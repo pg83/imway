@@ -1,0 +1,67 @@
+#cloud-config
+hostname: imway-dev
+
+users:
+  - name: dev
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    shell: /bin/bash
+    lock_passwd: true
+    groups: [video, render, input]
+    ssh_authorized_keys:
+      - @SSH_PUBKEY@
+
+package_update: true
+package_upgrade: false
+
+packages:
+  # cloud-ядро без virtio_gpu — ставим полное (даёт /dev/dri)
+  - linux-image-arm64
+  # тулчейн
+  - build-essential
+  - cmake
+  - ninja-build
+  - pkg-config
+  - git
+  - rsync
+  - gdb
+  - ccache
+  # зависимости imway
+  - libwayland-dev
+  - wayland-protocols
+  - libdrm-dev
+  - libinput-dev
+  - libudev-dev
+  - libev-dev
+  - libxkbcommon-dev
+  - libseat-dev
+  - libvulkan-dev
+  # vulkan runtime (lavapipe в mesa-vulkan-drivers) и инструменты
+  - mesa-vulkan-drivers
+  - vulkan-tools
+  - vulkan-validationlayers
+  - glslang-tools
+  - spirv-tools
+  # обвязка для ручного тестирования
+  - seatd
+  - sway
+  - foot
+  - wayland-utils
+  - wl-clipboard
+  - libinput-tools
+  - drm-info
+
+write_files:
+  # udmabuf — экспорт dmabuf у lavapipe; uinput — инъекция input в тестах
+  - path: /etc/modules-load.d/imway.conf
+    content: |
+      udmabuf
+      uinput
+  - path: /etc/udev/rules.d/99-imway.rules
+    content: |
+      KERNEL=="udmabuf", GROUP="render", MODE="0660"
+      KERNEL=="uinput", GROUP="input", MODE="0660"
+
+runcmd:
+  - modprobe udmabuf || true
+  - modprobe uinput || true
+  - udevadm control --reload && udevadm trigger || true

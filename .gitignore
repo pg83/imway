@@ -1,0 +1,4 @@
+# состояние dev-VM: образы дисков, ssh-ключи, pid/логи (2.5G+)
+vm/.state/
+build/
+.claude/settings.local.json
