@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.h>
 
 struct Server;
+struct Subsurface;
 struct Surface;
 struct Toplevel;
 
@@ -28,7 +29,7 @@ struct Renderer {
     void shutdown();
 
     // скопировать пиксели поверхности в staging (пересоздать текстуру при ресайзе)
-    void upload_surface(Toplevel&, Surface&);
+    void upload_surface(Surface&);
     void destroy_texture(SurfaceTexture*);
 
     // построить ImGui-кадр по toplevel'ам сервера, записать и исполнить command buffer
@@ -70,4 +71,6 @@ private:
     bool create_host_buffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
                             VkDeviceMemory& mem, void** map);
     void build_ui(Server&);
+    void draw_surface_tree(Surface&, float x, float y);
+    void mark_tree_unhovered(Surface&);
 };

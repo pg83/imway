@@ -101,31 +101,36 @@ bool Server::init() {
     return true;
 }
 
-void Server::on_frame_tick() {
-    // загрузить свежие пиксели в текстуры
-    for (Toplevel* t : toplevels) {
-        Surface* surf = t->xdg ? t->xdg->surface : nullptr;
-        if (t->mapped && surf && surf->dirty) {
-            renderer->upload_surface(*t, *surf);
-            surf->dirty = false;
-        }
+static void fire_frame_callbacks(Surface& s, uint32_t t) {
+    // деструктор ресурса удаляет callback из frame_cbs — забираем список до итерации
+    auto cbs = std::move(s.frame_cbs);
+    s.frame_cbs.clear();
+    for (wl_resource* cb : cbs) {
+        wl_callback_send_done(cb, t);
+        wl_resource_destroy(cb);
     }
+    for (Subsurface* c : s.stack_below)
+        if (c->surface) fire_frame_callbacks(*c->surface, t);
+    for (Subsurface* c : s.stack_above)
+        if (c->surface) fire_frame_callbacks(*c->surface, t);
+}
+
+void Server::on_frame_tick() {
+    // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
+    for (Surface* s : surfaces)
+        if (s->dirty && s->has_content) {
+            renderer->upload_surface(*s);
+            s->dirty = false;
+        }
 
     renderer->render_frame(*this);
     if (kms) kms_present(kms, renderer->readback_data());
 
-    // frame callbacks — всем поверхностям, показанным в кадре
+    // frame callbacks — всем деревьям, показанным в кадре
     uint32_t t = now_msec();
     for (Toplevel* tl : toplevels) {
         Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
-        if (!tl->mapped || !surf) continue;
-        // деструктор ресурса удаляет callback из frame_cbs — забираем список до итерации
-        auto cbs = std::move(surf->frame_cbs);
-        surf->frame_cbs.clear();
-        for (wl_resource* cb : cbs) {
-            wl_callback_send_done(cb, t);
-            wl_resource_destroy(cb);
-        }
+        if (tl->mapped && surf) fire_frame_callbacks(*surf, t);
     }
 
     frames_done++;

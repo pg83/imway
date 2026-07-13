@@ -1,14 +1,34 @@
-// wl_compositor + wl_surface + wl_region (минимум для M1).
+// wl_compositor + wl_surface + wl_region + wl_subcompositor.
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include <wayland-server-protocol.h>
 
 #include "renderer.hpp"
+#include "seat.hpp"
 #include "server.hpp"
 
+Toplevel* Surface::root_toplevel() {
+    Surface* s = this;
+    // вверх по цепочке субповерхностей до корня
+    while (s->sub) {
+        if (!s->sub->parent) return nullptr; // сирота
+        s = s->sub->parent;
+    }
+    return s->xdg ? s->xdg->toplevel : nullptr;
+}
+
+bool Subsurface::effective_sync() const {
+    for (const Subsurface* s = this; s; s = s->parent ? s->parent->sub : nullptr)
+        if (s->sync) return true;
+    return false;
+}
+
 namespace {
+
+void unlink_from_parent(Subsurface&); // определено ниже, в секции subcompositor
 
 Surface* surface_from(wl_resource* res) {
     return (Surface*)wl_resource_get_user_data(res);
@@ -70,47 +90,120 @@ void surface_frame(wl_client* client, wl_resource* res, uint32_t id) {
 void surface_set_opaque_region(wl_client*, wl_resource*, wl_resource*) {}
 void surface_set_input_region(wl_client*, wl_resource*, wl_resource*) {}
 
-void copy_shm_buffer(Surface& s, wl_shm_buffer* shm) {
-    int32_t w = wl_shm_buffer_get_width(shm);
-    int32_t h = wl_shm_buffer_get_height(shm);
-    int32_t stride = wl_shm_buffer_get_stride(shm);
-    uint32_t fmt = wl_shm_buffer_get_format(shm);
+void copy_shm_buffer_to(wl_shm_buffer& shm, int& out_w, int& out_h, std::vector<uint8_t>& out) {
+    int32_t w = wl_shm_buffer_get_width(&shm);
+    int32_t h = wl_shm_buffer_get_height(&shm);
+    int32_t stride = wl_shm_buffer_get_stride(&shm);
+    uint32_t fmt = wl_shm_buffer_get_format(&shm);
     if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
         std::fprintf(stderr, "imway: неподдержанный shm-формат 0x%x\n", fmt);
+        out_w = out_h = 0;
         return;
     }
-    s.width = w;
-    s.height = h;
-    s.pixels.resize((size_t)w * h * 4);
-    wl_shm_buffer_begin_access(shm);
-    auto* src = (const uint8_t*)wl_shm_buffer_get_data(shm);
+    out_w = w;
+    out_h = h;
+    out.resize((size_t)w * h * 4);
+    wl_shm_buffer_begin_access(&shm);
+    auto* src = (const uint8_t*)wl_shm_buffer_get_data(&shm);
     for (int32_t y = 0; y < h; y++)
-        std::memcpy(s.pixels.data() + (size_t)y * w * 4, src + (size_t)y * stride, (size_t)w * 4);
-    wl_shm_buffer_end_access(shm);
-    s.dirty = true;
-    s.has_content = true;
+        std::memcpy(out.data() + (size_t)y * w * 4, src + (size_t)y * stride, (size_t)w * 4);
+    wl_shm_buffer_end_access(&shm);
+}
+
+void copy_shm_buffer(Surface& s, wl_shm_buffer* shm) {
+    copy_shm_buffer_to(*shm, s.width, s.height, s.pixels);
+    if (s.width > 0) {
+        s.dirty = true;
+        s.has_content = true;
+    }
+}
+
+// применить кэш sync-субповерхности и рекурсивно кэши её sync-детей
+void apply_subsurface_cache(Subsurface& sub) {
+    if (sub.cache.valid) {
+        Surface& s = *sub.surface;
+        s.has_content = sub.cache.has_content;
+        s.width = sub.cache.width;
+        s.height = sub.cache.height;
+        if (sub.cache.has_content && !sub.cache.pixels.empty()) {
+            s.pixels = std::move(sub.cache.pixels);
+            s.dirty = true;
+        }
+        for (wl_resource* cb : sub.cache.frames) s.frame_cbs.push_back(cb);
+        sub.cache.frames.clear();
+        sub.cache.pixels.clear();
+        sub.cache.valid = false;
+    }
+    if (sub.pending_pos) {
+        sub.x = sub.pending_x;
+        sub.y = sub.pending_y;
+        sub.pending_pos = false;
+    }
+    // спека: commit родителя применяет закешированное состояние всего sync-поддерева
+    for (Subsurface* c : sub.surface->stack_below)
+        if (c->sync) apply_subsurface_cache(*c);
+    for (Subsurface* c : sub.surface->stack_above)
+        if (c->sync) apply_subsurface_cache(*c);
+}
+
+void apply_children_caches(Surface& s) {
+    for (auto* stack : {&s.stack_below, &s.stack_above})
+        for (Subsurface* c : *stack) {
+            // позиция двойнобуферизована коммитом родителя для любых детей
+            if (c->pending_pos) {
+                c->x = c->pending_x;
+                c->y = c->pending_y;
+                c->pending_pos = false;
+            }
+            if (c->sync) apply_subsurface_cache(*c);
+        }
 }
 
 void surface_commit(wl_client*, wl_resource* res) {
     Surface& s = *surface_from(res);
+    bool to_cache = s.sub && s.sub->effective_sync();
 
     if (s.pending.newly_attached) {
         if (!s.pending.buffer) {
-            s.has_content = false;
-            s.width = s.height = 0;
+            if (to_cache) {
+                s.sub->cache.valid = true;
+                s.sub->cache.has_content = false;
+                s.sub->cache.width = s.sub->cache.height = 0;
+                s.sub->cache.pixels.clear();
+            } else {
+                s.has_content = false;
+                s.width = s.height = 0;
+            }
         } else if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
-            copy_shm_buffer(s, shm);
-            // копия снята — буфер можно вернуть клиенту сразу
+            if (to_cache) {
+                // снимаем копию сразу (буфер возвращается клиенту), показ — на commit родителя
+                copy_shm_buffer_to(*shm, s.sub->cache.width, s.sub->cache.height,
+                                   s.sub->cache.pixels);
+                s.sub->cache.has_content = s.sub->cache.width > 0;
+                s.sub->cache.valid = true;
+            } else {
+                copy_shm_buffer(s, shm);
+            }
             wl_buffer_send_release(s.pending.buffer);
         } else {
-            std::fprintf(stderr, "imway: не-shm буфер, в M1 не поддержан\n");
+            std::fprintf(stderr, "imway: не-shm буфер, пока не поддержан\n");
         }
         detach_pending_buffer(s);
         s.pending.newly_attached = false;
     }
 
+    if (to_cache) {
+        for (wl_resource* cb : s.pending.frames) s.sub->cache.frames.push_back(cb);
+        s.pending.frames.clear();
+        return; // остальное (кэши детей) — когда применится наш кэш
+    }
+
     for (wl_resource* cb : s.pending.frames) s.frame_cbs.push_back(cb);
     s.pending.frames.clear();
+
+    // desync-субповерхность: позиция всё равно применяется коммитом родителя,
+    // но контент — сразу (уже применён выше)
+    apply_children_caches(s);
 
     if (s.xdg) xdg_handle_commit(s);
 }
@@ -140,6 +233,14 @@ void surface_resource_destroyed(wl_resource* res) {
     for (wl_resource* cb : s->pending.frames) wl_resource_set_user_data(cb, nullptr);
     for (wl_resource* cb : s->frame_cbs) wl_resource_set_user_data(cb, nullptr);
     if (s->xdg) s->xdg->surface = nullptr;
+    if (s->sub) { // роль-субповерхность: выпасть из стека родителя
+        unlink_from_parent(*s->sub);
+        s->sub->surface = nullptr;
+    }
+    for (Subsurface* c : s->stack_below) c->parent = nullptr; // дети-сироты не рендерятся
+    for (Subsurface* c : s->stack_above) c->parent = nullptr;
+    if (s->server->seat) s->server->seat->surface_gone(s);
+    if (s->texture && s->server->renderer) s->server->renderer->destroy_texture(s->texture);
     s->server->surfaces.remove(s);
     delete s;
 }
@@ -197,14 +298,75 @@ void compositor_bind(wl_client* client, void* data, uint32_t version, uint32_t i
     wl_resource_set_implementation(res, &compositor_impl, data, nullptr);
 }
 
-// --- wl_subcompositor (M1: инертный — субповерхности принимаем, но не рендерим) ---
+// --- wl_subcompositor / wl_subsurface ---
+
+Subsurface* sub_from(wl_resource* res) { return (Subsurface*)wl_resource_get_user_data(res); }
+
+void unlink_from_parent(Subsurface& sub) {
+    if (!sub.parent) return;
+    std::erase(sub.parent->stack_below, &sub);
+    std::erase(sub.parent->stack_above, &sub);
+    sub.parent = nullptr;
+}
 
 void subsurface_destroy(wl_client*, wl_resource* res) { wl_resource_destroy(res); }
-void subsurface_set_position(wl_client*, wl_resource*, int32_t, int32_t) {}
-void subsurface_place_above(wl_client*, wl_resource*, wl_resource*) {}
-void subsurface_place_below(wl_client*, wl_resource*, wl_resource*) {}
-void subsurface_set_sync(wl_client*, wl_resource*) {}
-void subsurface_set_desync(wl_client*, wl_resource*) {}
+
+void subsurface_set_position(wl_client*, wl_resource* res, int32_t x, int32_t y) {
+    Subsurface* sub = sub_from(res);
+    if (!sub) return;
+    sub->pending_x = x;
+    sub->pending_y = y;
+    sub->pending_pos = true;
+}
+
+// найти позицию sibling'а в стеках родителя; nullptr-стек = ref это сам родитель
+void subsurface_restack(Subsurface& sub, Surface* ref_surface, bool above) {
+    Surface* parent = sub.parent;
+    if (!parent) return;
+    std::erase(parent->stack_below, &sub);
+    std::erase(parent->stack_above, &sub);
+
+    if (ref_surface == parent) {
+        // относительно самого родителя
+        if (above)
+            parent->stack_above.insert(parent->stack_above.begin(), &sub);
+        else
+            parent->stack_below.push_back(&sub);
+        return;
+    }
+    Subsurface* ref = ref_surface->sub;
+    for (auto* stack : {&parent->stack_below, &parent->stack_above}) {
+        auto it = std::find(stack->begin(), stack->end(), ref);
+        if (it != stack->end()) {
+            stack->insert(above ? it + 1 : it, &sub);
+            return;
+        }
+    }
+    // ref не sibling — по спеке ошибка протокола, прощаем и кладём наверх
+    parent->stack_above.push_back(&sub);
+}
+
+void subsurface_place_above(wl_client*, wl_resource* res, wl_resource* sibling) {
+    Subsurface* sub = sub_from(res);
+    if (sub && sibling) subsurface_restack(*sub, surface_from(sibling), true);
+}
+
+void subsurface_place_below(wl_client*, wl_resource* res, wl_resource* sibling) {
+    Subsurface* sub = sub_from(res);
+    if (sub && sibling) subsurface_restack(*sub, surface_from(sibling), false);
+}
+
+void subsurface_set_sync(wl_client*, wl_resource* res) {
+    if (Subsurface* sub = sub_from(res)) sub->sync = true;
+}
+
+void subsurface_set_desync(wl_client*, wl_resource* res) {
+    Subsurface* sub = sub_from(res);
+    if (!sub) return;
+    sub->sync = false;
+    // переход в desync применяет накопленный кэш
+    if (!sub->effective_sync() && sub->cache.valid) apply_subsurface_cache(*sub);
+}
 
 const struct wl_subsurface_interface subsurface_impl = {
     .destroy = subsurface_destroy,
@@ -215,17 +377,39 @@ const struct wl_subsurface_interface subsurface_impl = {
     .set_desync = subsurface_set_desync,
 };
 
+void subsurface_resource_destroyed(wl_resource* res) {
+    Subsurface* sub = sub_from(res);
+    if (!sub) return;
+    unlink_from_parent(*sub);
+    for (wl_resource* cb : sub->cache.frames) wl_resource_destroy(cb);
+    if (sub->surface) sub->surface->sub = nullptr;
+    delete sub;
+}
+
 void subcompositor_destroy(wl_client*, wl_resource* res) { wl_resource_destroy(res); }
 
 void subcompositor_get_subsurface(wl_client* client, wl_resource* res, uint32_t id,
-                                  wl_resource* /*surface*/, wl_resource* /*parent*/) {
+                                  wl_resource* surface_res, wl_resource* parent_res) {
+    Surface* surface = surface_from(surface_res);
+    Surface* parent = surface_from(parent_res);
+    if (surface->xdg || surface->sub) {
+        wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
+                               "у поверхности уже есть роль");
+        return;
+    }
     wl_resource* sres =
         wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id);
     if (!sres) {
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(sres, &subsurface_impl, nullptr, nullptr);
+    auto* sub = new Subsurface();
+    sub->surface = surface;
+    sub->parent = parent;
+    sub->res = sres;
+    surface->sub = sub;
+    parent->stack_above.push_back(sub); // новая субповерхность — наверху стека
+    wl_resource_set_implementation(sres, &subsurface_impl, sub, subsurface_resource_destroyed);
 }
 
 const struct wl_subcompositor_interface subcompositor_impl = {

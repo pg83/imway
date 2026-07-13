@@ -217,13 +217,13 @@ bool Renderer::init(int width, int height) {
     return true;
 }
 
-void Renderer::upload_surface(Toplevel& t, Surface& s) {
+void Renderer::upload_surface(Surface& s) {
     if (s.width <= 0 || s.height <= 0) return;
-    SurfaceTexture* tex = t.texture;
+    SurfaceTexture* tex = s.texture;
     if (tex && (tex->w != s.width || tex->h != s.height)) {
         destroy_texture(tex);
         tex = nullptr;
-        t.texture = nullptr;
+        s.texture = nullptr;
     }
     if (!tex) {
         tex = new SurfaceTexture();
@@ -247,7 +247,7 @@ void Renderer::upload_surface(Toplevel& t, Surface& s) {
         tex->ds = ImGui_ImplVulkan_AddTexture(sampler_, tex->view,
                                               VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         textures_.push_back(tex);
-        t.texture = tex;
+        s.texture = tex;
     }
     std::memcpy(tex->staging_map, s.pixels.data(), s.pixels.size());
     tex->needs_upload = true;
@@ -286,27 +286,56 @@ void Renderer::build_ui(Server& server) {
 
     int i = 0;
     for (Toplevel* t : server.toplevels) {
-        if (!t->mapped || !t->texture) continue;
+        Surface* root = t->xdg ? t->xdg->surface : nullptr;
+        if (!t->mapped || !root || !root->texture) {
+            if (root) mark_tree_unhovered(*root);
+            continue;
+        }
         char label[256];
         std::snprintf(label, sizeof label, "%s###toplevel%llu", t->title.c_str(),
                       (unsigned long long)t->id);
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
         if (ImGui::Begin(label, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-            ImGui::Image((ImTextureID)(uintptr_t)t->texture->ds,
-                         ImVec2((float)t->texture->w, (float)t->texture->h));
-            // состояние для маршрутизации input (использует seat в следующих событиях)
-            ImVec2 p = ImGui::GetItemRectMin();
-            t->img_x = p.x;
-            t->img_y = p.y;
-            t->hovered = ImGui::IsItemHovered();
+            ImVec2 origin = ImGui::GetCursorScreenPos();
+            draw_surface_tree(*root, origin.x, origin.y);
         } else {
-            t->hovered = false;
+            mark_tree_unhovered(*root);
         }
         ImGui::End();
     }
 
     ImGui::Render();
+}
+
+// нарисовать поверхность и её субповерхности (stack_below → сама → stack_above);
+// позже нарисованный Image перекрывает ранние, что и даёт правильный z-порядок
+void Renderer::draw_surface_tree(Surface& s, float x, float y) {
+    for (Subsurface* c : s.stack_below)
+        if (c->surface && c->surface->has_content)
+            draw_surface_tree(*c->surface, x + (float)c->x, y + (float)c->y);
+
+    if (s.texture) {
+        ImGui::SetCursorScreenPos(ImVec2(x, y));
+        ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds,
+                     ImVec2((float)s.texture->w, (float)s.texture->h));
+        s.img_x = x;
+        s.img_y = y;
+        // hovered без учёта перекрытия сиблингами — seat берёт последний в порядке отрисовки
+        s.hovered = ImGui::IsItemHovered();
+    }
+
+    for (Subsurface* c : s.stack_above)
+        if (c->surface && c->surface->has_content)
+            draw_surface_tree(*c->surface, x + (float)c->x, y + (float)c->y);
+}
+
+void Renderer::mark_tree_unhovered(Surface& s) {
+    s.hovered = false;
+    for (Subsurface* c : s.stack_below)
+        if (c->surface) mark_tree_unhovered(*c->surface);
+    for (Subsurface* c : s.stack_above)
+        if (c->surface) mark_tree_unhovered(*c->surface);
 }
 
 void Renderer::render_frame(Server& server) {

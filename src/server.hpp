@@ -13,6 +13,7 @@ struct Renderer;
 struct SurfaceTexture;
 struct Server;
 struct XdgSurface;
+struct Subsurface;
 struct Toplevel;
 
 struct Surface {
@@ -35,7 +36,44 @@ struct Surface {
     bool has_content = false;
     std::vector<wl_resource*> frame_cbs;
 
-    XdgSurface* xdg = nullptr;
+    SurfaceTexture* texture = nullptr; // владеет Renderer
+
+    // состояние из последнего ImGui-кадра (для маршрутизации input)
+    float img_x = 0, img_y = 0; // экранная позиция Image-итема
+    bool hovered = false;
+
+    XdgSurface* xdg = nullptr; // роль xdg_surface
+    Subsurface* sub = nullptr; // роль wl_subsurface
+
+    // дети-субповерхности: stack_below рисуются до этой поверхности, stack_above — после,
+    // обе — по порядку списка (низ → верх)
+    std::vector<Subsurface*> stack_below;
+    std::vector<Subsurface*> stack_above;
+
+    // toplevel корня дерева (nullptr для orphan/попапов)
+    Toplevel* root_toplevel();
+};
+
+struct Subsurface {
+    Surface* surface = nullptr; // сама субповерхность
+    Surface* parent = nullptr;
+    wl_resource* res = nullptr;
+
+    int x = 0, y = 0; // позиция в координатах родителя
+    int pending_x = 0, pending_y = 0;
+    bool pending_pos = false; // применяется на commit родителя
+    bool sync = true;         // режим по умолчанию — synchronized
+
+    // кэш состояния для sync-коммитов (применяется на commit родителя)
+    struct {
+        bool valid = false;
+        bool has_content = false;
+        int width = 0, height = 0;
+        std::vector<uint8_t> pixels;
+        std::vector<wl_resource*> frames;
+    } cache;
+
+    bool effective_sync() const; // sync у себя или у любого предка-субповерхности
 };
 
 struct XdgSurface {
@@ -55,11 +93,6 @@ struct Toplevel {
     std::string title = "(без имени)";
     std::string app_id;
     bool mapped = false;
-    SurfaceTexture* texture = nullptr; // владеет Renderer
-
-    // состояние из последнего ImGui-кадра (для маршрутизации input)
-    float img_x = 0, img_y = 0; // экранная позиция Image-итема
-    bool hovered = false;       // курсор над Image (ImGui учитывает z-order)
 };
 
 struct Server {

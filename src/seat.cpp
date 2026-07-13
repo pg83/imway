@@ -144,31 +144,56 @@ bool Seat::same_client(wl_resource* res, Toplevel* t) {
            wl_resource_get_client(res) == wl_resource_get_client(t->xdg->surface->res);
 }
 
-Toplevel* Seat::pick_pointer_target() {
-    // hovered-флаги выставлены ImGui в последнем кадре (учитывают z-order)
-    for (Toplevel* t : server->toplevels)
-        if (t->mapped && t->hovered) return t;
+bool Seat::same_client_s(wl_resource* res, Surface* s) {
+    return s && wl_resource_get_client(res) == wl_resource_get_client(s->res);
+}
+
+namespace {
+
+// топовая hovered-поверхность дерева: последняя в порядке отрисовки
+// (stack_below → сама → stack_above) перекрывает предыдущие
+Surface* pick_in_tree(Surface& s) {
+    Surface* found = nullptr;
+    for (Subsurface* c : s.stack_below)
+        if (c->surface && c->surface->has_content)
+            if (Surface* f = pick_in_tree(*c->surface)) found = f;
+    if (s.hovered) found = &s;
+    for (Subsurface* c : s.stack_above)
+        if (c->surface && c->surface->has_content)
+            if (Surface* f = pick_in_tree(*c->surface)) found = f;
+    return found;
+}
+
+} // namespace
+
+Surface* Seat::pick_pointer_target() {
+    // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order учтён,
+    // внутри окна поздние Image перекрывают ранние — берём последний hovered в дереве)
+    for (Toplevel* t : server->toplevels) {
+        if (!t->mapped || !t->xdg || !t->xdg->surface) continue;
+        if (Surface* s = pick_in_tree(*t->xdg->surface)) return s;
+    }
     return nullptr;
 }
 
-void Seat::pointer_set_focus(Toplevel* t, double sx, double sy) {
-    if (ptr_focus == t) return;
-    if (ptr_focus && ptr_focus->xdg && ptr_focus->xdg->surface) {
+void Seat::pointer_set_focus(Surface* s, double sx, double sy) {
+    if (ptr_focus == s) return;
+    if (ptr_focus) {
         uint32_t serial = wl_display_next_serial(server->display);
         for (wl_resource* p : pointers)
-            if (same_client(p, ptr_focus)) {
-                wl_pointer_send_leave(p, serial, ptr_focus->xdg->surface->res);
+            if (same_client_s(p, ptr_focus)) {
+                wl_pointer_send_leave(p, serial, ptr_focus->res);
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION)
                     wl_pointer_send_frame(p);
             }
     }
-    ptr_focus = t;
-    if (t && t->xdg && t->xdg->surface) {
+    ptr_focus = s;
+    if (s) {
         uint32_t serial = wl_display_next_serial(server->display);
         for (wl_resource* p : pointers)
-            if (same_client(p, t)) {
-                wl_pointer_send_enter(p, serial, t->xdg->surface->res,
-                                      wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+            if (same_client_s(p, s)) {
+                wl_pointer_send_enter(p, serial, s->res, wl_fixed_from_double(sx),
+                                      wl_fixed_from_double(sy));
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION)
                     wl_pointer_send_frame(p);
             }
@@ -180,7 +205,7 @@ void Seat::handle_motion(double x, double y) {
     cur_y = y;
     ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
 
-    Toplevel* target = buttons_down > 0 ? ptr_focus : pick_pointer_target();
+    Surface* target = buttons_down > 0 ? ptr_focus : pick_pointer_target();
     if (target != ptr_focus) {
         double sx = target ? x - target->img_x : 0, sy = target ? y - target->img_y : 0;
         pointer_set_focus(target, sx, sy);
@@ -192,7 +217,7 @@ void Seat::handle_motion(double x, double y) {
     double sy = y - ptr_focus->img_y;
     uint32_t t = now_msec();
     for (wl_resource* p : pointers)
-        if (same_client(p, ptr_focus)) {
+        if (same_client_s(p, ptr_focus)) {
             wl_pointer_send_motion(p, t, wl_fixed_from_double(sx), wl_fixed_from_double(sy));
             if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION)
                 wl_pointer_send_frame(p);
@@ -203,13 +228,15 @@ void Seat::handle_button(uint32_t button, bool pressed) {
     int imgui_btn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
     ImGui::GetIO().AddMouseButtonEvent(imgui_btn, pressed);
 
-    if (pressed && ptr_focus) focus_toplevel(ptr_focus); // click-to-focus
+    // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
+    if (pressed && ptr_focus)
+        if (Toplevel* t = ptr_focus->root_toplevel()) focus_toplevel(t);
 
     if (ptr_focus) {
         uint32_t serial = wl_display_next_serial(server->display);
         uint32_t t = now_msec();
         for (wl_resource* p : pointers)
-            if (same_client(p, ptr_focus)) {
+            if (same_client_s(p, ptr_focus)) {
                 wl_pointer_send_button(p, serial, t, button,
                                        pressed ? WL_POINTER_BUTTON_STATE_PRESSED
                                                : WL_POINTER_BUTTON_STATE_RELEASED);
@@ -226,7 +253,7 @@ void Seat::handle_scroll(double value) {
     if (!ptr_focus) return;
     uint32_t t = now_msec();
     for (wl_resource* p : pointers)
-        if (same_client(p, ptr_focus)) {
+        if (same_client_s(p, ptr_focus)) {
             wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
                                  wl_fixed_from_double(value * 15.0));
             if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION)
@@ -298,8 +325,15 @@ void Seat::focus_toplevel(Toplevel* t) {
     }
 }
 
+void Seat::surface_gone(Surface* s) {
+    if (ptr_focus == s) {
+        ptr_focus = nullptr;
+        buttons_down = 0;
+    }
+}
+
 void Seat::toplevel_gone(Toplevel* t) {
-    if (ptr_focus == t) {
+    if (ptr_focus && ptr_focus->root_toplevel() == t) {
         ptr_focus = nullptr;
         buttons_down = 0;
     }

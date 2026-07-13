@@ -55,7 +55,6 @@ const struct xdg_toplevel_interface toplevel_impl = {
 void toplevel_resource_destroyed(wl_resource* res) {
     auto* t = (Toplevel*)wl_resource_get_user_data(res);
     if (t->server->seat) t->server->seat->toplevel_gone(t);
-    if (t->texture && t->server->renderer) t->server->renderer->destroy_texture(t->texture);
     if (t->xdg) t->xdg->toplevel = nullptr;
     t->server->toplevels.remove(t);
     std::printf("imway: toplevel «%s» уничтожен\n", t->title.c_str());

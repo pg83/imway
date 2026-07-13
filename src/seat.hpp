@@ -24,8 +24,8 @@ struct Seat {
     uint32_t keymap_size = 0;
 
     Toplevel* kb_focus = nullptr;
-    Toplevel* ptr_focus = nullptr; // куда сейчас идут pointer-события (enter послан)
-    int buttons_down = 0;          // implicit grab, пока >0 — ptr_focus залочен
+    Surface* ptr_focus = nullptr; // поверхность (в т.ч. суб-), куда идут pointer-события
+    int buttons_down = 0;         // implicit grab, пока >0 — ptr_focus залочен
 
     double cur_x = 0, cur_y = 0; // координаты output
     std::vector<uint32_t> pressed_keys;
@@ -43,14 +43,16 @@ struct Seat {
     // жизненный цикл окон
     void focus_toplevel(Toplevel*); // клавиатурный фокус (focus-on-map, click-to-focus)
     void toplevel_gone(Toplevel*);
+    void surface_gone(Surface*);
 
 private:
     void send_keymap(wl_resource* kb);
     void update_modifiers();
     void kb_send_to_focus_client(uint32_t key, bool pressed, uint32_t serial, uint32_t time);
-    Toplevel* pick_pointer_target();
-    void pointer_set_focus(Toplevel*, double sx, double sy);
+    Surface* pick_pointer_target();
+    void pointer_set_focus(Surface*, double sx, double sy);
     bool same_client(wl_resource* res, Toplevel* t);
+    bool same_client_s(wl_resource* res, Surface* s);
 };
 
 void seat_create_global(Server&);

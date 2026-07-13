@@ -18,6 +18,14 @@ add_test(NAME headless_shm
             $<TARGET_FILE:imway> $<TARGET_FILE:client_shm>)
 set_tests_properties(headless_shm PROPERTIES TIMEOUT 60)
 
+add_executable(client_subsurface client_subsurface.c)
+target_link_libraries(client_subsurface PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+
+add_test(NAME headless_subsurface
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_subsurface.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_subsurface>)
+set_tests_properties(headless_subsurface PROPERTIES TIMEOUT 60)
+
 add_test(NAME headless_input
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_input.sh $<TARGET_FILE:imway>)
 set_tests_properties(headless_input PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
