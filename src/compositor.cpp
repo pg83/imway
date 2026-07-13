@@ -191,6 +191,7 @@ void apply_children_caches(Surface& s) {
 
 void surface_commit(wl_client*, wl_resource* res) {
     Surface& s = *surface_from(res);
+    s.server->needs_frame = true;
     bool to_cache = s.sub && s.sub->effective_sync();
 
     if (s.pending.newly_attached) {
@@ -284,6 +285,7 @@ void surface_resource_destroyed(wl_resource* res) {
     if (s->server->seat) s->server->seat->surface_gone(s);
     release_held_dmabuf(*s);
     viewport_surface_gone(*s);
+    s->server->needs_frame = true;
     if (s->texture && s->server->renderer) s->server->renderer->destroy_texture(s->texture);
     s->server->surfaces.remove(s);
     delete s;

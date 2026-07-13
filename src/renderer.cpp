@@ -236,6 +236,7 @@ bool Renderer::init(int width, int height) {
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // не писать imgui.ini
     io.DisplaySize = ImVec2((float)width_, (float)height_);
+    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors; // ресайз за края окна
 
     ImGui_ImplVulkan_InitInfo ii{};
     ii.ApiVersion = VK_API_VERSION_1_2;
@@ -335,7 +336,21 @@ void Renderer::build_ui(Server& server) {
                       (unsigned long long)t->id);
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
-        if (ImGui::Begin(label, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        if (!t->win_size_set) {
+            // окно под размер первого буфера; дальше размером владеет пользователь
+            const ImGuiStyle& st = ImGui::GetStyle();
+            ImGui::SetNextWindowSize(ImVec2((float)root->view_w() + st.WindowPadding.x * 2,
+                                            (float)root->view_h() + st.WindowPadding.y * 2 +
+                                                ImGui::GetFrameHeight()),
+                                     ImGuiCond_Always);
+            t->win_size_set = true;
+        }
+        // колесо — клиенту, не скроллу окна
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        if (ImGui::Begin(label, nullptr, flags)) {
+            ImVec2 avail = ImGui::GetContentRegionAvail();
+            t->desired_w = (int)avail.x;
+            t->desired_h = (int)avail.y;
             ImVec2 origin = ImGui::GetCursorScreenPos();
             draw_surface_tree(*root, origin.x, origin.y);
         } else {

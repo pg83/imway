@@ -114,6 +114,11 @@ struct Toplevel {
     std::string title = "(без имени)";
     std::string app_id;
     bool mapped = false;
+
+    // ресайз: ImGui-окно → configure клиенту
+    bool win_size_set = false;    // начальный размер ImGui-окна выставлен
+    int desired_w = 0, desired_h = 0; // контент-регион из последнего кадра
+    int cfg_w = 0, cfg_h = 0;         // последний отправленный configure
 };
 
 struct Server {
@@ -146,6 +151,10 @@ struct Server {
     std::string screenshot_path;
     std::string control_path; // FIFO для инъекции input/команд
 
+    // рендер только по необходимости: тик без изменений — пустой (lavapipe = CPU)
+    bool needs_frame = true;
+    int settle_frames = 0; // дорисовать пару кадров после последней активности
+
     bool init();
     void run();
     void finish();
@@ -166,6 +175,8 @@ void viewport_surface_gone(Surface&);
 
 // реакция xdg-роли на commit поверхности (map-логика, configure dance)
 void xdg_handle_commit(Surface&);
+// послать клиенту configure с новым размером (ресайз ImGui-окном)
+void xdg_toplevel_configure_size(Toplevel&, int w, int h);
 
 // control-канал (FIFO)
 struct Control* control_create(Server&, const char* path);

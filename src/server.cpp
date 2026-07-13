@@ -119,24 +119,44 @@ static void fire_frame_callbacks(Surface& s, uint32_t t) {
 }
 
 void Server::on_frame_tick() {
-    // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
-    for (Surface* s : surfaces)
-        if (s->dirty && s->has_content) {
-            if (s->dmabuf_buffer)
-                renderer->import_dmabuf(*s);
-            else
-                renderer->upload_surface(*s);
-            s->dirty = false;
+    // lavapipe — это CPU: без изменений кадр не рисуем вовсе
+    if (needs_frame)
+        settle_frames = 3; // ImGui дорисует hover/анимации
+    bool active = needs_frame || settle_frames > 0;
+    needs_frame = false;
+
+    if (active) {
+        settle_frames--;
+
+        // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
+        for (Surface* s : surfaces)
+            if (s->dirty && s->has_content) {
+                if (s->dmabuf_buffer)
+                    renderer->import_dmabuf(*s);
+                else
+                    renderer->upload_surface(*s);
+                s->dirty = false;
+            }
+
+        renderer->render_frame(*this);
+        if (kms) kms_present(kms, renderer->readback_data());
+
+        // frame callbacks — всем деревьям, показанным в кадре
+        uint32_t t = now_msec();
+        for (Toplevel* tl : toplevels) {
+            Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
+            if (tl->mapped && surf) fire_frame_callbacks(*surf, t);
         }
 
-    renderer->render_frame(*this);
-    if (kms) kms_present(kms, renderer->readback_data());
-
-    // frame callbacks — всем деревьям, показанным в кадре
-    uint32_t t = now_msec();
-    for (Toplevel* tl : toplevels) {
-        Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
-        if (tl->mapped && surf) fire_frame_callbacks(*surf, t);
+        // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
+        for (Toplevel* tl : toplevels) {
+            Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
+            if (!tl->mapped || !surf || tl->desired_w <= 0) continue;
+            bool differs_view = tl->desired_w != surf->view_w() || tl->desired_h != surf->view_h();
+            bool differs_sent = tl->desired_w != tl->cfg_w || tl->desired_h != tl->cfg_h;
+            if (differs_view && differs_sent)
+                xdg_toplevel_configure_size(*tl, tl->desired_w, tl->desired_h);
+        }
     }
 
     frames_done++;

@@ -107,6 +107,21 @@ void xdg_surface_ack_configure(wl_client*, wl_resource* res, uint32_t) {
     ((XdgSurface*)wl_resource_get_user_data(res))->acked = true;
 }
 
+} // namespace
+
+void xdg_toplevel_configure_size(Toplevel& t, int w, int h) {
+    wl_array states;
+    wl_array_init(&states);
+    xdg_toplevel_send_configure(t.res, w, h, &states);
+    wl_array_release(&states);
+    xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.server->display));
+    t.cfg_w = w;
+    t.cfg_h = h;
+    std::printf("imway: configure «%s» → %dx%d\n", t.title.c_str(), w, h);
+}
+
+namespace {
+
 const struct xdg_surface_interface xdg_surface_impl = {
     .destroy = xdg_surface_destroy,
     .get_toplevel = xdg_surface_get_toplevel,
@@ -214,12 +229,14 @@ void xdg_handle_commit(Surface& s) {
 
     if (xs->toplevel && !xs->toplevel->mapped && s.has_content && xs->acked) {
         xs->toplevel->mapped = true;
+        s.server->needs_frame = true;
         std::printf("imway: toplevel «%s» (%s) mapped %dx%d\n", xs->toplevel->title.c_str(),
                     xs->toplevel->app_id.c_str(), s.width, s.height);
         if (s.server->seat) s.server->seat->focus_toplevel(xs->toplevel); // focus-on-map
     }
     if (xs->toplevel && xs->toplevel->mapped && !s.has_content) {
         xs->toplevel->mapped = false;
+        s.server->needs_frame = true;
         std::printf("imway: toplevel «%s» unmapped\n", xs->toplevel->title.c_str());
     }
 }

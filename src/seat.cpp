@@ -203,6 +203,7 @@ void Seat::pointer_set_focus(Surface* s, double sx, double sy) {
 void Seat::handle_motion(double x, double y) {
     cur_x = x;
     cur_y = y;
+    server->needs_frame = true;
     ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
 
     Surface* target = buttons_down > 0 ? ptr_focus : pick_pointer_target();
@@ -226,6 +227,7 @@ void Seat::handle_motion(double x, double y) {
 
 void Seat::handle_button(uint32_t button, bool pressed) {
     int imgui_btn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
+    server->needs_frame = true;
     ImGui::GetIO().AddMouseButtonEvent(imgui_btn, pressed);
 
     // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
@@ -249,6 +251,7 @@ void Seat::handle_button(uint32_t button, bool pressed) {
 }
 
 void Seat::handle_scroll(double value) {
+    server->needs_frame = true;
     ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
     if (!ptr_focus) return;
     uint32_t t = now_msec();
@@ -280,6 +283,7 @@ void Seat::update_modifiers() {
 }
 
 void Seat::handle_key(uint32_t code, bool pressed) {
+    server->needs_frame = true;
     xkb_state_update_key(xkb_state_, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
 
     if (pressed)
