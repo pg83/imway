@@ -31,10 +31,15 @@ struct Surface {
 
     // текущее состояние
     int width = 0, height = 0;
-    std::vector<uint8_t> pixels; // BGRA, плотные строки w*4
-    bool dirty = false;          // pixels изменились с последней загрузки в текстуру
+    std::vector<uint8_t> pixels; // BGRA, плотные строки w*4 (только shm-путь)
+    bool dirty = false;          // контент изменился с последней загрузки в текстуру
     bool has_content = false;
     std::vector<wl_resource*> frame_cbs;
+
+    // dmabuf-контент: буфер держим до замены (рендер читает память напрямую)
+    wl_resource* dmabuf_buffer = nullptr;
+    wl_listener dmabuf_destroy{};
+    bool dmabuf_destroy_armed = false;
 
     SurfaceTexture* texture = nullptr; // владеет Renderer
 

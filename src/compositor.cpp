@@ -6,6 +6,7 @@
 
 #include <wayland-server-protocol.h>
 
+#include "dmabuf.hpp"
 #include "renderer.hpp"
 #include "seat.hpp"
 #include "server.hpp"
@@ -47,6 +48,35 @@ void pending_buffer_destroyed(wl_listener* l, void*) {
     s->pending.buffer = nullptr;
     s->pending.buffer_destroy_armed = false;
     wl_list_remove(&s->pending.buffer_destroy.link);
+}
+
+// --- удержание dmabuf-буфера (рендер читает его память напрямую) ---
+
+void held_dmabuf_destroyed(wl_listener* l, void*) {
+    Surface* s = wl_container_of(l, s, dmabuf_destroy);
+    // клиент уничтожил буфер, пока тот показан: текстура уже импортирована
+    // (память живёт на нашем fd-дубликате), просто забываем ресурс
+    s->dmabuf_buffer = nullptr;
+    s->dmabuf_destroy_armed = false;
+    wl_list_remove(&s->dmabuf_destroy.link);
+}
+
+void release_held_dmabuf(Surface& s) {
+    if (!s.dmabuf_buffer) return;
+    wl_buffer_send_release(s.dmabuf_buffer);
+    if (s.dmabuf_destroy_armed) {
+        wl_list_remove(&s.dmabuf_destroy.link);
+        s.dmabuf_destroy_armed = false;
+    }
+    s.dmabuf_buffer = nullptr;
+}
+
+void hold_dmabuf(Surface& s, wl_resource* buffer) {
+    release_held_dmabuf(s);
+    s.dmabuf_buffer = buffer;
+    s.dmabuf_destroy.notify = held_dmabuf_destroyed;
+    wl_resource_add_destroy_listener(buffer, &s.dmabuf_destroy);
+    s.dmabuf_destroy_armed = true;
 }
 
 // --- wl_surface ---
@@ -185,8 +215,18 @@ void surface_commit(wl_client*, wl_resource* res) {
                 copy_shm_buffer(s, shm);
             }
             wl_buffer_send_release(s.pending.buffer);
+            release_held_dmabuf(s); // на случай смены dmabuf → shm
+        } else if (DmabufBuffer* db = dmabuf_from_buffer_resource(s.pending.buffer)) {
+            // dmabuf применяем сразу даже для sync-субповерхностей (без кэша):
+            // буфер один, копий нет — упрощение, приемлемое для M3
+            hold_dmabuf(s, s.pending.buffer);
+            s.width = db->width;
+            s.height = db->height;
+            s.pixels.clear();
+            s.has_content = true;
+            s.dirty = true;
         } else {
-            std::fprintf(stderr, "imway: не-shm буфер, пока не поддержан\n");
+            std::fprintf(stderr, "imway: неизвестный тип буфера\n");
         }
         detach_pending_buffer(s);
         s.pending.newly_attached = false;
@@ -242,6 +282,7 @@ void surface_resource_destroyed(wl_resource* res) {
     for (Subsurface* c : s->stack_below) c->parent = nullptr; // дети-сироты не рендерятся
     for (Subsurface* c : s->stack_above) c->parent = nullptr;
     if (s->server->seat) s->server->seat->surface_gone(s);
+    release_held_dmabuf(*s);
     viewport_surface_gone(*s);
     if (s->texture && s->server->renderer) s->server->renderer->destroy_texture(s->texture);
     s->server->surfaces.remove(s);

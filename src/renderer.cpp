@@ -2,10 +2,12 @@
 
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
 
+#include "dmabuf.hpp"
 #include "server.hpp"
 
 namespace {
@@ -113,6 +115,34 @@ bool Renderer::init(int width, int height) {
         }
     if (queue_family_ == UINT32_MAX) return false;
 
+    // dmabuf-импорт: включаем расширения, если девайс умеет
+    std::vector<const char*> dev_exts;
+    {
+        uint32_t en = 0;
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &en, nullptr);
+        std::vector<VkExtensionProperties> eprops(en);
+        vkEnumerateDeviceExtensionProperties(phys_, nullptr, &en, eprops.data());
+        auto have = [&](const char* name) {
+            for (const auto& e : eprops)
+                if (!strcmp(e.extensionName, name)) return true;
+            return false;
+        };
+        const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+                              VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
+                              VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
+        has_dmabuf_ = true;
+        for (const char* n : need)
+            if (!have(n)) {
+                has_dmabuf_ = false;
+                std::fprintf(stderr, "imway: vulkan без %s — dmabuf выключен\n", n);
+            }
+        if (has_dmabuf_) {
+            for (const char* n : need) dev_exts.push_back(n);
+            if (have(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME))
+                dev_exts.push_back(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
+        }
+    }
+
     float prio = 1.f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
     qci.queueFamilyIndex = queue_family_;
@@ -121,8 +151,17 @@ bool Renderer::init(int width, int height) {
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qci;
+    dci.enabledExtensionCount = (uint32_t)dev_exts.size();
+    dci.ppEnabledExtensionNames = dev_exts.data();
     VK_CHECK(vkCreateDevice(phys_, &dci, nullptr, &device_));
     vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
+
+    if (has_dmabuf_) {
+        get_memory_fd_props_ = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
+            device_, "vkGetMemoryFdPropertiesKHR");
+        if (!get_memory_fd_props_) has_dmabuf_ = false;
+    }
+    if (has_dmabuf_) query_dmabuf_formats();
 
     // render target + readback
     if (!create_image(width_, height_,
@@ -435,6 +474,164 @@ bool Renderer::screenshot(const char* path) {
         std::fwrite(row.data(), 1, row.size(), f);
     }
     std::fclose(f);
+    return true;
+}
+
+// оба fourcc — B8G8R8A8_UNORM в памяти; X-вариант получает alpha=1 свизлом вью
+static constexpr uint32_t kFourccArgb = 0x34325241; // DRM_FORMAT_ARGB8888 ('AR24')
+static constexpr uint32_t kFourccXrgb = 0x34325258; // DRM_FORMAT_XRGB8888 ('XR24')
+
+void Renderer::query_dmabuf_formats() {
+    VkDrmFormatModifierPropertiesListEXT mod_list{
+        VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
+    VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+    props.pNext = &mod_list;
+    vkGetPhysicalDeviceFormatProperties2(phys_, kFormat, &props);
+    std::vector<VkDrmFormatModifierPropertiesEXT> mods(mod_list.drmFormatModifierCount);
+    mod_list.pDrmFormatModifierProperties = mods.data();
+    vkGetPhysicalDeviceFormatProperties2(phys_, kFormat, &props);
+
+    for (const auto& m : mods) {
+        if (m.drmFormatModifierPlaneCount != 1) continue; // импортим только 1 плоскость
+        if (!(m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) continue;
+        dmabuf_formats_.push_back({kFourccArgb, m.drmFormatModifier});
+        dmabuf_formats_.push_back({kFourccXrgb, m.drmFormatModifier});
+    }
+    std::printf("imway: dmabuf-форматов: %zu (модификаторов на fourcc: %zu)\n",
+                dmabuf_formats_.size(), dmabuf_formats_.size() / 2);
+}
+
+bool Renderer::dmabuf_format_supported(uint32_t fourcc, uint64_t modifier) const {
+    for (const auto& f : dmabuf_formats_)
+        if (f.fourcc == fourcc && f.modifier == modifier) return true;
+    return false;
+}
+
+bool Renderer::import_dmabuf(Surface& s) {
+    DmabufBuffer* b = s.dmabuf_buffer ? dmabuf_from_buffer_resource(s.dmabuf_buffer) : nullptr;
+    if (!b || !has_dmabuf_) return false;
+    if (b->nplanes != 1) return false; // отфильтровано на create, но перестрахуемся
+
+    destroy_texture(s.texture);
+    s.texture = nullptr;
+
+    auto* tex = new SurfaceTexture();
+    tex->w = b->width;
+    tex->h = b->height;
+    tex->external = true;
+
+    VkSubresourceLayout plane{};
+    plane.offset = b->offsets[0];
+    plane.rowPitch = b->strides[0];
+
+    VkImageDrmFormatModifierExplicitCreateInfoEXT mod_info{
+        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT};
+    mod_info.drmFormatModifier = b->modifier;
+    mod_info.drmFormatModifierPlaneCount = 1;
+    mod_info.pPlaneLayouts = &plane;
+
+    VkExternalMemoryImageCreateInfo ext_info{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+    ext_info.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    ext_info.pNext = &mod_info;
+
+    VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ici.pNext = &ext_info;
+    ici.imageType = VK_IMAGE_TYPE_2D;
+    ici.format = kFormat;
+    ici.extent = {(uint32_t)b->width, (uint32_t)b->height, 1};
+    ici.mipLevels = 1;
+    ici.arrayLayers = 1;
+    ici.samples = VK_SAMPLE_COUNT_1_BIT;
+    ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+    ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+    ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    if (vkCreateImage(device_, &ici, nullptr, &tex->image) != VK_SUCCESS) {
+        std::fprintf(stderr, "imway: dmabuf vkCreateImage fail\n");
+        delete tex;
+        return false;
+    }
+
+    // память: тип должен подходить и картинке, и самому fd
+    int fd = dup(b->fds[0]); // импорт забирает fd себе
+    VkMemoryFdPropertiesKHR fd_props{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+    if (get_memory_fd_props_(device_, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd,
+                             &fd_props) != VK_SUCCESS) {
+        std::fprintf(stderr, "imway: vkGetMemoryFdPropertiesKHR fail\n");
+        close(fd);
+        vkDestroyImage(device_, tex->image, nullptr);
+        delete tex;
+        return false;
+    }
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(device_, tex->image, &req);
+    uint32_t type_bits = req.memoryTypeBits & fd_props.memoryTypeBits;
+    uint32_t mem_type = UINT32_MAX;
+    for (uint32_t i = 0; i < 32 && mem_type == UINT32_MAX; i++)
+        if (type_bits & (1u << i)) mem_type = i;
+
+    VkImportMemoryFdInfoKHR import_info{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+    import_info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    import_info.fd = fd;
+    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+    dedicated.image = tex->image;
+    dedicated.pNext = &import_info;
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.pNext = &dedicated;
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = mem_type;
+    if (mem_type == UINT32_MAX ||
+        vkAllocateMemory(device_, &mai, nullptr, &tex->memory) != VK_SUCCESS ||
+        vkBindImageMemory(device_, tex->image, tex->memory, 0) != VK_SUCCESS) {
+        std::fprintf(stderr, "imway: импорт dmabuf-памяти fail\n");
+        close(fd);
+        vkDestroyImage(device_, tex->image, nullptr);
+        if (tex->memory) vkFreeMemory(device_, tex->memory, nullptr);
+        delete tex;
+        return false;
+    }
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vci.image = tex->image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = kFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    if (b->format == kFourccXrgb) vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
+    vkCreateImageView(device_, &vci, nullptr, &tex->view);
+
+    // одноразовый переход UNDEFINED → SHADER_READ_ONLY
+    VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbai.commandPool = cmd_pool_;
+    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbai.commandBufferCount = 1;
+    VkCommandBuffer once = VK_NULL_HANDLE;
+    vkAllocateCommandBuffers(device_, &cbai, &once);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(once, &bi);
+    VkImageMemoryBarrier to_read{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    to_read.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    to_read.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    to_read.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    to_read.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_read.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    to_read.image = tex->image;
+    to_read.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(once, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &to_read);
+    vkEndCommandBuffer(once);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &once;
+    vkQueueSubmit(queue_, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue_);
+    vkFreeCommandBuffers(device_, cmd_pool_, 1, &once);
+
+    tex->ds = ImGui_ImplVulkan_AddTexture(sampler_, tex->view,
+                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->first_use = false;
+    textures_.push_back(tex);
+    s.texture = tex;
     return true;
 }
 

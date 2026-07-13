@@ -34,6 +34,14 @@ add_test(NAME headless_viewport
             $<TARGET_FILE:imway> $<TARGET_FILE:client_viewport>)
 set_tests_properties(headless_viewport PROPERTIES TIMEOUT 60)
 
+add_executable(client_dmabuf client_dmabuf.c)
+target_link_libraries(client_dmabuf PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+
+add_test(NAME headless_dmabuf
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_dmabuf.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_dmabuf>)
+set_tests_properties(headless_dmabuf PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
+
 add_test(NAME headless_input
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_input.sh $<TARGET_FILE:imway>)
 set_tests_properties(headless_input PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)

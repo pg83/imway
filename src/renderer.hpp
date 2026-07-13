@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <list>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -21,7 +22,13 @@ struct SurfaceTexture {
     void* staging_map = nullptr;
     VkDescriptorSet ds = VK_NULL_HANDLE; // ImTextureID
     bool needs_upload = false;
-    bool first_use = true; // layout ещё UNDEFINED
+    bool first_use = true;  // layout ещё UNDEFINED
+    bool external = false;  // импортированный dmabuf: без staging/upload
+};
+
+struct DmabufFormat {
+    uint32_t fourcc = 0;
+    uint64_t modifier = 0;
 };
 
 struct Renderer {
@@ -31,6 +38,11 @@ struct Renderer {
     // скопировать пиксели поверхности в staging (пересоздать текстуру при ресайзе)
     void upload_surface(Surface&);
     void destroy_texture(SurfaceTexture*);
+
+    // dmabuf: форматы для рекламы клиентам и прямой импорт в VkImage
+    const std::vector<DmabufFormat>& dmabuf_formats() const { return dmabuf_formats_; }
+    bool dmabuf_format_supported(uint32_t fourcc, uint64_t modifier) const;
+    bool import_dmabuf(Surface&);
 
     // построить ImGui-кадр по toplevel'ам сервера, записать и исполнить command buffer
     void render_frame(Server&);
@@ -65,6 +77,12 @@ private:
     VkSampler sampler_ = VK_NULL_HANDLE;
 
     std::list<SurfaceTexture*> textures_;
+
+    // dmabuf-импорт
+    bool has_dmabuf_ = false;
+    std::vector<DmabufFormat> dmabuf_formats_;
+    PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_props_ = nullptr;
+    void query_dmabuf_formats();
 
     uint32_t find_memory_type(uint32_t type_bits, VkMemoryPropertyFlags props);
     bool create_image(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);

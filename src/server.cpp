@@ -5,6 +5,7 @@
 
 #include <wayland-server-protocol.h>
 
+#include "dmabuf.hpp"
 #include "kms.hpp"
 #include "renderer.hpp"
 #include "seat.hpp"
@@ -75,6 +76,7 @@ bool Server::init() {
     data_device_create_global(*this);
     xdg_decoration_create_global(*this);
     viewporter_create_global(*this);
+    linux_dmabuf_create_global(*this);
 
     if (!control_path.empty()) {
         control = control_create(*this, control_path.c_str());
@@ -120,7 +122,10 @@ void Server::on_frame_tick() {
     // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
     for (Surface* s : surfaces)
         if (s->dirty && s->has_content) {
-            renderer->upload_surface(*s);
+            if (s->dmabuf_buffer)
+                renderer->import_dmabuf(*s);
+            else
+                renderer->upload_surface(*s);
             s->dirty = false;
         }
 
