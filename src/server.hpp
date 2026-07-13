@@ -38,6 +38,22 @@ struct Surface {
 
     SurfaceTexture* texture = nullptr; // владеет Renderer
 
+    // wp_viewport: кроп (координаты буфера) и масштаб (размер поверхности)
+    struct {
+        wl_resource* res = nullptr; // живой wp_viewport (максимум один)
+        // pending: -1 = unset; применяется на commit
+        double pend_sx = -1, pend_sy = -1, pend_sw = -1, pend_sh = -1;
+        int pend_dw = -1, pend_dh = -1;
+        // текущее
+        bool has_src = false, has_dst = false;
+        double sx = 0, sy = 0, sw = 0, sh = 0;
+        int dw = 0, dh = 0;
+    } vp;
+
+    // итоговый размер на экране с учётом вьюпорта
+    int view_w() const { return vp.has_dst ? vp.dw : vp.has_src ? (int)vp.sw : width; }
+    int view_h() const { return vp.has_dst ? vp.dh : vp.has_src ? (int)vp.sh : height; }
+
     // состояние из последнего ImGui-кадра (для маршрутизации input)
     float img_x = 0, img_y = 0; // экранная позиция Image-итема
     bool hovered = false;
@@ -137,6 +153,11 @@ void xdg_shell_create_global(Server&);
 void output_create_global(Server&);
 void data_device_create_global(Server&);
 void xdg_decoration_create_global(Server&);
+void viewporter_create_global(Server&);
+
+// wp_viewport: применить pending на commit; отвязать при смерти поверхности
+void viewport_apply_pending(Surface&);
+void viewport_surface_gone(Surface&);
 
 // реакция xdg-роли на commit поверхности (map-логика, configure dance)
 void xdg_handle_commit(Surface&);

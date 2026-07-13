@@ -39,6 +39,17 @@ add_custom_command(OUTPUT "${PROTO_DIR}/xdg-shell-protocol.c"
     COMMAND ${WAYLAND_SCANNER} private-code "${XDG_SHELL_XML}" "${PROTO_DIR}/xdg-shell-protocol.c"
     DEPENDS "${XDG_SHELL_XML}")
 
+set(VIEWPORTER_XML "${WAYLAND_PROTOCOLS_DIR}/stable/viewporter/viewporter.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/viewporter-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${VIEWPORTER_XML}" "${PROTO_DIR}/viewporter-server-protocol.h"
+    DEPENDS "${VIEWPORTER_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/viewporter-client-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} client-header "${VIEWPORTER_XML}" "${PROTO_DIR}/viewporter-client-protocol.h"
+    DEPENDS "${VIEWPORTER_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/viewporter-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${VIEWPORTER_XML}" "${PROTO_DIR}/viewporter-protocol.c"
+    DEPENDS "${VIEWPORTER_XML}")
+
 set(XDG_DECO_XML "${WAYLAND_PROTOCOLS_DIR}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
 add_custom_command(OUTPUT "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h"
     COMMAND ${WAYLAND_SCANNER} server-header "${XDG_DECO_XML}" "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h"
@@ -51,6 +62,9 @@ add_library(protocols STATIC
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
     "${PROTO_DIR}/xdg-shell-client-protocol.h"
+    "${PROTO_DIR}/viewporter-protocol.c"
+    "${PROTO_DIR}/viewporter-server-protocol.h"
+    "${PROTO_DIR}/viewporter-client-protocol.h"
     "${PROTO_DIR}/xdg-decoration-unstable-v1-protocol.c"
     "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
@@ -74,6 +88,7 @@ add_executable(imway
     src/data_device.cpp
     src/input_linux.cpp
     src/kms.cpp
+    src/viewporter.cpp
     src/seat.cpp
     src/seat_output.cpp
     src/xdg_decoration.cpp

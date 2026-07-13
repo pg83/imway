@@ -74,6 +74,7 @@ bool Server::init() {
     seat_create_global(*this);
     data_device_create_global(*this);
     xdg_decoration_create_global(*this);
+    viewporter_create_global(*this);
 
     if (!control_path.empty()) {
         control = control_create(*this, control_path.c_str());

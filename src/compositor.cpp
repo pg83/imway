@@ -201,6 +201,8 @@ void surface_commit(wl_client*, wl_resource* res) {
     for (wl_resource* cb : s.pending.frames) s.frame_cbs.push_back(cb);
     s.pending.frames.clear();
 
+    viewport_apply_pending(s);
+
     // desync-субповерхность: позиция всё равно применяется коммитом родителя,
     // но контент — сразу (уже применён выше)
     apply_children_caches(s);
@@ -240,6 +242,7 @@ void surface_resource_destroyed(wl_resource* res) {
     for (Subsurface* c : s->stack_below) c->parent = nullptr; // дети-сироты не рендерятся
     for (Subsurface* c : s->stack_above) c->parent = nullptr;
     if (s->server->seat) s->server->seat->surface_gone(s);
+    viewport_surface_gone(*s);
     if (s->texture && s->server->renderer) s->server->renderer->destroy_texture(s->texture);
     s->server->surfaces.remove(s);
     delete s;

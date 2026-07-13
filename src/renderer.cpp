@@ -316,9 +316,16 @@ void Renderer::draw_surface_tree(Surface& s, float x, float y) {
             draw_surface_tree(*c->surface, x + (float)c->x, y + (float)c->y);
 
     if (s.texture) {
+        // wp_viewport: source → UV-кроп, destination → размер итема
+        ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+        if (s.vp.has_src && s.texture->w > 0 && s.texture->h > 0) {
+            uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
+            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w),
+                         (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+        }
+        float w = (float)s.view_w(), h = (float)s.view_h();
         ImGui::SetCursorScreenPos(ImVec2(x, y));
-        ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds,
-                     ImVec2((float)s.texture->w, (float)s.texture->h));
+        ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv0, uv1);
         s.img_x = x;
         s.img_y = y;
         // hovered без учёта перекрытия сиблингами — seat берёт последний в порядке отрисовки

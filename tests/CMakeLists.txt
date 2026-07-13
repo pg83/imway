@@ -26,6 +26,14 @@ add_test(NAME headless_subsurface
             $<TARGET_FILE:imway> $<TARGET_FILE:client_subsurface>)
 set_tests_properties(headless_subsurface PROPERTIES TIMEOUT 60)
 
+add_executable(client_viewport client_viewport.c)
+target_link_libraries(client_viewport PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+
+add_test(NAME headless_viewport
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_viewport.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_viewport>)
+set_tests_properties(headless_viewport PROPERTIES TIMEOUT 60)
+
 add_test(NAME headless_input
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_input.sh $<TARGET_FILE:imway>)
 set_tests_properties(headless_input PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
