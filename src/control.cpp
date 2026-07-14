@@ -1,7 +1,3 @@
-// Control-канал: FIFO с текстовыми командами для инъекции input и управления.
-// Команды: motion X Y | button left|right|middle press|release |
-//          key CODE press|release | type TEXT | scroll N |
-//          screenshot PATH | quit
 
 #include "control.h"
 #include "input.h"
@@ -25,7 +21,6 @@
 using namespace stl;
 
 namespace {
-    // ascii → (evdev code, needs shift) для us-раскладки
     bool asciiToKey(char c, u32& code, bool& shift) {
         static const struct {
             char ch;
@@ -162,7 +157,6 @@ void ControlImpl::handleLine(const char* cmd) {
     } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
         sink->scroll(y);
     } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
-        // скриншот содержимого последнего отрендеренного кадра
         renderer->screenshot(a);
         sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
     } else if (!strcmp(cmd, "quit")) {
@@ -192,11 +186,11 @@ void ControlImpl::handleInput() {
                 }
             }
         } else if (n == 0) {
-            reopen(); // писатель закрыл FIFO
+            reopen();
 
             return;
         } else {
-            return; // EAGAIN
+            return;
         }
     }
 }

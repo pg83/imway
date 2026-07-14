@@ -23,7 +23,6 @@
 
 using namespace stl;
 
-// непрозрачный для остального кода: только рендерер знает про Vulkan
 struct SurfaceTexture {
     int w = 0, h = 0;
     VkImage image = VK_NULL_HANDLE;
@@ -32,21 +31,19 @@ struct SurfaceTexture {
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
     void* stagingMap = nullptr;
-    VkDescriptorSet ds = VK_NULL_HANDLE; // ImTextureID
+    VkDescriptorSet ds = VK_NULL_HANDLE;
     bool needsUpload = false;
-    bool firstUse = true;  // layout ещё UNDEFINED
-    bool external = false; // импортированный dmabuf: без staging/upload
+    bool firstUse = true;
+    bool external = false;
 };
 
-// ошибка Vulkan — ловимое исключение (main — граница)
 #define VK_CHECK(x) STD_VERIFY((x) == VK_SUCCESS)
 
 namespace {
-    constexpr VkFormat kFormat = VK_FORMAT_B8G8R8A8_UNORM; // wl_shm ARGB8888 в памяти = BGRA
+    constexpr VkFormat kFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-    // оба fourcc — B8G8R8A8_UNORM в памяти; X-вариант получает alpha=1 свизлом вью
-    constexpr u32 kFourccArgb = 0x34325241; // DRM_FORMAT_ARGB8888 ('AR24')
-    constexpr u32 kFourccXrgb = 0x34325258; // DRM_FORMAT_XRGB8888 ('XR24')
+    constexpr u32 kFourccArgb = 0x34325241;
+    constexpr u32 kFourccXrgb = 0x34325258;
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
 
@@ -57,7 +54,7 @@ namespace {
         FrameListener* listener = nullptr;
         ev_timer frameTimer{};
         int framesLimit = 0;
-        int settleFrames = 0; // дорисовать пару кадров после последней активности
+        int settleFrames = 0;
 
         int width = 0, height = 0;
 
@@ -85,7 +82,6 @@ namespace {
         ObjList<SurfaceTexture>* textureAlloc = nullptr;
         Vector<SurfaceTexture*> textures;
 
-        // dmabuf-импорт
         bool hasDmabuf = false;
         Vector<DmabufFormat> dmabufFormats_;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
@@ -99,7 +95,7 @@ namespace {
         {
             setup(scn.outW, scn.outH);
 
-            ImGui::GetIO().MouseDrawCursor = scn.drawCursor; // композитный курсор
+            ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
 
             ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
             frameTimer.data = this;
@@ -130,8 +126,6 @@ namespace {
             listener = l;
         }
 
-        // --- InputSink: сырой ввод для ImGui (окна двигает/ресайзит он) ---
-
         void motion(double x, double y) override {
             scene->needsFrame = true;
             ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
@@ -145,7 +139,7 @@ namespace {
         }
 
         void key(u32, bool) override {
-            scene->needsFrame = true; // клавиши ImGui не нужны, но кадр — да
+            scene->needsFrame = true;
         }
 
         void scroll(double value) override {
@@ -253,9 +247,8 @@ void RendererImpl::setup(int w, int h) {
     u32 n = 0;
 
     vkEnumeratePhysicalDevices(instance, &n, nullptr);
-    STD_VERIFY(n > 0); // нет vulkan-устройств
+    STD_VERIFY(n > 0);
 
-    // берём первый девайс
     n = 1;
     vkEnumeratePhysicalDevices(instance, &n, &phys);
 
@@ -284,7 +277,6 @@ void RendererImpl::setup(int w, int h) {
 
     STD_VERIFY(queueFamily != UINT32_MAX);
 
-    // dmabuf-импорт: включаем расширения, если девайс умеет
     Vector<const char*> devExts;
     {
         u32 en = 0;
@@ -359,7 +351,6 @@ void RendererImpl::setup(int w, int h) {
         queryDmabufFormats();
     }
 
-    // render target + readback
     createImage(width, height,
                 VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target,
                 targetMemory);
@@ -375,7 +366,6 @@ void RendererImpl::setup(int w, int h) {
     createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback,
                      readbackMemory, &readbackMap);
 
-    // render pass: clear → imgui → TRANSFER_SRC (для readback в любой момент)
     VkAttachmentDescription att{};
 
     att.format = kFormat;
@@ -438,15 +428,14 @@ void RendererImpl::setup(int w, int h) {
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VK_CHECK(vkCreateSampler(device, &sci, nullptr, &sampler));
 
-    // ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
 
-    io.IniFilename = nullptr; // не писать imgui.ini
+    io.IniFilename = nullptr;
     io.DisplaySize = ImVec2((float)width, (float)height);
-    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors; // ресайз за края окна
+    io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
     ImGui_ImplVulkan_InitInfo ii{};
 
@@ -456,7 +445,7 @@ void RendererImpl::setup(int w, int h) {
     ii.Device = device;
     ii.QueueFamily = queueFamily;
     ii.Queue = queue;
-    ii.DescriptorPoolSize = 512; // внутренний пул: fonts + AddTexture
+    ii.DescriptorPoolSize = 512;
     ii.MinImageCount = 2;
     ii.ImageCount = 2;
     ii.PipelineInfoMain.RenderPass = renderPass;
@@ -480,7 +469,7 @@ void RendererImpl::queryDmabufFormats() {
     vkGetPhysicalDeviceFormatProperties2(phys, kFormat, &props);
 
     for (const auto& m : mods) {
-        if (m.drmFormatModifierPlaneCount != 1) { // импортим только 1 плоскость
+        if (m.drmFormatModifierPlaneCount != 1) {
             continue;
         }
 
@@ -514,7 +503,6 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex->w = s.width;
         tex->h = s.height;
 
-        // сбой аллокации — не повод ронять композитор из wayland-колбэка
         try {
             createImage(s.width, s.height,
                         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image,
@@ -552,7 +540,7 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
         return;
     }
 
-    vkQueueWaitIdle(queue); // грубо, но корректно
+    vkQueueWaitIdle(queue);
 
     if (tex->ds) {
         ImGui_ImplVulkan_RemoveTexture(tex->ds);
@@ -589,7 +577,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    if (b->nplanes != 1) { // отфильтровано на create, но перестрахуемся
+    if (b->nplanes != 1) {
         return false;
     }
 
@@ -639,8 +627,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    // память: тип должен подходить и картинке, и самому fd
-    int fd = dup(b->fds[0]); // импорт забирает fd себе
+    int fd = dup(b->fds[0]);
     VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
     if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) !=
@@ -711,7 +698,6 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vkCreateImageView(device, &vci, nullptr, &tex->view);
 
-    // одноразовый переход UNDEFINED → SHADER_READ_ONLY
     VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 
     cbai.commandPool = cmdPool;
@@ -758,8 +744,6 @@ bool RendererImpl::importDmabuf(Surface& s) {
     return true;
 }
 
-// нарисовать поверхность и её субповерхности (stackBelow → сама → stackAbove);
-// позже нарисованный Image перекрывает ранние, что и даёт правильный z-порядок
 void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     for (Subsurface* c : s.stackBelow) {
         if (c->surface && c->surface->hasContent) {
@@ -768,7 +752,6 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     }
 
     if (s.texture) {
-        // wp_viewport: source → UV-кроп, destination → размер итема
         ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
 
         if (s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
@@ -783,7 +766,6 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv0, uv1);
         s.imgX = x;
         s.imgY = y;
-        // hovered без учёта перекрытия сиблингами — seat берёт последний в порядке отрисовки
         s.hovered = ImGui::IsItemHovered();
     }
 
@@ -794,8 +776,6 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     }
 }
 
-// вариант для попапов: рисует в foreground draw list поверх всех окон,
-// hovered считается вручную (попапы всегда верхние, перекрыть их некому)
 void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
     for (Subsurface* c : s.stackBelow) {
         if (c->surface && c->surface->hasContent) {
@@ -857,7 +837,6 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui::NewFrame();
 
     if (ImGui::BeginMainMenuBar()) {
-        // дефолтный шрифт ImGui — только ASCII; кириллица придёт со своим шрифтом
         ImGui::TextUnformatted("imway");
         ImGui::Separator();
         ImGui::Text("clients: %zu", scene.toplevels.length());
@@ -886,7 +865,6 @@ void RendererImpl::buildUi(Scene& scene) {
         i++;
 
         if (!t->winSizeSet) {
-            // окно под размер первого буфера; дальше размером владеет пользователь
             const ImGuiStyle& st = ImGui::GetStyle();
 
             ImGui::SetNextWindowSize(ImVec2((float)root->viewW() + st.WindowPadding.x * 2,
@@ -896,7 +874,6 @@ void RendererImpl::buildUi(Scene& scene) {
             t->winSizeSet = true;
         }
 
-        // колесо — клиенту, не скроллу окна
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
         if (ImGui::Begin(label, nullptr, flags)) {
@@ -915,10 +892,6 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::End();
     }
 
-    // попапы — поверх всех окон через foreground draw list (не отдельные
-    // ImGui-окна: их z-order управляется фокусом и проигрывает toplevel'у);
-    // позиция позиционера — относительно поверхности родителя, чей imgX/imgY
-    // записан этим же кадром
     for (Popup* p : scene.popups) {
         Surface* ps = p->surface;
 
@@ -946,7 +919,6 @@ void RendererImpl::renderFrame() {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
 
-    // залить обновлённые текстуры поверхностей
     for (SurfaceTexture* tex : textures) {
         if (!tex->needsUpload) {
             continue;
@@ -1003,8 +975,6 @@ void RendererImpl::renderFrame() {
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     vkCmdEndRenderPass(cmd);
 
-    // target уже в TRANSFER_SRC (finalLayout) — копия в readback каждый кадр
-    // дёшева на cpu-девайсе
     VkBufferImageCopy region{};
 
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -1024,7 +994,6 @@ void RendererImpl::renderFrame() {
 }
 
 bool RendererImpl::screenshot(const char* path) {
-    // readbackMap обновлён последним кадром: BGRA → PPM (RGB)
     FILE* f = fopen(path, "wb");
 
     if (!f) {
@@ -1042,9 +1011,9 @@ bool RendererImpl::screenshot(const char* path) {
         const unsigned char* src = px + (size_t)y * width * 4;
 
         for (int x = 0; x < width; x++) {
-            row.mut(x * 3 + 0) = src[x * 4 + 2]; // R
-            row.mut(x * 3 + 1) = src[x * 4 + 1]; // G
-            row.mut(x * 3 + 2) = src[x * 4 + 0]; // B
+            row.mut(x * 3 + 0) = src[x * 4 + 2];
+            row.mut(x * 3 + 1) = src[x * 4 + 1];
+            row.mut(x * 3 + 2) = src[x * 4 + 0];
         }
 
         fwrite(row.data(), 1, row.length(), f);
@@ -1088,11 +1057,9 @@ void RendererImpl::shutdown() noexcept {
     device = VK_NULL_HANDLE;
 }
 
-// кадровый клок: по needsFrame рендерим, презентим, уведомляем SM
 void RendererImpl::tick() {
-    // lavapipe — это CPU: без изменений кадр не рисуем вовсе
     if (scene->needsFrame) {
-        settleFrames = 3; // ImGui дорисует hover/анимации
+        settleFrames = 3;
     }
 
     bool active = scene->needsFrame || settleFrames > 0;
@@ -1102,12 +1069,10 @@ void RendererImpl::tick() {
     if (active) {
         settleFrames--;
 
-        // текстуры уничтоженных нод
         while (!scene->orphanedTextures.empty()) {
             destroyTexture(scene->orphanedTextures.popBack());
         }
 
-        // свежий контент нод — в текстуры (субповерхности тоже, у каждой своя)
         for (Surface* s : scene->surfaces) {
             if (s->dirty && s->hasContent) {
                 if (s->dmabuf) {

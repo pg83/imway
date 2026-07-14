@@ -1,5 +1,3 @@
-// Источники ввода: libinput (абсолютная/относительная мышь, кнопки, колесо,
-// клавиатура — сырые evdev-коды) и tee-разветвитель.
 
 #include "input.h"
 #include "util.h"
@@ -43,7 +41,7 @@ namespace {
         udev* ud = nullptr;
         libinput* li = nullptr;
         ev_io io{};
-        double relX = 0, relY = 0; // накопленная позиция для относительных устройств
+        double relX = 0, relY = 0;
 
         LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h);
         ~LibinputSource() noexcept override;
@@ -66,15 +64,14 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int 
 {
     ud = udev_new();
     li = libinput_udev_create_context(&liIface, this, ud);
-    STD_VERIFY(li); // libinput context не создался
+    STD_VERIFY(li);
 
-    // права на /dev/input?
     STD_VERIFY(libinput_udev_assign_seat(li, "seat0") == 0);
 
     ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
-    dispatch(); // добавленные устройства
+    dispatch();
     sysO << "imway: libinput ready"_sv << endL;
 }
 

@@ -25,7 +25,6 @@ bool Surface::inputContains(double sx, double sy) const {
 Surface* Surface::rootSurface() {
     Surface* s = this;
 
-    // вверх по цепочке субповерхностей до корня
     while (s->sub && s->sub->parent) {
         s = s->sub->parent;
     }
@@ -36,7 +35,7 @@ Surface* Surface::rootSurface() {
 Toplevel* Surface::rootToplevel() {
     Surface* s = rootSurface();
 
-    if (s->sub) { // сирота: родитель умер
+    if (s->sub) {
         return nullptr;
     }
 

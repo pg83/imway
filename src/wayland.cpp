@@ -1,11 +1,8 @@
-// Wayland state machine: wl_display, все глобалы и обработчики протоколов,
-// seat (фокус/грабы/клавиатура). Протокольные части модели сцены (pending,
-// кэши, xdg-ресурсы) — impl-наследники структур сцены, наружу не видны.
 
 #include "wayland.h"
 
 #include "input.h"
-#include "renderer.h" // FrameListener
+#include "renderer.h"
 #include "scene.h"
 #include "util.h"
 
@@ -38,7 +35,6 @@ namespace {
     struct ToplevelImpl;
     struct WaylandImpl;
 
-    // роль xdg_surface — чисто протокольная, сцене не видна
     struct XdgSurface {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
@@ -51,32 +47,29 @@ namespace {
 
     struct SurfaceImpl: public Surface {
         WaylandImpl* srv = nullptr;
-        wl_resource* res = nullptr; // канал к клиенту
+        wl_resource* res = nullptr;
 
-        // pending-состояние (double buffering протокола)
         struct {
             wl_resource* buffer = nullptr;
             bool newlyAttached = false;
             wl_listener bufferDestroy{};
             bool bufferDestroyArmed = false;
             Vector<wl_resource*> frames;
-            bool inputRegionSet = false; // false = вся поверхность
+            bool inputRegionSet = false;
             Vector<RectI> inputRegion;
         } pending;
 
         Vector<wl_resource*> frameCbs;
 
-        // dmabuf-контент: буфер держим до замены (рендер читает память напрямую)
         wl_resource* dmabufRes = nullptr;
         wl_listener dmabufDestroy{};
         bool dmabufDestroyArmed = false;
 
-        // wp_viewport: pending (-1 = unset, применяется на commit) и живой ресурс
         wl_resource* vpRes = nullptr;
         double pendSx = -1, pendSy = -1, pendSw = -1, pendSh = -1;
         int pendDw = -1, pendDh = -1;
 
-        XdgSurface* xdg = nullptr; // роль xdg_surface
+        XdgSurface* xdg = nullptr;
     };
 
     struct SubsurfaceImpl: public Subsurface {
@@ -84,10 +77,9 @@ namespace {
         wl_resource* res = nullptr;
 
         int pendingX = 0, pendingY = 0;
-        bool pendingPos = false; // применяется на commit родителя
-        bool sync = true;        // режим по умолчанию — synchronized
+        bool pendingPos = false;
+        bool sync = true;
 
-        // кэш состояния для sync-коммитов (применяется на commit родителя)
         struct {
             bool valid = false;
             bool hasContent = false;
@@ -96,24 +88,23 @@ namespace {
             Vector<wl_resource*> frames;
         } cache;
 
-        bool effectiveSync() const; // sync у себя или у любого предка-субповерхности
+        bool effectiveSync() const;
     };
 
     struct ToplevelImpl: public Toplevel {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
-        int cfgW = 0, cfgH = 0; // последний отправленный configure
+        int cfgW = 0, cfgH = 0;
     };
 
     struct PopupImpl: public Popup {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
-        int w = 0, h = 0; // размер из позиционера
+        int w = 0, h = 0;
     };
 
-    // мелкие протокольные объекты с O(1) reuse; srv — для возврата в свой ObjList
     struct RegionBox {
         WaylandImpl* srv = nullptr;
         Vector<RectI> rects;
@@ -122,31 +113,29 @@ namespace {
     struct Positioner {
         WaylandImpl* srv = nullptr;
 
-        int w = 0, h = 0;                   // set_size
-        int ax = 0, ay = 0, aw = 0, ah = 0; // anchor_rect
+        int w = 0, h = 0;
+        int ax = 0, ay = 0, aw = 0, ah = 0;
         u32 anchor = XDG_POSITIONER_ANCHOR_NONE;
         u32 gravity = XDG_POSITIONER_GRAVITY_NONE;
-        int dx = 0, dy = 0; // offset
+        int dx = 0, dy = 0;
 
-        // левый-верхний угол попапа в координатах родителя
         void place(int& outX, int& outY) const;
     };
 
-    struct BufferBox { // dmabuf wl_buffer
+    struct BufferBox {
         WaylandImpl* srv = nullptr;
         DmabufBuffer buf;
     };
 
-    struct Params { // zwp_linux_buffer_params_v1
+    struct Params {
         WaylandImpl* srv = nullptr;
-        BufferBox* pending = nullptr; // накапливаем add(); nullptr после create
+        BufferBox* pending = nullptr;
     };
 
-    // seat — не подсистема, а протокольное состояние ввода внутри SM
     struct SeatState {
         WaylandImpl* srv = nullptr;
 
-        Vector<wl_resource*> keyboards; // все wl_keyboard всех клиентов
+        Vector<wl_resource*> keyboards;
         Vector<wl_resource*> pointers;
 
         xkb_context* xkb = nullptr;
@@ -156,11 +145,11 @@ namespace {
         u32 keymapSize = 0;
 
         Toplevel* kbFocus = nullptr;
-        Surface* kbOverride = nullptr; // grab-попап: клавиатура идёт сюда, не в kbFocus
-        Surface* ptrFocus = nullptr;   // поверхность (в т.ч. суб-), куда идут pointer-события
-        int buttonsDown = 0;           // implicit grab, пока >0 — ptrFocus залочен
+        Surface* kbOverride = nullptr;
+        Surface* ptrFocus = nullptr;
+        int buttonsDown = 0;
 
-        double curX = 0, curY = 0; // координаты output
+        double curX = 0, curY = 0;
         Vector<u32> pressedKeys;
         u32 modsDepressed = 0, modsLatched = 0, modsLocked = 0, modsGroup = 0;
 
@@ -209,7 +198,6 @@ namespace {
 
         u64 nextToplevelId = 1;
 
-        // переиспользуемые аллокации протокольных объектов (память из пула)
         ObjList<SurfaceImpl>* surfaceAlloc = nullptr;
         ObjList<SubsurfaceImpl>* subsurfaceAlloc = nullptr;
         ObjList<XdgSurface>* xdgSurfaceAlloc = nullptr;
@@ -233,7 +221,6 @@ namespace {
             return this;
         }
 
-        // InputSink: сырой ввод → seat-логика
         void motion(double x, double y) override {
             seat.handleMotion(x, y);
         }
@@ -250,14 +237,12 @@ namespace {
             seat.handleScroll(value);
         }
 
-        // FrameListener: кадр показан — frame callbacks + configure по фидбеку
         void frameShown(u32 msec) override;
 
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
     };
 
-    // канал ноды сцены к клиенту (все ноды создаёт SM как SurfaceImpl)
     wl_resource* resOf(Surface* s) {
         return ((SurfaceImpl*)s)->res;
     }
@@ -266,15 +251,12 @@ namespace {
         return *(SubsurfaceImpl*)sub;
     }
 
-    // --- event loop ---
-
     void wlIoCb(struct ev_loop*, ev_io* w, int) {
         auto* s = (WaylandImpl*)w->data;
 
         wl_event_loop_dispatch(s->wlLoop, 0);
     }
 
-    // Инвариант libwayland: не засыпать с несброшенными буферами клиентов.
     void flushCb(struct ev_loop*, ev_prepare* w, int) {
         auto* s = (WaylandImpl*)w->data;
 
@@ -286,7 +268,6 @@ namespace {
     }
 
     void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
-        // деструктор ресурса удаляет callback из frameCbs — забираем список до итерации
         Vector<wl_resource*> cbs;
 
         cbs.xchg(s.frameCbs);
@@ -324,7 +305,6 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    // объявления для перекрёстных ссылок между секциями
     void unlinkFromParent(SubsurfaceImpl&);
     void applySubsurfaceCache(SubsurfaceImpl&);
     void xdgHandleCommit(SurfaceImpl&);
@@ -332,8 +312,6 @@ namespace {
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
-
-    // ================= wl_surface / wl_region / wl_subcompositor =================
 
     SurfaceImpl* surfaceFrom(wl_resource* res) {
         return (SurfaceImpl*)wl_resource_get_user_data(res);
@@ -356,13 +334,9 @@ namespace {
         wl_list_remove(&s->pending.bufferDestroy.link);
     }
 
-    // --- удержание dmabuf-буфера (рендер читает его память напрямую) ---
-
     void heldDmabufDestroyed(wl_listener* l, void*) {
         SurfaceImpl* s = wl_container_of(l, s, dmabufDestroy);
 
-        // клиент уничтожил буфер, пока тот показан: текстура уже импортирована
-        // (память живёт на нашем fd-дубликате), просто забываем ресурс
         s->dmabuf = nullptr;
         s->dmabufRes = nullptr;
         s->dmabufDestroyArmed = false;
@@ -414,7 +388,6 @@ namespace {
     }
 
     void surfaceDamage(wl_client*, wl_resource*, i32, i32, i32, i32) {
-        // полная перезаливка на каждый commit, damage-rects учтём позже
     }
 
     void frameCallbackDestroyed(wl_resource* cb) {
@@ -448,14 +421,13 @@ namespace {
     void surfaceSetInputRegion(wl_client*, wl_resource* res, wl_resource* region) {
         SurfaceImpl& s = *surfaceFrom(res);
 
-        if (!region) { // NULL = вся поверхность
+        if (!region) {
             s.pending.inputRegionSet = false;
             s.pending.inputRegion.clear();
 
             return;
         }
 
-        // регион копируется в момент запроса (клиент может сразу уничтожить его)
         auto* box = (RegionBox*)wl_resource_get_user_data(region);
 
         s.pending.inputRegionSet = true;
@@ -508,7 +480,6 @@ namespace {
             for (Subsurface* c : *stack) {
                 SubsurfaceImpl& sub = impl(c);
 
-                // позиция двойнобуферизована коммитом родителя для любых детей
                 if (sub.pendingPos) {
                     sub.x = sub.pendingX;
                     sub.y = sub.pendingY;
@@ -522,7 +493,6 @@ namespace {
         }
     }
 
-    // применить кэш sync-субповерхности и рекурсивно кэши её sync-детей
     void applySubsurfaceCache(SubsurfaceImpl& sub) {
         if (sub.cache.valid) {
             SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
@@ -551,7 +521,6 @@ namespace {
             sub.pendingPos = false;
         }
 
-        // спека: commit родителя применяет закешированное состояние всего sync-поддерева
         for (Subsurface* c : sub.surface->stackBelow) {
             if (impl(c).sync) {
                 applySubsurfaceCache(impl(c));
@@ -586,7 +555,6 @@ namespace {
                 }
             } else if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
                 if (toCache) {
-                    // снимаем копию сразу (буфер возвращается клиенту), показ — на commit родителя
                     copyShmBufferTo(*shm, sub->cache.width, sub->cache.height, sub->cache.pixels);
                     sub->cache.hasContent = sub->cache.width > 0;
                     sub->cache.valid = true;
@@ -595,10 +563,8 @@ namespace {
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
-                releaseHeldDmabuf(s); // на случай смены dmabuf → shm
+                releaseHeldDmabuf(s);
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
-                // dmabuf применяем сразу даже для sync-субповерхностей (без кэша):
-                // буфер один, копий нет — упрощение
                 holdDmabuf(s, s.pending.buffer, db);
                 s.width = db->width;
                 s.height = db->height;
@@ -613,8 +579,6 @@ namespace {
             s.pending.newlyAttached = false;
         }
 
-        // input region применяем сразу даже для sync-субповерхностей: хит-тест
-        // не должен ждать commit родителя (упрощение, GTK-оверлеям достаточно)
         s.inputRegionSet = s.pending.inputRegionSet;
         s.inputRegion.clear();
         s.inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
@@ -626,7 +590,7 @@ namespace {
 
             s.pending.frames.clear();
 
-            return; // остальное (кэши детей) — когда применится наш кэш
+            return;
         }
 
         for (wl_resource* cb : s.pending.frames) {
@@ -637,8 +601,6 @@ namespace {
 
         viewportApplyPending(s);
 
-        // desync-субповерхность: позиция всё равно применяется коммитом родителя,
-        // но контент — сразу (уже применён выше)
         applyChildrenCaches(s);
 
         if (s.xdg) {
@@ -698,12 +660,12 @@ namespace {
             }
         }
 
-        if (s->sub) { // роль-субповерхность: выпасть из стека родителя
+        if (s->sub) {
             unlinkFromParent(impl(s->sub));
             s->sub->surface = nullptr;
         }
 
-        for (Subsurface* c : s->stackBelow) { // дети-сироты не рендерятся
+        for (Subsurface* c : s->stackBelow) {
             c->parent = nullptr;
         }
 
@@ -711,7 +673,7 @@ namespace {
             c->parent = nullptr;
         }
 
-        for (Popup* p : srv->scene->popups) { // попапы умершего родителя гаснут
+        for (Popup* p : srv->scene->popups) {
             if (p->parent == s) {
                 p->parent = nullptr;
 
@@ -726,7 +688,7 @@ namespace {
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
 
-        if (s->texture) { // текстуру освободит renderer
+        if (s->texture) {
             srv->scene->orphanedTextures.pushBack(s->texture);
             s->texture = nullptr;
         }
@@ -745,8 +707,6 @@ namespace {
     }
 
     void regionSubtract(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
-        // честная булева геометрия не нужна для input-хит-теста наших клиентов;
-        // выкидываем целиком совпавшие прямоугольники, частичные пересечения игнорируем
         auto& v = ((RegionBox*)wl_resource_get_user_data(res))->rects;
         size_t keep = 0;
 
@@ -858,7 +818,6 @@ namespace {
         sub->pendingPos = true;
     }
 
-    // вставить относительно sibling'а; ref == сам родитель тоже валиден
     void subsurfaceRestack(SubsurfaceImpl& sub, Surface* refSurface, bool above) {
         Surface* parent = sub.parent;
 
@@ -870,7 +829,6 @@ namespace {
         removeOne(parent->stackAbove, (Subsurface*)&sub);
 
         if (refSurface == parent) {
-            // относительно самого родителя
             if (above) {
                 insertAt(parent->stackAbove, 0, (Subsurface*)&sub);
             } else {
@@ -893,7 +851,6 @@ namespace {
             }
         }
 
-        // ref не sibling — по спеке ошибка протокола, прощаем и кладём наверх
         parent->stackAbove.pushBack(&sub);
     }
 
@@ -928,7 +885,6 @@ namespace {
 
         sub->sync = false;
 
-        // переход в desync применяет накопленный кэш
         if (!sub->effectiveSync() && sub->cache.valid) {
             applySubsurfaceCache(*sub);
         }
@@ -996,7 +952,7 @@ namespace {
         sub->parent = parent;
         sub->res = sres;
         surface->sub = sub;
-        parent->stackAbove.pushBack(sub); // новая субповерхность — наверху стека
+        parent->stackAbove.pushBack(sub);
         wl_resource_set_implementation(sres, &subsurfaceImpl, sub, subsurfaceResourceDestroyed);
     }
 
@@ -1016,8 +972,6 @@ namespace {
 
         wl_resource_set_implementation(res, &subcompositorImpl, data, nullptr);
     }
-
-    // ================= xdg_wm_base =================
 
     void toplevelDestroy(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
@@ -1155,12 +1109,10 @@ namespace {
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
     }
 
-    // определение ниже: нужны Positioner и popupImpl из секции попапов
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes,
                             wl_resource* positionerRes);
 
     void xdgSurfaceSetWindowGeometry(wl_client*, wl_resource*, i32, i32, i32, i32) {
-        // рисуем буфер целиком; кроп по geometry не делаем
     }
 
     void xdgSurfaceAckConfigure(wl_client*, wl_resource* res, u32) {
@@ -1229,7 +1181,6 @@ namespace {
     }
 
     void positionerSetConstraintAdjustment(wl_client*, wl_resource*, u32) {
-        // слайды/флипы у краёв — позже; в ImGui-окне попап и так виден
     }
 
     void positionerSetOffset(wl_client*, wl_resource* res, i32 x, i32 y) {
@@ -1271,7 +1222,7 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void popupGrab(wl_client*, wl_resource* res, wl_resource* /*seat*/, u32 /*serial*/) {
+    void popupGrab(wl_client*, wl_resource* res, wl_resource*, u32) {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
 
         p->grab = true;
@@ -1435,7 +1386,6 @@ namespace {
             return;
         }
 
-        // Спека: первый configure отправляется в ответ на commit без буфера.
         if (!xs->initialConfigureSent) {
             if (s.hasContent) {
                 sysE << "imway: client attached a buffer before configure (spec violation)"_sv
@@ -1454,7 +1404,7 @@ namespace {
                  << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv
                  << s.height << endL;
 
-            s.srv->seat.focusToplevel(xs->toplevel); // focus-on-map
+            s.srv->seat.focusToplevel(xs->toplevel);
         }
 
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
@@ -1495,8 +1445,6 @@ namespace {
         xdg_popup_send_popup_done(p.res);
     }
 
-    // ================= wl_output =================
-
     void outputRelease(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
     }
@@ -1532,8 +1480,6 @@ namespace {
             wl_output_send_done(res);
         }
     }
-
-    // ================= wl_data_device_manager (инертная заглушка) =================
 
     void sourceOffer(wl_client*, wl_resource*, const char*) {
     }
@@ -1595,8 +1541,6 @@ namespace {
         wl_resource_set_implementation(res, &dataManagerImpl, data, nullptr);
     }
 
-    // ================= zxdg_decoration_manager_v1 (всегда server_side) =================
-
     void decoSetMode(wl_client*, wl_resource* res, u32) {
         zxdg_toplevel_decoration_v1_send_configure(res,
                                                    ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
@@ -1614,7 +1558,7 @@ namespace {
     };
 
     void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id,
-                                          wl_resource* /*toplevel*/) {
+                                          wl_resource*) {
         wl_resource* d = wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface,
                                             wl_resource_get_version(res), id);
 
@@ -1646,8 +1590,6 @@ namespace {
         wl_resource_set_implementation(res, &decoManagerImpl, data, nullptr);
     }
 
-    // ================= wp_viewporter =================
-
     void viewportDestroy(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
     }
@@ -1665,7 +1607,7 @@ namespace {
         double dx = wl_fixed_to_double(x), dy = wl_fixed_to_double(y);
         double dw = wl_fixed_to_double(w), dh = wl_fixed_to_double(h);
 
-        if (dx == -1 && dy == -1 && dw == -1 && dh == -1) { // unset
+        if (dx == -1 && dy == -1 && dw == -1 && dh == -1) {
             s->pendSw = s->pendSh = -1;
 
             return;
@@ -1692,7 +1634,7 @@ namespace {
             return;
         }
 
-        if (w == -1 && h == -1) { // unset
+        if (w == -1 && h == -1) {
             s->pendDw = s->pendDh = -1;
 
             return;
@@ -1721,7 +1663,6 @@ namespace {
             return;
         }
 
-        // спека: состояние снимается на следующем commit
         s->vpRes = nullptr;
         s->pendSw = s->pendSh = -1;
         s->pendDw = s->pendDh = -1;
@@ -1790,14 +1731,11 @@ namespace {
         }
     }
 
-    // при уничтожении поверхности вьюпорт становится инертным
     void viewportSurfaceGone(SurfaceImpl& s) {
         if (s.vpRes) {
             wl_resource_set_user_data(s.vpRes, nullptr);
         }
     }
-
-    // ================= zwp_linux_dmabuf_v1 (v3) =================
 
     const struct wl_buffer_interface dmabufWlBufferImpl = {.destroy = resDestroy};
 
@@ -1881,7 +1819,6 @@ namespace {
         }
     }
 
-    // общая часть create/create_immed; nullptr = протокол-ошибка уже послана
     wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId, i32 width,
                                   i32 height, u32 format) {
         Params* p = paramsFrom(res);
@@ -1925,7 +1862,7 @@ namespace {
 
         BufferBox* box = p->pending;
 
-        p->pending = nullptr; // владение ушло в wl_buffer
+        p->pending = nullptr;
         box->buf.width = width;
         box->buf.height = height;
         box->buf.format = format;
@@ -1936,7 +1873,7 @@ namespace {
     }
 
     void paramsCreate(wl_client* client, wl_resource* res, i32 width, i32 height, u32 format,
-                      u32 /*flags*/) {
+                      u32) {
         wl_resource* buf = paramsMakeBuffer(client, res, 0, width, height, format);
 
         if (buf) {
@@ -1947,7 +1884,7 @@ namespace {
     }
 
     void paramsCreateImmed(wl_client* client, wl_resource* res, u32 bufferId, i32 width,
-                           i32 height, u32 format, u32 /*flags*/) {
+                           i32 height, u32 format, u32) {
         paramsMakeBuffer(client, res, bufferId, width, height, format);
     }
 
@@ -2004,7 +1941,6 @@ namespace {
 
         wl_resource_set_implementation(res, &dmabufImpl, srv, nullptr);
 
-        // v1: format-события; v3: modifier-события
         for (const DmabufFormat& fm : srv->formats) {
             if (version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION) {
                 zwp_linux_dmabuf_v1_send_modifier(res, fm.fourcc, (u32)(fm.modifier >> 32),
@@ -2015,18 +1951,13 @@ namespace {
         }
     }
 
-    // ================= wl_seat =================
-
     constexpr u32 kSeatVersion = 5;
-
-    // --- wl_pointer / wl_keyboard / wl_touch ресурсы ---
 
     SeatState* seatOf(wl_resource* res) {
         return (SeatState*)wl_resource_get_user_data(res);
     }
 
     void pointerSetCursor(wl_client*, wl_resource*, u32, wl_resource*, i32, i32) {
-        // курсоры клиентов игнорируем: курсор рисует ImGui
     }
 
     const struct wl_pointer_interface pointerImpl = {
@@ -2081,7 +2012,6 @@ namespace {
             wl_keyboard_send_repeat_info(k, 25, 600);
         }
 
-        // если фокус уже у этого клиента — новая клавиатура должна получить enter
         SeatState& s = *seat;
 
         if (s.kbFocus && s.kbFocus->surface &&
@@ -2135,8 +2065,6 @@ namespace {
         }
     }}
 
-// ================= методы impl-структур =================
-
 bool SubsurfaceImpl::effectiveSync() const {
     for (const SubsurfaceImpl* s = this; s;
          s = s->parent ? (const SubsurfaceImpl*)s->parent->sub : nullptr) {
@@ -2149,7 +2077,7 @@ bool SubsurfaceImpl::effectiveSync() const {
 }
 
 void Positioner::place(int& outX, int& outY) const {
-    int px = ax, py = ay; // якорная точка на anchor_rect
+    int px = ax, py = ay;
 
     switch (anchor) {
         case XDG_POSITIONER_ANCHOR_TOP:
@@ -2178,13 +2106,12 @@ void Positioner::place(int& outX, int& outY) const {
             px += aw;
             py += ah;
             break;
-        default: // NONE = центр
+        default:
             px += aw / 2;
             py += ah / 2;
             break;
     }
 
-    // gravity: в какую сторону попап растёт от якоря
     switch (gravity) {
         case XDG_POSITIONER_GRAVITY_TOP:
             px -= w / 2;
@@ -2212,7 +2139,7 @@ void Positioner::place(int& outX, int& outY) const {
             break;
         case XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT:
             break;
-        default: // NONE = центр
+        default:
             px -= w / 2;
             py -= h / 2;
             break;
@@ -2221,8 +2148,6 @@ void Positioner::place(int& outX, int& outY) const {
     outX = px + dx;
     outY = py + dy;
 }
-
-// ================= SeatState =================
 
 SeatState::SeatState(WaylandImpl& impl)
     : srv(&impl)
@@ -2243,7 +2168,7 @@ SeatState::SeatState(WaylandImpl& impl)
     bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;
 
     free(str);
-    STD_VERIFY(written); // keymap fd не создался
+    STD_VERIFY(written);
 }
 
 SeatState::~SeatState() noexcept {
@@ -2272,9 +2197,6 @@ bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
     return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(resOf(t->surface));
 }
 
-// топовая hovered-поверхность дерева: последняя в порядке отрисовки
-// (stackBelow → сама → stackAbove) перекрывает предыдущие;
-// поверхности с input region мимо точки — прозрачны для ввода
 Surface* SeatState::pickInTree(Surface& s) {
     Surface* found = nullptr;
 
@@ -2302,9 +2224,6 @@ Surface* SeatState::pickInTree(Surface& s) {
 }
 
 Surface* SeatState::pickPointerTarget() {
-    // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order
-    // учтён, внутри окна поздние Image перекрывают ранние — берём последний
-    // hovered в дереве). Попапы сверху: последний созданный — самый верхний.
     for (size_t i = srv->scene->popups.length(); i > 0; i--) {
         Popup* p = srv->scene->popups[i - 1];
 
@@ -2404,8 +2323,6 @@ void SeatState::handleMotion(double x, double y) {
 void SeatState::handleButton(u32 button, bool pressed) {
     srv->scene->needsFrame = true;
 
-    // hovered-флаги могли освежиться кадрами после последнего motion —
-    // без этого press после одиночного motion уходит мимо клиента
     if (pressed && buttonsDown == 0) {
         Surface* target = pickPointerTarget();
 
@@ -2415,7 +2332,6 @@ void SeatState::handleButton(u32 button, bool pressed) {
         }
     }
 
-    // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
     if (pressed) {
         for (size_t i = srv->scene->popups.length(); i > 0; i--) {
             Popup* p = srv->scene->popups[i - 1];
@@ -2434,7 +2350,6 @@ void SeatState::handleButton(u32 button, bool pressed) {
         }
     }
 
-    // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
     if (pressed && ptrFocus) {
         if (Toplevel* t = ptrFocus->rootToplevel()) {
             focusToplevel(t);
@@ -2486,7 +2401,6 @@ void SeatState::handleScroll(double value) {
     }
 }
 
-// куда сейчас идёт клавиатура (override > kbFocus)
 wl_resource* SeatState::kbTargetRes() {
     if (kbOverride) {
         return resOf(kbOverride);
@@ -2638,7 +2552,7 @@ void SeatState::popupGone(Popup* p) {
     if (s && kbOverride == s) {
         kbSendLeave(resOf(kbOverride));
         kbOverride = nullptr;
-        kbSendEnter(kbTargetRes()); // клавиатура возвращается toplevel'у
+        kbSendEnter(kbTargetRes());
     }
 }
 
@@ -2658,7 +2572,6 @@ void SeatState::toplevelGone(Toplevel* t) {
     if (kbFocus == t) {
         kbFocus = nullptr;
 
-        // отдать фокус последнему замапленному
         for (size_t i = srv->scene->toplevels.length(); i > 0; i--) {
             Toplevel* other = srv->scene->toplevels[i - 1];
 
@@ -2670,8 +2583,6 @@ void SeatState::toplevelGone(Toplevel* t) {
         }
     }
 }
-
-// ================= WaylandImpl =================
 
 WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn,
                          const WaylandConfig& cfg)
@@ -2732,8 +2643,6 @@ WaylandImpl::~WaylandImpl() noexcept {
         ev_signal_stop(loop, &sigTerm);
     }
 
-    // нормальный путь гасит display в run(); сюда попадаем только при
-    // исключении из конструктора — клиентов ещё нет
     if (display) {
         wl_display_destroy(display);
         display = nullptr;
@@ -2743,7 +2652,6 @@ WaylandImpl::~WaylandImpl() noexcept {
 void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
-    // v3: repositioned-событие у попапов
     wl_global_create(display, &xdg_wm_base_interface, 3, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
@@ -2769,8 +2677,6 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 }
 
 void WaylandImpl::frameShown(u32 msec) {
-    // frame callbacks — всем деревьям, показанным в кадре (попапам тоже,
-    // GTK не рисует контент меню, пока не получит frame done)
     for (Toplevel* tl : scene->toplevels) {
         if (tl->mapped && tl->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
@@ -2783,7 +2689,6 @@ void WaylandImpl::frameShown(u32 msec) {
         }
     }
 
-    // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
     for (Toplevel* tl : scene->toplevels) {
         auto* ti = (ToplevelImpl*)tl;
 
@@ -2804,14 +2709,10 @@ void WaylandImpl::frameShown(u32 msec) {
 void WaylandImpl::run() {
     ev_run(loop, 0);
 
-    // клиенты умирают первыми: их текстуры уходят в orphanedTextures,
-    // сами подсистемы умрут вместе с пулом
     wl_display_destroy_clients(display);
     wl_display_destroy(display);
     display = nullptr;
 }
-
-// ================= публичные определения =================
 
 Wayland::~Wayland() noexcept {
 }

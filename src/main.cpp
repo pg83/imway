@@ -95,8 +95,6 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // пул — владелец всего графа объектов; умирает при выходе из main.
-    // порядок создания = обратный порядок смерти: сцена умирает последней
     ObjPool::Ref pool = ObjPool::fromMemory();
     struct ev_loop* loop = ev_default_loop(0);
 
@@ -110,7 +108,7 @@ int main(int argc, char** argv) {
         ::Output* output = kms ? ::Output::createKms(pool.mutPtr(), loop, drmDevice)
                              : ::Output::createHeadless(pool.mutPtr(), outW, outH, hz);
 
-        if (kms) { // размер сцены диктует режим дисплея
+        if (kms) {
             scene->outW = output->width();
             scene->outH = output->height();
             scene->hz = output->refresh();
@@ -122,7 +120,6 @@ int main(int argc, char** argv) {
         Renderer* renderer =
             Renderer::create(pool.mutPtr(), loop, *scene, *output, framesLimit);
 
-        // dmabuf-возможности GPU передаются протоколу как данные
         Vector<DmabufFormat> formats;
 
         for (size_t i = 0; i < renderer->dmabufFormatCount(); i++) {
@@ -139,7 +136,6 @@ int main(int argc, char** argv) {
 
         renderer->setFrameListener(wayland->frameListener());
 
-        // сырой ввод — обоим: view (ImGui как WM) и протоколу
         InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer, *wayland->sink());
 
         if (kms) {

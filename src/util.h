@@ -1,4 +1,3 @@
-// Мелкие операции над stl::Vector<T> и строковый литерал-вью.
 #pragma once
 
 #include <string.h>
@@ -6,14 +5,12 @@
 #include <std/lib/vector.h>
 #include <std/str/view.h>
 
-// "..."_sv — литерал сразу как StringView (для стримового вывода)
 inline stl::StringView operator""_sv(const char* s, size_t len) {
     return {(const u8*)s, len};
 }
 
 u32 nowMsec();
 
-// убрать первое вхождение (порядок остальных сохраняется)
 template <typename T>
 bool removeOne(stl::Vector<T>& v, const T& t) {
     for (size_t i = 0; i < v.length(); i++) {

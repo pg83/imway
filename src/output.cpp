@@ -1,5 +1,3 @@
-// Реализации Output: DRM/KMS (atomic modeset + dumb-буферы, кадр копируется
-// в scanout) и headless.
 
 #include "output.h"
 #include "util.h"
@@ -76,7 +74,6 @@ namespace {
         drmModeModeInfo mode{};
         u32 modeBlob = 0;
 
-        // property ids
         u32 connCrtcId = 0;
         u32 crtcModeId = 0, crtcActive = 0;
         u32 plFbId = 0, plCrtcId = 0;
@@ -137,7 +134,6 @@ KmsOutput::KmsOutput(struct ev_loop* evLoop, const char* path)
         Errno().raise(StringBuilder() << "kms: open "_sv << path);
     }
 
-    // atomic обязателен
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
@@ -204,7 +200,7 @@ KmsOutput::~KmsOutput() noexcept {
 void KmsOutput::pickOutput() {
     drmModeRes* res = drmModeGetResources(fd);
 
-    STD_VERIFY(res); // drmModeGetResources сломался
+    STD_VERIFY(res);
 
     drmModeConnector* conn = nullptr;
 
@@ -218,10 +214,10 @@ void KmsOutput::pickOutput() {
         }
     }
 
-    STD_VERIFY(conn); // нет подключённых коннекторов
+    STD_VERIFY(conn);
 
     connectorId = conn->connector_id;
-    mode = conn->modes[0]; // первый = preferred
+    mode = conn->modes[0];
 
     for (int i = 0; i < conn->count_modes; i++) {
         if (conn->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
@@ -231,14 +227,13 @@ void KmsOutput::pickOutput() {
         }
     }
 
-    // CRTC через encoder->possible_crtcs
     drmModeEncoder* enc = conn->encoder_id ? drmModeGetEncoder(fd, conn->encoder_id) : nullptr;
 
     if (!enc && conn->count_encoders > 0) {
         enc = drmModeGetEncoder(fd, conn->encoders[0]);
     }
 
-    STD_VERIFY(enc); // нет энкодера
+    STD_VERIFY(enc);
 
     if (enc->crtc_id) {
         crtcId = enc->crtc_id;
@@ -254,9 +249,8 @@ void KmsOutput::pickOutput() {
 
     drmModeFreeEncoder(enc);
     drmModeFreeConnector(conn);
-    STD_VERIFY(crtcId); // нет CRTC
+    STD_VERIFY(crtcId);
 
-    // primary plane этого CRTC
     int crtcIndex = -1;
 
     for (int i = 0; i < res->count_crtcs; i++) {
@@ -294,7 +288,7 @@ void KmsOutput::pickOutput() {
     }
 
     drmModeFreePlaneResources(planes);
-    STD_VERIFY(planeId); // нет primary plane
+    STD_VERIFY(planeId);
 }
 
 void KmsOutput::createDumb(DumbBuffer& b) {
@@ -368,8 +362,6 @@ bool KmsOutput::commit(DumbBuffer& b, bool doModeset) {
 }
 
 void KmsOutput::setupVt() {
-    // выключить обработку клавиатуры ядром и текстовый режим консоли,
-    // иначе ввод дублируется в getty, а курсор консоли мигает поверх
     ttyFd = open("/dev/tty1", O_RDWR | O_CLOEXEC);
 
     if (ttyFd < 0) {
@@ -404,7 +396,6 @@ bool KmsOutput::start() {
     drmIo.data = this;
     ev_io_start(loop, &drmIo);
 
-    // первый кадр: чёрный, с модесетом
     memset(bufs[0].map, 0, bufs[0].size);
 
     if (!commit(bufs[0], true)) {
@@ -420,7 +411,7 @@ bool KmsOutput::start() {
 }
 
 void KmsOutput::present(const void* pixels) {
-    if (!modeSet || flipPending) { // предыдущий flip ещё в полёте — дропаем кадр
+    if (!modeSet || flipPending) {
         return;
     }
 
