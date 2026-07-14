@@ -6,11 +6,12 @@ namespace stl {
     class ObjPool;
 }
 
-struct DmabufFormat;
 struct ev_loop;
-struct FrameListener;
-struct InputSink;
+
 struct Scene;
+struct InputSink;
+struct DmabufFormat;
+struct FrameListener;
 
 struct WaylandConfig {
     const char* socketName = "imway-0";
@@ -20,7 +21,6 @@ struct WaylandConfig {
 
 struct Wayland {
     virtual void run() = 0;
-
     virtual InputSink* sink() = 0;
     virtual FrameListener* frameListener() = 0;
 
