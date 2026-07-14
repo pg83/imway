@@ -6,7 +6,6 @@
 #include "control.h"
 #include "renderer.h"
 #include "seat.h"
-#include "server.h"
 #include "util.h"
 
 #include <ev.h>
@@ -74,14 +73,16 @@ namespace {
     void controlIoCb(struct ev_loop*, ev_io* w, int);
 
     struct ControlImpl: public Control {
-        Server* server = nullptr;
+        struct ev_loop* loop = nullptr;
+        Seat* seat = nullptr;
+        Renderer* renderer = nullptr;
         int fd = -1;
         ev_io io{};
         char path[256] = "";
         char line[1024] = "";
         size_t lineLen = 0;
 
-        ControlImpl(Server& srv, const char* fifoPath);
+        ControlImpl(struct ev_loop* evLoop, Seat& st, Renderer& rnd, const char* fifoPath);
         ~ControlImpl() noexcept override;
 
         void handleLine(const char* cmd);
@@ -94,8 +95,10 @@ namespace {
     }
 }
 
-ControlImpl::ControlImpl(Server& srv, const char* fifoPath)
-    : server(&srv)
+ControlImpl::ControlImpl(struct ev_loop* evLoop, Seat& st, Renderer& rnd, const char* fifoPath)
+    : loop(evLoop)
+    , seat(&st)
+    , renderer(&rnd)
 {
     STD_VERIFY(strlen(fifoPath) < sizeof(path));
     strcpy(path, fifoPath);
@@ -107,13 +110,13 @@ ControlImpl::ControlImpl(Server& srv, const char* fifoPath)
 
     ev_io_init(&io, controlIoCb, fd, EV_READ);
     io.data = this;
-    ev_io_start(server->loop, &io);
+    ev_io_start(loop, &io);
     sysO << "imway: control FIFO: "_sv << (const char*)path << endL;
 }
 
 ControlImpl::~ControlImpl() noexcept {
     if (fd >= 0) {
-        ev_io_stop(server->loop, &io);
+        ev_io_stop(loop, &io);
         close(fd);
     }
 
@@ -123,19 +126,19 @@ ControlImpl::~ControlImpl() noexcept {
 }
 
 void ControlImpl::handleLine(const char* cmd) {
-    Seat& seat = *server->seat;
+    Seat& st = *seat;
     char a[64] = {0}, b[64] = {0};
     double x, y;
     u32 code;
 
     if (sscanf(cmd, "motion %lf %lf", &x, &y) == 2) {
-        seat.handleMotion(x, y);
+        st.handleMotion(x, y);
     } else if (sscanf(cmd, "button %63s %63s", a, b) == 2) {
         u32 btn = !strcmp(a, "left") ? BTN_LEFT : !strcmp(a, "right") ? BTN_RIGHT : BTN_MIDDLE;
 
-        seat.handleButton(btn, !strcmp(b, "press"));
+        st.handleButton(btn, !strcmp(b, "press"));
     } else if (sscanf(cmd, "key %u %63s", &code, b) == 2) {
-        seat.handleKey(code, !strcmp(b, "press"));
+        st.handleKey(code, !strcmp(b, "press"));
     } else if (!strncmp(cmd, "type ", 5)) {
         for (const char* p = cmd + 5; *p; p++) {
             u32 kc;
@@ -146,24 +149,24 @@ void ControlImpl::handleLine(const char* cmd) {
             }
 
             if (shift) {
-                seat.handleKey(KEY_LEFTSHIFT, true);
+                st.handleKey(KEY_LEFTSHIFT, true);
             }
 
-            seat.handleKey(kc, true);
-            seat.handleKey(kc, false);
+            st.handleKey(kc, true);
+            st.handleKey(kc, false);
 
             if (shift) {
-                seat.handleKey(KEY_LEFTSHIFT, false);
+                st.handleKey(KEY_LEFTSHIFT, false);
             }
         }
     } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
-        seat.handleScroll(y);
+        st.handleScroll(y);
     } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
         // скриншот содержимого последнего отрендеренного кадра
-        server->renderer->screenshot(a);
+        renderer->screenshot(a);
         sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
     } else if (!strcmp(cmd, "quit")) {
-        ev_break(server->loop, EVBREAK_ALL);
+        ev_break(loop, EVBREAK_ALL);
     } else {
         sysE << "imway: unknown command: "_sv << cmd << endL;
     }
@@ -199,7 +202,7 @@ void ControlImpl::handleInput() {
 }
 
 void ControlImpl::reopen() {
-    ev_io_stop(server->loop, &io);
+    ev_io_stop(loop, &io);
     close(fd);
 
     fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -210,12 +213,13 @@ void ControlImpl::reopen() {
 
     ev_io_init(&io, controlIoCb, fd, EV_READ);
     io.data = this;
-    ev_io_start(server->loop, &io);
+    ev_io_start(loop, &io);
 }
 
 Control::~Control() noexcept {
 }
 
-Control* Control::create(ObjPool* pool, Server& server, const char* fifoPath) {
-    return pool->make<ControlImpl>(server, fifoPath);
+Control* Control::create(ObjPool* pool, struct ev_loop* loop, Seat& seat, Renderer& renderer,
+                         const char* fifoPath) {
+    return pool->make<ControlImpl>(loop, seat, renderer, fifoPath);
 }

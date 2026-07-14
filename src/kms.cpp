@@ -1,7 +1,6 @@
 // DRM/KMS-бэкенд: atomic modeset + dumb-буферы, кадр рендерера копируется в scanout.
 
 #include "kms.h"
-#include "server.h"
 #include "util.h"
 
 #include <ev.h>
@@ -65,7 +64,7 @@ namespace {
     void drmIoCb(struct ev_loop*, ev_io* w, int);
 
     struct KmsImpl: public Kms {
-        Server* server = nullptr;
+        struct ev_loop* loop = nullptr;
         int fd = -1;
         int ttyFd = -1;
         long oldKbMode = -1;
@@ -90,8 +89,20 @@ namespace {
 
         ev_io drmIo{};
 
-        KmsImpl(Server& srv, const char* path);
+        KmsImpl(struct ev_loop* evLoop, const char* path);
         ~KmsImpl() noexcept override;
+
+        int width() const override {
+            return mode.hdisplay;
+        }
+
+        int height() const override {
+            return mode.vdisplay;
+        }
+
+        double refresh() const override {
+            return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
+        }
 
         void pickOutput();
         void createDumb(DumbBuffer& b);
@@ -116,8 +127,8 @@ namespace {
     }
 }
 
-KmsImpl::KmsImpl(Server& srv, const char* path)
-    : server(&srv)
+KmsImpl::KmsImpl(struct ev_loop* evLoop, const char* path)
+    : loop(evLoop)
 {
     fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
 
@@ -151,10 +162,6 @@ KmsImpl::KmsImpl(Server& srv, const char* path)
         createDumb(b);
     }
 
-    srv.outW = mode.hdisplay;
-    srv.outH = mode.vdisplay;
-    srv.hz = mode.vrefresh > 0 ? mode.vrefresh : 60.0;
-
     sysO << "imway: kms "_sv << path << ": "_sv << mode.hdisplay << "x"_sv << mode.vdisplay
          << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId
          << ", plane "_sv << planeId << endL;
@@ -165,7 +172,7 @@ KmsImpl::~KmsImpl() noexcept {
         return;
     }
 
-    ev_io_stop(server->loop, &drmIo);
+    ev_io_stop(loop, &drmIo);
     restoreVt();
 
     for (auto& b : bufs) {
@@ -394,7 +401,7 @@ bool KmsImpl::start() {
     setupVt();
     ev_io_init(&drmIo, drmIoCb, fd, EV_READ);
     drmIo.data = this;
-    ev_io_start(server->loop, &drmIo);
+    ev_io_start(loop, &drmIo);
 
     // первый кадр: чёрный, с модесетом
     memset(bufs[0].map, 0, bufs[0].size);
@@ -432,6 +439,6 @@ void KmsImpl::present(const void* pixels) {
 Kms::~Kms() noexcept {
 }
 
-Kms* Kms::create(ObjPool* pool, Server& server, const char* devPath) {
-    return pool->make<KmsImpl>(server, devPath);
+Kms* Kms::create(ObjPool* pool, struct ev_loop* loop, const char* devPath) {
+    return pool->make<KmsImpl>(loop, devPath);
 }

@@ -11,6 +11,7 @@ struct Popup;
 struct Server;
 struct Surface;
 struct Toplevel;
+struct wl_display;
 
 struct Seat {
     virtual ~Seat() noexcept;
@@ -32,4 +33,4 @@ struct Seat {
     static Seat* create(stl::ObjPool* pool, Server&);
 };
 
-void seatCreateGlobal(Server&);
+void seatCreateGlobal(wl_display*, Seat&);

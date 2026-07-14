@@ -87,7 +87,7 @@ int main(int argc, char** argv) {
         Server* server = Server::create(pool.mutPtr(), cfg);
 
         server->run();
-        sysO << "imway: clean exit after "_sv << server->framesDone << " frames"_sv << endL;
+        sysO << "imway: clean exit after "_sv << server->scene.framesDone << " frames"_sv << endL;
     } catch (...) {
         sysE << "imway: fatal: "_sv << Exception::current() << endL;
 

@@ -39,13 +39,15 @@ namespace {
     void inputIoCb(struct ev_loop*, ev_io* w, int);
 
     struct InputLinuxImpl: public InputLinux {
-        Server* server = nullptr;
+        struct ev_loop* loop = nullptr;
+        Seat* seat = nullptr;
+        int outW = 0, outH = 0;
         udev* ud = nullptr;
         libinput* li = nullptr;
         ev_io io{};
         double relX = 0, relY = 0; // накопленная позиция для относительных устройств
 
-        InputLinuxImpl(Server& srv);
+        InputLinuxImpl(struct ev_loop* evLoop, Seat& st, int w, int h);
         ~InputLinuxImpl() noexcept override;
 
         void dispatch();
@@ -56,10 +58,13 @@ namespace {
     }
 }
 
-InputLinuxImpl::InputLinuxImpl(Server& srv)
-    : server(&srv)
-    , relX(srv.outW / 2.0)
-    , relY(srv.outH / 2.0)
+InputLinuxImpl::InputLinuxImpl(struct ev_loop* evLoop, Seat& st, int w, int h)
+    : loop(evLoop)
+    , seat(&st)
+    , outW(w)
+    , outH(h)
+    , relX(w / 2.0)
+    , relY(h / 2.0)
 {
     ud = udev_new();
     li = libinput_udev_create_context(&liIface, this, ud);
@@ -70,14 +75,14 @@ InputLinuxImpl::InputLinuxImpl(Server& srv)
 
     ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
     io.data = this;
-    ev_io_start(server->loop, &io);
+    ev_io_start(loop, &io);
     dispatch(); // добавленные устройства
     sysO << "imway: libinput ready"_sv << endL;
 }
 
 InputLinuxImpl::~InputLinuxImpl() noexcept {
     if (li) {
-        ev_io_stop(server->loop, &io);
+        ev_io_stop(loop, &io);
         libinput_unref(li);
     }
 
@@ -89,7 +94,6 @@ InputLinuxImpl::~InputLinuxImpl() noexcept {
 void InputLinuxImpl::dispatch() {
     libinput_dispatch(li);
 
-    Seat& seat = *server->seat;
     libinput_event* ev;
 
     while ((ev = libinput_get_event(li))) {
@@ -108,31 +112,31 @@ void InputLinuxImpl::dispatch() {
                     relY = 0;
                 }
 
-                if (relX > server->outW - 1) {
-                    relX = server->outW - 1;
+                if (relX > outW - 1) {
+                    relX = outW - 1;
                 }
 
-                if (relY > server->outH - 1) {
-                    relY = server->outH - 1;
+                if (relY > outH - 1) {
+                    relY = outH - 1;
                 }
 
-                seat.handleMotion(relX, relY);
+                seat->handleMotion(relX, relY);
 
                 break;
             }
             case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                relX = libinput_event_pointer_get_absolute_x_transformed(p, server->outW);
-                relY = libinput_event_pointer_get_absolute_y_transformed(p, server->outH);
-                seat.handleMotion(relX, relY);
+                relX = libinput_event_pointer_get_absolute_x_transformed(p, outW);
+                relY = libinput_event_pointer_get_absolute_y_transformed(p, outH);
+                seat->handleMotion(relX, relY);
 
                 break;
             }
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                seat.handleButton(libinput_event_pointer_get_button(p),
+                seat->handleButton(libinput_event_pointer_get_button(p),
                                   libinput_event_pointer_get_button_state(p) ==
                                       LIBINPUT_BUTTON_STATE_PRESSED);
 
@@ -148,7 +152,7 @@ void InputLinuxImpl::dispatch() {
                                    p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) /
                                120.0;
 
-                    seat.handleScroll(v);
+                    seat->handleScroll(v);
                 }
 
                 break;
@@ -156,7 +160,7 @@ void InputLinuxImpl::dispatch() {
             case LIBINPUT_EVENT_KEYBOARD_KEY: {
                 auto* k = libinput_event_get_keyboard_event(ev);
 
-                seat.handleKey(libinput_event_keyboard_get_key(k),
+                seat->handleKey(libinput_event_keyboard_get_key(k),
                                libinput_event_keyboard_get_key_state(k) ==
                                    LIBINPUT_KEY_STATE_PRESSED);
 
@@ -173,6 +177,7 @@ void InputLinuxImpl::dispatch() {
 InputLinux::~InputLinux() noexcept {
 }
 
-InputLinux* InputLinux::create(ObjPool* pool, Server& server) {
-    return pool->make<InputLinuxImpl>(server);
+InputLinux* InputLinux::create(ObjPool* pool, struct ev_loop* loop, Seat& seat, int outW,
+                               int outH) {
+    return pool->make<InputLinuxImpl>(loop, seat, outW, outH);
 }

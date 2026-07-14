@@ -1,5 +1,5 @@
 #include "renderer.h"
-#include "server.h"
+#include "scene.h"
 #include "util.h"
 
 #include <stdio.h>
@@ -97,7 +97,7 @@ namespace {
         void drawSurfaceTree(Surface& s, float x, float y);
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
         void markTreeUnhovered(Surface& s);
-        void buildUi(Server& server);
+        void buildUi(Scene& scene);
 
         size_t dmabufFormatCount() const override {
             return dmabufFormats_.length();
@@ -111,7 +111,7 @@ namespace {
         bool importDmabuf(Surface& s) override;
         void uploadSurface(Surface& s) override;
         void destroyTexture(SurfaceTexture* tex) override;
-        void renderFrame(Server& server) override;
+        void renderFrame(Scene& scene) override;
         bool screenshot(const char* path) override;
 
         const void* readbackData() const override {
@@ -540,7 +540,7 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
 }
 
 bool RendererImpl::importDmabuf(Surface& s) {
-    DmabufBuffer* b = s.dmabufBuffer ? dmabufFromBufferResource(s.dmabufBuffer) : nullptr;
+    DmabufBuffer* b = s.dmabuf;
 
     if (!b || !hasDmabuf) {
         return false;
@@ -804,11 +804,11 @@ void RendererImpl::markTreeUnhovered(Surface& s) {
     }
 }
 
-void RendererImpl::buildUi(Server& server) {
+void RendererImpl::buildUi(Scene& scene) {
     ImGuiIO& io = ImGui::GetIO();
 
     io.DisplaySize = ImVec2((float)width, (float)height);
-    io.DeltaTime = (float)(1.0 / server.hz);
+    io.DeltaTime = (float)(1.0 / scene.hz);
 
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
@@ -817,16 +817,16 @@ void RendererImpl::buildUi(Server& server) {
         // дефолтный шрифт ImGui — только ASCII; кириллица придёт со своим шрифтом
         ImGui::TextUnformatted("imway");
         ImGui::Separator();
-        ImGui::Text("clients: %zu", server.toplevels.length());
+        ImGui::Text("clients: %zu", scene.toplevels.length());
         ImGui::Separator();
-        ImGui::Text("frame %d", server.framesDone);
+        ImGui::Text("frame %d", scene.framesDone);
         ImGui::EndMainMenuBar();
     }
 
     int i = 0;
 
-    for (Toplevel* t : server.toplevels) {
-        Surface* root = t->xdg ? t->xdg->surface : nullptr;
+    for (Toplevel* t : scene.toplevels) {
+        Surface* root = t->surface;
 
         if (!t->mapped || !root || !root->texture) {
             if (root) {
@@ -876,8 +876,8 @@ void RendererImpl::buildUi(Server& server) {
     // ImGui-окна: их z-order управляется фокусом и проигрывает toplevel'у);
     // позиция позиционера — относительно поверхности родителя, чей imgX/imgY
     // записан этим же кадром
-    for (Popup* p : server.popups) {
-        Surface* ps = p->xdg ? p->xdg->surface : nullptr;
+    for (Popup* p : scene.popups) {
+        Surface* ps = p->surface;
 
         if (!p->mapped || !ps || !ps->texture || !p->parent) {
             if (ps) {
@@ -893,8 +893,8 @@ void RendererImpl::buildUi(Server& server) {
     ImGui::Render();
 }
 
-void RendererImpl::renderFrame(Server& server) {
-    buildUi(server);
+void RendererImpl::renderFrame(Scene& scene) {
+    buildUi(scene);
 
     vkResetCommandBuffer(cmd, 0);
 

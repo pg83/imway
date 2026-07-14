@@ -1,4 +1,6 @@
 // Ядро композитора: event loop, все wayland-глобалы и обработчики протоколов.
+// Протокольные части модели сцены (pending-состояние, кэши, xdg-ресурсы) —
+// impl-наследники структур сцены, наружу не видны.
 
 #include "server.h"
 
@@ -33,7 +35,85 @@
 using namespace stl;
 
 namespace {
+    struct PopupImpl;
     struct ServerImpl;
+    struct SurfaceImpl;
+    struct ToplevelImpl;
+
+    // роль xdg_surface — чисто протокольная, сцене не видна
+    struct XdgSurface {
+        ServerImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        SurfaceImpl* surface = nullptr;
+        ToplevelImpl* toplevel = nullptr;
+        PopupImpl* popup = nullptr;
+        bool initialConfigureSent = false;
+        bool acked = false;
+    };
+
+    struct SurfaceImpl: public Surface {
+        ServerImpl* srv = nullptr;
+
+        // pending-состояние (double buffering протокола)
+        struct {
+            wl_resource* buffer = nullptr;
+            bool newlyAttached = false;
+            wl_listener bufferDestroy{};
+            bool bufferDestroyArmed = false;
+            Vector<wl_resource*> frames;
+            bool inputRegionSet = false; // false = вся поверхность
+            Vector<RectI> inputRegion;
+        } pending;
+
+        bool dirty = false; // контент изменился с последней загрузки в текстуру
+        Vector<wl_resource*> frameCbs;
+
+        // dmabuf-контент: буфер держим до замены (рендер читает память напрямую)
+        wl_resource* dmabufRes = nullptr;
+        wl_listener dmabufDestroy{};
+        bool dmabufDestroyArmed = false;
+
+        // wp_viewport: pending (-1 = unset, применяется на commit) и живой ресурс
+        wl_resource* vpRes = nullptr;
+        double pendSx = -1, pendSy = -1, pendSw = -1, pendSh = -1;
+        int pendDw = -1, pendDh = -1;
+
+        XdgSurface* xdg = nullptr; // роль xdg_surface
+    };
+
+    struct SubsurfaceImpl: public Subsurface {
+        ServerImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+
+        int pendingX = 0, pendingY = 0;
+        bool pendingPos = false; // применяется на commit родителя
+        bool sync = true;        // режим по умолчанию — synchronized
+
+        // кэш состояния для sync-коммитов (применяется на commit родителя)
+        struct {
+            bool valid = false;
+            bool hasContent = false;
+            int width = 0, height = 0;
+            Vector<u8> pixels;
+            Vector<wl_resource*> frames;
+        } cache;
+
+        bool effectiveSync() const; // sync у себя или у любого предка-субповерхности
+    };
+
+    struct ToplevelImpl: public Toplevel {
+        ServerImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        XdgSurface* xdg = nullptr;
+        int cfgW = 0, cfgH = 0; // последний отправленный configure
+    };
+
+    struct PopupImpl: public Popup {
+        ServerImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        XdgSurface* xdg = nullptr;
+        int w = 0, h = 0; // размер из позиционера
+    };
 
     // мелкие протокольные объекты с O(1) reuse; srv — для возврата в свой ObjList
     struct RegionBox {
@@ -68,8 +148,11 @@ namespace {
         ObjPool* pool = nullptr;
         ServerConfig cfg;
 
+        struct ev_loop* loop = nullptr;
         wl_event_loop* wlLoop = nullptr;
 
+        Renderer* renderer = nullptr;
+        Seat* seat = nullptr;
         Kms* kms = nullptr;
         InputLinux* input = nullptr;
         Control* control = nullptr;
@@ -84,11 +167,11 @@ namespace {
         int settleFrames = 0; // дорисовать пару кадров после последней активности
 
         // переиспользуемые аллокации протокольных объектов (память из пула)
-        ObjList<Surface>* surfaceAlloc = nullptr;
-        ObjList<Subsurface>* subsurfaceAlloc = nullptr;
+        ObjList<SurfaceImpl>* surfaceAlloc = nullptr;
+        ObjList<SubsurfaceImpl>* subsurfaceAlloc = nullptr;
         ObjList<XdgSurface>* xdgSurfaceAlloc = nullptr;
-        ObjList<Toplevel>* toplevelAlloc = nullptr;
-        ObjList<Popup>* popupAlloc = nullptr;
+        ObjList<ToplevelImpl>* toplevelAlloc = nullptr;
+        ObjList<PopupImpl>* popupAlloc = nullptr;
         ObjList<RegionBox>* regionAlloc = nullptr;
         ObjList<Positioner>* positionerAlloc = nullptr;
         ObjList<BufferBox>* dmabufBoxAlloc = nullptr;
@@ -104,8 +187,8 @@ namespace {
         void onFrameTick();
     };
 
-    ServerImpl& impl(Server* s) {
-        return *(ServerImpl*)s;
+    SubsurfaceImpl& impl(Subsurface* sub) {
+        return *(SubsurfaceImpl*)sub;
     }
 
     // --- event loop ---
@@ -131,7 +214,7 @@ namespace {
         ev_break(loop, EVBREAK_ALL);
     }
 
-    void fireFrameCallbacks(Surface& s, u32 t) {
+    void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
         // деструктор ресурса удаляет callback из frameCbs — забираем список до итерации
         Vector<wl_resource*> cbs;
 
@@ -144,13 +227,13 @@ namespace {
 
         for (Subsurface* c : s.stackBelow) {
             if (c->surface) {
-                fireFrameCallbacks(*c->surface, t);
+                fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
             }
         }
 
         for (Subsurface* c : s.stackAbove) {
             if (c->surface) {
-                fireFrameCallbacks(*c->surface, t);
+                fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
             }
         }
     }
@@ -171,20 +254,21 @@ namespace {
     }
 
     // объявления для перекрёстных ссылок между секциями
-    void unlinkFromParent(Subsurface&);
-    void applySubsurfaceCache(Subsurface&);
-    void xdgHandleCommit(Surface&);
-    void xdgPopupDismiss(Popup&);
-    void viewportApplyPending(Surface&);
-    void viewportSurfaceGone(Surface&);
+    void unlinkFromParent(SubsurfaceImpl&);
+    void applySubsurfaceCache(SubsurfaceImpl&);
+    void xdgHandleCommit(SurfaceImpl&);
+    void xdgPopupDismiss(PopupImpl&);
+    void viewportApplyPending(SurfaceImpl&);
+    void viewportSurfaceGone(SurfaceImpl&);
+    DmabufBuffer* dmabufFromRes(wl_resource*);
 
     // ================= wl_surface / wl_region / wl_subcompositor =================
 
-    Surface* surfaceFrom(wl_resource* res) {
-        return (Surface*)wl_resource_get_user_data(res);
+    SurfaceImpl* surfaceFrom(wl_resource* res) {
+        return (SurfaceImpl*)wl_resource_get_user_data(res);
     }
 
-    void detachPendingBuffer(Surface& s) {
+    void detachPendingBuffer(SurfaceImpl& s) {
         if (s.pending.bufferDestroyArmed) {
             wl_list_remove(&s.pending.bufferDestroy.link);
             s.pending.bufferDestroyArmed = false;
@@ -194,7 +278,7 @@ namespace {
     }
 
     void pendingBufferDestroyed(wl_listener* l, void*) {
-        Surface* s = wl_container_of(l, s, pending.bufferDestroy);
+        SurfaceImpl* s = wl_container_of(l, s, pending.bufferDestroy);
 
         s->pending.buffer = nullptr;
         s->pending.bufferDestroyArmed = false;
@@ -204,34 +288,37 @@ namespace {
     // --- удержание dmabuf-буфера (рендер читает его память напрямую) ---
 
     void heldDmabufDestroyed(wl_listener* l, void*) {
-        Surface* s = wl_container_of(l, s, dmabufDestroy);
+        SurfaceImpl* s = wl_container_of(l, s, dmabufDestroy);
 
         // клиент уничтожил буфер, пока тот показан: текстура уже импортирована
         // (память живёт на нашем fd-дубликате), просто забываем ресурс
-        s->dmabufBuffer = nullptr;
+        s->dmabuf = nullptr;
+        s->dmabufRes = nullptr;
         s->dmabufDestroyArmed = false;
         wl_list_remove(&s->dmabufDestroy.link);
     }
 
-    void releaseHeldDmabuf(Surface& s) {
-        if (!s.dmabufBuffer) {
+    void releaseHeldDmabuf(SurfaceImpl& s) {
+        if (!s.dmabufRes) {
             return;
         }
 
-        wl_buffer_send_release(s.dmabufBuffer);
+        wl_buffer_send_release(s.dmabufRes);
 
         if (s.dmabufDestroyArmed) {
             wl_list_remove(&s.dmabufDestroy.link);
             s.dmabufDestroyArmed = false;
         }
 
-        s.dmabufBuffer = nullptr;
+        s.dmabuf = nullptr;
+        s.dmabufRes = nullptr;
     }
 
-    void holdDmabuf(Surface& s, wl_resource* buffer) {
+    void holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf) {
         releaseHeldDmabuf(s);
 
-        s.dmabufBuffer = buffer;
+        s.dmabuf = buf;
+        s.dmabufRes = buffer;
         s.dmabufDestroy.notify = heldDmabufDestroyed;
         wl_resource_add_destroy_listener(buffer, &s.dmabufDestroy);
         s.dmabufDestroyArmed = true;
@@ -242,7 +329,7 @@ namespace {
     }
 
     void surfaceAttach(wl_client*, wl_resource* res, wl_resource* buffer, i32, i32) {
-        Surface& s = *surfaceFrom(res);
+        SurfaceImpl& s = *surfaceFrom(res);
 
         detachPendingBuffer(s);
         s.pending.buffer = buffer;
@@ -260,7 +347,7 @@ namespace {
     }
 
     void frameCallbackDestroyed(wl_resource* cb) {
-        Surface* s = (Surface*)wl_resource_get_user_data(cb);
+        SurfaceImpl* s = (SurfaceImpl*)wl_resource_get_user_data(cb);
 
         if (!s) {
             return;
@@ -271,7 +358,7 @@ namespace {
     }
 
     void surfaceFrame(wl_client* client, wl_resource* res, u32 id) {
-        Surface& s = *surfaceFrom(res);
+        SurfaceImpl& s = *surfaceFrom(res);
         wl_resource* cb = wl_resource_create(client, &wl_callback_interface, 1, id);
 
         if (!cb) {
@@ -288,7 +375,7 @@ namespace {
     }
 
     void surfaceSetInputRegion(wl_client*, wl_resource* res, wl_resource* region) {
-        Surface& s = *surfaceFrom(res);
+        SurfaceImpl& s = *surfaceFrom(res);
 
         if (!region) { // NULL = вся поверхность
             s.pending.inputRegionSet = false;
@@ -334,7 +421,7 @@ namespace {
         wl_shm_buffer_end_access(&shm);
     }
 
-    void copyShmBuffer(Surface& s, wl_shm_buffer* shm) {
+    void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm) {
         copyShmBufferTo(*shm, s.width, s.height, s.pixels);
 
         if (s.width > 0) {
@@ -343,29 +430,31 @@ namespace {
         }
     }
 
-    void applyChildrenCaches(Surface& s) {
+    void applyChildrenCaches(SurfaceImpl& s) {
         Vector<Subsurface*>* stacks[] = {&s.stackBelow, &s.stackAbove};
 
         for (auto* stack : stacks) {
             for (Subsurface* c : *stack) {
+                SubsurfaceImpl& sub = impl(c);
+
                 // позиция двойнобуферизована коммитом родителя для любых детей
-                if (c->pendingPos) {
-                    c->x = c->pendingX;
-                    c->y = c->pendingY;
-                    c->pendingPos = false;
+                if (sub.pendingPos) {
+                    sub.x = sub.pendingX;
+                    sub.y = sub.pendingY;
+                    sub.pendingPos = false;
                 }
 
-                if (c->sync) {
-                    applySubsurfaceCache(*c);
+                if (sub.sync) {
+                    applySubsurfaceCache(sub);
                 }
             }
         }
     }
 
     // применить кэш sync-субповерхности и рекурсивно кэши её sync-детей
-    void applySubsurfaceCache(Subsurface& sub) {
+    void applySubsurfaceCache(SubsurfaceImpl& sub) {
         if (sub.cache.valid) {
-            Surface& s = *sub.surface;
+            SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
 
             s.hasContent = sub.cache.hasContent;
             s.width = sub.cache.width;
@@ -393,32 +482,33 @@ namespace {
 
         // спека: commit родителя применяет закешированное состояние всего sync-поддерева
         for (Subsurface* c : sub.surface->stackBelow) {
-            if (c->sync) {
-                applySubsurfaceCache(*c);
+            if (impl(c).sync) {
+                applySubsurfaceCache(impl(c));
             }
         }
 
         for (Subsurface* c : sub.surface->stackAbove) {
-            if (c->sync) {
-                applySubsurfaceCache(*c);
+            if (impl(c).sync) {
+                applySubsurfaceCache(impl(c));
             }
         }
     }
 
     void surfaceCommit(wl_client*, wl_resource* res) {
-        Surface& s = *surfaceFrom(res);
+        SurfaceImpl& s = *surfaceFrom(res);
 
-        s.server->needsFrame = true;
+        s.srv->scene.needsFrame = true;
 
-        bool toCache = s.sub && s.sub->effectiveSync();
+        SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
+        bool toCache = sub && sub->effectiveSync();
 
         if (s.pending.newlyAttached) {
             if (!s.pending.buffer) {
                 if (toCache) {
-                    s.sub->cache.valid = true;
-                    s.sub->cache.hasContent = false;
-                    s.sub->cache.width = s.sub->cache.height = 0;
-                    s.sub->cache.pixels.clear();
+                    sub->cache.valid = true;
+                    sub->cache.hasContent = false;
+                    sub->cache.width = sub->cache.height = 0;
+                    sub->cache.pixels.clear();
                 } else {
                     s.hasContent = false;
                     s.width = s.height = 0;
@@ -426,20 +516,19 @@ namespace {
             } else if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
                 if (toCache) {
                     // снимаем копию сразу (буфер возвращается клиенту), показ — на commit родителя
-                    copyShmBufferTo(*shm, s.sub->cache.width, s.sub->cache.height,
-                                    s.sub->cache.pixels);
-                    s.sub->cache.hasContent = s.sub->cache.width > 0;
-                    s.sub->cache.valid = true;
+                    copyShmBufferTo(*shm, sub->cache.width, sub->cache.height, sub->cache.pixels);
+                    sub->cache.hasContent = sub->cache.width > 0;
+                    sub->cache.valid = true;
                 } else {
                     copyShmBuffer(s, shm);
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
                 releaseHeldDmabuf(s); // на случай смены dmabuf → shm
-            } else if (DmabufBuffer* db = dmabufFromBufferResource(s.pending.buffer)) {
+            } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
                 // dmabuf применяем сразу даже для sync-субповерхностей (без кэша):
                 // буфер один, копий нет — упрощение
-                holdDmabuf(s, s.pending.buffer);
+                holdDmabuf(s, s.pending.buffer, db);
                 s.width = db->width;
                 s.height = db->height;
                 s.pixels.clear();
@@ -461,7 +550,7 @@ namespace {
 
         if (toCache) {
             for (wl_resource* cb : s.pending.frames) {
-                s.sub->cache.frames.pushBack(cb);
+                sub->cache.frames.pushBack(cb);
             }
 
             s.pending.frames.clear();
@@ -513,8 +602,8 @@ namespace {
     };
 
     void surfaceResourceDestroyed(wl_resource* res) {
-        Surface* s = surfaceFrom(res);
-        Server* server = s->server;
+        SurfaceImpl* s = surfaceFrom(res);
+        ServerImpl* srv = s->srv;
 
         detachPendingBuffer(*s);
 
@@ -528,10 +617,18 @@ namespace {
 
         if (s->xdg) {
             s->xdg->surface = nullptr;
+
+            if (s->xdg->toplevel) {
+                s->xdg->toplevel->surface = nullptr;
+            }
+
+            if (s->xdg->popup) {
+                s->xdg->popup->surface = nullptr;
+            }
         }
 
         if (s->sub) { // роль-субповерхность: выпасть из стека родителя
-            unlinkFromParent(*s->sub);
+            unlinkFromParent(impl(s->sub));
             s->sub->surface = nullptr;
         }
 
@@ -543,30 +640,30 @@ namespace {
             c->parent = nullptr;
         }
 
-        for (Popup* p : server->popups) { // попапы умершего родителя гаснут
+        for (Popup* p : srv->scene.popups) { // попапы умершего родителя гаснут
             if (p->parent == s) {
                 p->parent = nullptr;
 
                 if (p->mapped) {
-                    xdgPopupDismiss(*p);
+                    xdgPopupDismiss(*(PopupImpl*)p);
                 }
             }
         }
 
-        if (server->seat) {
-            server->seat->surfaceGone(s);
+        if (srv->seat) {
+            srv->seat->surfaceGone(s);
         }
 
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
 
-        if (s->texture && server->renderer) {
-            server->renderer->destroyTexture(s->texture);
+        if (s->texture && srv->renderer) {
+            srv->renderer->destroyTexture(s->texture);
         }
 
-        server->needsFrame = true;
-        removeOne(server->surfaces, s);
-        impl(server).surfaceAlloc->release(s);
+        srv->scene.needsFrame = true;
+        removeOne(srv->scene.surfaces, (Surface*)s);
+        srv->surfaceAlloc->release(s);
     }
 
     void regionDestroy(wl_client*, wl_resource* res) {
@@ -621,9 +718,9 @@ namespace {
 
         auto* s = srv->surfaceAlloc->make();
 
-        s->server = srv;
+        s->srv = srv;
         s->res = sres;
-        srv->surfaces.pushBack(s);
+        srv->scene.surfaces.pushBack(s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
     }
 
@@ -661,17 +758,17 @@ namespace {
         wl_resource_set_implementation(res, &compositorImpl, data, nullptr);
     }
 
-    Subsurface* subFrom(wl_resource* res) {
-        return (Subsurface*)wl_resource_get_user_data(res);
+    SubsurfaceImpl* subFrom(wl_resource* res) {
+        return (SubsurfaceImpl*)wl_resource_get_user_data(res);
     }
 
-    void unlinkFromParent(Subsurface& sub) {
+    void unlinkFromParent(SubsurfaceImpl& sub) {
         if (!sub.parent) {
             return;
         }
 
-        removeOne(sub.parent->stackBelow, &sub);
-        removeOne(sub.parent->stackAbove, &sub);
+        removeOne(sub.parent->stackBelow, (Subsurface*)&sub);
+        removeOne(sub.parent->stackAbove, (Subsurface*)&sub);
         sub.parent = nullptr;
     }
 
@@ -680,7 +777,7 @@ namespace {
     }
 
     void subsurfaceSetPosition(wl_client*, wl_resource* res, i32 x, i32 y) {
-        Subsurface* sub = subFrom(res);
+        SubsurfaceImpl* sub = subFrom(res);
 
         if (!sub) {
             return;
@@ -692,20 +789,20 @@ namespace {
     }
 
     // вставить относительно sibling'а; ref == сам родитель тоже валиден
-    void subsurfaceRestack(Subsurface& sub, Surface* refSurface, bool above) {
+    void subsurfaceRestack(SubsurfaceImpl& sub, Surface* refSurface, bool above) {
         Surface* parent = sub.parent;
 
         if (!parent) {
             return;
         }
 
-        removeOne(parent->stackBelow, &sub);
-        removeOne(parent->stackAbove, &sub);
+        removeOne(parent->stackBelow, (Subsurface*)&sub);
+        removeOne(parent->stackAbove, (Subsurface*)&sub);
 
         if (refSurface == parent) {
             // относительно самого родителя
             if (above) {
-                insertAt(parent->stackAbove, 0, &sub);
+                insertAt(parent->stackAbove, 0, (Subsurface*)&sub);
             } else {
                 parent->stackBelow.pushBack(&sub);
             }
@@ -720,7 +817,7 @@ namespace {
             long idx = indexOf(*stack, ref);
 
             if (idx >= 0) {
-                insertAt(*stack, above ? (size_t)idx + 1 : (size_t)idx, &sub);
+                insertAt(*stack, above ? (size_t)idx + 1 : (size_t)idx, (Subsurface*)&sub);
 
                 return;
             }
@@ -731,7 +828,7 @@ namespace {
     }
 
     void subsurfacePlaceAbove(wl_client*, wl_resource* res, wl_resource* sibling) {
-        Subsurface* sub = subFrom(res);
+        SubsurfaceImpl* sub = subFrom(res);
 
         if (sub && sibling) {
             subsurfaceRestack(*sub, surfaceFrom(sibling), true);
@@ -739,7 +836,7 @@ namespace {
     }
 
     void subsurfacePlaceBelow(wl_client*, wl_resource* res, wl_resource* sibling) {
-        Subsurface* sub = subFrom(res);
+        SubsurfaceImpl* sub = subFrom(res);
 
         if (sub && sibling) {
             subsurfaceRestack(*sub, surfaceFrom(sibling), false);
@@ -747,13 +844,13 @@ namespace {
     }
 
     void subsurfaceSetSync(wl_client*, wl_resource* res) {
-        if (Subsurface* sub = subFrom(res)) {
+        if (SubsurfaceImpl* sub = subFrom(res)) {
             sub->sync = true;
         }
     }
 
     void subsurfaceSetDesync(wl_client*, wl_resource* res) {
-        Subsurface* sub = subFrom(res);
+        SubsurfaceImpl* sub = subFrom(res);
 
         if (!sub) {
             return;
@@ -777,13 +874,11 @@ namespace {
     };
 
     void subsurfaceResourceDestroyed(wl_resource* res) {
-        Subsurface* sub = subFrom(res);
+        SubsurfaceImpl* sub = subFrom(res);
 
         if (!sub) {
             return;
         }
-
-        Server* server = sub->surface ? sub->surface->server : nullptr;
 
         unlinkFromParent(*sub);
 
@@ -795,9 +890,7 @@ namespace {
             sub->surface->sub = nullptr;
         }
 
-        if (server) {
-            impl(server).subsurfaceAlloc->release(sub);
-        }
+        sub->srv->subsurfaceAlloc->release(sub);
     }
 
     void subcompositorDestroy(wl_client*, wl_resource* res) {
@@ -807,8 +900,8 @@ namespace {
     void subcompositorGetSubsurface(wl_client* client, wl_resource* res, u32 id,
                                     wl_resource* surfaceRes, wl_resource* parentRes) {
         auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
-        Surface* surface = surfaceFrom(surfaceRes);
-        Surface* parent = surfaceFrom(parentRes);
+        SurfaceImpl* surface = surfaceFrom(surfaceRes);
+        SurfaceImpl* parent = surfaceFrom(parentRes);
 
         if (surface->xdg || surface->sub) {
             wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
@@ -828,6 +921,7 @@ namespace {
 
         auto* sub = srv->subsurfaceAlloc->make();
 
+        sub->srv = srv;
         sub->surface = surface;
         sub->parent = parent;
         sub->res = sres;
@@ -863,13 +957,13 @@ namespace {
     }
 
     void toplevelSetTitle(wl_client*, wl_resource* res, const char* title) {
-        auto* t = (Toplevel*)wl_resource_get_user_data(res);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
         copyBounded(t->title, sizeof(t->title), title);
     }
 
     void toplevelSetAppId(wl_client*, wl_resource* res, const char* appId) {
-        auto* t = (Toplevel*)wl_resource_get_user_data(res);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
         copyBounded(t->appId, sizeof(t->appId), appId);
     }
@@ -922,21 +1016,25 @@ namespace {
     };
 
     void toplevelResourceDestroyed(wl_resource* res) {
-        auto* t = (Toplevel*)wl_resource_get_user_data(res);
-        Server* server = t->server;
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
+        ServerImpl* srv = t->srv;
 
-        if (server->seat) {
-            server->seat->toplevelGone(t);
+        if (srv->seat) {
+            srv->seat->toplevelGone(t);
         }
 
         if (t->xdg) {
             t->xdg->toplevel = nullptr;
         }
 
-        removeOne(server->toplevels, t);
+        if (t->surface) {
+            t->surface->toplevel = nullptr;
+        }
+
+        removeOne(srv->scene.toplevels, (Toplevel*)t);
         sysO << "imway: toplevel "_sv << (const char*)t->title << " destroyed"_sv << endL;
-        server->needsFrame = true;
-        impl(server).toplevelAlloc->release(t);
+        srv->scene.needsFrame = true;
+        srv->toplevelAlloc->release(t);
     }
 
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
@@ -951,12 +1049,12 @@ namespace {
             xdg_toplevel_send_configure(xs.toplevel->res, 0, 0, &states);
             wl_array_release(&states);
         } else if (xs.popup) {
-            Popup& p = *xs.popup;
+            PopupImpl& p = *xs.popup;
 
             xdg_popup_send_configure(p.res, p.x, p.y, p.w, p.h);
         }
 
-        xdg_surface_send_configure(xs.res, wl_display_next_serial(xs.server->display));
+        xdg_surface_send_configure(xs.res, wl_display_next_serial(xs.srv->display));
         xs.initialConfigureSent = true;
     }
 
@@ -971,15 +1069,21 @@ namespace {
             return;
         }
 
-        ServerImpl& srv = impl(xs->server);
-        auto* t = srv.toplevelAlloc->make();
+        ServerImpl* srv = xs->srv;
+        auto* t = srv->toplevelAlloc->make();
 
-        t->server = &srv;
+        t->srv = srv;
         t->res = tres;
         t->xdg = xs;
-        t->id = srv.nextToplevelId++;
+        t->surface = xs->surface;
+        t->id = srv->nextToplevelId++;
         xs->toplevel = t;
-        srv.toplevels.pushBack(t);
+
+        if (xs->surface) {
+            xs->surface->toplevel = t;
+        }
+
+        srv->scene.toplevels.pushBack(t);
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
     }
 
@@ -1008,17 +1112,20 @@ namespace {
 
         if (xs->surface) {
             xs->surface->xdg = nullptr;
+            xs->surface->toplevel = nullptr;
         }
 
         if (xs->toplevel) {
             xs->toplevel->xdg = nullptr;
+            xs->toplevel->surface = nullptr;
         }
 
         if (xs->popup) {
             xs->popup->xdg = nullptr;
+            xs->popup->surface = nullptr;
         }
 
-        impl(xs->server).xdgSurfaceAlloc->release(xs);
+        xs->srv->xdgSurfaceAlloc->release(xs);
     }
 
     Positioner* positionerFrom(wl_resource* res) {
@@ -1097,13 +1204,13 @@ namespace {
     }
 
     void popupGrab(wl_client*, wl_resource* res, wl_resource* /*seat*/, u32 /*serial*/) {
-        auto* p = (Popup*)wl_resource_get_user_data(res);
+        auto* p = (PopupImpl*)wl_resource_get_user_data(res);
 
         p->grab = true;
     }
 
     void popupReposition(wl_client*, wl_resource* res, wl_resource* positioner, u32 token) {
-        auto* p = (Popup*)wl_resource_get_user_data(res);
+        auto* p = (PopupImpl*)wl_resource_get_user_data(res);
         Positioner* pos = positionerFrom(positioner);
 
         pos->place(p->x, p->y);
@@ -1111,8 +1218,8 @@ namespace {
         p->h = pos->h;
         xdg_popup_send_repositioned(res, token);
         xdg_popup_send_configure(res, p->x, p->y, p->w, p->h);
-        xdg_surface_send_configure(p->xdg->res, wl_display_next_serial(p->server->display));
-        p->server->needsFrame = true;
+        xdg_surface_send_configure(p->xdg->res, wl_display_next_serial(p->srv->display));
+        p->srv->scene.needsFrame = true;
     }
 
     const struct xdg_popup_interface popupImpl = {
@@ -1122,20 +1229,20 @@ namespace {
     };
 
     void popupResourceDestroyed(wl_resource* res) {
-        auto* p = (Popup*)wl_resource_get_user_data(res);
-        Server* server = p->server;
+        auto* p = (PopupImpl*)wl_resource_get_user_data(res);
+        ServerImpl* srv = p->srv;
 
-        if (server->seat) {
-            server->seat->popupGone(p);
+        if (srv->seat) {
+            srv->seat->popupGone(p);
         }
 
         if (p->xdg) {
             p->xdg->popup = nullptr;
         }
 
-        removeOne(server->popups, p);
-        server->needsFrame = true;
-        impl(server).popupAlloc->release(p);
+        removeOne(srv->scene.popups, (Popup*)p);
+        srv->scene.needsFrame = true;
+        srv->popupAlloc->release(p);
     }
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes,
@@ -1159,12 +1266,13 @@ namespace {
             return;
         }
 
-        ServerImpl& srv = impl(xs->server);
-        auto* p = srv.popupAlloc->make();
+        ServerImpl* srv = xs->srv;
+        auto* p = srv->popupAlloc->make();
 
-        p->server = &srv;
+        p->srv = srv;
         p->res = pres;
         p->xdg = xs;
+        p->surface = xs->surface;
         p->parent = parentXs->surface;
 
         Positioner* pos = positionerFrom(positionerRes);
@@ -1173,7 +1281,7 @@ namespace {
         p->w = pos->w;
         p->h = pos->h;
         xs->popup = p;
-        srv.popups.pushBack(p);
+        srv->scene.popups.pushBack(p);
         wl_resource_set_implementation(pres, &popupImpl, p, popupResourceDestroyed);
     }
 
@@ -1200,7 +1308,7 @@ namespace {
 
     void wmBaseGetXdgSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
-        auto* surface = (Surface*)wl_resource_get_user_data(surfaceRes);
+        auto* surface = surfaceFrom(surfaceRes);
         wl_resource* xres =
             wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
 
@@ -1212,7 +1320,7 @@ namespace {
 
         auto* xs = srv->xdgSurfaceAlloc->make();
 
-        xs->server = srv;
+        xs->srv = srv;
         xs->res = xres;
         xs->surface = surface;
         surface->xdg = xs;
@@ -1241,20 +1349,20 @@ namespace {
         wl_resource_set_implementation(res, &wmBaseImpl, data, nullptr);
     }
 
-    void xdgToplevelConfigureSize(Toplevel& t, int w, int h) {
+    void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h) {
         wl_array states;
 
         wl_array_init(&states);
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
-        xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.server->display));
+        xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
         t.cfgW = w;
         t.cfgH = h;
         sysO << "imway: configure "_sv << (const char*)t.title << " -> "_sv << w << "x"_sv << h
              << endL;
     }
 
-    void xdgHandleCommit(Surface& s) {
+    void xdgHandleCommit(SurfaceImpl& s) {
         XdgSurface* xs = s.xdg;
 
         if (!xs) {
@@ -1275,51 +1383,51 @@ namespace {
 
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
-            s.server->needsFrame = true;
+            s.srv->scene.needsFrame = true;
             sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " ("_sv
                  << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv
                  << s.height << endL;
 
-            if (s.server->seat) {
-                s.server->seat->focusToplevel(xs->toplevel); // focus-on-map
+            if (s.srv->seat) {
+                s.srv->seat->focusToplevel(xs->toplevel); // focus-on-map
             }
         }
 
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
-            s.server->needsFrame = true;
+            s.srv->scene.needsFrame = true;
             sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " unmapped"_sv
                  << endL;
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
-            s.server->needsFrame = true;
+            s.srv->scene.needsFrame = true;
             sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv
                  << xs->popup->x << ","_sv << xs->popup->y << ")"_sv
                  << (xs->popup->grab ? " grab" : "") << endL;
 
-            if (xs->popup->grab && s.server->seat) {
-                s.server->seat->popupGrabStart(xs->popup);
+            if (xs->popup->grab && s.srv->seat) {
+                s.srv->seat->popupGrabStart(xs->popup);
             }
         }
 
         if (xs->popup && xs->popup->mapped && !s.hasContent) {
             xs->popup->mapped = false;
-            s.server->needsFrame = true;
+            s.srv->scene.needsFrame = true;
         }
     }
 
-    void xdgPopupDismiss(Popup& p) {
+    void xdgPopupDismiss(PopupImpl& p) {
         if (!p.mapped) {
             return;
         }
 
         p.mapped = false;
-        p.server->needsFrame = true;
+        p.srv->scene.needsFrame = true;
 
-        if (p.server->seat) {
-            p.server->seat->popupGone(&p);
+        if (p.srv->seat) {
+            p.srv->seat->popupGone(&p);
         }
 
         xdg_popup_send_popup_done(p.res);
@@ -1334,7 +1442,7 @@ namespace {
     const struct wl_output_interface outputImpl = {.release = outputRelease};
 
     void outputBind(wl_client* client, void* data, u32 version, u32 id) {
-        auto* server = (Server*)(ServerImpl*)data;
+        auto* srv = (ServerImpl*)data;
         wl_resource* res = wl_resource_create(client, &wl_output_interface, version, id);
 
         if (!res) {
@@ -1343,12 +1451,12 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(res, &outputImpl, server, nullptr);
+        wl_resource_set_implementation(res, &outputImpl, srv, nullptr);
 
         wl_output_send_geometry(res, 0, 0, 340, 210, WL_OUTPUT_SUBPIXEL_UNKNOWN, "imway",
                                 "headless", WL_OUTPUT_TRANSFORM_NORMAL);
-        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, server->outW,
-                            server->outH, (i32)(server->hz * 1000));
+        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
+                            srv->scene.outW, srv->scene.outH, (i32)(srv->scene.hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
             wl_output_send_scale(res, 1);
@@ -1478,17 +1586,13 @@ namespace {
 
     // ================= wp_viewporter =================
 
-    Surface* viewportSurfaceOf(wl_resource* res) {
-        return (Surface*)wl_resource_get_user_data(res);
-    }
-
     void viewportDestroy(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
     }
 
     void viewportSetSource(wl_client*, wl_resource* res, wl_fixed_t x, wl_fixed_t y, wl_fixed_t w,
                            wl_fixed_t h) {
-        Surface* s = viewportSurfaceOf(res);
+        SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
             wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "поверхность уничтожена");
@@ -1500,7 +1604,7 @@ namespace {
         double dw = wl_fixed_to_double(w), dh = wl_fixed_to_double(h);
 
         if (dx == -1 && dy == -1 && dw == -1 && dh == -1) { // unset
-            s->vp.pendSw = s->vp.pendSh = -1;
+            s->pendSw = s->pendSh = -1;
 
             return;
         }
@@ -1511,14 +1615,14 @@ namespace {
             return;
         }
 
-        s->vp.pendSx = dx;
-        s->vp.pendSy = dy;
-        s->vp.pendSw = dw;
-        s->vp.pendSh = dh;
+        s->pendSx = dx;
+        s->pendSy = dy;
+        s->pendSw = dw;
+        s->pendSh = dh;
     }
 
     void viewportSetDestination(wl_client*, wl_resource* res, i32 w, i32 h) {
-        Surface* s = viewportSurfaceOf(res);
+        SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
             wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "поверхность уничтожена");
@@ -1527,7 +1631,7 @@ namespace {
         }
 
         if (w == -1 && h == -1) { // unset
-            s->vp.pendDw = s->vp.pendDh = -1;
+            s->pendDw = s->pendDh = -1;
 
             return;
         }
@@ -1538,8 +1642,8 @@ namespace {
             return;
         }
 
-        s->vp.pendDw = w;
-        s->vp.pendDh = h;
+        s->pendDw = w;
+        s->pendDh = h;
     }
 
     const struct wp_viewport_interface viewportImpl = {
@@ -1549,16 +1653,16 @@ namespace {
     };
 
     void viewportResourceDestroyed(wl_resource* res) {
-        Surface* s = viewportSurfaceOf(res);
+        SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
             return;
         }
 
         // спека: состояние снимается на следующем commit
-        s->vp.res = nullptr;
-        s->vp.pendSw = s->vp.pendSh = -1;
-        s->vp.pendDw = s->vp.pendDh = -1;
+        s->vpRes = nullptr;
+        s->pendSw = s->pendSh = -1;
+        s->pendDw = s->pendDh = -1;
     }
 
     void viewporterDestroy(wl_client*, wl_resource* res) {
@@ -1567,9 +1671,9 @@ namespace {
 
     void viewporterGetViewport(wl_client* client, wl_resource* res, u32 id,
                                wl_resource* surfaceRes) {
-        Surface* s = (Surface*)wl_resource_get_user_data(surfaceRes);
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
 
-        if (s->vp.res) {
+        if (s->vpRes) {
             wl_resource_post_error(res, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS,
                                    "у поверхности уже есть вьюпорт");
 
@@ -1585,7 +1689,7 @@ namespace {
             return;
         }
 
-        s->vp.res = vres;
+        s->vpRes = vres;
         wl_resource_set_implementation(vres, &viewportImpl, s, viewportResourceDestroyed);
     }
 
@@ -1606,34 +1710,42 @@ namespace {
         wl_resource_set_implementation(res, &viewporterImpl, data, nullptr);
     }
 
-    void viewportApplyPending(Surface& s) {
-        s.vp.hasSrc = s.vp.pendSw > 0;
+    void viewportApplyPending(SurfaceImpl& s) {
+        s.vp.hasSrc = s.pendSw > 0;
 
         if (s.vp.hasSrc) {
-            s.vp.sx = s.vp.pendSx;
-            s.vp.sy = s.vp.pendSy;
-            s.vp.sw = s.vp.pendSw;
-            s.vp.sh = s.vp.pendSh;
+            s.vp.sx = s.pendSx;
+            s.vp.sy = s.pendSy;
+            s.vp.sw = s.pendSw;
+            s.vp.sh = s.pendSh;
         }
 
-        s.vp.hasDst = s.vp.pendDw > 0;
+        s.vp.hasDst = s.pendDw > 0;
 
         if (s.vp.hasDst) {
-            s.vp.dw = s.vp.pendDw;
-            s.vp.dh = s.vp.pendDh;
+            s.vp.dw = s.pendDw;
+            s.vp.dh = s.pendDh;
         }
     }
 
     // при уничтожении поверхности вьюпорт становится инертным
-    void viewportSurfaceGone(Surface& s) {
-        if (s.vp.res) {
-            wl_resource_set_user_data(s.vp.res, nullptr);
+    void viewportSurfaceGone(SurfaceImpl& s) {
+        if (s.vpRes) {
+            wl_resource_set_user_data(s.vpRes, nullptr);
         }
     }
 
     // ================= zwp_linux_dmabuf_v1 (v3) =================
 
     const struct wl_buffer_interface dmabufWlBufferImpl = {.destroy = resDestroy};
+
+    DmabufBuffer* dmabufFromRes(wl_resource* res) {
+        if (!wl_resource_instance_of(res, &wl_buffer_interface, &dmabufWlBufferImpl)) {
+            return nullptr;
+        }
+
+        return &((BufferBox*)wl_resource_get_user_data(res))->buf;
+    }
 
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
@@ -1846,7 +1958,18 @@ namespace {
     }
 }
 
-// ================= Positioner =================
+// ================= методы impl-структур =================
+
+bool SubsurfaceImpl::effectiveSync() const {
+    for (const SubsurfaceImpl* s = this; s;
+         s = s->parent ? (const SubsurfaceImpl*)s->parent->sub : nullptr) {
+        if (s->sync) {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 void Positioner::place(int& outX, int& outY) const {
     int px = ax, py = ay; // якорная точка на anchor_rect
@@ -1928,9 +2051,9 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     : pool(p)
     , cfg(config)
 {
-    outW = cfg.outW;
-    outH = cfg.outH;
-    hz = cfg.hz;
+    scene.outW = cfg.outW;
+    scene.outH = cfg.outH;
+    scene.hz = cfg.hz;
 
     display = wl_display_create();
     STD_VERIFY(display);
@@ -1938,11 +2061,11 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     wlLoop = wl_display_get_event_loop(display);
     loop = ev_default_loop(0);
 
-    surfaceAlloc = pool->make<ObjList<Surface>>(pool);
-    subsurfaceAlloc = pool->make<ObjList<Subsurface>>(pool);
+    surfaceAlloc = pool->make<ObjList<SurfaceImpl>>(pool);
+    subsurfaceAlloc = pool->make<ObjList<SubsurfaceImpl>>(pool);
     xdgSurfaceAlloc = pool->make<ObjList<XdgSurface>>(pool);
-    toplevelAlloc = pool->make<ObjList<Toplevel>>(pool);
-    popupAlloc = pool->make<ObjList<Popup>>(pool);
+    toplevelAlloc = pool->make<ObjList<ToplevelImpl>>(pool);
+    popupAlloc = pool->make<ObjList<PopupImpl>>(pool);
     regionAlloc = pool->make<ObjList<RegionBox>>(pool);
     positionerAlloc = pool->make<ObjList<Positioner>>(pool);
     dmabufBoxAlloc = pool->make<ObjList<BufferBox>>(pool);
@@ -1957,17 +2080,20 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
 
     // kms до рендерера: размер output диктует режим дисплея
     if (!strcmp(cfg.backend, "kms")) {
-        kms = Kms::create(pool, *this, cfg.drmDevice);
+        kms = Kms::create(pool, loop, cfg.drmDevice);
+        scene.outW = kms->width();
+        scene.outH = kms->height();
+        scene.hz = kms->refresh();
     }
 
-    renderer = Renderer::create(pool, outW, outH);
+    renderer = Renderer::create(pool, scene.outW, scene.outH);
     seat = Seat::create(pool, *this);
 
     if (kms) {
         STD_VERIFY(kms->start());
 
         try {
-            input = InputLinux::create(pool, *this);
+            input = InputLinux::create(pool, loop, *seat, scene.outW, scene.outH);
         } catch (...) {
             sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
         }
@@ -1978,7 +2104,7 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     createGlobals();
 
     if (cfg.controlPath) {
-        control = Control::create(pool, *this, cfg.controlPath);
+        control = Control::create(pool, loop, *seat, *renderer, cfg.controlPath);
     }
 
     ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
@@ -1989,7 +2115,7 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     flushPrepare.data = this;
     ev_prepare_start(loop, &flushPrepare);
 
-    ev_timer_init(&frameTimer, frameCb, 0., 1.0 / hz);
+    ev_timer_init(&frameTimer, frameCb, 0., 1.0 / scene.hz);
     frameTimer.data = this;
     ev_timer_start(loop, &frameTimer);
 
@@ -1999,8 +2125,8 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
-    sysO << "imway: socket "_sv << cfg.socketName << ", output "_sv << outW << "x"_sv << outH
-         << "@"_sv << (i64)hz << endL;
+    sysO << "imway: socket "_sv << cfg.socketName << ", output "_sv << scene.outW << "x"_sv
+         << scene.outH << "@"_sv << (i64)scene.hz << endL;
 }
 
 ServerImpl::~ServerImpl() noexcept {
@@ -2026,7 +2152,7 @@ void ServerImpl::createGlobals() {
     // v3: repositioned-событие у попапов
     wl_global_create(display, &xdg_wm_base_interface, 3, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
-    seatCreateGlobal(*this);
+    seatCreateGlobal(display, *seat);
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
@@ -2039,36 +2165,38 @@ void ServerImpl::createGlobals() {
 }
 
 void ServerImpl::dismissPopup(Popup& p) {
-    xdgPopupDismiss(p);
+    xdgPopupDismiss(*(PopupImpl*)&p);
 }
 
 void ServerImpl::onFrameTick() {
     // lavapipe — это CPU: без изменений кадр не рисуем вовсе
-    if (needsFrame) {
+    if (scene.needsFrame) {
         settleFrames = 3; // ImGui дорисует hover/анимации
     }
 
-    bool active = needsFrame || settleFrames > 0;
+    bool active = scene.needsFrame || settleFrames > 0;
 
-    needsFrame = false;
+    scene.needsFrame = false;
 
     if (active) {
         settleFrames--;
 
         // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
-        for (Surface* s : surfaces) {
-            if (s->dirty && s->hasContent) {
-                if (s->dmabufBuffer) {
-                    renderer->importDmabuf(*s);
+        for (Surface* s : scene.surfaces) {
+            auto* si = (SurfaceImpl*)s;
+
+            if (si->dirty && si->hasContent) {
+                if (si->dmabuf) {
+                    renderer->importDmabuf(*si);
                 } else {
-                    renderer->uploadSurface(*s);
+                    renderer->uploadSurface(*si);
                 }
 
-                s->dirty = false;
+                si->dirty = false;
             }
         }
 
-        renderer->renderFrame(*this);
+        renderer->renderFrame(scene);
 
         if (kms) {
             kms->present(renderer->readbackData());
@@ -2078,42 +2206,39 @@ void ServerImpl::onFrameTick() {
         // GTK не рисует контент меню, пока не получит frame done)
         u32 t = nowMsec();
 
-        for (Toplevel* tl : toplevels) {
-            Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
-
-            if (tl->mapped && surf) {
-                fireFrameCallbacks(*surf, t);
+        for (Toplevel* tl : scene.toplevels) {
+            if (tl->mapped && tl->surface) {
+                fireFrameCallbacks(*(SurfaceImpl*)tl->surface, t);
             }
         }
 
-        for (Popup* p : popups) {
-            Surface* surf = p->xdg ? p->xdg->surface : nullptr;
-
-            if (surf) {
-                fireFrameCallbacks(*surf, t);
+        for (Popup* p : scene.popups) {
+            if (p->surface) {
+                fireFrameCallbacks(*(SurfaceImpl*)p->surface, t);
             }
         }
 
         // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
-        for (Toplevel* tl : toplevels) {
-            Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
+        for (Toplevel* tl : scene.toplevels) {
+            auto* ti = (ToplevelImpl*)tl;
 
-            if (!tl->mapped || !surf || tl->desiredW <= 0) {
+            if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
                 continue;
             }
 
-            bool differsView = tl->desiredW != surf->viewW() || tl->desiredH != surf->viewH();
-            bool differsSent = tl->desiredW != tl->cfgW || tl->desiredH != tl->cfgH;
+            bool differsView =
+                ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
+            bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
             if (differsView && differsSent) {
-                xdgToplevelConfigureSize(*tl, tl->desiredW, tl->desiredH);
+                xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
             }
         }
     }
 
-    framesDone++;
+    scene.framesDone++;
 
-    if (cfg.framesLimit > 0 && framesDone >= cfg.framesLimit) {
+    if (cfg.framesLimit > 0 && scene.framesDone >= cfg.framesLimit) {
         ev_break(loop, EVBREAK_ALL);
     }
 }
@@ -2143,73 +2268,10 @@ Server* Server::create(ObjPool* pool, const ServerConfig& config) {
     return pool->make<ServerImpl>(pool, config);
 }
 
-DmabufBuffer* dmabufFromBufferResource(wl_resource* res) {
-    if (!wl_resource_instance_of(res, &wl_buffer_interface, &dmabufWlBufferImpl)) {
-        return nullptr;
-    }
-
-    return &((BufferBox*)wl_resource_get_user_data(res))->buf;
-}
-
 u32 nowMsec() {
     timespec ts{};
 
     clock_gettime(CLOCK_MONOTONIC, &ts);
 
     return (u32)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
-}
-
-// --- методы модели ---
-
-bool Surface::inputContains(double sx, double sy) const {
-    if (!inputRegionSet) {
-        return true;
-    }
-
-    for (const RectI& r : inputRegion) {
-        if (sx >= r.x && sy >= r.y && sx < r.x + r.w && sy < r.y + r.h) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-int Surface::viewW() const {
-    return vp.hasDst ? vp.dw : vp.hasSrc ? (int)vp.sw : width;
-}
-
-int Surface::viewH() const {
-    return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : height;
-}
-
-Surface* Surface::rootSurface() {
-    Surface* s = this;
-
-    // вверх по цепочке субповерхностей до корня
-    while (s->sub && s->sub->parent) {
-        s = s->sub->parent;
-    }
-
-    return s;
-}
-
-Toplevel* Surface::rootToplevel() {
-    Surface* s = rootSurface();
-
-    if (s->sub) { // сирота: родитель умер
-        return nullptr;
-    }
-
-    return s->xdg ? s->xdg->toplevel : nullptr;
-}
-
-bool Subsurface::effectiveSync() const {
-    for (const Subsurface* s = this; s; s = s->parent ? s->parent->sub : nullptr) {
-        if (s->sync) {
-            return true;
-        }
-    }
-
-    return false;
 }

@@ -105,6 +105,7 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 # ---- композитор ----
 add_executable(imway
     src/main.cpp
+    src/scene.cpp
     src/server.cpp
     src/control.cpp
     src/input_linux.cpp

@@ -5,11 +5,14 @@ namespace stl {
     class ObjPool;
 }
 
-struct Server;
+struct ev_loop;
+struct Renderer;
+struct Seat;
 
 struct Control {
     virtual ~Control() noexcept;
 
     // бросает stl::Exception, если FIFO не создался
-    static Control* create(stl::ObjPool* pool, Server&, const char* fifoPath);
+    static Control* create(stl::ObjPool* pool, struct ev_loop* loop, Seat& seat,
+                           Renderer& renderer, const char* fifoPath);
 };

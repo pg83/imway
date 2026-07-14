@@ -7,7 +7,7 @@ namespace stl {
     class ObjPool;
 }
 
-struct Server;
+struct Scene;
 struct Surface;
 struct SurfaceTexture; // непрозрачный, живёт в renderer.cpp
 
@@ -29,8 +29,8 @@ struct Renderer {
     virtual bool dmabufFormatSupported(u32 fourcc, u64 modifier) const = 0;
     virtual bool importDmabuf(Surface&) = 0;
 
-    // построить ImGui-кадр по toplevel'ам сервера, записать и исполнить command buffer
-    virtual void renderFrame(Server&) = 0;
+    // построить ImGui-кадр по сцене, записать и исполнить command buffer
+    virtual void renderFrame(Scene&) = 0;
 
     virtual bool screenshot(const char* path) = 0;
 

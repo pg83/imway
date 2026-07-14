@@ -141,8 +141,8 @@ namespace {
         // если фокус уже у этого клиента — новая клавиатура должна получить enter
         SeatImpl& s = *seat;
 
-        if (s.kbFocus && s.kbFocus->xdg && s.kbFocus->xdg->surface &&
-            wl_resource_get_client(s.kbFocus->xdg->surface->res) == client) {
+        if (s.kbFocus && s.kbFocus->surface &&
+            wl_resource_get_client(s.kbFocus->surface->res) == client) {
             wl_array keys;
 
             wl_array_init(&keys);
@@ -152,7 +152,7 @@ namespace {
             }
 
             wl_keyboard_send_enter(k, wl_display_next_serial(s.server->display),
-                                   s.kbFocus->xdg->surface->res, &keys);
+                                   s.kbFocus->surface->res, &keys);
             wl_array_release(&keys);
             wl_keyboard_send_modifiers(k, wl_display_next_serial(s.server->display),
                                        s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
@@ -234,8 +234,7 @@ SeatImpl::~SeatImpl() noexcept {
 }
 
 bool SeatImpl::sameClient(wl_resource* res, Toplevel* t) {
-    return t && t->xdg && t->xdg->surface &&
-           wl_resource_get_client(res) == wl_resource_get_client(t->xdg->surface->res);
+    return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(t->surface->res);
 }
 
 // топовая hovered-поверхность дерева: последняя в порядке отрисовки
@@ -271,24 +270,24 @@ Surface* SeatImpl::pickPointerTarget() {
     // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order
     // учтён, внутри окна поздние Image перекрывают ранние — берём последний
     // hovered в дереве). Попапы сверху: последний созданный — самый верхний.
-    for (size_t i = server->popups.length(); i > 0; i--) {
-        Popup* p = server->popups[i - 1];
+    for (size_t i = server->scene.popups.length(); i > 0; i--) {
+        Popup* p = server->scene.popups[i - 1];
 
-        if (!p->mapped || !p->xdg || !p->xdg->surface) {
+        if (!p->mapped || !p->surface) {
             continue;
         }
 
-        if (Surface* s = pickInTree(*p->xdg->surface)) {
+        if (Surface* s = pickInTree(*p->surface)) {
             return s;
         }
     }
 
-    for (Toplevel* t : server->toplevels) {
-        if (!t->mapped || !t->xdg || !t->xdg->surface) {
+    for (Toplevel* t : server->scene.toplevels) {
+        if (!t->mapped || !t->surface) {
             continue;
         }
 
-        if (Surface* s = pickInTree(*t->xdg->surface)) {
+        if (Surface* s = pickInTree(*t->surface)) {
             return s;
         }
     }
@@ -336,7 +335,7 @@ void SeatImpl::pointerSetFocus(Surface* s, double sx, double sy) {
 void SeatImpl::handleMotion(double x, double y) {
     curX = x;
     curY = y;
-    server->needsFrame = true;
+    server->scene.needsFrame = true;
     ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
 
     Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
@@ -371,7 +370,7 @@ void SeatImpl::handleMotion(double x, double y) {
 void SeatImpl::handleButton(u32 button, bool pressed) {
     int imguiBtn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
 
-    server->needsFrame = true;
+    server->scene.needsFrame = true;
     ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
 
     // hovered-флаги могли освежиться кадрами после последнего motion —
@@ -387,14 +386,14 @@ void SeatImpl::handleButton(u32 button, bool pressed) {
 
     // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
     if (pressed) {
-        for (size_t i = server->popups.length(); i > 0; i--) {
-            Popup* p = server->popups[i - 1];
+        for (size_t i = server->scene.popups.length(); i > 0; i--) {
+            Popup* p = server->scene.popups[i - 1];
 
             if (!p->mapped || !p->grab) {
                 continue;
             }
 
-            Surface* proot = p->xdg ? p->xdg->surface : nullptr;
+            Surface* proot = p->surface;
 
             if (ptrFocus && proot && ptrFocus->rootSurface() == proot) {
                 break;
@@ -436,7 +435,7 @@ void SeatImpl::handleButton(u32 button, bool pressed) {
 }
 
 void SeatImpl::handleScroll(double value) {
-    server->needsFrame = true;
+    server->scene.needsFrame = true;
     ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
 
     if (!ptrFocus) {
@@ -463,8 +462,8 @@ wl_resource* SeatImpl::kbTargetRes() {
         return kbOverride->res;
     }
 
-    if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
-        return kbFocus->xdg->surface->res;
+    if (kbFocus && kbFocus->surface) {
+        return kbFocus->surface->res;
     }
 
     return nullptr;
@@ -540,7 +539,7 @@ void SeatImpl::updateModifiers() {
 }
 
 void SeatImpl::handleKey(u32 code, bool pressed) {
-    server->needsFrame = true;
+    server->scene.needsFrame = true;
     xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
 
     if (pressed) {
@@ -570,36 +569,36 @@ void SeatImpl::focusToplevel(Toplevel* t) {
         return;
     }
 
-    if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
+    if (kbFocus && kbFocus->surface) {
         u32 serial = wl_display_next_serial(server->display);
 
         for (wl_resource* k : keyboards) {
             if (sameClient(k, kbFocus)) {
-                wl_keyboard_send_leave(k, serial, kbFocus->xdg->surface->res);
+                wl_keyboard_send_leave(k, serial, kbFocus->surface->res);
             }
         }
     }
 
     kbFocus = t;
 
-    if (t && t->xdg && t->xdg->surface) {
-        kbSendEnter(t->xdg->surface->res);
+    if (t && t->surface) {
+        kbSendEnter(t->surface->res);
         sysO << "imway: focus -> "_sv << (const char*)t->title << endL;
     }
 }
 
 void SeatImpl::popupGrabStart(Popup* p) {
-    if (!p->xdg || !p->xdg->surface) {
+    if (!p->surface) {
         return;
     }
 
     kbSendLeave(kbTargetRes());
-    kbOverride = p->xdg->surface;
+    kbOverride = p->surface;
     kbSendEnter(kbOverride->res);
 }
 
 void SeatImpl::popupGone(Popup* p) {
-    Surface* s = p->xdg ? p->xdg->surface : nullptr;
+    Surface* s = p->surface;
 
     if (s && ptrFocus && ptrFocus->rootSurface() == s) {
         ptrFocus = nullptr;
@@ -630,8 +629,8 @@ void SeatImpl::toplevelGone(Toplevel* t) {
         kbFocus = nullptr;
 
         // отдать фокус последнему замапленному
-        for (size_t i = server->toplevels.length(); i > 0; i--) {
-            Toplevel* other = server->toplevels[i - 1];
+        for (size_t i = server->scene.toplevels.length(); i > 0; i--) {
+            Toplevel* other = server->scene.toplevels[i - 1];
 
             if (other != t && other->mapped) {
                 focusToplevel(other);
@@ -649,7 +648,6 @@ Seat* Seat::create(ObjPool* pool, Server& server) {
     return pool->make<SeatImpl>(server);
 }
 
-void seatCreateGlobal(Server& server) {
-    wl_global_create(server.display, &wl_seat_interface, kSeatVersion, (SeatImpl*)server.seat,
-                     seatBind);
+void seatCreateGlobal(wl_display* display, Seat& seat) {
+    wl_global_create(display, &wl_seat_interface, kSeatVersion, (SeatImpl*)&seat, seatBind);
 }
