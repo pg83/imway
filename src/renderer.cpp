@@ -359,40 +359,49 @@ void Renderer::build_ui(Server& server) {
         ImGui::End();
     }
 
-    // попапы — безрамочные окна поверх родителя (координаты позиционера
-    // относительно поверхности родителя, чей img_x/img_y уже записан этим кадром)
+    // попапы — поверх всех окон через foreground draw list (не отдельные
+    // ImGui-окна: их z-order управляется фокусом и проигрывает toplevel'у);
+    // позиция позиционера — относительно поверхности родителя, чей img_x/img_y
+    // записан этим же кадром
     for (Popup* p : server.popups) {
         Surface* ps = p->xdg ? p->xdg->surface : nullptr;
         if (!p->mapped || !ps || !ps->texture || !p->parent) {
             if (ps) mark_tree_unhovered(*ps);
             continue;
         }
-        ImGui::SetNextWindowPos(
-            ImVec2(p->parent->img_x + (float)p->x, p->parent->img_y + (float)p->y),
-            ImGuiCond_Always);
-        if (!p->focus_set) {
-            ImGui::SetNextWindowFocus(); // наверх при появлении
-            p->focus_set = true;
-        }
-        char label[64];
-        std::snprintf(label, sizeof label, "###popup%p", (void*)p);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
-        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoScrollWithMouse |
-                                 ImGuiWindowFlags_AlwaysAutoResize |
-                                 ImGuiWindowFlags_NoSavedSettings;
-        if (ImGui::Begin(label, nullptr, flags)) {
-            ImVec2 origin = ImGui::GetCursorScreenPos();
-            draw_surface_tree(*ps, origin.x, origin.y);
-        } else {
-            mark_tree_unhovered(*ps);
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
+        draw_surface_tree_overlay(*ps, p->parent->img_x + (float)p->x,
+                                  p->parent->img_y + (float)p->y);
     }
 
     ImGui::Render();
+}
+
+// вариант draw_surface_tree для попапов: рисует в foreground draw list,
+// hovered считается вручную (попапы всегда верхние, перекрыть их некому)
+void Renderer::draw_surface_tree_overlay(Surface& s, float x, float y) {
+    for (Subsurface* c : s.stack_below)
+        if (c->surface && c->surface->has_content)
+            draw_surface_tree_overlay(*c->surface, x + (float)c->x, y + (float)c->y);
+
+    if (s.texture) {
+        ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+        if (s.vp.has_src && s.texture->w > 0 && s.texture->h > 0) {
+            uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
+            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w),
+                         (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+        }
+        float w = (float)s.view_w(), h = (float)s.view_h();
+        ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(uintptr_t)s.texture->ds,
+                                                 ImVec2(x, y), ImVec2(x + w, y + h), uv0, uv1);
+        s.img_x = x;
+        s.img_y = y;
+        ImVec2 m = ImGui::GetIO().MousePos;
+        s.hovered = m.x >= x && m.y >= y && m.x < x + w && m.y < y + h;
+    }
+
+    for (Subsurface* c : s.stack_above)
+        if (c->surface && c->surface->has_content)
+            draw_surface_tree_overlay(*c->surface, x + (float)c->x, y + (float)c->y);
 }
 
 // нарисовать поверхность и её субповерхности (stack_below → сама → stack_above);

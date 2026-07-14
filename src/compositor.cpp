@@ -121,7 +121,18 @@ void surface_frame(wl_client* client, wl_resource* res, uint32_t id) {
 }
 
 void surface_set_opaque_region(wl_client*, wl_resource*, wl_resource*) {}
-void surface_set_input_region(wl_client*, wl_resource*, wl_resource*) {}
+
+void surface_set_input_region(wl_client*, wl_resource* res, wl_resource* region) {
+    Surface& s = *surface_from(res);
+    if (!region) { // NULL = вся поверхность
+        s.pending.input_region_set = false;
+        s.pending.input_region.clear();
+        return;
+    }
+    // регион копируется в момент запроса (клиент может сразу уничтожить его)
+    s.pending.input_region_set = true;
+    s.pending.input_region = *(std::vector<RectI>*)wl_resource_get_user_data(region);
+}
 
 void copy_shm_buffer_to(wl_shm_buffer& shm, int& out_w, int& out_h, std::vector<uint8_t>& out) {
     int32_t w = wl_shm_buffer_get_width(&shm);
@@ -236,6 +247,11 @@ void surface_commit(wl_client*, wl_resource* res) {
         s.pending.newly_attached = false;
     }
 
+    // input region применяем сразу даже для sync-субповерхностей: хит-тест
+    // не должен ждать commit родителя (упрощение, GTK-оверлеям достаточно)
+    s.input_region_set = s.pending.input_region_set;
+    s.input_region = s.pending.input_region;
+
     if (to_cache) {
         for (wl_resource* cb : s.pending.frames) s.sub->cache.frames.push_back(cb);
         s.pending.frames.clear();
@@ -299,17 +315,31 @@ void surface_resource_destroyed(wl_resource* res) {
     delete s;
 }
 
-// --- wl_region (храним ничего: регионы в M1 не используются) ---
+// --- wl_region: список прямоугольников (для input region) ---
 
 void region_destroy(wl_client*, wl_resource* res) { wl_resource_destroy(res); }
-void region_add(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
-void region_subtract(wl_client*, wl_resource*, int32_t, int32_t, int32_t, int32_t) {}
+
+void region_add(wl_client*, wl_resource* res, int32_t x, int32_t y, int32_t w, int32_t h) {
+    ((std::vector<RectI>*)wl_resource_get_user_data(res))->push_back({x, y, w, h});
+}
+
+void region_subtract(wl_client*, wl_resource* res, int32_t x, int32_t y, int32_t w, int32_t h) {
+    // честная булева геометрия не нужна для input-хит-теста наших клиентов;
+    // выкидываем целиком совпавшие прямоугольники, частичные пересечения игнорируем
+    std::erase_if(*(std::vector<RectI>*)wl_resource_get_user_data(res), [&](const RectI& r) {
+        return r.x >= x && r.y >= y && r.x + r.w <= x + w && r.y + r.h <= y + h;
+    });
+}
 
 const struct wl_region_interface region_impl = {
     .destroy = region_destroy,
     .add = region_add,
     .subtract = region_subtract,
 };
+
+void region_resource_destroyed(wl_resource* res) {
+    delete (std::vector<RectI>*)wl_resource_get_user_data(res);
+}
 
 // --- wl_compositor ---
 
@@ -335,7 +365,8 @@ void compositor_create_region(wl_client* client, wl_resource* res, uint32_t id) 
         wl_client_post_no_memory(client);
         return;
     }
-    wl_resource_set_implementation(rres, &region_impl, nullptr, nullptr);
+    wl_resource_set_implementation(rres, &region_impl, new std::vector<RectI>(),
+                                   region_resource_destroyed);
 }
 
 const struct wl_compositor_interface compositor_impl = {

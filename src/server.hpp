@@ -16,6 +16,10 @@ struct XdgSurface;
 struct Subsurface;
 struct Toplevel;
 
+struct RectI {
+    int32_t x = 0, y = 0, w = 0, h = 0;
+};
+
 struct Surface {
     Server* server = nullptr;
     wl_resource* res = nullptr;
@@ -27,7 +31,19 @@ struct Surface {
         wl_listener buffer_destroy{};
         bool buffer_destroy_armed = false;
         std::vector<wl_resource*> frames;
+        bool input_region_set = false;      // false = вся поверхность
+        std::vector<RectI> input_region;
     } pending;
+
+    // input region (текущий): куда поверхность принимает указатель
+    bool input_region_set = false;
+    std::vector<RectI> input_region;
+    bool input_contains(double sx, double sy) const {
+        if (!input_region_set) return true;
+        for (const RectI& r : input_region)
+            if (sx >= r.x && sy >= r.y && sx < r.x + r.w && sy < r.y + r.h) return true;
+        return false;
+    }
 
     // текущее состояние
     int width = 0, height = 0;

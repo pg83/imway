@@ -151,16 +151,17 @@ bool Seat::same_client_s(wl_resource* res, Surface* s) {
 namespace {
 
 // топовая hovered-поверхность дерева: последняя в порядке отрисовки
-// (stack_below → сама → stack_above) перекрывает предыдущие
-Surface* pick_in_tree(Surface& s) {
+// (stack_below → сама → stack_above) перекрывает предыдущие;
+// поверхности с input region мимо точки — прозрачны для ввода
+Surface* pick_in_tree(Surface& s, double cx, double cy) {
     Surface* found = nullptr;
     for (Subsurface* c : s.stack_below)
         if (c->surface && c->surface->has_content)
-            if (Surface* f = pick_in_tree(*c->surface)) found = f;
-    if (s.hovered) found = &s;
+            if (Surface* f = pick_in_tree(*c->surface, cx, cy)) found = f;
+    if (s.hovered && s.input_contains(cx - s.img_x, cy - s.img_y)) found = &s;
     for (Subsurface* c : s.stack_above)
         if (c->surface && c->surface->has_content)
-            if (Surface* f = pick_in_tree(*c->surface)) found = f;
+            if (Surface* f = pick_in_tree(*c->surface, cx, cy)) found = f;
     return found;
 }
 
@@ -173,11 +174,11 @@ Surface* Seat::pick_pointer_target() {
     for (auto it = server->popups.rbegin(); it != server->popups.rend(); ++it) {
         Popup* p = *it;
         if (!p->mapped || !p->xdg || !p->xdg->surface) continue;
-        if (Surface* s = pick_in_tree(*p->xdg->surface)) return s;
+        if (Surface* s = pick_in_tree(*p->xdg->surface, cur_x, cur_y)) return s;
     }
     for (Toplevel* t : server->toplevels) {
         if (!t->mapped || !t->xdg || !t->xdg->surface) continue;
-        if (Surface* s = pick_in_tree(*t->xdg->surface)) return s;
+        if (Surface* s = pick_in_tree(*t->xdg->surface, cur_x, cur_y)) return s;
     }
     return nullptr;
 }
@@ -235,6 +236,15 @@ void Seat::handle_button(uint32_t button, bool pressed) {
     int imgui_btn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
     server->needs_frame = true;
     ImGui::GetIO().AddMouseButtonEvent(imgui_btn, pressed);
+
+    // hovered-флаги могли освежиться кадрами после последнего motion —
+    // без этого press после одиночного motion уходит мимо клиента
+    if (pressed && buttons_down == 0) {
+        Surface* target = pick_pointer_target();
+        if (target != ptr_focus)
+            pointer_set_focus(target, target ? cur_x - target->img_x : 0,
+                              target ? cur_y - target->img_y : 0);
+    }
 
     // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
     if (pressed) {

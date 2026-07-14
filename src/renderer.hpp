@@ -90,5 +90,6 @@ private:
                             VkDeviceMemory& mem, void** map);
     void build_ui(Server&);
     void draw_surface_tree(Surface&, float x, float y);
+    void draw_surface_tree_overlay(Surface&, float x, float y);
     void mark_tree_unhovered(Surface&);
 };

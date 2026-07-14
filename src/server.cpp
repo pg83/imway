@@ -141,11 +141,16 @@ void Server::on_frame_tick() {
         renderer->render_frame(*this);
         if (kms) kms_present(kms, renderer->readback_data());
 
-        // frame callbacks — всем деревьям, показанным в кадре
+        // frame callbacks — всем деревьям, показанным в кадре (попапам тоже,
+        // GTK не рисует контент меню, пока не получит frame done)
         uint32_t t = now_msec();
         for (Toplevel* tl : toplevels) {
             Surface* surf = tl->xdg ? tl->xdg->surface : nullptr;
             if (tl->mapped && surf) fire_frame_callbacks(*surf, t);
+        }
+        for (Popup* p : popups) {
+            Surface* surf = p->xdg ? p->xdg->surface : nullptr;
+            if (surf) fire_frame_callbacks(*surf, t);
         }
 
         // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
