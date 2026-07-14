@@ -144,6 +144,16 @@ struct Scene {
     bool needsFrame = true;
     bool drawCursor = false;
 
+    // short active-layout name for the menu bar, written by wayland
+    char layout[4] = "";
+
+    const char* socketName = nullptr;
+
+    // written by the renderer (imgui truth of the last frame), read by wayland
+    Toplevel* focusedToplevel = nullptr;
+    bool kbCaptured = false;
+    bool ptrCaptured = false;
+
     // pointer-constraints state: written by wayland, honored by the input source
     bool pointerLocked = false;
     bool pointerConfined = false;

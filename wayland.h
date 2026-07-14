@@ -10,6 +10,7 @@ struct ev_loop;
 
 struct Scene;
 struct Output;
+struct Keyboard;
 struct InputSink;
 struct DmabufFormat;
 struct FrameListener;
@@ -17,8 +18,7 @@ struct SessionListener;
 
 struct WaylandConfig {
     const char* socketName = "imway-0";
-    const char* xkbLayout = nullptr;
-    const char* xkbOptions = nullptr;
+    Keyboard* keyboard = nullptr;
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;
     unsigned long long mainDevice = 0;

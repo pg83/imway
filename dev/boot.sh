@@ -62,7 +62,7 @@ scene.cpp
 wayland.cpp
 control.cpp
 input.cpp
-input_sink.cpp
+keyboard.cpp
 session.cpp
 device.cpp
 util.cpp

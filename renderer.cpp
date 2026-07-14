@@ -3,6 +3,7 @@
 #include "device_vk.h"
 #include "frame_listener.h"
 #include "input_sink.h"
+#include "keyboard.h"
 #include "output.h"
 #include "scene.h"
 #include "util.h"
@@ -11,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -22,6 +24,7 @@
 #include <linux/input-event-codes.h>
 
 #include <vulkan/vulkan.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 #include <imgui.h>
 #include <imgui_impl_vulkan.h>
@@ -57,15 +60,26 @@ struct SurfaceTexture {
 namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
+    void clockTimerCb(struct ev_loop*, ev_timer* w, int);
+
 
     struct RendererImpl: public Renderer, public InputSink {
         InputSink* sink() override { return this; }
+
+        void attachInput(Keyboard* kb, InputSink* slave) override {
+            keyboard = kb;
+            next = slave;
+        }
+
+        void modsChanged() override {
+        }
 
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
         ::Output* output = nullptr;
         FrameListener* listener = nullptr;
         ev_timer frameTimer{};
+        ev_timer clockTimer{};
         int framesLimit = 0;
         int settleFrames = 0;
 
@@ -114,6 +128,17 @@ namespace {
 
         const char* fontPath = nullptr;
         float uiScale = 1.f;
+
+        // input mastering: imgui first, leftovers to the wayland slave sink
+        Keyboard* keyboard = nullptr;
+        InputSink* next = nullptr;
+        bool kbCapturePrev = false;
+        bool chordDown[256] = {};
+
+        // super-F2 launcher
+        bool launcherOpen = false;
+        bool launchFocus = false;
+        char launchBuf[256] = "";
 
         // hardware cursor plane state
         bool hwCursorReady = false;
@@ -175,6 +200,10 @@ namespace {
                 frameTimer.data = this;
                 ev_timer_start(loop, &frameTimer);
             }
+
+            ev_timer_init(&clockTimer, clockTimerCb, 10., 10.);
+            clockTimer.data = this;
+            ev_timer_start(loop, &clockTimer);
         }
 
         ~RendererImpl() noexcept {
@@ -184,6 +213,7 @@ namespace {
                 ev_timer_stop(loop, &frameTimer);
             }
 
+            ev_timer_stop(loop, &clockTimer);
             shutdown();
         }
 
@@ -202,6 +232,8 @@ namespace {
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
+        // every event feeds imgui first; whatever the compositor ui did not
+        // capture flows on to the wayland slave sink
         void motion(double x, double y) override {
             scene->needsFrame = true;
             ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
@@ -210,6 +242,12 @@ namespace {
             if (hwCursorReady && hwVisible) {
                 output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
             }
+
+            // the slave always needs the position: it turns ui capture into
+            // a proper pointer leave on its own
+            if (next) {
+                next->motion(x, y);
+            }
         }
 
         void button(u32 btn, bool pressed) override {
@@ -217,44 +255,82 @@ namespace {
 
             scene->needsFrame = true;
             ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
+
+            // presses over our ui stay ours; releases always go through, the
+            // slave drops the ones whose press it never saw
+            if (next && (!pressed || !scene->ptrCaptured)) {
+                next->button(btn, pressed);
+            }
         }
 
-        void key(u32, bool) override {
-            scene->needsFrame = true;
-        }
+        void key(u32 code, bool pressed) override;
 
         void scroll(double dx, double dy) override {
             scene->needsFrame = true;
             ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
+
+            if (next && !scene->ptrCaptured) {
+                next->scroll(dx, dy);
+            }
         }
 
-        // relative motion and touchpad gestures are for wayland clients only
-        void relMotion(double, double, double, double) override {
+        // relative motion and touchpad gestures are client-only streams; the
+        // slave gates them by its own pointer focus
+        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
+            if (next) {
+                next->relMotion(dx, dy, dxRaw, dyRaw);
+            }
         }
 
-        void swipeBegin(u32) override {
+        void swipeBegin(u32 fingers) override {
+            if (next) {
+                next->swipeBegin(fingers);
+            }
         }
 
-        void swipeUpdate(double, double) override {
+        void swipeUpdate(double dx, double dy) override {
+            if (next) {
+                next->swipeUpdate(dx, dy);
+            }
         }
 
-        void swipeEnd(bool) override {
+        void swipeEnd(bool cancelled) override {
+            if (next) {
+                next->swipeEnd(cancelled);
+            }
         }
 
-        void pinchBegin(u32) override {
+        void pinchBegin(u32 fingers) override {
+            if (next) {
+                next->pinchBegin(fingers);
+            }
         }
 
-        void pinchUpdate(double, double, double, double) override {
+        void pinchUpdate(double dx, double dy, double scale, double rotation) override {
+            if (next) {
+                next->pinchUpdate(dx, dy, scale, rotation);
+            }
         }
 
-        void pinchEnd(bool) override {
+        void pinchEnd(bool cancelled) override {
+            if (next) {
+                next->pinchEnd(cancelled);
+            }
         }
 
-        void holdBegin(u32) override {
+        void holdBegin(u32 fingers) override {
+            if (next) {
+                next->holdBegin(fingers);
+            }
         }
 
-        void holdEnd(bool) override {
+        void holdEnd(bool cancelled) override {
+            if (next) {
+                next->holdEnd(cancelled);
+            }
         }
+
+        void spawnLaunch();
 
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
@@ -283,6 +359,149 @@ namespace {
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->tick();
+    }
+
+    // the desktop renders on demand, wake it up so the clock stays fresh
+    void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
+        ((RendererImpl*)w->data)->scene->needsFrame = true;
+    }
+}
+
+namespace {
+    ImGuiKey evdevToImGuiKey(u32 code) {
+        switch (code) {
+            case KEY_A: return ImGuiKey_A; case KEY_B: return ImGuiKey_B; case KEY_C: return ImGuiKey_C;
+            case KEY_D: return ImGuiKey_D; case KEY_E: return ImGuiKey_E; case KEY_F: return ImGuiKey_F;
+            case KEY_G: return ImGuiKey_G; case KEY_H: return ImGuiKey_H; case KEY_I: return ImGuiKey_I;
+            case KEY_J: return ImGuiKey_J; case KEY_K: return ImGuiKey_K; case KEY_L: return ImGuiKey_L;
+            case KEY_M: return ImGuiKey_M; case KEY_N: return ImGuiKey_N; case KEY_O: return ImGuiKey_O;
+            case KEY_P: return ImGuiKey_P; case KEY_Q: return ImGuiKey_Q; case KEY_R: return ImGuiKey_R;
+            case KEY_S: return ImGuiKey_S; case KEY_T: return ImGuiKey_T; case KEY_U: return ImGuiKey_U;
+            case KEY_V: return ImGuiKey_V; case KEY_W: return ImGuiKey_W; case KEY_X: return ImGuiKey_X;
+            case KEY_Y: return ImGuiKey_Y; case KEY_Z: return ImGuiKey_Z;
+            case KEY_1: return ImGuiKey_1; case KEY_2: return ImGuiKey_2; case KEY_3: return ImGuiKey_3;
+            case KEY_4: return ImGuiKey_4; case KEY_5: return ImGuiKey_5; case KEY_6: return ImGuiKey_6;
+            case KEY_7: return ImGuiKey_7; case KEY_8: return ImGuiKey_8; case KEY_9: return ImGuiKey_9;
+            case KEY_0: return ImGuiKey_0;
+            case KEY_F1: return ImGuiKey_F1; case KEY_F2: return ImGuiKey_F2; case KEY_F3: return ImGuiKey_F3;
+            case KEY_F4: return ImGuiKey_F4; case KEY_F5: return ImGuiKey_F5; case KEY_F6: return ImGuiKey_F6;
+            case KEY_F7: return ImGuiKey_F7; case KEY_F8: return ImGuiKey_F8; case KEY_F9: return ImGuiKey_F9;
+            case KEY_F10: return ImGuiKey_F10; case KEY_F11: return ImGuiKey_F11; case KEY_F12: return ImGuiKey_F12;
+            case KEY_LEFT: return ImGuiKey_LeftArrow; case KEY_RIGHT: return ImGuiKey_RightArrow;
+            case KEY_UP: return ImGuiKey_UpArrow; case KEY_DOWN: return ImGuiKey_DownArrow;
+            case KEY_HOME: return ImGuiKey_Home; case KEY_END: return ImGuiKey_End;
+            case KEY_PAGEUP: return ImGuiKey_PageUp; case KEY_PAGEDOWN: return ImGuiKey_PageDown;
+            case KEY_INSERT: return ImGuiKey_Insert; case KEY_DELETE: return ImGuiKey_Delete;
+            case KEY_BACKSPACE: return ImGuiKey_Backspace; case KEY_TAB: return ImGuiKey_Tab;
+            case KEY_ENTER: return ImGuiKey_Enter; case KEY_KPENTER: return ImGuiKey_KeypadEnter;
+            case KEY_ESC: return ImGuiKey_Escape; case KEY_SPACE: return ImGuiKey_Space;
+            case KEY_MINUS: return ImGuiKey_Minus; case KEY_EQUAL: return ImGuiKey_Equal;
+            case KEY_LEFTBRACE: return ImGuiKey_LeftBracket; case KEY_RIGHTBRACE: return ImGuiKey_RightBracket;
+            case KEY_SEMICOLON: return ImGuiKey_Semicolon; case KEY_APOSTROPHE: return ImGuiKey_Apostrophe;
+            case KEY_GRAVE: return ImGuiKey_GraveAccent; case KEY_BACKSLASH: return ImGuiKey_Backslash;
+            case KEY_COMMA: return ImGuiKey_Comma; case KEY_DOT: return ImGuiKey_Period;
+            case KEY_SLASH: return ImGuiKey_Slash; case KEY_CAPSLOCK: return ImGuiKey_CapsLock;
+            case KEY_LEFTSHIFT: return ImGuiKey_LeftShift; case KEY_RIGHTSHIFT: return ImGuiKey_RightShift;
+            case KEY_LEFTCTRL: return ImGuiKey_LeftCtrl; case KEY_RIGHTCTRL: return ImGuiKey_RightCtrl;
+            case KEY_LEFTALT: return ImGuiKey_LeftAlt; case KEY_RIGHTALT: return ImGuiKey_RightAlt;
+            case KEY_LEFTMETA: return ImGuiKey_LeftSuper; case KEY_RIGHTMETA: return ImGuiKey_RightSuper;
+            default: return ImGuiKey_None;
+        }
+    }
+}
+
+void RendererImpl::key(u32 code, bool pressed) {
+    scene->needsFrame = true;
+
+    if (keyboard) {
+        keyboard->updateKey(code, pressed);
+    }
+
+    // 1. imgui is fed unconditionally: physical key, modifiers, text
+    ImGuiIO& io = ImGui::GetIO();
+    u32 mask = keyboard ? keyboard->modMask() : 0;
+
+    io.AddKeyEvent(ImGuiMod_Ctrl, mask & kModCtrl);
+    io.AddKeyEvent(ImGuiMod_Shift, mask & kModShift);
+    io.AddKeyEvent(ImGuiMod_Alt, mask & kModAlt);
+    io.AddKeyEvent(ImGuiMod_Super, mask & kModLogo);
+
+    if (ImGuiKey k = evdevToImGuiKey(code); k != ImGuiKey_None) {
+        io.AddKeyEvent(k, pressed);
+    }
+
+    if (pressed && keyboard) {
+        char buf[8];
+
+        if (keyboard->utf8(code, buf, sizeof(buf)) > 0 && (u8)buf[0] >= 0x20) {
+            io.AddInputCharactersUTF8(buf);
+        }
+    }
+
+    if (!next) {
+        return;
+    }
+
+    // 2. compositor-global chords are sacred: consumed before anyone,
+    // matched on the group-0 keysym so they work in any layout
+    if (code < 256) {
+        if (pressed && keyboard && mask == kModLogo && keyboard->keysymBase(code) == XKB_KEY_F2) {
+            chordDown[code] = true;
+            launcherOpen = !launcherOpen;
+            launchFocus = launcherOpen;
+
+            if (launcherOpen) {
+                launchBuf[0] = 0;
+            }
+
+            next->modsChanged();
+
+            return;
+        }
+
+        if (!pressed && chordDown[code]) {
+            chordDown[code] = false;
+            next->modsChanged();
+
+            return;
+        }
+    }
+
+    // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
+    // lives in the slave's modsChanged)
+    bool capture = launcherOpen || io.WantCaptureKeyboard;
+
+    scene->kbCaptured = capture;
+
+    if (!capture) {
+        next->key(code, pressed);
+    }
+
+    next->modsChanged();
+}
+
+void RendererImpl::spawnLaunch() {
+    StringView cmd(launchBuf);
+
+    if (cmd.empty() || !scene->socketName) {
+        return;
+    }
+
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // double fork: the command reparents to init, no zombies to reap
+        if (fork() != 0) {
+            _exit(0);
+        }
+
+        setenv("WAYLAND_DISPLAY", scene->socketName, 1);
+        execlp("sh", "sh", "-c", launchBuf, (char*)nullptr);
+        _exit(127);
+    }
+
+    if (pid > 0) {
+        waitpid(pid, nullptr, 0);
     }
 }
 
@@ -1301,12 +1520,46 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
+    scene.focusedToplevel = nullptr;
+
     if (ImGui::BeginMainMenuBar()) {
         ImGui::TextUnformatted("imway");
-        ImGui::Separator();
-        ImGui::Text("clients: %zu", scene.toplevels.length());
-        ImGui::Separator();
-        ImGui::Text("frame %d", scene.framesDone);
+
+        time_t now = time(nullptr);
+        tm lt{};
+
+        localtime_r(&now, &lt);
+
+        CStr<64> clock;
+        auto pad2 = [&clock](int v) {
+            if (v < 10) {
+                clock << 0;
+            }
+
+            clock << v;
+        };
+
+        pad2(lt.tm_mday);
+        clock << "."_sv;
+        pad2(lt.tm_mon + 1);
+        clock << " "_sv;
+        pad2(lt.tm_hour);
+        clock << ":"_sv;
+        pad2(lt.tm_min);
+
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float cw = ImGui::CalcTextSize(clock.cStr()).x;
+        float x = ImGui::GetWindowWidth() - cw - st.ItemSpacing.x;
+
+        if (scene.layout[0]) {
+            float lw = ImGui::CalcTextSize(scene.layout).x;
+
+            ImGui::SameLine(x - lw - st.ItemSpacing.x * 2);
+            ImGui::TextUnformatted(scene.layout);
+        }
+
+        ImGui::SameLine(x);
+        ImGui::TextUnformatted(clock.cStr());
         ImGui::EndMainMenuBar();
     }
 
@@ -1359,6 +1612,10 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         if (ImGui::Begin(label.cStr(), nullptr, flags)) {
+            if (ImGui::IsWindowFocused()) {
+                scene.focusedToplevel = t;
+            }
+
             if (t->raiseRequested) {
                 t->raiseRequested = false;
                 ImGui::SetWindowFocus();
@@ -1476,6 +1733,39 @@ void RendererImpl::buildUi(Scene& scene) {
             overClient = true;
         }
     }
+
+    if (launcherOpen) {
+        float lw = (float)width / 4.f < 320.f ? 320.f : (float)width / 4.f;
+
+        ImGui::SetNextWindowPos(ImVec2((float)width / 2.f, (float)height / 3.f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+        ImGui::SetNextWindowSize(ImVec2(lw, 0.f));
+
+        if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::TextUnformatted("run");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.f);
+
+            if (launchFocus) {
+                ImGui::SetKeyboardFocusHere();
+                launchFocus = false;
+            }
+
+            if (ImGui::InputText("##cmd", launchBuf, sizeof(launchBuf), ImGuiInputTextFlags_EnterReturnsTrue)) {
+                spawnLaunch();
+                launcherOpen = false;
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                launcherOpen = false;
+            }
+        }
+
+        ImGui::End();
+    }
+
+    // ui owns the pointer when it is over our widgets but not over client
+    // content (client windows are imgui windows too, hence the second term)
+    scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && !overClient;
 
     // everything below draws into the foreground list, which sits on top of
     // all windows anyway — and it MUST happen before ImGui::Render(): draw

@@ -2,6 +2,7 @@
 #include "device.h"
 #include "input.h"
 #include "input_sink.h"
+#include "keyboard.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -149,6 +150,7 @@ int main(int argc, char** argv) {
         scene->outH = output->height();
         scene->hz = output->refresh();
         scene->drawCursor = kms || getenv("IMWAY_FORCE_CURSOR");
+        scene->socketName = socketName;
 
         STD_VERIFY(output->start());
 
@@ -158,11 +160,12 @@ int main(int argc, char** argv) {
             formats.pushBack(device->dmabufFormat(i));
         }
 
+        Keyboard* kb = Keyboard::create(pool.mutPtr(), xkbLayout, xkbOptions);
+
         WaylandConfig wcfg;
 
         wcfg.socketName = socketName;
-        wcfg.xkbLayout = xkbLayout;
-        wcfg.xkbOptions = xkbOptions;
+        wcfg.keyboard = kb;
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
         wcfg.mainDevice = device->renderDevice();
@@ -178,7 +181,9 @@ int main(int argc, char** argv) {
             session->addListener(wayland->sessionListener());
         }
 
-        InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer->sink(), *wayland->sink());
+        renderer->attachInput(kb, wayland->sink());
+
+        InputSink* sink = renderer->sink();
 
         if (kms) {
             try {

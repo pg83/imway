@@ -3,6 +3,7 @@
 
 #include "input_sink.h"
 #include "frame_listener.h"
+#include "keyboard.h"
 #include "output.h"
 #include "scene.h"
 #include "session.h"
@@ -225,6 +226,7 @@ namespace {
         DataSource* dragSource = nullptr;
         Surface* dragTarget = nullptr;
         u32 lastPressedButton = 0;
+        Vector<u32> pressedButtons;
 
         void releaseAllKeys();
         void setSelection(DataSource* src, bool primary);
@@ -234,11 +236,8 @@ namespace {
         void dragMotion();
         void endDrag();
 
-        xkb_context* xkb = nullptr;
-        xkb_keymap* keymap = nullptr;
-        xkb_state* xkbState = nullptr;
-        int keymapFd = -1;
-        u32 keymapSize = 0;
+        Keyboard* kb = nullptr;
+        bool uiCaptured = false;
 
         Toplevel* kbFocus = nullptr;
         Surface* kbOverride = nullptr;
@@ -281,6 +280,7 @@ namespace {
         void kbSendLeave(wl_resource* target);
         void kbSendEnter(wl_resource* target);
         void updateModifiers();
+        void layoutIndicator();
 
         void focusToplevel(Toplevel* t);
         void popupGrabStart(Popup* p);
@@ -297,8 +297,7 @@ namespace {
         wl_event_loop* wlLoop = nullptr;
 
         const char* socketName = nullptr;
-        const char* xkbLayout = nullptr;
-        const char* xkbOptions = nullptr;
+        Keyboard* keyboard = nullptr;
         Vector<DmabufFormat> formats;
         u64 mainDevice = 0;
         int fbTableFd = -1;
@@ -397,6 +396,20 @@ namespace {
         void scroll(double dx, double dy) override {
             activity();
             seat.handleScroll(dx, dy);
+        }
+
+        // called by the renderer after every key event: keeps client-visible
+        // modifiers fresh and applies the kwin-style release-all on the
+        // rising edge of ui keyboard capture
+        void modsChanged() override {
+            bool cap = scene->kbCaptured;
+
+            if (cap && !seat.uiCaptured) {
+                seat.releaseAllKeys();
+            }
+
+            seat.uiCaptured = cap;
+            seat.updateModifiers();
         }
 
         void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
@@ -3752,7 +3765,7 @@ namespace {
         wl_resource_set_implementation(k, &keyboardImpl, seat, keyboardResourceDestroyed);
         seat->keyboards.pushBack(k);
 
-        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->keymapFd, seat->keymapSize);
+        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->kb->keymapFd(), seat->kb->keymapSize());
 
         if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
             wl_keyboard_send_repeat_info(k, 25, 600);
@@ -3891,51 +3904,17 @@ void Positioner::place(int& outX, int& outY) const {
 }
 
 SeatState::SeatState(WaylandImpl& impl) : srv(&impl) {
-    xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    STD_VERIFY(xkb);
+    kb = impl.keyboard;
+    STD_VERIFY(kb);
+    layoutIndicator();
+}
 
-    xkb_rule_names names{};
-
-    names.layout = srv->xkbLayout;
-    names.options = srv->xkbOptions;
-    keymap = xkb_keymap_new_from_names(xkb, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-    if (!keymap && (names.layout || names.options)) {
-        sysE << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
-        keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    }
-
-    STD_VERIFY(keymap);
-
-    xkbState = xkb_state_new(keymap);
-
-    char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
-
-    keymapSize = (u32)StringView(str).length() + 1;
-    keymapFd = memfd_create("imway-keymap", 0);
-
-    bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;
-
-    free(str);
-    STD_VERIFY(written);
+void SeatState::layoutIndicator() {
+    kb->layoutShort(srv->scene->layout);
+    srv->scene->needsFrame = true;
 }
 
 SeatState::~SeatState() noexcept {
-    if (keymapFd >= 0) {
-        close(keymapFd);
-    }
-
-    if (xkbState) {
-        xkb_state_unref(xkbState);
-    }
-
-    if (keymap) {
-        xkb_keymap_unref(keymap);
-    }
-
-    if (xkb) {
-        xkb_context_unref(xkb);
-    }
 }
 
 bool SeatState::sameClientS(wl_resource* res, Surface* s) {
@@ -4286,6 +4265,13 @@ void SeatState::handleMotion(double x, double y) {
         return;
     }
 
+    // pointer is over the compositor's own ui: the client sees a leave
+    if (srv->scene->ptrCaptured) {
+        pointerSetFocus(nullptr, 0, 0);
+
+        return;
+    }
+
     Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
 
     if (target != ptrFocus) {
@@ -4320,8 +4306,15 @@ void SeatState::handleMotion(double x, double y) {
 void SeatState::handleButton(u32 button, bool pressed) {
     srv->scene->needsFrame = true;
 
+    if (!pressed && !contains(pressedButtons, button)) {
+        return;
+    }
+
     if (pressed) {
+        pressedButtons.pushBack(button);
         lastPressedButton = button;
+    } else {
+        removeOne(pressedButtons, button);
     }
 
     if (dragSource) {
@@ -4480,19 +4473,26 @@ void SeatState::kbSendEnter(wl_resource* target) {
 }
 
 void SeatState::updateModifiers() {
-    u32 dep = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_DEPRESSED);
-    u32 lat = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LATCHED);
-    u32 lock = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LOCKED);
-    u32 grp = xkb_state_serialize_layout(xkbState, XKB_STATE_LAYOUT_EFFECTIVE);
+    KeyMods m = kb->mods();
+    u32 dep = m.depressed;
+    u32 lat = m.latched;
+    u32 lock = m.locked;
+    u32 grp = m.group;
 
     if (dep == modsDepressed && lat == modsLatched && lock == modsLocked && grp == modsGroup) {
         return;
     }
 
+    bool groupChanged = grp != modsGroup;
+
     modsDepressed = dep;
     modsLatched = lat;
     modsLocked = lock;
     modsGroup = grp;
+
+    if (groupChanged) {
+        layoutIndicator();
+    }
 
     wl_resource* target = kbTargetRes();
 
@@ -4529,7 +4529,7 @@ void SeatState::releaseAllKeys() {
     }
 
     for (u32 code : pressedKeys) {
-        xkb_state_update_key(xkbState, code + 8, XKB_KEY_UP);
+        kb->updateKey(code, false);
     }
 
     pressedKeys.clear();
@@ -4537,7 +4537,11 @@ void SeatState::releaseAllKeys() {
 
 void SeatState::handleKey(u32 code, bool pressed) {
     srv->scene->needsFrame = true;
-    xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+
+    // never send a release for a press the client did not see
+    if (!pressed && !contains(pressedKeys, code)) {
+        return;
+    }
 
     if (pressed) {
         pressedKeys.pushBack(code);
@@ -4555,8 +4559,6 @@ void SeatState::handleKey(u32 code, bool pressed) {
             }
         }
     }
-
-    updateModifiers();
 }
 
 void SeatState::setSelection(DataSource* src, bool primary) {
@@ -4806,7 +4808,7 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), xkbLayout(cfg.xkbLayout), xkbOptions(cfg.xkbOptions), mainDevice(cfg.mainDevice), seat(*this) {
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), keyboard(cfg.keyboard), mainDevice(cfg.mainDevice), seat(*this) {
     formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();
@@ -4951,6 +4953,10 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 }
 
 void WaylandImpl::frameShown(u32 msec) {
+    if (scene->focusedToplevel && scene->focusedToplevel != seat.kbFocus) {
+        seat.focusToplevel(scene->focusedToplevel);
+    }
+
     for (Toplevel* tl : scene->toplevels) {
         if (tl->mapped && tl->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
