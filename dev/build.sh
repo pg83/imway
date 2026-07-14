@@ -3,9 +3,9 @@
 # On macOS — syncs sources into the dev VM, builds and runs the tests there.
 
 set -euo pipefail
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 
-STD_DIR="${STD_DIR:-$(cd "$(dirname "$0")/../std" && pwd)}"
+STD_DIR="${STD_DIR:-$(cd ../std && pwd)}"
 
 if [[ "$(uname)" == "Linux" ]]; then
     make -C "$STD_DIR" -j"$(nproc)" CXX=clang++ std/libstd.a
@@ -16,15 +16,15 @@ if [[ "$(uname)" == "Linux" ]]; then
     exit 0
 fi
 
-source vm/common.sh
+source dev/vm/common.sh
 
-vm_running || vm/run.sh
+vm_running || dev/vm/run.sh
 wait_ssh
 
 echo "== rsync sources =="
 vm_ssh "mkdir -p imway/src"
 rsync -az --delete \
-    --exclude 'vm/.state' --exclude 'build/' --exclude '.claude/' \
+    --exclude 'dev/vm/.state' --exclude 'build/' --exclude '.claude/' \
     -e "ssh $SSH_OPTS_STR" \
     ./ "$VM_USER@127.0.0.1:imway/src/"
 rsync -az --delete --exclude '.git' \

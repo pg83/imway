@@ -1,5 +1,5 @@
 # dev VM state: disk images, ssh keys, pid/logs (2.5G+)
-vm/.state/
+dev/vm/.state/
 build/
 .claude/settings.local.json
 .#*

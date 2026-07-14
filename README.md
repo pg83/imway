@@ -36,12 +36,12 @@ Raw, no frameworks (no wlroots/Smithay):
 The code is built and tested in a QEMU VM (Debian, aarch64+hvf on macOS):
 
 ```sh
-vm/create.sh   # one-time: download the image, cloud-init with the toolchain
-./build.sh     # rsync sources into the VM + build + ctest
-vm/gui.sh      # QEMU window with imway on KMS + foot (mouse/keyboard work)
+dev/vm/create.sh   # one-time: download the image, cloud-init with the toolchain
+dev/build.sh       # rsync sources into the VM + build + ctest
+dev/vm/gui.sh      # QEMU window with imway on KMS + foot (mouse/keyboard work)
 ```
 
-On Linux `./build.sh` builds natively. Tests are headless screenshots with
+On Linux `dev/build.sh` builds natively. Tests are headless screenshots with
 pixel checks: shm, subsurfaces, viewporter, dmabuf (via udmabuf), and a
 keyboard e2e test (typing a command into foot).
 

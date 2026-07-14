@@ -161,16 +161,18 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 
 # ---- compositor ----
 add_executable(imway
-    src/main.cpp
-    src/scene.cpp
-    src/wayland.cpp
-    src/control.cpp
-    src/input.cpp
-    src/input_sink.cpp
-    src/session.cpp
-    src/device.cpp
-    src/util.cpp
-    src/renderer.cpp)
+    main.cpp
+    scene.cpp
+    wayland.cpp
+    control.cpp
+    input.cpp
+    input_sink.cpp
+    session.cpp
+    device.cpp
+    util.cpp
+    output.cpp
+    frame_listener.cpp
+    renderer.cpp)
 target_link_libraries(imway PRIVATE
     imgui
     protocols
@@ -186,4 +188,4 @@ target_link_libraries(imway PRIVATE
 )
 
 enable_testing()
-add_subdirectory(tests)
+add_subdirectory(dev/tests)

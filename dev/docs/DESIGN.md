@@ -379,10 +379,18 @@ needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and K
 
 ### 14.1 Layers and files
 
+Project layout (2026-07-14): sources live at the repository root — flat, no
+`src/` — one pair of files per subsystem. Everything that is not the compositor
+itself lives under `dev/`: `dev/build.sh` (the single build entry point),
+`dev/vm/` (the QEMU harness, state in `dev/vm/.state`), `dev/tests/` (ctest
+suite), `dev/docs/` (this document). Vendored code stays in `third_party/`.
+
 Dependencies point strictly downward: `main` → `control` → {`wayland`, `renderer`} →
-{`scene`, `device`, `output`, `input`, `session`} → `util`. One .cpp — one .h
-(except main; the pure interfaces `output.h`/`input_sink.h`/`frame_listener.h`
-live without a .cpp).
+{`scene`, `device`, `output`, `input`, `session`} → `util`. One .h — one .cpp,
+with no exceptions: pure interfaces (`output.h`, `input_sink.h`,
+`frame_listener.h`, `device_vk.h` aside — it is a data contract) get a .cpp
+that is just `#include` of their header, so every header is compile-checked
+standalone.
 
 - **Layer 0 — wrappers over kernel mechanisms.**
   - `session.h` — `Session`: a broker of device fds + seat activity events.
