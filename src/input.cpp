@@ -1,4 +1,3 @@
-
 #include "input.h"
 #include "input_sink.h"
 #include "util.h"
