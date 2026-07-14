@@ -24,7 +24,7 @@ export XDG_RUNTIME_DIR=/tmp/imway-run
 sudo rm -rf $XDG_RUNTIME_DIR; mkdir -p $XDG_RUNTIME_DIR
 # root: DRM master + /dev/input + tty без плясок с правами (dev-VM)
 sudo -b env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR \
-    ./imway/build/imway --backend kms --socket imway-0 >/tmp/imway-gui.log 2>&1
+    ./imway/build/imway --device auto --socket imway-0 >/tmp/imway-gui.log 2>&1
 for i in $(seq 50); do [ -S $XDG_RUNTIME_DIR/imway-0 ] && break; sleep 0.1; done
 [ -S $XDG_RUNTIME_DIR/imway-0 ] || { cat /tmp/imway-gui.log; exit 1; }
 sudo -b env XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR WAYLAND_DISPLAY=imway-0 LANG=C.UTF-8 \

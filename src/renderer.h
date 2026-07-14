@@ -1,28 +1,21 @@
 #pragma once
 
-#include <stddef.h>
-
 namespace stl {
     class ObjPool;
 }
 
 struct ev_loop;
 
-struct Scene;
-struct Output;
-struct DmabufFormat;
+struct DeviceVk;
 struct FrameListener;
 struct InputSink;
+struct Output;
+struct Scene;
 
 struct Renderer {
     virtual InputSink* sink() = 0;
 
-    virtual size_t dmabufFormatCount() const = 0;
-    virtual DmabufFormat dmabufFormat(size_t i) const = 0;
-
-    virtual void setFrameListener(FrameListener*) = 0;
-
     virtual bool screenshot(const char* path) = 0;
 
-    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, Output& output, int framesLimit);
+    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, Output& output, const DeviceVk& vk, FrameListener& listener, int framesLimit);
 };

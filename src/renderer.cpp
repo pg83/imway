@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include "device_vk.h"
 #include "frame_listener.h"
 #include "input_sink.h"
 #include "output.h"
@@ -43,11 +44,6 @@ struct SurfaceTexture {
 #define VK_CHECK(x) STD_VERIFY((x) == VK_SUCCESS)
 
 namespace {
-    constexpr VkFormat kFormat = VK_FORMAT_B8G8R8A8_UNORM;
-
-    constexpr u32 kFourccArgb = 0x34325241;
-    constexpr u32 kFourccXrgb = 0x34325258;
-
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
 
     struct RendererImpl: public Renderer, public InputSink {
@@ -88,10 +84,9 @@ namespace {
         Vector<SurfaceTexture*> textures;
 
         bool hasDmabuf = false;
-        Vector<DmabufFormat> dmabufFormats_;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, int limit) : loop(evLoop), scene(&scn), output(&out), framesLimit(limit), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)) {
+        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
             setup(scn.outW, scn.outH);
 
             ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
@@ -112,17 +107,12 @@ namespace {
         void createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
-        void queryDmabufFormats();
         void shutdown() noexcept;
 
         void drawSurfaceTree(Surface& s, float x, float y);
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
-
-        void setFrameListener(FrameListener* l) override {
-            listener = l;
-        }
 
         void motion(double x, double y) override {
             scene->needsFrame = true;
@@ -143,14 +133,6 @@ namespace {
         void scroll(double value) override {
             scene->needsFrame = true;
             ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
-        }
-
-        size_t dmabufFormatCount() const override {
-            return dmabufFormats_.length();
-        }
-
-        DmabufFormat dmabufFormat(size_t i) const override {
-            return dmabufFormats_[i];
         }
 
         bool importDmabuf(Surface& s);
@@ -183,7 +165,7 @@ void RendererImpl::createImage(int w, int h, VkImageUsageFlags usage, VkImage& i
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = kFormat;
+    ici.format = kVkFormat;
     ici.extent = {(u32)w, (u32)h, 1};
     ici.mipLevels = 1;
     ici.arrayLayers = 1;
@@ -229,127 +211,13 @@ void RendererImpl::setup(int w, int h) {
     width = w;
     height = h;
 
-    VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-
-    app.pApplicationName = "imway";
-    app.apiVersion = VK_API_VERSION_1_2;
-
-    VkInstanceCreateInfo instInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
-
-    instInfo.pApplicationInfo = &app;
-    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &instance));
-
-    u32 n = 0;
-
-    vkEnumeratePhysicalDevices(instance, &n, nullptr);
-    STD_VERIFY(n > 0);
-
-    n = 1;
-    vkEnumeratePhysicalDevices(instance, &n, &phys);
-
-    VkPhysicalDeviceProperties props{};
-
-    vkGetPhysicalDeviceProperties(phys, &props);
-    sysO << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
-
-    u32 qn = 0;
-
-    vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, nullptr);
-
-    Vector<VkQueueFamilyProperties> qf;
-
-    qf.zero(qn);
-    vkGetPhysicalDeviceQueueFamilyProperties(phys, &qn, qf.mutData());
-    queueFamily = UINT32_MAX;
-
-    for (u32 i = 0; i < qn; i++) {
-        if (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            queueFamily = i;
-
-            break;
-        }
-    }
-
-    STD_VERIFY(queueFamily != UINT32_MAX);
-
-    Vector<const char*> devExts;
-    {
-        u32 en = 0;
-
-        vkEnumerateDeviceExtensionProperties(phys, nullptr, &en, nullptr);
-
-        Vector<VkExtensionProperties> eprops;
-
-        eprops.zero(en);
-        vkEnumerateDeviceExtensionProperties(phys, nullptr, &en, eprops.mutData());
-
-        auto have = [&](const char* name) {
-            for (const auto& e : eprops) {
-                if (!strcmp(e.extensionName, name)) {
-                    return true;
-                }
-            }
-
-            return false;
-        };
-
-        const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
-
-        hasDmabuf = true;
-
-        for (const char* name : need) {
-            if (!have(name)) {
-                hasDmabuf = false;
-                sysE << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
-            }
-        }
-
-        if (hasDmabuf) {
-            for (const char* name : need) {
-                devExts.pushBack(name);
-            }
-
-            if (have(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
-                devExts.pushBack(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
-            }
-        }
-    }
-
-    float prio = 1.f;
-    VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
-
-    qci.queueFamilyIndex = queueFamily;
-    qci.queueCount = 1;
-    qci.pQueuePriorities = &prio;
-
-    VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-
-    dci.queueCreateInfoCount = 1;
-    dci.pQueueCreateInfos = &qci;
-    dci.enabledExtensionCount = (u32)devExts.length();
-    dci.ppEnabledExtensionNames = devExts.data();
-    VK_CHECK(vkCreateDevice(phys, &dci, nullptr, &device));
-    vkGetDeviceQueue(device, queueFamily, 0, &queue);
-
-    if (hasDmabuf) {
-        getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(device, "vkGetMemoryFdPropertiesKHR");
-
-        if (!getMemoryFdProps) {
-            hasDmabuf = false;
-        }
-    }
-
-    if (hasDmabuf) {
-        queryDmabufFormats();
-    }
-
     createImage(width, height, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
     vci.image = target;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = kFormat;
+    vci.format = kVkFormat;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
 
@@ -357,7 +225,7 @@ void RendererImpl::setup(int w, int h) {
 
     VkAttachmentDescription att{};
 
-    att.format = kFormat;
+    att.format = kVkFormat;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
     att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -443,36 +311,6 @@ void RendererImpl::setup(int w, int h) {
     STD_VERIFY(ImGui_ImplVulkan_Init(&ii));
 }
 
-void RendererImpl::queryDmabufFormats() {
-    VkDrmFormatModifierPropertiesListEXT modList{
-        VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
-    VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
-
-    props.pNext = &modList;
-    vkGetPhysicalDeviceFormatProperties2(phys, kFormat, &props);
-
-    Vector<VkDrmFormatModifierPropertiesEXT> mods;
-
-    mods.zero(modList.drmFormatModifierCount);
-    modList.pDrmFormatModifierProperties = mods.mutData();
-    vkGetPhysicalDeviceFormatProperties2(phys, kFormat, &props);
-
-    for (const auto& m : mods) {
-        if (m.drmFormatModifierPlaneCount != 1) {
-            continue;
-        }
-
-        if (!(m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-            continue;
-        }
-
-        dmabufFormats_.pushBack({kFourccArgb, m.drmFormatModifier});
-        dmabufFormats_.pushBack({kFourccXrgb, m.drmFormatModifier});
-    }
-
-    sysO << "imway: dmabuf formats: "_sv << dmabufFormats_.length() << " (modifiers per fourcc: "_sv << dmabufFormats_.length() / 2 << ")"_sv << endL;
-}
-
 void RendererImpl::uploadSurface(Surface& s) {
     if (s.width <= 0 || s.height <= 0) {
         return;
@@ -505,7 +343,7 @@ void RendererImpl::uploadSurface(Surface& s) {
 
         vci.image = tex->image;
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format = kFormat;
+        vci.format = kVkFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCreateImageView(device, &vci, nullptr, &tex->view);
         tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -593,7 +431,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     ici.pNext = &extInfo;
     ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = kFormat;
+    ici.format = kVkFormat;
     ici.extent = {(u32)b->width, (u32)b->height, 1};
     ici.mipLevels = 1;
     ici.arrayLayers = 1;
@@ -668,7 +506,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = kFormat;
+    vci.format = kVkFormat;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
     if (b->format == kFourccXrgb) {
@@ -1014,8 +852,6 @@ void RendererImpl::shutdown() noexcept {
     vkDestroyImageView(device, targetView, nullptr);
     vkDestroyImage(device, target, nullptr);
     vkFreeMemory(device, targetMemory, nullptr);
-    vkDestroyDevice(device, nullptr);
-    vkDestroyInstance(instance, nullptr);
     device = VK_NULL_HANDLE;
 }
 
@@ -1062,6 +898,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, framesLimit);
 }

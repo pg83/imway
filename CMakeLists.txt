@@ -110,7 +110,7 @@ add_executable(imway
     src/control.cpp
     src/input.cpp
     src/input_sink.cpp
-    src/output.cpp
+    src/device.cpp
     src/util.cpp
     src/renderer.cpp)
 target_link_libraries(imway PRIVATE

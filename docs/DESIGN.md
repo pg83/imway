@@ -378,18 +378,36 @@ clang++ (библиотека использует клэнговые builtins).
 ### 14.1 Слои и файлы
 
 Зависимости строго вниз: `main` → `control` → {`wayland`, `renderer`} →
-{`scene`, `output`, `input`} → `util`. Один .cpp — один .h (кроме main).
+{`scene`, `device`, `output`, `input`} → `util`. Один .cpp — один .h (кроме main;
+чистые интерфейсы `output.h`/`input_sink.h`/`frame_listener.h` живут без .cpp).
 
 - **Слой 0 — врапперы над ядерными механизмами.**
+  - `device.h` — `Device`: один графический адаптер = Vulkan-девайс + (опционально)
+    KMS-узел. Владеет DRM fd, VkInstance/VkDevice/очередью и таблицей
+    dmabuf-форматов; ev_io на DRM fd (page-flip события) — тоже его. Фабрика
+    своего: `createOutput(connector, mode)` и `createRenderer(scene, output,
+    frameListener, framesLimit)`. Реализации: `createKms` (путь или nullptr =
+    первый узел с atomic) и `createHeadless` (lavapipe, KMS-половины нет).
+    Соответствие Vulkan ↔ DRM ищется через `VK_EXT_physical_device_drm`
+    (major:minor против fstat); нет совпадения — первый Vulkan-девайс и
+    readback-мост (реальность VM: рендер lavapipe, сканаут virtio-gpu — честный
+    cross-device). Хендлы уезжают в Renderer внутренним контрактом `DeviceVk`
+    (device_vk.h, только между device.cpp и renderer.cpp). `Device::list()` —
+    enumeration для `imway --list`: DRM-узлы, коннекторы с режимами (preferred
+    помечен `*`), Vulkan-девайсы с их drm-узлами.
   - `output.h` — `Output`: `width/height/refresh()` (режим дисплея; вызывающий
     подгоняет сцену под него), `start()` (modeset + первый чёрный кадр; headless —
-    no-op), `present(pixels)`. Реализации: `createKms` (DRM atomic + 2 dumb-буфера;
-    если предыдущий flip ещё в полёте — кадр дропается) и `createHeadless`.
+    no-op), `present(pixels)`. KmsOutput = коннектор+CRTC+plane+режим
+    (2 dumb-буфера; если предыдущий flip ещё в полёте — кадр дропается; VT в
+    K_OFF/KD_GRAPHICS), HeadlessOutput = WxH@hz из конфига. Выбор: коннектор по
+    имени («HDMI-A-1», nullptr = первый подключённый), режим по «WxH@Hz»
+    (nullptr = preferred из EDID).
   - `input.h` — `InputSink`: `motion` (абсолютные координаты output), `button/key`
     (сырые evdev-коды), `scroll` (деления колеса). `InputSource::createLibinput`
     (libinput/udev; outW/outH — границы относительного курсора и масштаб
     абсолютного). `InputSink::tee` размножает поток на два синка. Источники не
-    знают, кто потребляет.
+    знают, кто потребляет. Input-устройства — отдельная от Device ось: их
+    перечисляет udev seat, хотплаг у libinput свой.
 - **Слой 1 — `scene.h`: чистые данные, ни одного wayland/vulkan-типа в API.**
   Деревья поверхностей (`Surface` + роли `Subsurface`/`Toplevel`/`Popup`),
   контент (pixels BGRA либо `DmabufBuffer`), применённый viewport, input region,
@@ -440,9 +458,12 @@ clang++ (библиотека использует клэнговые builtins).
   → `FrameListener::frameShown(msec)`. По нему SM шлёт frame callbacks — всем
   деревьям, показанным в кадре, включая попапы (GTK не рисует контент меню, пока
   не получит frame done) — и configure по view-фидбеку.
-- **dmabuf-форматы GPU** снимаются с renderer'а
-  (`dmabufFormatCount/dmabufFormat`) и передаются в `WaylandConfig` как данные:
-  SM не зависит от рендера. Пустой список = dmabuf-глобал не поднимается.
+- **dmabuf-форматы GPU** — знание Device (`dmabufFormatCount/dmabufFormat`),
+  передаются в `WaylandConfig` как данные: SM не зависит ни от девайса, ни от
+  рендера. Пустой список = dmabuf-глобал не поднимается. Поскольку форматы
+  известны до рождения рендера, граф создаётся за один проход: Scene → Device →
+  Output → Wayland → Renderer (FrameListener приходит конструктором,
+  сеттеров-дособирателей нет).
 - Любой ввод и key press будят кадр (`needsFrame`), даже если ImGui клавиши не
   потребляет.
 

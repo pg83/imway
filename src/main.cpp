@@ -1,4 +1,5 @@
 #include "control.h"
+#include "device.h"
 #include "input.h"
 #include "input_sink.h"
 #include "output.h"
@@ -14,40 +15,25 @@
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
+#include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
-#include <std/str/view.h>
 #include <std/sys/throw.h>
 
 using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--backend headless|kms] [--drm-device PATH] [--socket NAME]" " [--size WxH] [--hz N] [--frames N] [--screenshot PATH] [--control FIFO]"_sv << endL;
-    }
-
-    bool parseSize(const char* s, int& w, int& h) {
-        StringView v(s);
-        StringView before, after;
-
-        if (!v.split('x', before, after) || before.empty() || after.empty()) {
-            return false;
-        }
-
-        w = (int)before.stou();
-        h = (int)after.stou();
-
-        return w > 0 && h > 0;
+        sysE << "usage: "_sv << argv0 << " [--device headless|auto|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--frames N] [--screenshot PATH] [--control FIFO] [--list]"_sv << endL;
     }
 }
 
 int main(int argc, char** argv) {
-    bool kms = false;
-    const char* drmDevice = "/dev/dri/card0";
+    const char* devicePath = "headless";
+    const char* outputName = nullptr;
+    const char* modeStr = nullptr;
     const char* socketName = "imway-0";
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
-    int outW = 1280, outH = 800;
-    double hz = 60.0;
     int framesLimit = 0;
 
     for (int i = 1; i < argc; i++) {
@@ -62,30 +48,30 @@ int main(int argc, char** argv) {
 
         if (!strcmp(argv[i], "--socket")) {
             socketName = next();
-        } else if (!strcmp(argv[i], "--size")) {
-            if (!parseSize(next(), outW, outH)) {
-                usage(argv[0]);
-
-                return 2;
-            }
-        } else if (!strcmp(argv[i], "--hz")) {
-            hz = atof(next());
+        } else if (!strcmp(argv[i], "--device")) {
+            devicePath = next();
+        } else if (!strcmp(argv[i], "--output")) {
+            outputName = next();
+        } else if (!strcmp(argv[i], "--mode")) {
+            modeStr = next();
         } else if (!strcmp(argv[i], "--frames")) {
             framesLimit = atoi(next());
         } else if (!strcmp(argv[i], "--screenshot")) {
             screenshotPath = next();
         } else if (!strcmp(argv[i], "--control")) {
             controlPath = next();
-        } else if (!strcmp(argv[i], "--backend")) {
-            kms = !strcmp(next(), "kms");
-        } else if (!strcmp(argv[i], "--drm-device")) {
-            drmDevice = next();
+        } else if (!strcmp(argv[i], "--list")) {
+            Device::list();
+
+            return 0;
         } else {
             usage(argv[0]);
 
             return 2;
         }
     }
+
+    bool kms = strcmp(devicePath, "headless") != 0;
 
     if (!getenv("XDG_RUNTIME_DIR")) {
         sysE << "XDG_RUNTIME_DIR is not set"_sv << endL;
@@ -99,27 +85,21 @@ int main(int argc, char** argv) {
     try {
         auto* scene = pool->make<Scene>();
 
-        scene->outW = outW;
-        scene->outH = outH;
-        scene->hz = hz;
+        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, strcmp(devicePath, "auto") ? devicePath : nullptr) : Device::createHeadless(pool.mutPtr(), loop);
 
-        ::Output* output = kms ? ::Output::createKms(pool.mutPtr(), loop, drmDevice) : ::Output::createHeadless(pool.mutPtr(), outW, outH, hz);
+        ::Output* output = device->createOutput(outputName, modeStr);
 
-        if (kms) {
-            scene->outW = output->width();
-            scene->outH = output->height();
-            scene->hz = output->refresh();
-            scene->drawCursor = true;
-        }
+        scene->outW = output->width();
+        scene->outH = output->height();
+        scene->hz = output->refresh();
+        scene->drawCursor = kms;
 
         STD_VERIFY(output->start());
 
-        Renderer* renderer = Renderer::create(pool.mutPtr(), loop, *scene, *output, framesLimit);
-
         Vector<DmabufFormat> formats;
 
-        for (size_t i = 0; i < renderer->dmabufFormatCount(); i++) {
-            formats.pushBack(renderer->dmabufFormat(i));
+        for (size_t i = 0; i < device->dmabufFormatCount(); i++) {
+            formats.pushBack(device->dmabufFormat(i));
         }
 
         WaylandConfig wcfg;
@@ -130,7 +110,7 @@ int main(int argc, char** argv) {
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 
-        renderer->setFrameListener(wayland->frameListener());
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), framesLimit);
 
         InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer->sink(), *wayland->sink());
 
