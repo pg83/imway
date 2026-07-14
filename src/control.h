@@ -9,7 +9,6 @@ struct InputSink;
 struct Renderer;
 
 struct Control {
-    virtual ~Control() noexcept;
 
     static Control* create(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, const char* fifoPath);
 };

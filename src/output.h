@@ -7,8 +7,6 @@ namespace stl {
 struct ev_loop;
 
 struct Output {
-    virtual ~Output() noexcept;
-
     virtual int width() const = 0;
     virtual int height() const = 0;
     virtual double refresh() const = 0;

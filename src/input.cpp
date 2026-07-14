@@ -44,7 +44,7 @@ namespace {
         double relX = 0, relY = 0;
 
         LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h);
-        ~LibinputSource() noexcept override;
+        ~LibinputSource() noexcept;
 
         void dispatch();
     };
@@ -189,9 +189,6 @@ namespace {
 
 InputSink* InputSink::tee(ObjPool* pool, InputSink& a, InputSink& b) {
     return pool->make<TeeSink>(a, b);
-}
-
-InputSource::~InputSource() noexcept {
 }
 
 InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, InputSink& sink, int outW, int outH) {

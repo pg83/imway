@@ -88,7 +88,7 @@ namespace {
         ev_io drmIo{};
 
         KmsOutput(struct ev_loop* evLoop, const char* path);
-        ~KmsOutput() noexcept override;
+        ~KmsOutput() noexcept;
 
         int width() const override {
             return mode.hdisplay;
@@ -448,9 +448,6 @@ namespace {
         void present(const void*) override {
         }
     };
-}
-
-::Output::~Output() noexcept {
 }
 
 ::Output* ::Output::createKms(ObjPool* pool, struct ev_loop* loop, const char* devPath) {

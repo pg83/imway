@@ -16,7 +16,6 @@ struct FrameListener {
 };
 
 struct Renderer: public InputSink {
-    virtual ~Renderer() noexcept;
 
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;

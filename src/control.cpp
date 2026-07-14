@@ -78,7 +78,7 @@ namespace {
         size_t lineLen = 0;
 
         ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath);
-        ~ControlImpl() noexcept override;
+        ~ControlImpl() noexcept;
 
         void handleLine(const char* cmd);
         void handleInput();
@@ -203,9 +203,6 @@ void ControlImpl::reopen() {
     ev_io_init(&io, controlIoCb, fd, EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
-}
-
-Control::~Control() noexcept {
 }
 
 Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, const char* fifoPath) {

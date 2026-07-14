@@ -19,7 +19,6 @@ struct WaylandConfig {
 };
 
 struct Wayland {
-    virtual ~Wayland() noexcept;
 
     virtual void run() = 0;
 

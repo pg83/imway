@@ -96,7 +96,7 @@ namespace {
             ev_timer_start(loop, &frameTimer);
         }
 
-        ~RendererImpl() noexcept override {
+        ~RendererImpl() noexcept {
             ev_timer_stop(loop, &frameTimer);
             shutdown();
         }
@@ -1055,9 +1055,6 @@ void RendererImpl::tick() {
     if (framesLimit > 0 && scene->framesDone >= framesLimit) {
         ev_break(loop, EVBREAK_ALL);
     }
-}
-
-Renderer::~Renderer() noexcept {
 }
 
 Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, int framesLimit) {

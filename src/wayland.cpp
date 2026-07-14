@@ -209,7 +209,7 @@ namespace {
         ObjList<Params>* dmabufParamsAlloc = nullptr;
 
         WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
-        ~WaylandImpl() noexcept override;
+        ~WaylandImpl() noexcept;
 
         void run() override;
 
@@ -2638,9 +2638,6 @@ void WaylandImpl::run() {
     wl_display_destroy_clients(display);
     wl_display_destroy(display);
     display = nullptr;
-}
-
-Wayland::~Wayland() noexcept {
 }
 
 Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig& cfg) {
