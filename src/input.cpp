@@ -1,5 +1,6 @@
 #include "input.h"
 #include "input_sink.h"
+#include "session.h"
 #include "util.h"
 
 #include <ev.h>
@@ -17,15 +18,8 @@
 using namespace stl;
 
 namespace {
-    int openRestricted(const char* path, int flags, void*) {
-        int fd = open(path, flags | O_CLOEXEC);
-
-        return fd < 0 ? -errno : fd;
-    }
-
-    void closeRestricted(int fd, void*) {
-        close(fd);
-    }
+    int openRestricted(const char* path, int, void* data);
+    void closeRestricted(int fd, void* data);
 
     const libinput_interface liIface = {
         .open_restricted = openRestricted,
@@ -34,8 +28,9 @@ namespace {
 
     void inputIoCb(struct ev_loop*, ev_io* w, int);
 
-    struct LibinputSource: public InputSource {
+    struct LibinputSource: public InputSource, public SessionListener {
         struct ev_loop* loop = nullptr;
+        Session* session = nullptr;
         InputSink* sink = nullptr;
         int outW = 0, outH = 0;
         udev* ud = nullptr;
@@ -43,23 +38,40 @@ namespace {
         ev_io io{};
         double relX = 0, relY = 0;
 
-        LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h);
+        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, int w, int h);
         ~LibinputSource() noexcept;
+
+        void sessionEnabled() override {
+            libinput_resume(li);
+        }
+
+        void sessionDisabled() override {
+            libinput_suspend(li);
+        }
 
         void dispatch();
     };
+
+    int openRestricted(const char* path, int, void* data) {
+        return ((LibinputSource*)data)->session->openDevice(path);
+    }
+
+    void closeRestricted(int fd, void* data) {
+        ((LibinputSource*)data)->session->closeDevice(fd);
+    }
 
     void inputIoCb(struct ev_loop*, ev_io* w, int) {
         ((LibinputSource*)w->data)->dispatch();
     }
 }
 
-LibinputSource::LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h) : loop(evLoop), sink(&s), outW(w), outH(h), relX(w / 2.0), relY(h / 2.0) {
+LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, int w, int h) : loop(evLoop), session(&ses), sink(&s), outW(w), outH(h), relX(w / 2.0), relY(h / 2.0) {
     ud = udev_new();
     li = libinput_udev_create_context(&liIface, this, ud);
     STD_VERIFY(li);
 
-    STD_VERIFY(libinput_udev_assign_seat(li, "seat0") == 0);
+    STD_VERIFY(libinput_udev_assign_seat(li, ses.seatName()) == 0);
+    ses.addListener(this);
 
     ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
     io.data = this;
@@ -157,6 +169,6 @@ void LibinputSource::dispatch() {
     }
 }
 
-InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, InputSink& sink, int outW, int outH) {
-    return pool->make<LibinputSource>(loop, sink, outW, outH);
+InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink, int outW, int outH) {
+    return pool->make<LibinputSource>(loop, session, sink, outW, outH);
 }

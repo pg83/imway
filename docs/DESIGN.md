@@ -378,10 +378,23 @@ clang++ (библиотека использует клэнговые builtins).
 ### 14.1 Слои и файлы
 
 Зависимости строго вниз: `main` → `control` → {`wayland`, `renderer`} →
-{`scene`, `device`, `output`, `input`} → `util`. Один .cpp — один .h (кроме main;
-чистые интерфейсы `output.h`/`input_sink.h`/`frame_listener.h` живут без .cpp).
+{`scene`, `device`, `output`, `input`, `session`} → `util`. Один .cpp — один .h
+(кроме main; чистые интерфейсы `output.h`/`input_sink.h`/`frame_listener.h`
+живут без .cpp).
 
 - **Слой 0 — врапперы над ядерными механизмами.**
+  - `session.h` — `Session`: брокер fd устройств + события активности сиденья.
+    `openDevice/closeDevice` (возвращает fd или -errno — без исключений, зовётся
+    из C-колбэков libinput), `seatName()`, `addListener` (`SessionListener`:
+    `sessionEnabled/sessionDisabled` = VT-switch). Реализации: libseat
+    (seatd → logind → builtin: под root без демона libseat сам поднимает
+    встроенный seatd) и Direct (plain open/close, всегда активна). main пробует
+    libseat, при неудаче падает на Direct с логом. Через Session открываются
+    DRM-узел (Device) и /dev/input (libinput open_restricted); headless живёт
+    без сессии. На disable KmsOutput перестаёт презентить (мастер отозван),
+    libinput suspend; на enable — remodeset последним показанным буфером
+    (ALLOW_MODESET) и libinput resume. Ack (`libseat_disable_seat`) шлётся после
+    оповещения слушателей.
   - `device.h` — `Device`: один графический адаптер = Vulkan-девайс + (опционально)
     KMS-узел. Владеет DRM fd, VkInstance/VkDevice/очередью и таблицей
     dmabuf-форматов; ev_io на DRM fd (page-flip события) — тоже его. Фабрика
@@ -510,6 +523,8 @@ clang++ (библиотека использует клэнговые builtins).
 
 - **KMS/VT**: обязательно `KDSKBMODE K_OFF` + `KDSETMODE KD_GRAPHICS`, иначе
   ввод дублируется в getty под композитором, а курсор консоли мигает поверх кадра.
+- **libseat.h без extern "C"-гардов** — включать обёрнутым. Зажатые клавиши при
+  VT-switch клиентам пока не отпускаются (§8) — долг.
 - **Попапы рисуются в ImGui foreground draw list**, не отдельными ImGui-окнами:
   z-order отдельных окон управляется фокусом и проигрывает toplevel'у. hovered
   для них считается вручную (попапы всегда сверху, перекрыть их некому). Позиция —

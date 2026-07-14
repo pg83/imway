@@ -8,11 +8,12 @@ namespace stl {
 
 struct ev_loop;
 
-struct DmabufFormat;
-struct FrameListener;
+struct Scene;
 struct Output;
 struct Renderer;
-struct Scene;
+struct DmabufFormat;
+struct FrameListener;
+struct Session;
 
 struct Device {
     virtual size_t dmabufFormatCount() const = 0;
@@ -21,7 +22,7 @@ struct Device {
     virtual Output* createOutput(const char* connector, const char* mode) = 0;
     virtual Renderer* createRenderer(Scene& scene, Output& output, FrameListener& listener, int framesLimit) = 0;
 
-    static Device* createKms(stl::ObjPool* pool, struct ev_loop* loop, const char* devPath);
+    static Device* createKms(stl::ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath);
     static Device* createHeadless(stl::ObjPool* pool, struct ev_loop* loop);
 
     static void list();

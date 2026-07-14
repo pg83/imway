@@ -14,6 +14,7 @@ pkg_check_modules(DRM            REQUIRED IMPORTED_TARGET libdrm)
 pkg_check_modules(INPUT          REQUIRED IMPORTED_TARGET libinput)
 pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
+pkg_check_modules(SEAT           REQUIRED IMPORTED_TARGET libseat)
 
 # велосипедная стандартная библиотека (github.com/pg83/std), собирается make'ом
 set(STD_ROOT "" CACHE PATH "корень репозитория std (libstd.a должен быть собран)")
@@ -110,6 +111,7 @@ add_executable(imway
     src/control.cpp
     src/input.cpp
     src/input_sink.cpp
+    src/session.cpp
     src/device.cpp
     src/util.cpp
     src/renderer.cpp)
@@ -123,6 +125,7 @@ target_link_libraries(imway PRIVATE
     PkgConfig::INPUT
     PkgConfig::UDEV
     PkgConfig::XKB
+    PkgConfig::SEAT
     ev::ev
 )
 

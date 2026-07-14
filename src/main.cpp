@@ -5,6 +5,7 @@
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
+#include "session.h"
 #include "util.h"
 #include "wayland.h"
 
@@ -85,7 +86,19 @@ int main(int argc, char** argv) {
     try {
         auto* scene = pool->make<Scene>();
 
-        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, strcmp(devicePath, "auto") ? devicePath : nullptr) : Device::createHeadless(pool.mutPtr(), loop);
+        Session* session = nullptr;
+
+        if (kms) {
+            try {
+                session = Session::create(pool.mutPtr(), loop);
+                sysO << "imway: libseat session on "_sv << session->seatName() << endL;
+            } catch (...) {
+                sysE << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
+                session = Session::createDirect(pool.mutPtr());
+            }
+        }
+
+        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, strcmp(devicePath, "auto") ? devicePath : nullptr) : Device::createHeadless(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(outputName, modeStr);
 
@@ -116,7 +129,7 @@ int main(int argc, char** argv) {
 
         if (kms) {
             try {
-                InputSource::createLibinput(pool.mutPtr(), loop, *sink, scene->outW, scene->outH);
+                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink, scene->outW, scene->outH);
             } catch (...) {
                 sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }

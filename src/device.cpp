@@ -4,6 +4,7 @@
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
+#include "session.h"
 #include "util.h"
 
 #include <ev.h>
@@ -290,10 +291,11 @@ namespace {
         return id;
     }
 
-    struct KmsOutput: public ::Output {
+    struct KmsOutput: public ::Output, public SessionListener {
         int fd = -1;
         int ttyFd = -1;
         long oldKbMode = -1;
+        bool sessionActive = true;
 
         u32 connectorId = 0;
         u32 crtcId = 0;
@@ -312,7 +314,10 @@ namespace {
         bool flipPending = false;
         bool modeSet = false;
 
-        KmsOutput(int drmFd, const char* connector, const char* modeStr);
+        KmsOutput(int drmFd, Session& session, const char* connector, const char* modeStr);
+
+        void sessionEnabled() override;
+        void sessionDisabled() override;
         ~KmsOutput() noexcept;
 
         int width() const override {
@@ -352,13 +357,14 @@ namespace {
     struct KmsDevice: public Device {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
+        Session* session = nullptr;
         int fd = -1;
         char path[64] = {};
         DeviceVk vk{};
         Vector<DmabufFormat> formats;
         ev_io drmIo{};
 
-        KmsDevice(ObjPool* p, struct ev_loop* evLoop, const char* devPath);
+        KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
         ~KmsDevice() noexcept;
 
         size_t dmabufFormatCount() const override {
@@ -370,7 +376,7 @@ namespace {
         }
 
         ::Output* createOutput(const char* connector, const char* modeStr) override {
-            return pool->make<KmsOutput>(fd, connector, modeStr);
+            return pool->make<KmsOutput>(fd, *session, connector, modeStr);
         }
 
         Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, int framesLimit) override {
@@ -429,12 +435,12 @@ namespace {
         }
     };
 
-    int openKmsNode(const char* devPath, char* outPath, size_t outLen) {
+    int openKmsNode(Session& session, const char* devPath, char* outPath, size_t outLen) {
         if (devPath) {
-            int fd = open(devPath, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+            int fd = session.openDevice(devPath);
 
             if (fd < 0) {
-                Errno().raise(StringBuilder() << "kms: open "_sv << devPath);
+                Errno(-fd).raise(StringBuilder() << "kms: open "_sv << devPath);
             }
 
             snprintf(outPath, outLen, "%s", devPath);
@@ -447,14 +453,14 @@ namespace {
 
             snprintf(p, sizeof(p), "/dev/dri/card%d", i);
 
-            int fd = open(p, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+            int fd = session.openDevice(p);
 
             if (fd < 0) {
                 continue;
             }
 
             if (drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) != 0) {
-                close(fd);
+                session.closeDevice(fd);
 
                 continue;
             }
@@ -470,8 +476,8 @@ namespace {
     }
 }
 
-KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, const char* devPath) : pool(p), loop(evLoop) {
-    fd = openKmsNode(devPath, path, sizeof(path));
+KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath) : pool(p), loop(evLoop), session(&s) {
+    fd = openKmsNode(s, devPath, path, sizeof(path));
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
@@ -494,12 +500,13 @@ KmsDevice::~KmsDevice() noexcept {
     destroyVulkan(vk);
 
     if (fd >= 0) {
-        close(fd);
+        session->closeDevice(fd);
         fd = -1;
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const char* connector, const char* modeStr) : fd(drmFd) {
+KmsOutput::KmsOutput(int drmFd, Session& session, const char* connector, const char* modeStr) : fd(drmFd) {
+    session.addListener(this);
     pickPipe(connector, modeStr);
 
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
@@ -798,8 +805,24 @@ bool KmsOutput::start() {
     return true;
 }
 
+void KmsOutput::sessionDisabled() {
+    sessionActive = false;
+    sysO << "imway: session disabled (vt switch away)"_sv << endL;
+}
+
+void KmsOutput::sessionEnabled() {
+    bool comeback = !sessionActive;
+
+    sessionActive = true;
+    flipPending = false;
+
+    if (comeback && modeSet && commit(bufs[nextBuf ^ 1], true)) {
+        sysO << "imway: session enabled, remodeset"_sv << endL;
+    }
+}
+
 void KmsOutput::present(const void* pixels) {
-    if (!modeSet || flipPending) {
+    if (!modeSet || flipPending || !sessionActive) {
         return;
     }
 
@@ -838,8 +861,8 @@ HeadlessDevice::~HeadlessDevice() noexcept {
     return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
 }
 
-Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, const char* devPath) {
-    return pool->make<KmsDevice>(pool, loop, devPath);
+Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath) {
+    return pool->make<KmsDevice>(pool, loop, session, devPath);
 }
 
 Device* Device::createHeadless(ObjPool* pool, struct ev_loop* loop) {

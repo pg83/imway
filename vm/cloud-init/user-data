@@ -34,6 +34,8 @@ packages:
   - libev-dev
   - libxkbcommon-dev
   - libseat-dev
+  - seatd
+  - libseat-dev
   - libvulkan-dev
   # vulkan runtime (lavapipe в mesa-vulkan-drivers) и инструменты
   - mesa-vulkan-drivers
