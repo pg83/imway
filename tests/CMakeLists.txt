@@ -57,3 +57,10 @@ set_tests_properties(headless_input PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
 add_test(NAME headless_clipboard
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_clipboard.sh $<TARGET_FILE:imway>)
 set_tests_properties(headless_clipboard PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
+
+add_executable(client_sigbus client_sigbus.c)
+target_link_libraries(client_sigbus PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+add_test(NAME headless_sigbus
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_sigbus.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_sigbus>)
+set_tests_properties(headless_sigbus PROPERTIES TIMEOUT 60)
