@@ -98,7 +98,7 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
         STD_VERIFY(li);
 
         for (int i = 0; i < 64; i++) {
-            CStr<32> p;
+            CStr<64> p;
 
             p << "/dev/input/event"_sv << i;
 

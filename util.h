@@ -12,7 +12,9 @@ inline stl::StringView operator""_sv(const char* s, size_t len) {
 }
 
 // fixed-capacity stream producing a NUL-terminated string for C APIs;
-// string writes are truncated to fit, number writes must fit whole
+// string writes are truncated to fit, number writes must fit whole:
+// libstd requests 24 spare bytes per integer (128 per float) up front,
+// so size N with that headroom, not just for the expected characters
 template <size_t N>
 class CStr: public stl::ZeroCopyOutput {
     char buf[N];

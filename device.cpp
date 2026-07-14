@@ -878,7 +878,7 @@ namespace {
         }
 
         for (int i = 0; i < 8; i++) {
-            CStr<32> p;
+            CStr<64> p;
 
             p << "/dev/dri/card"_sv << i;
 
@@ -1543,7 +1543,7 @@ Device* Device::createHeadless(ObjPool* pool, struct ev_loop* loop) {
 
 void Device::list() {
     for (int i = 0; i < 8; i++) {
-        CStr<32> p;
+        CStr<64> p;
 
         p << "/dev/dri/card"_sv << i;
 
