@@ -96,6 +96,12 @@ namespace {
         Vector<VkImageView> scanViews;
         Vector<VkFramebuffer> scanFbs;
 
+        Toplevel* moving = nullptr;
+        ImVec2 moveOff{};
+        Toplevel* resizing = nullptr;
+        u32 activeEdges = 0;
+        ImVec2 resizeStartSz{}, resizeStartPos{}, resizeStartMouse{};
+
         ev_prepare prep{};
         bool haveFrame = false;
         VkImage lastImage = VK_NULL_HANDLE;
@@ -855,6 +861,14 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::EndMainMenuBar();
     }
 
+    if (moving && !contains(scene.toplevels, moving)) {
+        moving = nullptr;
+    }
+
+    if (resizing && !contains(scene.toplevels, resizing)) {
+        resizing = nullptr;
+    }
+
     int i = 0;
 
     for (Toplevel* t : scene.toplevels) {
@@ -883,7 +897,83 @@ void RendererImpl::buildUi(Scene& scene) {
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
+        if (t->fullscreen) {
+            ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2((float)width, (float)height), ImGuiCond_Always);
+            flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus;
+        }
+
         if (ImGui::Begin(label, nullptr, flags)) {
+            if (t->moveRequested) {
+                t->moveRequested = false;
+
+                if (ImGui::IsAnyMouseDown()) {
+                    moving = t;
+                    resizing = nullptr;
+
+                    ImVec2 wp = ImGui::GetWindowPos();
+
+                    moveOff = ImVec2(wp.x - io.MousePos.x, wp.y - io.MousePos.y);
+                }
+            }
+
+            if (t->resizeEdges) {
+                if (ImGui::IsAnyMouseDown()) {
+                    resizing = t;
+                    moving = nullptr;
+                    activeEdges = t->resizeEdges;
+                    resizeStartSz = ImGui::GetWindowSize();
+                    resizeStartPos = ImGui::GetWindowPos();
+                    resizeStartMouse = io.MousePos;
+                }
+
+                t->resizeEdges = 0;
+            }
+
+            if (moving == t) {
+                if (ImGui::IsAnyMouseDown()) {
+                    ImGui::SetWindowPos(ImVec2(io.MousePos.x + moveOff.x, io.MousePos.y + moveOff.y));
+                    scene.needsFrame = true;
+                } else {
+                    moving = nullptr;
+                }
+            }
+
+            if (resizing == t) {
+                if (ImGui::IsAnyMouseDown()) {
+                    float dx = io.MousePos.x - resizeStartMouse.x;
+                    float dy = io.MousePos.y - resizeStartMouse.y;
+                    ImVec2 sz = resizeStartSz;
+                    ImVec2 pos = resizeStartPos;
+
+                    if (activeEdges & 8) {
+                        sz.x += dx;
+                    } else if (activeEdges & 4) {
+                        sz.x -= dx;
+                        pos.x += dx;
+                    }
+
+                    if (activeEdges & 2) {
+                        sz.y += dy;
+                    } else if (activeEdges & 1) {
+                        sz.y -= dy;
+                        pos.y += dy;
+                    }
+
+                    sz.x = sz.x < 120.f ? 120.f : sz.x;
+                    sz.y = sz.y < 80.f ? 80.f : sz.y;
+                    ImGui::SetWindowSize(sz);
+
+                    if (activeEdges & 5) {
+                        ImGui::SetWindowPos(pos);
+                    }
+
+                    scene.needsFrame = true;
+                } else {
+                    resizing = nullptr;
+                }
+            }
+
             ImVec2 avail = ImGui::GetContentRegionAvail();
 
             t->desiredW = (int)avail.x;

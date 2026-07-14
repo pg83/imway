@@ -99,6 +99,7 @@ namespace {
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
         int cfgW = 0, cfgH = 0;
+        int prevW = 0, prevH = 0;
     };
 
     struct PopupImpl: public Popup {
@@ -300,6 +301,9 @@ namespace {
     void signalCb(struct ev_loop* loop, ev_signal*, int) {
         ev_break(loop, EVBREAK_ALL);
     }
+
+    void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h);
+    void xdgToplevelReconfigure(ToplevelImpl& t);
 
     void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
         Vector<wl_resource*> cbs;
@@ -1066,10 +1070,22 @@ namespace {
     void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
     }
 
-    void toplevelMove(wl_client*, wl_resource*, wl_resource*, u32) {
+    void toplevelMove(wl_client*, wl_resource* res, wl_resource*, u32) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (ti && ti->srv->seat.buttonsDown > 0) {
+            ti->moveRequested = true;
+            ti->srv->scene->needsFrame = true;
+        }
     }
 
-    void toplevelResize(wl_client*, wl_resource*, wl_resource*, u32, u32) {
+    void toplevelResize(wl_client*, wl_resource* res, wl_resource*, u32, u32 edges) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (ti && ti->srv->seat.buttonsDown > 0 && edges != 0) {
+            ti->resizeEdges = edges;
+            ti->srv->scene->needsFrame = true;
+        }
     }
 
     void toplevelSetMaxSize(wl_client*, wl_resource*, i32, i32) {
@@ -1084,10 +1100,31 @@ namespace {
     void toplevelUnsetMaximized(wl_client*, wl_resource*) {
     }
 
-    void toplevelSetFullscreen(wl_client*, wl_resource*, wl_resource*) {
+    void toplevelSetFullscreen(wl_client*, wl_resource* res, wl_resource*) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (!ti || ti->fullscreen) {
+            return;
+        }
+
+        ti->fullscreen = true;
+        ti->prevW = ti->cfgW;
+        ti->prevH = ti->cfgH;
+        xdgToplevelConfigureSize(*ti, ti->srv->scene->outW, ti->srv->scene->outH);
+        ti->srv->scene->needsFrame = true;
     }
 
-    void toplevelUnsetFullscreen(wl_client*, wl_resource*) {
+    void toplevelUnsetFullscreen(wl_client*, wl_resource* res) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (!ti || !ti->fullscreen) {
+            return;
+        }
+
+        ti->fullscreen = false;
+        ti->winSizeSet = false;
+        xdgToplevelConfigureSize(*ti, ti->prevW, ti->prevH);
+        ti->srv->scene->needsFrame = true;
     }
 
     void toplevelSetMinimized(wl_client*, wl_resource*) {
@@ -1434,12 +1471,25 @@ namespace {
         wl_array states;
 
         wl_array_init(&states);
+
+        if (t.activated) {
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_ACTIVATED;
+        }
+
+        if (t.fullscreen) {
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_FULLSCREEN;
+        }
+
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
         xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
         t.cfgW = w;
         t.cfgH = h;
         sysO << "imway: configure "_sv << (const char*)t.title << " -> "_sv << w << "x"_sv << h << endL;
+    }
+
+    void xdgToplevelReconfigure(ToplevelImpl& t) {
+        xdgToplevelConfigureSize(t, t.cfgW, t.cfgH);
     }
 
     void xdgHandleCommit(SurfaceImpl& s) {
@@ -2976,6 +3026,24 @@ void SeatState::endDrag() {
 void SeatState::focusToplevel(Toplevel* t) {
     if (kbFocus == t) {
         return;
+    }
+
+    if (kbFocus && kbFocus->surface) {
+        auto* old = (ToplevelImpl*)kbFocus;
+
+        if (old->activated) {
+            old->activated = false;
+            xdgToplevelReconfigure(*old);
+        }
+    }
+
+    if (t && t->surface) {
+        auto* ti = (ToplevelImpl*)t;
+
+        if (!ti->activated) {
+            ti->activated = true;
+            xdgToplevelReconfigure(*ti);
+        }
     }
 
     if (kbFocus && kbFocus->surface) {

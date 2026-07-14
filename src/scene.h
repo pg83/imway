@@ -89,6 +89,12 @@ struct Toplevel {
 
     bool winSizeSet = false;
     int desiredW = 0, desiredH = 0;
+
+    bool moveRequested = false;
+    u32 resizeEdges = 0;
+
+    bool fullscreen = false;
+    bool activated = false;
 };
 
 struct Popup {
