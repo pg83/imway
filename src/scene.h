@@ -96,6 +96,7 @@ struct Toplevel {
 
     bool fullscreen = false;
     bool activated = false;
+    bool raiseRequested = false;
 };
 
 struct Popup {

@@ -1040,6 +1040,11 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         if (ImGui::Begin(label, nullptr, flags)) {
+            if (t->raiseRequested) {
+                t->raiseRequested = false;
+                ImGui::SetWindowFocus();
+            }
+
             if (t->moveRequested) {
                 t->moveRequested = false;
 

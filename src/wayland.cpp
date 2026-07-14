@@ -8,14 +8,17 @@
 
 #include <fcntl.h>
 #include <string.h>
+#include <time.h>
 #include <sys/mman.h>
 #include <unistd.h>
 
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
+#include <presentation-time-server-protocol.h>
 #include <primary-selection-unstable-v1-server-protocol.h>
 #include <single-pixel-buffer-v1-server-protocol.h>
+#include <xdg-activation-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
@@ -67,6 +70,7 @@ namespace {
         } pending;
 
         Vector<wl_resource*> frameCbs;
+        Vector<wl_resource*> presentFeedbacks;
 
         wl_resource* dmabufRes = nullptr;
         wl_listener dmabufDestroy{};
@@ -236,6 +240,7 @@ namespace {
         u64 mainDevice = 0;
         int fbTableFd = -1;
         u32 fbTableSize = 0;
+        u64 tokenCounter = 0;
 
         SeatState seat;
 
@@ -328,6 +333,23 @@ namespace {
         for (wl_resource* cb : cbs) {
             wl_callback_send_done(cb, t);
             wl_resource_destroy(cb);
+        }
+
+        if (!s.presentFeedbacks.empty()) {
+            timespec ts{};
+
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+
+            u32 refreshNs = s.srv->scene->hz > 0 ? (u32)(1e9 / s.srv->scene->hz) : 0;
+            Vector<wl_resource*> fbs;
+
+            fbs.xchg(s.presentFeedbacks);
+
+            for (wl_resource* fb : fbs) {
+                wl_resource_set_user_data(fb, nullptr);
+                wp_presentation_feedback_send_presented(fb, (u32)(ts.tv_sec >> 32), (u32)ts.tv_sec, (u32)ts.tv_nsec, refreshNs, 0, 0, WP_PRESENTATION_FEEDBACK_KIND_VSYNC);
+                wl_resource_destroy(fb);
+            }
         }
 
         for (Subsurface* c : s.stackBelow) {
@@ -780,6 +802,11 @@ namespace {
 
         for (wl_resource* cb : s->frameCbs) {
             wl_resource_set_user_data(cb, nullptr);
+        }
+
+        for (wl_resource* fb : s->presentFeedbacks) {
+            wl_resource_set_user_data(fb, nullptr);
+            wp_presentation_feedback_send_discarded(fb);
         }
 
         if (s->xdg) {
@@ -2198,6 +2225,118 @@ namespace {
         .create_u32_rgba_buffer = spbCreateBuffer,
     };
 
+    void presentFeedbackDestroyed(wl_resource* res) {
+        SurfaceImpl* s = (SurfaceImpl*)wl_resource_get_user_data(res);
+
+        if (s) {
+            removeOne(s->presentFeedbacks, res);
+        }
+    }
+
+    void presentationFeedback(wl_client* client, wl_resource* res, wl_resource* surfRes, u32 id) {
+        wl_resource* fb = wl_resource_create(client, &wp_presentation_feedback_interface, 1, id);
+
+        if (!fb) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        SurfaceImpl* s = surfaceFrom(surfRes);
+
+        wl_resource_set_implementation(fb, nullptr, s, presentFeedbackDestroyed);
+        s->presentFeedbacks.pushBack(fb);
+    }
+
+    const struct wp_presentation_interface presentationImpl = {
+        .destroy = resDestroy,
+        .feedback = presentationFeedback,
+    };
+
+    void presentationBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_presentation_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &presentationImpl, data, nullptr);
+        wp_presentation_send_clock_id(res, CLOCK_MONOTONIC);
+    }
+
+    void activationTokenSetSerial(wl_client*, wl_resource*, u32, wl_resource*) {
+    }
+
+    void activationTokenSetAppId(wl_client*, wl_resource*, const char*) {
+    }
+
+    void activationTokenSetSurface(wl_client*, wl_resource*, wl_resource*) {
+    }
+
+
+    void activationTokenCommit(wl_client*, wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        char token[64];
+
+        snprintf(token, sizeof(token), "imway-%llu", (unsigned long long)++srv->tokenCounter);
+        xdg_activation_token_v1_send_done(res, token);
+    }
+
+    const struct xdg_activation_token_v1_interface activationTokenImpl = {
+        .set_serial = activationTokenSetSerial,
+        .set_app_id = activationTokenSetAppId,
+        .set_surface = activationTokenSetSurface,
+        .commit = activationTokenCommit,
+        .destroy = resDestroy,
+    };
+
+    void activationGetToken(wl_client* client, wl_resource* res, u32 id) {
+        wl_resource* t = wl_resource_create(client, &xdg_activation_token_v1_interface, 1, id);
+
+        if (!t) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(t, &activationTokenImpl, wl_resource_get_user_data(res), nullptr);
+    }
+
+    void activationActivate(wl_client*, wl_resource* res, const char* token, wl_resource* surfRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        SurfaceImpl* s = surfaceFrom(surfRes);
+        Toplevel* tl = s ? s->rootToplevel() : nullptr;
+
+        if (!tl || !tl->mapped) {
+            return;
+        }
+
+        sysO << "imway: activation ("_sv << token << ") -> "_sv << (const char*)tl->title << endL;
+        srv->seat.focusToplevel(tl);
+        tl->raiseRequested = true;
+        srv->scene->needsFrame = true;
+    }
+
+    const struct xdg_activation_v1_interface activationImpl = {
+        .destroy = resDestroy,
+        .get_activation_token = activationGetToken,
+        .activate = activationActivate,
+    };
+
+    void activationBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_activation_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &activationImpl, data, nullptr);
+    }
+
     void spbManagerBind(wl_client* client, void* data, u32 version, u32 id) {
         wl_resource* res = wl_resource_create(client, &wp_single_pixel_buffer_manager_v1_interface, version, id);
 
@@ -3481,6 +3620,8 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
     wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 1, this, cursorShapeManagerBind);
     wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
+    wl_global_create(display, &wp_presentation_interface, 1, this, presentationBind);
+    wl_global_create(display, &xdg_activation_v1_interface, 1, this, activationBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 

@@ -108,6 +108,22 @@ add_custom_command(OUTPUT "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
     COMMAND ${WAYLAND_SCANNER} private-code "${SPB_XML}" "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
     DEPENDS "${SPB_XML}")
 
+set(PRESENTATION_XML "${WAYLAND_PROTOCOLS_DIR}/stable/presentation-time/presentation-time.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/presentation-time-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${PRESENTATION_XML}" "${PROTO_DIR}/presentation-time-server-protocol.h"
+    DEPENDS "${PRESENTATION_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/presentation-time-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${PRESENTATION_XML}" "${PROTO_DIR}/presentation-time-protocol.c"
+    DEPENDS "${PRESENTATION_XML}")
+
+set(ACTIVATION_XML "${WAYLAND_PROTOCOLS_DIR}/staging/xdg-activation/xdg-activation-v1.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/xdg-activation-v1-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${ACTIVATION_XML}" "${PROTO_DIR}/xdg-activation-v1-server-protocol.h"
+    DEPENDS "${ACTIVATION_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/xdg-activation-v1-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${ACTIVATION_XML}" "${PROTO_DIR}/xdg-activation-v1-protocol.c"
+    DEPENDS "${ACTIVATION_XML}")
+
 add_library(protocols STATIC
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
@@ -126,7 +142,11 @@ add_library(protocols STATIC
     "${PROTO_DIR}/cursor-shape-v1-server-protocol.h"
     "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
     "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
-    "${PROTO_DIR}/single-pixel-buffer-v1-server-protocol.h")
+    "${PROTO_DIR}/single-pixel-buffer-v1-server-protocol.h"
+    "${PROTO_DIR}/presentation-time-protocol.c"
+    "${PROTO_DIR}/presentation-time-server-protocol.h"
+    "${PROTO_DIR}/xdg-activation-v1-protocol.c"
+    "${PROTO_DIR}/xdg-activation-v1-server-protocol.h")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
 
 # ---- Dear ImGui (vendored) ----
