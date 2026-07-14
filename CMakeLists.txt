@@ -112,6 +112,7 @@ add_executable(imway
     src/input_linux.cpp
     src/kms.cpp
     src/linux_dmabuf.cpp
+    src/util.cpp
     src/viewporter.cpp
     src/seat.cpp
     src/seat_output.cpp

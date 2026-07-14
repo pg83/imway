@@ -9,7 +9,8 @@ STD_DIR="${STD_DIR:-$(cd "$(dirname "$0")/../std" && pwd)}"
 
 if [[ "$(uname)" == "Linux" ]]; then
     make -C "$STD_DIR" -j"$(nproc)" CXX=clang++ std/libstd.a
-    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DSTD_ROOT="$STD_DIR"
+    cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DSTD_ROOT="$STD_DIR" \
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
     cmake --build build
     ctest --test-dir build --output-on-failure
     exit 0
@@ -35,6 +36,7 @@ vm_ssh "set -e
     make -C std -j4 CXX=clang++ std/libstd.a
     cmake -S imway/src -B imway/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+        -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
         -DSTD_ROOT=/home/dev/std
     cmake --build imway/build
     ctest --test-dir imway/build --output-on-failure"
