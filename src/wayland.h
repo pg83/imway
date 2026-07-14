@@ -19,7 +19,6 @@ struct WaylandConfig {
 };
 
 struct Wayland {
-
     virtual void run() = 0;
 
     virtual InputSink* sink() = 0;

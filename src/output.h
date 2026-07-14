@@ -15,6 +15,5 @@ struct Output {
     virtual void present(const void* pixels) = 0;
 
     static Output* createKms(stl::ObjPool* pool, struct ev_loop* loop, const char* devPath);
-
     static Output* createHeadless(stl::ObjPool* pool, int width, int height, double refresh);
 };

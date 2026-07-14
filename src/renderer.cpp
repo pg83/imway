@@ -1,4 +1,6 @@
 #include "renderer.h"
+
+#include "frame_listener.h"
 #include "output.h"
 #include "scene.h"
 #include "util.h"

@@ -1,8 +1,8 @@
 
 #include "wayland.h"
 
-#include "input.h"
-#include "renderer.h"
+#include "input_sink.h"
+#include "frame_listener.h"
 #include "scene.h"
 #include "util.h"
 

@@ -2,3 +2,4 @@
 vm/.state/
 build/
 .claude/settings.local.json
+.#*

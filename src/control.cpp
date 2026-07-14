@@ -1,6 +1,5 @@
-
 #include "control.h"
-#include "input.h"
+#include "input_sink.h"
 #include "renderer.h"
 #include "util.h"
 

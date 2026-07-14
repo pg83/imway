@@ -1,6 +1,6 @@
 #pragma once
 
-#include "input.h"
+#include "input_sink.h"
 
 namespace stl {
     class ObjPool;
@@ -8,15 +8,11 @@ namespace stl {
 
 struct DmabufFormat;
 struct ev_loop;
+struct FrameListener;
 struct Output;
 struct Scene;
 
-struct FrameListener {
-    virtual void frameShown(u32 msec) = 0;
-};
-
 struct Renderer: public InputSink {
-
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;
 
