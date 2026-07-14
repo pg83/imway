@@ -26,6 +26,5 @@ struct Wayland {
     virtual InputSink* sink() = 0;
     virtual FrameListener* frameListener() = 0;
 
-    static Wayland* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene,
-                           const WaylandConfig&);
+    static Wayland* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig&);
 };

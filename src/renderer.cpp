@@ -86,13 +86,7 @@ namespace {
         Vector<DmabufFormat> dmabufFormats_;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, int limit)
-            : loop(evLoop)
-            , scene(&scn)
-            , output(&out)
-            , framesLimit(limit)
-            , textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool))
-        {
+        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, int limit) : loop(evLoop), scene(&scn), output(&out), framesLimit(limit), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)) {
             setup(scn.outW, scn.outH);
 
             ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
@@ -111,8 +105,7 @@ namespace {
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
         void createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
-        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
-                              VkDeviceMemory& mem, void** map);
+        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
         void queryDmabufFormats();
         void shutdown() noexcept;
@@ -181,8 +174,7 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return UINT32_MAX;
 }
 
-void RendererImpl::createImage(int w, int h, VkImageUsageFlags usage, VkImage& img,
-                               VkDeviceMemory& mem) {
+void RendererImpl::createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
@@ -208,8 +200,7 @@ void RendererImpl::createImage(int w, int h, VkImageUsageFlags usage, VkImage& i
     VK_CHECK(vkBindImageMemory(device, img, mem, 0));
 }
 
-void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
-                                    VkDeviceMemory& mem, void** map) {
+void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map) {
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 
     bci.size = size;
@@ -223,8 +214,7 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
 
     mai.allocationSize = req.size;
-    mai.memoryTypeIndex = findMemoryType(
-        req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &mem));
     VK_CHECK(vkBindBufferMemory(device, buf, mem, 0));
     VK_CHECK(vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map));
@@ -298,9 +288,7 @@ void RendererImpl::setup(int w, int h) {
             return false;
         };
 
-        const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-                              VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
-                              VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
+        const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
 
         hasDmabuf = true;
 
@@ -339,8 +327,7 @@ void RendererImpl::setup(int w, int h) {
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
 
     if (hasDmabuf) {
-        getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
-            device, "vkGetMemoryFdPropertiesKHR");
+        getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(device, "vkGetMemoryFdPropertiesKHR");
 
         if (!getMemoryFdProps) {
             hasDmabuf = false;
@@ -351,9 +338,7 @@ void RendererImpl::setup(int w, int h) {
         queryDmabufFormats();
     }
 
-    createImage(width, height,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target,
-                targetMemory);
+    createImage(width, height, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
@@ -363,8 +348,7 @@ void RendererImpl::setup(int w, int h) {
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
 
-    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback,
-                     readbackMemory, &readbackMap);
+    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
 
     VkAttachmentDescription att{};
 
@@ -481,8 +465,7 @@ void RendererImpl::queryDmabufFormats() {
         dmabufFormats_.pushBack({kFourccXrgb, m.drmFormatModifier});
     }
 
-    sysO << "imway: dmabuf formats: "_sv << dmabufFormats_.length()
-         << " (modifiers per fourcc: "_sv << dmabufFormats_.length() / 2 << ")"_sv << endL;
+    sysO << "imway: dmabuf formats: "_sv << dmabufFormats_.length() << " (modifiers per fourcc: "_sv << dmabufFormats_.length() / 2 << ")"_sv << endL;
 }
 
 void RendererImpl::uploadSurface(Surface& s) {
@@ -504,15 +487,10 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex->h = s.height;
 
         try {
-            createImage(s.width, s.height,
-                        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image,
-                        tex->memory);
-            createHostBuffer((VkDeviceSize)s.width * s.height * 4,
-                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory,
-                             &tex->stagingMap);
+            createImage(s.width, s.height, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+            createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
         } catch (...) {
-            sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height
-                 << endL;
+            sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
             textureAlloc->release(tex);
 
             return;
@@ -525,8 +503,7 @@ void RendererImpl::uploadSurface(Surface& s) {
         vci.format = kFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCreateImageView(device, &vci, nullptr, &tex->view);
-        tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view,
-                                              VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         textures.pushBack(tex);
         s.texture = tex;
     }
@@ -630,8 +607,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     int fd = dup(b->fds[0]);
     VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
-    if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) !=
-        VK_SUCCESS) {
+    if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) != VK_SUCCESS) {
         sysE << "imway: vkGetMemoryFdPropertiesKHR failed"_sv << endL;
         close(fd);
         vkDestroyImage(device, tex->image, nullptr);
@@ -669,9 +645,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = memType;
 
-    if (memType == UINT32_MAX ||
-        vkAllocateMemory(device, &mai, nullptr, &tex->memory) != VK_SUCCESS ||
-        vkBindImageMemory(device, tex->image, tex->memory, 0) != VK_SUCCESS) {
+    if (memType == UINT32_MAX || vkAllocateMemory(device, &mai, nullptr, &tex->memory) != VK_SUCCESS || vkBindImageMemory(device, tex->image, tex->memory, 0) != VK_SUCCESS) {
         sysE << "imway: dmabuf memory import failed"_sv << endL;
         close(fd);
         vkDestroyImage(device, tex->image, nullptr);
@@ -722,9 +696,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toRead.image = tex->image;
     toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(once, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                         &toRead);
+    vkCmdPipelineBarrier(once, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
     vkEndCommandBuffer(once);
 
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -735,8 +707,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     vkQueueWaitIdle(queue);
     vkFreeCommandBuffers(device, cmdPool, 1, &once);
 
-    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view,
-                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     tex->firstUse = false;
     textures.pushBack(tex);
     s.texture = tex;
@@ -756,8 +727,7 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 
         if (s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
             uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w),
-                         (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
         }
 
         float w = (float)s.viewW(), h = (float)s.viewH();
@@ -788,14 +758,12 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
 
         if (s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
             uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w),
-                         (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
         }
 
         float w = (float)s.viewW(), h = (float)s.viewH();
 
-        ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(uintptr_t)s.texture->ds,
-                                                 ImVec2(x, y), ImVec2(x + w, y + h), uv0, uv1);
+        ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(x, y), ImVec2(x + w, y + h), uv0, uv1);
         s.imgX = x;
         s.imgY = y;
 
@@ -867,10 +835,7 @@ void RendererImpl::buildUi(Scene& scene) {
         if (!t->winSizeSet) {
             const ImGuiStyle& st = ImGui::GetStyle();
 
-            ImGui::SetNextWindowSize(ImVec2((float)root->viewW() + st.WindowPadding.x * 2,
-                                            (float)root->viewH() + st.WindowPadding.y * 2 +
-                                                ImGui::GetFrameHeight()),
-                                     ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2((float)root->viewW() + st.WindowPadding.x * 2, (float)root->viewH() + st.WindowPadding.y * 2 + ImGui::GetFrameHeight()), ImGuiCond_Always);
             t->winSizeSet = true;
         }
 
@@ -928,24 +893,19 @@ void RendererImpl::renderFrame() {
 
         toDst.srcAccessMask = tex->firstUse ? 0 : VK_ACCESS_SHADER_READ_BIT;
         toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toDst.oldLayout =
-            tex->firstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toDst.oldLayout = tex->firstUse ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toDst.image = tex->image;
         toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd,
-                             tex->firstUse ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT
-                                           : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+        vkCmdPipelineBarrier(cmd, tex->firstUse ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
 
         VkBufferImageCopy region{};
 
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageExtent = {(u32)tex->w, (u32)tex->h, 1};
-        vkCmdCopyBufferToImage(cmd, tex->staging, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               1, &region);
+        vkCmdCopyBufferToImage(cmd, tex->staging, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
         VkImageMemoryBarrier toRead = toDst;
 
@@ -953,9 +913,7 @@ void RendererImpl::renderFrame() {
         toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                             &toRead);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
         tex->needsUpload = false;
         tex->firstUse = false;
     }
@@ -979,8 +937,7 @@ void RendererImpl::renderFrame() {
 
     region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.imageExtent = {(u32)width, (u32)height, 1};
-    vkCmdCopyImageToBuffer(cmd, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1,
-                           &region);
+    vkCmdCopyImageToBuffer(cmd, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &region);
 
     vkEndCommandBuffer(cmd);
 
@@ -1103,7 +1060,6 @@ void RendererImpl::tick() {
 Renderer::~Renderer() noexcept {
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output,
-                           int framesLimit) {
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, int framesLimit) {
     return pool->make<RendererImpl>(pool, loop, scene, output, framesLimit);
 }

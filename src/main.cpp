@@ -21,10 +21,7 @@ using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0
-             << " [--backend headless|kms] [--drm-device PATH] [--socket NAME]"
-                " [--size WxH] [--hz N] [--frames N] [--screenshot PATH] [--control FIFO]"_sv
-             << endL;
+        sysE << "usage: "_sv << argv0 << " [--backend headless|kms] [--drm-device PATH] [--socket NAME]" " [--size WxH] [--hz N] [--frames N] [--screenshot PATH] [--control FIFO]"_sv << endL;
     }
 
     bool parseSize(const char* s, int& w, int& h) {
@@ -105,8 +102,7 @@ int main(int argc, char** argv) {
         scene->outH = outH;
         scene->hz = hz;
 
-        ::Output* output = kms ? ::Output::createKms(pool.mutPtr(), loop, drmDevice)
-                             : ::Output::createHeadless(pool.mutPtr(), outW, outH, hz);
+        ::Output* output = kms ? ::Output::createKms(pool.mutPtr(), loop, drmDevice) : ::Output::createHeadless(pool.mutPtr(), outW, outH, hz);
 
         if (kms) {
             scene->outW = output->width();
@@ -117,8 +113,7 @@ int main(int argc, char** argv) {
 
         STD_VERIFY(output->start());
 
-        Renderer* renderer =
-            Renderer::create(pool.mutPtr(), loop, *scene, *output, framesLimit);
+        Renderer* renderer = Renderer::create(pool.mutPtr(), loop, *scene, *output, framesLimit);
 
         Vector<DmabufFormat> formats;
 
@@ -140,8 +135,7 @@ int main(int argc, char** argv) {
 
         if (kms) {
             try {
-                InputSource::createLibinput(pool.mutPtr(), loop, *sink, scene->outW,
-                                            scene->outH);
+                InputSource::createLibinput(pool.mutPtr(), loop, *sink, scene->outW, scene->outH);
             } catch (...) {
                 sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }

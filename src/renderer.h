@@ -25,6 +25,5 @@ struct Renderer: public InputSink {
 
     virtual bool screenshot(const char* path) = 0;
 
-    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene,
-                            Output& output, int framesLimit);
+    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, Output& output, int framesLimit);
 };

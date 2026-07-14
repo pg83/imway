@@ -125,9 +125,7 @@ namespace {
     }
 }
 
-KmsOutput::KmsOutput(struct ev_loop* evLoop, const char* path)
-    : loop(evLoop)
-{
+KmsOutput::KmsOutput(struct ev_loop* evLoop, const char* path) : loop(evLoop) {
     fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
 
     if (fd < 0) {
@@ -159,9 +157,7 @@ KmsOutput::KmsOutput(struct ev_loop* evLoop, const char* path)
         createDumb(b);
     }
 
-    sysO << "imway: kms "_sv << path << ": "_sv << mode.hdisplay << "x"_sv << mode.vdisplay
-         << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId
-         << ", plane "_sv << planeId << endL;
+    sysO << "imway: kms "_sv << path << ": "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
 }
 
 KmsOutput::~KmsOutput() noexcept {
@@ -272,8 +268,7 @@ void KmsOutput::pickOutput() {
 
         if (p->possible_crtcs & (1u << crtcIndex)) {
             u32 typeProp = getPropId(fd, p->plane_id, DRM_MODE_OBJECT_PLANE, "type");
-            drmModeObjectProperties* pp =
-                drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
+            drmModeObjectProperties* pp = drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
 
             for (u32 j = 0; j < pp->count_props; j++) {
                 if (pp->props[j] == typeProp && pp->prop_values[j] == DRM_PLANE_TYPE_PRIMARY) {
@@ -305,16 +300,14 @@ void KmsOutput::createDumb(DumbBuffer& b) {
 
     u32 handles[4] = {b.handle}, pitches[4] = {b.pitch}, offsets[4] = {};
 
-    STD_VERIFY(drmModeAddFB2(fd, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888, handles,
-                             pitches, offsets, &b.fbId, 0) == 0);
+    STD_VERIFY(drmModeAddFB2(fd, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888, handles, pitches, offsets, &b.fbId, 0) == 0);
 
     drm_mode_map_dumb mapReq{};
 
     mapReq.handle = b.handle;
     STD_VERIFY(drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &mapReq) == 0);
 
-    b.map = (u8*)mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
-                      (off_t)mapReq.offset);
+    b.map = (u8*)mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)mapReq.offset);
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
@@ -433,11 +426,7 @@ namespace {
         int w = 0, h = 0;
         double hz = 60.0;
 
-        HeadlessOutput(int width, int height, double refresh)
-            : w(width)
-            , h(height)
-            , hz(refresh)
-        {
+        HeadlessOutput(int width, int height, double refresh) : w(width), h(height), hz(refresh) {
         }
 
         int width() const override {

@@ -737,8 +737,7 @@ namespace {
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* sres =
-            wl_resource_create(client, &wl_surface_interface, wl_resource_get_version(res), id);
+        wl_resource* sres = wl_resource_create(client, &wl_surface_interface, wl_resource_get_version(res), id);
 
         if (!sres) {
             wl_client_post_no_memory(client);
@@ -756,8 +755,7 @@ namespace {
 
     void compositorCreateRegion(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* rres =
-            wl_resource_create(client, &wl_region_interface, wl_resource_get_version(res), id);
+        wl_resource* rres = wl_resource_create(client, &wl_region_interface, wl_resource_get_version(res), id);
 
         if (!rres) {
             wl_client_post_no_memory(client);
@@ -923,21 +921,18 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void subcompositorGetSubsurface(wl_client* client, wl_resource* res, u32 id,
-                                    wl_resource* surfaceRes, wl_resource* parentRes) {
+    void subcompositorGetSubsurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes, wl_resource* parentRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
         if (surface->xdg || surface->sub) {
-            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE,
-                                   "у поверхности уже есть роль");
+            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "у поверхности уже есть роль");
 
             return;
         }
 
-        wl_resource* sres =
-            wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id);
+        wl_resource* sres = wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id);
 
         if (!sres) {
             wl_client_post_no_memory(client);
@@ -1082,8 +1077,7 @@ namespace {
 
     void xdgSurfaceGetToplevel(wl_client* client, wl_resource* res, u32 id) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
-        wl_resource* tres =
-            wl_resource_create(client, &xdg_toplevel_interface, wl_resource_get_version(res), id);
+        wl_resource* tres = wl_resource_create(client, &xdg_toplevel_interface, wl_resource_get_version(res), id);
 
         if (!tres) {
             wl_client_post_no_memory(client);
@@ -1109,8 +1103,7 @@ namespace {
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
     }
 
-    void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes,
-                            wl_resource* positionerRes);
+    void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes);
 
     void xdgSurfaceSetWindowGeometry(wl_client*, wl_resource*, i32, i32, i32, i32) {
     }
@@ -1262,20 +1255,17 @@ namespace {
         srv->popupAlloc->release(p);
     }
 
-    void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes,
-                            wl_resource* positionerRes) {
+    void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
         if (!parentRes) {
-            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
-                                   "попап без родителя не поддержан");
+            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "попап без родителя не поддержан");
 
             return;
         }
 
         auto* parentXs = (XdgSurface*)wl_resource_get_user_data(parentRes);
-        wl_resource* pres =
-            wl_resource_create(client, &xdg_popup_interface, wl_resource_get_version(res), id);
+        wl_resource* pres = wl_resource_create(client, &xdg_popup_interface, wl_resource_get_version(res), id);
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -1308,8 +1298,7 @@ namespace {
 
     void wmBaseCreatePositioner(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* pres = wl_resource_create(client, &xdg_positioner_interface,
-                                               wl_resource_get_version(res), id);
+        wl_resource* pres = wl_resource_create(client, &xdg_positioner_interface, wl_resource_get_version(res), id);
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -1326,8 +1315,7 @@ namespace {
     void wmBaseGetXdgSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         auto* surface = surfaceFrom(surfaceRes);
-        wl_resource* xres =
-            wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
+        wl_resource* xres = wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
 
         if (!xres) {
             wl_client_post_no_memory(client);
@@ -1375,8 +1363,7 @@ namespace {
         xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
         t.cfgW = w;
         t.cfgH = h;
-        sysO << "imway: configure "_sv << (const char*)t.title << " -> "_sv << w << "x"_sv << h
-             << endL;
+        sysO << "imway: configure "_sv << (const char*)t.title << " -> "_sv << w << "x"_sv << h << endL;
     }
 
     void xdgHandleCommit(SurfaceImpl& s) {
@@ -1388,8 +1375,7 @@ namespace {
 
         if (!xs->initialConfigureSent) {
             if (s.hasContent) {
-                sysE << "imway: client attached a buffer before configure (spec violation)"_sv
-                     << endL;
+                sysE << "imway: client attached a buffer before configure (spec violation)"_sv << endL;
             }
 
             sendConfigure(*xs);
@@ -1400,9 +1386,7 @@ namespace {
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " ("_sv
-                 << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv
-                 << s.height << endL;
+            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " ("_sv << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
 
             s.srv->seat.focusToplevel(xs->toplevel);
         }
@@ -1410,16 +1394,13 @@ namespace {
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " unmapped"_sv
-                 << endL;
+            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " unmapped"_sv << endL;
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv
-                 << xs->popup->x << ","_sv << xs->popup->y << ")"_sv
-                 << (xs->popup->grab ? " grab" : "") << endL;
+            sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
 
             if (xs->popup->grab) {
                 s.srv->seat.popupGrabStart(xs->popup);
@@ -1463,10 +1444,8 @@ namespace {
 
         wl_resource_set_implementation(res, &outputImpl, srv, nullptr);
 
-        wl_output_send_geometry(res, 0, 0, 340, 210, WL_OUTPUT_SUBPIXEL_UNKNOWN, "imway",
-                                "headless", WL_OUTPUT_TRANSFORM_NORMAL);
-        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
-                            srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
+        wl_output_send_geometry(res, 0, 0, 340, 210, WL_OUTPUT_SUBPIXEL_UNKNOWN, "imway", "headless", WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
             wl_output_send_scale(res, 1);
@@ -1506,8 +1485,7 @@ namespace {
     };
 
     void managerCreateDataSource(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* s = wl_resource_create(client, &wl_data_source_interface,
-                                            wl_resource_get_version(res), id);
+        wl_resource* s = wl_resource_create(client, &wl_data_source_interface, wl_resource_get_version(res), id);
 
         if (s) {
             wl_resource_set_implementation(s, &dataSourceImpl, nullptr, nullptr);
@@ -1515,8 +1493,7 @@ namespace {
     }
 
     void managerGetDataDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
-        wl_resource* d = wl_resource_create(client, &wl_data_device_interface,
-                                            wl_resource_get_version(res), id);
+        wl_resource* d = wl_resource_create(client, &wl_data_device_interface, wl_resource_get_version(res), id);
 
         if (d) {
             wl_resource_set_implementation(d, &dataDeviceImpl, nullptr, nullptr);
@@ -1529,8 +1506,7 @@ namespace {
     };
 
     void dataManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res =
-            wl_resource_create(client, &wl_data_device_manager_interface, version, id);
+        wl_resource* res = wl_resource_create(client, &wl_data_device_manager_interface, version, id);
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -1542,13 +1518,11 @@ namespace {
     }
 
     void decoSetMode(wl_client*, wl_resource* res, u32) {
-        zxdg_toplevel_decoration_v1_send_configure(res,
-                                                   ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
     void decoUnsetMode(wl_client*, wl_resource* res) {
-        zxdg_toplevel_decoration_v1_send_configure(res,
-                                                   ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
     const struct zxdg_toplevel_decoration_v1_interface decoImpl = {
@@ -1557,10 +1531,8 @@ namespace {
         .unset_mode = decoUnsetMode,
     };
 
-    void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id,
-                                          wl_resource*) {
-        wl_resource* d = wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface,
-                                            wl_resource_get_version(res), id);
+    void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        wl_resource* d = wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface, wl_resource_get_version(res), id);
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -1578,8 +1550,7 @@ namespace {
     };
 
     void decoManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res =
-            wl_resource_create(client, &zxdg_decoration_manager_v1_interface, version, id);
+        wl_resource* res = wl_resource_create(client, &zxdg_decoration_manager_v1_interface, version, id);
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -1594,8 +1565,7 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void viewportSetSource(wl_client*, wl_resource* res, wl_fixed_t x, wl_fixed_t y, wl_fixed_t w,
-                           wl_fixed_t h) {
+    void viewportSetSource(wl_client*, wl_resource* res, wl_fixed_t x, wl_fixed_t y, wl_fixed_t w, wl_fixed_t h) {
         SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
@@ -1672,19 +1642,16 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void viewporterGetViewport(wl_client* client, wl_resource* res, u32 id,
-                               wl_resource* surfaceRes) {
+    void viewporterGetViewport(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         if (s->vpRes) {
-            wl_resource_post_error(res, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS,
-                                   "у поверхности уже есть вьюпорт");
+            wl_resource_post_error(res, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS, "у поверхности уже есть вьюпорт");
 
             return;
         }
 
-        wl_resource* vres =
-            wl_resource_create(client, &wp_viewport_interface, wl_resource_get_version(res), id);
+        wl_resource* vres = wl_resource_create(client, &wp_viewport_interface, wl_resource_get_version(res), id);
 
         if (!vres) {
             wl_client_post_no_memory(client);
@@ -1779,21 +1746,18 @@ namespace {
         p->srv->dmabufParamsAlloc->release(p);
     }
 
-    void paramsAdd(wl_client*, wl_resource* res, i32 fd, u32 planeIdx, u32 offset, u32 stride,
-                   u32 modifierHi, u32 modifierLo) {
+    void paramsAdd(wl_client*, wl_resource* res, i32 fd, u32 planeIdx, u32 offset, u32 stride, u32 modifierHi, u32 modifierLo) {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED,
-                                   "params уже использованы");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params уже использованы");
             close(fd);
 
             return;
         }
 
         if (planeIdx >= (u32)kDmabufMaxPlanes) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_IDX,
-                                   "plane_idx %u вне диапазона", planeIdx);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_IDX, "plane_idx %u вне диапазона", planeIdx);
             close(fd);
 
             return;
@@ -1802,8 +1766,7 @@ namespace {
         DmabufBuffer& b = p->pending->buf;
 
         if (b.fds[planeIdx] >= 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET,
-                                   "plane %u уже задан", planeIdx);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET, "plane %u уже задан", planeIdx);
             close(fd);
 
             return;
@@ -1819,20 +1782,17 @@ namespace {
         }
     }
 
-    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId, i32 width,
-                                  i32 height, u32 format) {
+    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format) {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED,
-                                   "params уже использованы");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params уже использованы");
 
             return nullptr;
         }
 
         if (width <= 0 || height <= 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS,
-                                   "размер %dx%d", width, height);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS, "размер %dx%d", width, height);
 
             return nullptr;
         }
@@ -1846,8 +1806,7 @@ namespace {
         }
 
         if (!p->srv->formatSupported(format, b.modifier)) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT,
-                                   "формат 0x%x не поддержан", format);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "формат 0x%x не поддержан", format);
 
             return nullptr;
         }
@@ -1866,14 +1825,12 @@ namespace {
         box->buf.width = width;
         box->buf.height = height;
         box->buf.format = format;
-        wl_resource_set_implementation(bres, &dmabufWlBufferImpl, box,
-                                       dmabufBufferResourceDestroyed);
+        wl_resource_set_implementation(bres, &dmabufWlBufferImpl, box, dmabufBufferResourceDestroyed);
 
         return bres;
     }
 
-    void paramsCreate(wl_client* client, wl_resource* res, i32 width, i32 height, u32 format,
-                      u32) {
+    void paramsCreate(wl_client* client, wl_resource* res, i32 width, i32 height, u32 format, u32) {
         wl_resource* buf = paramsMakeBuffer(client, res, 0, width, height, format);
 
         if (buf) {
@@ -1883,8 +1840,7 @@ namespace {
         }
     }
 
-    void paramsCreateImmed(wl_client* client, wl_resource* res, u32 bufferId, i32 width,
-                           i32 height, u32 format, u32) {
+    void paramsCreateImmed(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format, u32) {
         paramsMakeBuffer(client, res, bufferId, width, height, format);
     }
 
@@ -1897,8 +1853,7 @@ namespace {
 
     void dmabufCreateParams(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* pres = wl_resource_create(client, &zwp_linux_buffer_params_v1_interface,
-                                               wl_resource_get_version(res), id);
+        wl_resource* pres = wl_resource_create(client, &zwp_linux_buffer_params_v1_interface, wl_resource_get_version(res), id);
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -1943,8 +1898,7 @@ namespace {
 
         for (const DmabufFormat& fm : srv->formats) {
             if (version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION) {
-                zwp_linux_dmabuf_v1_send_modifier(res, fm.fourcc, (u32)(fm.modifier >> 32),
-                                                  (u32)(fm.modifier & 0xffffffff));
+                zwp_linux_dmabuf_v1_send_modifier(res, fm.fourcc, (u32)(fm.modifier >> 32), (u32)(fm.modifier & 0xffffffff));
             } else {
                 zwp_linux_dmabuf_v1_send_format(res, fm.fourcc);
             }
@@ -1978,8 +1932,7 @@ namespace {
 
     void seatGetPointer(wl_client* client, wl_resource* res, u32 id) {
         SeatState* seat = seatOf(res);
-        wl_resource* p =
-            wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(res), id);
+        wl_resource* p = wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(res), id);
 
         if (!p) {
             wl_client_post_no_memory(client);
@@ -1993,8 +1946,7 @@ namespace {
 
     void seatGetKeyboard(wl_client* client, wl_resource* res, u32 id) {
         SeatState* seat = seatOf(res);
-        wl_resource* k =
-            wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(res), id);
+        wl_resource* k = wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(res), id);
 
         if (!k) {
             wl_client_post_no_memory(client);
@@ -2005,8 +1957,7 @@ namespace {
         wl_resource_set_implementation(k, &keyboardImpl, seat, keyboardResourceDestroyed);
         seat->keyboards.pushBack(k);
 
-        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->keymapFd,
-                                seat->keymapSize);
+        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->keymapFd, seat->keymapSize);
 
         if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
             wl_keyboard_send_repeat_info(k, 25, 600);
@@ -2014,8 +1965,7 @@ namespace {
 
         SeatState& s = *seat;
 
-        if (s.kbFocus && s.kbFocus->surface &&
-            wl_resource_get_client(resOf(s.kbFocus->surface)) == client) {
+        if (s.kbFocus && s.kbFocus->surface && wl_resource_get_client(resOf(s.kbFocus->surface)) == client) {
             wl_array keys;
 
             wl_array_init(&keys);
@@ -2024,17 +1974,14 @@ namespace {
                 *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
             }
 
-            wl_keyboard_send_enter(k, wl_display_next_serial(s.srv->display),
-                                   resOf(s.kbFocus->surface), &keys);
+            wl_keyboard_send_enter(k, wl_display_next_serial(s.srv->display), resOf(s.kbFocus->surface), &keys);
             wl_array_release(&keys);
-            wl_keyboard_send_modifiers(k, wl_display_next_serial(s.srv->display),
-                                       s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
+            wl_keyboard_send_modifiers(k, wl_display_next_serial(s.srv->display), s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
         }
     }
 
     void seatGetTouch(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* t =
-            wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(res), id);
+        wl_resource* t = wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(res), id);
 
         if (t) {
             wl_resource_set_implementation(t, &touchImpl, nullptr, nullptr);
@@ -2066,8 +2013,7 @@ namespace {
     }}
 
 bool SubsurfaceImpl::effectiveSync() const {
-    for (const SubsurfaceImpl* s = this; s;
-         s = s->parent ? (const SubsurfaceImpl*)s->parent->sub : nullptr) {
+    for (const SubsurfaceImpl* s = this; s; s = s->parent ? (const SubsurfaceImpl*)s->parent->sub : nullptr) {
         if (s->sync) {
             return true;
         }
@@ -2149,9 +2095,7 @@ void Positioner::place(int& outX, int& outY) const {
     outY = py + dy;
 }
 
-SeatState::SeatState(WaylandImpl& impl)
-    : srv(&impl)
-{
+SeatState::SeatState(WaylandImpl& impl) : srv(&impl) {
     xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(xkb);
 
@@ -2275,8 +2219,7 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 
         for (wl_resource* p : pointers) {
             if (sameClientS(p, s)) {
-                wl_pointer_send_enter(p, serial, resOf(s), wl_fixed_from_double(sx),
-                                      wl_fixed_from_double(sy));
+                wl_pointer_send_enter(p, serial, resOf(s), wl_fixed_from_double(sx), wl_fixed_from_double(sy));
 
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                     wl_pointer_send_frame(p);
@@ -2327,8 +2270,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
         Surface* target = pickPointerTarget();
 
         if (target != ptrFocus) {
-            pointerSetFocus(target, target ? curX - target->imgX : 0,
-                            target ? curY - target->imgY : 0);
+            pointerSetFocus(target, target ? curX - target->imgX : 0, target ? curY - target->imgY : 0);
         }
     }
 
@@ -2362,9 +2304,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
 
         for (wl_resource* p : pointers) {
             if (sameClientS(p, ptrFocus)) {
-                wl_pointer_send_button(p, serial, t, button,
-                                       pressed ? WL_POINTER_BUTTON_STATE_PRESSED
-                                               : WL_POINTER_BUTTON_STATE_RELEASED);
+                wl_pointer_send_button(p, serial, t, button, pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
 
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                     wl_pointer_send_frame(p);
@@ -2391,8 +2331,7 @@ void SeatState::handleScroll(double value) {
 
     for (wl_resource* p : pointers) {
         if (sameClientS(p, ptrFocus)) {
-            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
-                                 wl_fixed_from_double(value * 15.0));
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(value * 15.0));
 
             if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                 wl_pointer_send_frame(p);
@@ -2444,8 +2383,7 @@ void SeatState::kbSendEnter(wl_resource* target) {
     for (wl_resource* k : keyboards) {
         if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
             wl_keyboard_send_enter(k, serial, target, &keys);
-            wl_keyboard_send_modifiers(k, wl_display_next_serial(srv->display), modsDepressed,
-                                       modsLatched, modsLocked, modsGroup);
+            wl_keyboard_send_modifiers(k, wl_display_next_serial(srv->display), modsDepressed, modsLatched, modsLocked, modsGroup);
         }
     }
 
@@ -2498,9 +2436,7 @@ void SeatState::handleKey(u32 code, bool pressed) {
 
         for (wl_resource* k : keyboards) {
             if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
-                wl_keyboard_send_key(k, serial, t, code,
-                                     pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
-                                             : WL_KEYBOARD_KEY_STATE_RELEASED);
+                wl_keyboard_send_key(k, serial, t, code, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
             }
         }
     }
@@ -2584,14 +2520,7 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn,
-                         const WaylandConfig& cfg)
-    : pool(p)
-    , loop(evLoop)
-    , scene(&scn)
-    , socketName(cfg.socketName)
-    , seat(*this)
-{
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), seat(*this) {
     formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();
@@ -2610,8 +2539,7 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn,
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
 
     if (wl_display_add_socket(display, socketName) != 0) {
-        Errno().raise(StringBuilder() << "wl socket "_sv << socketName
-                                      << " failed (XDG_RUNTIME_DIR?)"_sv);
+        Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
     wl_display_init_shm(display);
@@ -2631,8 +2559,7 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn,
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
-    sysO << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv
-         << scene->outH << "@"_sv << (i64)scene->hz << endL;
+    sysO << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
 }
 
 WaylandImpl::~WaylandImpl() noexcept {
@@ -2696,8 +2623,7 @@ void WaylandImpl::frameShown(u32 msec) {
             continue;
         }
 
-        bool differsView =
-            ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
+        bool differsView = ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
         if (differsView && differsSent) {
@@ -2717,7 +2643,6 @@ void WaylandImpl::run() {
 Wayland::~Wayland() noexcept {
 }
 
-Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene,
-                         const WaylandConfig& cfg) {
+Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig& cfg) {
     return pool->make<WaylandImpl>(pool, loop, scene, cfg);
 }

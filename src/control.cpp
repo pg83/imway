@@ -90,12 +90,7 @@ namespace {
     }
 }
 
-ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd,
-                         const char* fifoPath)
-    : loop(evLoop)
-    , sink(&s)
-    , renderer(&rnd)
-{
+ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath) : loop(evLoop), sink(&s), renderer(&rnd) {
     STD_VERIFY(strlen(fifoPath) < sizeof(path));
     strcpy(path, fifoPath);
     unlink(path);
@@ -213,7 +208,6 @@ void ControlImpl::reopen() {
 Control::~Control() noexcept {
 }
 
-Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink,
-                         Renderer& renderer, const char* fifoPath) {
+Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, const char* fifoPath) {
     return pool->make<ControlImpl>(loop, sink, renderer, fifoPath);
 }

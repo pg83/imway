@@ -20,6 +20,5 @@ struct InputSink {
 struct InputSource {
     virtual ~InputSource() noexcept;
 
-    static InputSource* createLibinput(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink,
-                                       int outW, int outH);
+    static InputSource* createLibinput(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink, int outW, int outH);
 };

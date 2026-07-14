@@ -54,14 +54,7 @@ namespace {
     }
 }
 
-LibinputSource::LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h)
-    : loop(evLoop)
-    , sink(&s)
-    , outW(w)
-    , outH(h)
-    , relX(w / 2.0)
-    , relY(h / 2.0)
-{
+LibinputSource::LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h) : loop(evLoop), sink(&s), outW(w), outH(h), relX(w / 2.0), relY(h / 2.0) {
     ud = udev_new();
     li = libinput_udev_create_context(&liIface, this, ud);
     STD_VERIFY(li);
@@ -131,9 +124,7 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                sink->button(libinput_event_pointer_get_button(p),
-                                  libinput_event_pointer_get_button_state(p) ==
-                                      LIBINPUT_BUTTON_STATE_PRESSED);
+                sink->button(libinput_event_pointer_get_button(p), libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED);
 
                 break;
             }
@@ -143,8 +134,7 @@ void LibinputSource::dispatch() {
                 auto* p = libinput_event_get_pointer_event(ev);
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
-                    double v = libinput_event_pointer_get_scroll_value_v120(
-                                   p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) /
+                    double v = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) /
                                120.0;
 
                     sink->scroll(v);
@@ -155,9 +145,7 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_KEYBOARD_KEY: {
                 auto* k = libinput_event_get_keyboard_event(ev);
 
-                sink->key(libinput_event_keyboard_get_key(k),
-                               libinput_event_keyboard_get_key_state(k) ==
-                                   LIBINPUT_KEY_STATE_PRESSED);
+                sink->key(libinput_event_keyboard_get_key(k), libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED);
 
                 break;
             }
@@ -174,10 +162,7 @@ namespace {
         InputSink* a = nullptr;
         InputSink* b = nullptr;
 
-        TeeSink(InputSink& x, InputSink& y)
-            : a(&x)
-            , b(&y)
-        {
+        TeeSink(InputSink& x, InputSink& y) : a(&x), b(&y) {
         }
 
         void motion(double x, double y) override {
@@ -209,7 +194,6 @@ InputSink* InputSink::tee(ObjPool* pool, InputSink& a, InputSink& b) {
 InputSource::~InputSource() noexcept {
 }
 
-InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, InputSink& sink,
-                                         int outW, int outH) {
+InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, InputSink& sink, int outW, int outH) {
     return pool->make<LibinputSource>(loop, sink, outW, outH);
 }
