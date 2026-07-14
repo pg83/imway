@@ -1,11 +1,11 @@
 #include "scene.h"
 
 int Surface::viewW() const {
-    return vp.hasDst ? vp.dw : vp.hasSrc ? (int)vp.sw : width;
+    return vp.hasDst ? vp.dw : vp.hasSrc ? (int)vp.sw : width / bufferScale;
 }
 
 int Surface::viewH() const {
-    return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : height;
+    return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : height / bufferScale;
 }
 
 bool Surface::inputContains(double sx, double sy) const {

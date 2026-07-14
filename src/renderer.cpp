@@ -180,9 +180,9 @@ namespace {
             scene->needsFrame = true;
         }
 
-        void scroll(double value) override {
+        void scroll(double dx, double dy) override {
             scene->needsFrame = true;
-            ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
+            ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
         }
 
         bool importDmabuf(Surface& s);

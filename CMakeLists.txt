@@ -100,6 +100,14 @@ add_custom_command(OUTPUT "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
     COMMAND ${WAYLAND_SCANNER} private-code "${TABLET_XML}" "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
     DEPENDS "${TABLET_XML}")
 
+set(SPB_XML "${WAYLAND_PROTOCOLS_DIR}/staging/single-pixel-buffer/single-pixel-buffer-v1.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/single-pixel-buffer-v1-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${SPB_XML}" "${PROTO_DIR}/single-pixel-buffer-v1-server-protocol.h"
+    DEPENDS "${SPB_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${SPB_XML}" "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
+    DEPENDS "${SPB_XML}")
+
 add_library(protocols STATIC
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
@@ -116,7 +124,9 @@ add_library(protocols STATIC
     "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h"
     "${PROTO_DIR}/cursor-shape-v1-protocol.c"
     "${PROTO_DIR}/cursor-shape-v1-server-protocol.h"
-    "${PROTO_DIR}/tablet-unstable-v2-protocol.c")
+    "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
+    "${PROTO_DIR}/single-pixel-buffer-v1-protocol.c"
+    "${PROTO_DIR}/single-pixel-buffer-v1-server-protocol.h")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
 
 # ---- Dear ImGui (vendored) ----

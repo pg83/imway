@@ -145,11 +145,18 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_SCROLL_CONTINUOUS: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
-                    double v = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) /
-                               120.0;
+                double dx = 0, dy = 0;
 
-                    sink->scroll(v);
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
+                    dy = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 120.0;
+                }
+
+                if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
+                    dx = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 120.0;
+                }
+
+                if (dx != 0 || dy != 0) {
+                    sink->scroll(dx, dy);
                 }
 
                 break;

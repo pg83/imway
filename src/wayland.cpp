@@ -15,6 +15,7 @@
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
 #include <primary-selection-unstable-v1-server-protocol.h>
+#include <single-pixel-buffer-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
@@ -62,6 +63,7 @@ namespace {
             Vector<RectI> inputRegion;
             RectI damage;
             bool damageAll = false;
+            int scale = 0;
         } pending;
 
         Vector<wl_resource*> frameCbs;
@@ -133,6 +135,11 @@ namespace {
         DmabufBuffer buf;
     };
 
+    struct SpbBox {
+        WaylandImpl* srv = nullptr;
+        u32 argb = 0;
+    };
+
     struct Params {
         WaylandImpl* srv = nullptr;
         BufferBox* pending = nullptr;
@@ -200,7 +207,7 @@ namespace {
 
         void handleMotion(double x, double y);
         void handleButton(u32 button, bool pressed);
-        void handleScroll(double value);
+        void handleScroll(double dx, double dy);
         void handleKey(u32 code, bool pressed);
 
         wl_resource* kbTargetRes();
@@ -248,6 +255,7 @@ namespace {
         ObjList<Positioner>* positionerAlloc = nullptr;
         ObjList<BufferBox>* dmabufBoxAlloc = nullptr;
         ObjList<DataSource>* dataSourceAlloc = nullptr;
+        ObjList<SpbBox>* spbAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
 
         WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
@@ -275,8 +283,8 @@ namespace {
             seat.handleKey(code, pressed);
         }
 
-        void scroll(double value) override {
-            seat.handleScroll(value);
+        void scroll(double dx, double dy) override {
+            seat.handleScroll(dx, dy);
         }
 
         void frameShown(u32 msec) override;
@@ -357,6 +365,8 @@ namespace {
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
+    struct SpbBox;
+    SpbBox* spbFromRes(wl_resource*);
 
     SurfaceImpl* surfaceFrom(wl_resource* res) {
         return (SurfaceImpl*)wl_resource_get_user_data(res);
@@ -441,7 +451,9 @@ namespace {
             return;
         }
 
-        unionRect(s.pending.damage, {x, y, w, h});
+        i32 sc = s.bufferScale;
+
+        unionRect(s.pending.damage, {x * sc, y * sc, w * sc, h * sc});
     }
 
     void frameCallbackDestroyed(wl_resource* cb) {
@@ -639,6 +651,24 @@ namespace {
 
                 wl_buffer_send_release(s.pending.buffer);
                 releaseHeldDmabuf(s);
+            } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
+                if (toCache) {
+                    sub->cache.width = sub->cache.height = 1;
+                    sub->cache.pixels.clear();
+                    sub->cache.pixels.append((const u8*)&spb->argb, 4);
+                    sub->cache.hasContent = true;
+                    sub->cache.valid = true;
+                } else {
+                    s.width = s.height = 1;
+                    s.pixels.clear();
+                    s.pixels.append((const u8*)&spb->argb, 4);
+                    s.hasContent = true;
+                    s.dirty = true;
+                    s.damageAll = true;
+                }
+
+                wl_buffer_send_release(s.pending.buffer);
+                releaseHeldDmabuf(s);
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
                 holdDmabuf(s, s.pending.buffer, db);
                 s.width = db->width;
@@ -656,6 +686,11 @@ namespace {
 
         s.pending.damage = {};
         s.pending.damageAll = false;
+
+        if (s.pending.scale > 0 && s.pending.scale != s.bufferScale) {
+            s.bufferScale = s.pending.scale;
+            s.damageAll = true;
+        }
 
         s.inputRegionSet = s.pending.inputRegionSet;
         s.inputRegion.clear();
@@ -689,7 +724,14 @@ namespace {
     void surfaceSetBufferTransform(wl_client*, wl_resource*, i32) {
     }
 
-    void surfaceSetBufferScale(wl_client*, wl_resource*, i32) {
+    void surfaceSetBufferScale(wl_client*, wl_resource* res, i32 scale) {
+        if (scale < 1) {
+            wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_SCALE, "buffer_scale must be >= 1");
+
+            return;
+        }
+
+        surfaceFrom(res)->pending.scale = scale;
     }
 
     void surfaceDamageBuffer(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
@@ -2118,6 +2160,55 @@ namespace {
     }
 
     const struct wl_buffer_interface dmabufWlBufferImpl = {.destroy = resDestroy};
+    const struct wl_buffer_interface spbWlBufferImpl = {.destroy = resDestroy};
+
+    SpbBox* spbFromRes(wl_resource* res) {
+        if (!wl_resource_instance_of(res, &wl_buffer_interface, &spbWlBufferImpl)) {
+            return nullptr;
+        }
+
+        return (SpbBox*)wl_resource_get_user_data(res);
+    }
+
+    void spbBufferResourceDestroyed(wl_resource* res) {
+        SpbBox* box = (SpbBox*)wl_resource_get_user_data(res);
+
+        box->srv->spbAlloc->release(box);
+    }
+
+    void spbCreateBuffer(wl_client* client, wl_resource* res, u32 id, u32 r, u32 g, u32 b, u32 a) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* buf = wl_resource_create(client, &wl_buffer_interface, 1, id);
+
+        if (!buf) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        SpbBox* box = srv->spbAlloc->make();
+
+        box->srv = srv;
+        box->argb = ((a >> 24) << 24) | ((r >> 24) << 16) | ((g >> 24) << 8) | (b >> 24);
+        wl_resource_set_implementation(buf, &spbWlBufferImpl, box, spbBufferResourceDestroyed);
+    }
+
+    const struct wp_single_pixel_buffer_manager_v1_interface spbManagerImpl = {
+        .destroy = resDestroy,
+        .create_u32_rgba_buffer = spbCreateBuffer,
+    };
+
+    void spbManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_single_pixel_buffer_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &spbManagerImpl, data, nullptr);
+    }
 
     DmabufBuffer* dmabufFromRes(wl_resource* res) {
         if (!wl_resource_instance_of(res, &wl_buffer_interface, &dmabufWlBufferImpl)) {
@@ -2930,7 +3021,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
     }
 }
 
-void SeatState::handleScroll(double value) {
+void SeatState::handleScroll(double dx, double dy) {
     srv->scene->needsFrame = true;
 
     if (!ptrFocus) {
@@ -2940,12 +3031,30 @@ void SeatState::handleScroll(double value) {
     u32 t = nowMsec();
 
     for (wl_resource* p : pointers) {
-        if (sameClientS(p, ptrFocus)) {
-            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(value * 15.0));
+        if (!sameClientS(p, ptrFocus)) {
+            continue;
+        }
 
-            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                wl_pointer_send_frame(p);
+        bool discrete = wl_resource_get_version(p) >= WL_POINTER_AXIS_DISCRETE_SINCE_VERSION;
+
+        if (dy != 0) {
+            if (discrete && (i32)dy != 0) {
+                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_VERTICAL_SCROLL, (i32)dy);
             }
+
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(dy * 15.0));
+        }
+
+        if (dx != 0) {
+            if (discrete && (i32)dx != 0) {
+                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, (i32)dx);
+            }
+
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_double(dx * 15.0));
+        }
+
+        if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+            wl_pointer_send_frame(p);
         }
     }
 }
@@ -3321,6 +3430,7 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     positionerAlloc = pool->make<ObjList<Positioner>>(pool);
     dmabufBoxAlloc = pool->make<ObjList<BufferBox>>(pool);
     dataSourceAlloc = pool->make<ObjList<DataSource>>(pool);
+    spbAlloc = pool->make<ObjList<SpbBox>>(pool);
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
 
     if (wl_display_add_socket(display, socketName) != 0) {
@@ -3370,6 +3480,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
     wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 1, this, cursorShapeManagerBind);
+    wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 

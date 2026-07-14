@@ -30,9 +30,9 @@ namespace {
             b->key(code, pressed);
         }
 
-        void scroll(double value) override {
-            a->scroll(value);
-            b->scroll(value);
+        void scroll(double dx, double dy) override {
+            a->scroll(dx, dy);
+            b->scroll(dx, dy);
         }
     };
 }

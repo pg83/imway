@@ -10,7 +10,7 @@ struct InputSink {
     virtual void motion(double x, double y) = 0;
     virtual void button(u32 evdevBtn, bool pressed) = 0;
     virtual void key(u32 evdevCode, bool pressed) = 0;
-    virtual void scroll(double value) = 0;
+    virtual void scroll(double dx, double dy) = 0;
 
     static InputSink* tee(stl::ObjPool* pool, InputSink& a, InputSink& b);
 };

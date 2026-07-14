@@ -39,6 +39,7 @@ struct DmabufBuffer {
 
 struct Surface {
     int width = 0, height = 0;
+    int bufferScale = 1;
     bool hasContent = false;
     bool dirty = false;
     RectI damage;

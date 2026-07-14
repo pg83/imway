@@ -148,8 +148,10 @@ void ControlImpl::handleLine(const char* cmd) {
                 sink->key(KEY_LEFTSHIFT, false);
             }
         }
+    } else if (sscanf(cmd, "hscroll %lf", &x) == 1) {
+        sink->scroll(x, 0);
     } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
-        sink->scroll(y);
+        sink->scroll(0, y);
     } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
         renderer->screenshot(a);
         sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
