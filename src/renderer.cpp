@@ -9,7 +9,10 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+
+#include <linux/dma-buf.h>
 
 #include <ev.h>
 #include <linux/input-event-codes.h>
@@ -105,6 +108,13 @@ namespace {
 
         const char* fontPath = nullptr;
 
+        bool hasSyncFd = false;
+        VkSemaphore syncOut = VK_NULL_HANDLE;
+        VkSemaphore syncWaitPool[16] = {};
+        PFN_vkImportSemaphoreFdKHR importSemFd = nullptr;
+        PFN_vkGetSemaphoreFdKHR getSemFd = nullptr;
+        Vector<int> frameSyncFds;
+
         ev_prepare prep{};
         bool haveFrame = false;
         VkImage lastImage = VK_NULL_HANDLE;
@@ -115,6 +125,7 @@ namespace {
 
         RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, const char* font, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
             fontPath = font;
+            hasSyncFd = vk.hasSyncFd;
             setup(scn.outW, scn.outH);
 
             ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
@@ -365,6 +376,29 @@ void RendererImpl::setup(int w, int h) {
     VkFenceCreateInfo fenci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
     VK_CHECK(vkCreateFence(device, &fenci, nullptr, &fence));
+
+    if (hasSyncFd) {
+        importSemFd = (PFN_vkImportSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
+        getSemFd = (PFN_vkGetSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR");
+        hasSyncFd = importSemFd && getSemFd;
+    }
+
+    if (hasSyncFd) {
+        VkExportSemaphoreCreateInfo exp{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+
+        exp.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+
+        VkSemaphoreCreateInfo sci2{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+        sci2.pNext = &exp;
+        VK_CHECK(vkCreateSemaphore(device, &sci2, nullptr, &syncOut));
+
+        VkSemaphoreCreateInfo plain{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+        for (auto& sem : syncWaitPool) {
+            VK_CHECK(vkCreateSemaphore(device, &plain, nullptr, &sem));
+        }
+    }
 
     VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
 
@@ -1231,13 +1265,95 @@ void RendererImpl::renderFrame(int scanIdx) {
 
     vkEndCommandBuffer(cmd);
 
+    frameSyncFds.clear();
+
+    VkSemaphore waits[16];
+    VkPipelineStageFlags waitStages[16];
+    u32 nwaits = 0;
+
+    if (hasSyncFd) {
+        for (Surface* s : scene->surfaces) {
+            if (!s->dmabuf || !s->texture || !s->texture->external) {
+                continue;
+            }
+
+            for (int i = 0; i < s->dmabuf->nplanes; i++) {
+                int fd = s->dmabuf->fds[i];
+
+                if (fd < 0 || contains(frameSyncFds, fd)) {
+                    continue;
+                }
+
+                frameSyncFds.pushBack(fd);
+
+                if (nwaits >= 16) {
+                    continue;
+                }
+
+                dma_buf_export_sync_file exp{};
+
+                exp.flags = DMA_BUF_SYNC_WRITE;
+                exp.fd = -1;
+
+                if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0 || exp.fd < 0) {
+                    continue;
+                }
+
+                VkImportSemaphoreFdInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR};
+
+                imp.semaphore = syncWaitPool[nwaits];
+                imp.flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT;
+                imp.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+                imp.fd = exp.fd;
+
+                if (importSemFd(device, &imp) != VK_SUCCESS) {
+                    close(exp.fd);
+
+                    continue;
+                }
+
+                waits[nwaits] = syncWaitPool[nwaits];
+                waitStages[nwaits] = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+                nwaits++;
+            }
+        }
+    }
+
+    bool signalOut = hasSyncFd && !frameSyncFds.empty();
+
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
 
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
+    si.waitSemaphoreCount = nwaits;
+    si.pWaitSemaphores = waits;
+    si.pWaitDstStageMask = waitStages;
+    si.signalSemaphoreCount = signalOut ? 1 : 0;
+    si.pSignalSemaphores = &syncOut;
     vkQueueSubmit(queue, 1, &si, fence);
     vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &fence);
+
+    if (signalOut) {
+        VkSemaphoreGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
+
+        gfi.semaphore = syncOut;
+        gfi.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+
+        int outFd = -1;
+
+        if (getSemFd(device, &gfi, &outFd) == VK_SUCCESS && outFd >= 0) {
+            for (int fd : frameSyncFds) {
+                dma_buf_import_sync_file imp{};
+
+                imp.flags = DMA_BUF_SYNC_READ;
+                imp.fd = outFd;
+                ioctl(fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &imp);
+            }
+
+            close(outFd);
+        }
+    }
 }
 
 bool RendererImpl::screenshot(const char* path) {
@@ -1313,6 +1429,17 @@ void RendererImpl::shutdown() noexcept {
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();
     vkDestroySampler(device, sampler, nullptr);
+
+    if (syncOut) {
+        vkDestroySemaphore(device, syncOut, nullptr);
+    }
+
+    for (VkSemaphore sem : syncWaitPool) {
+        if (sem) {
+            vkDestroySemaphore(device, sem, nullptr);
+        }
+    }
+
     vkDestroyFence(device, fence, nullptr);
     vkDestroyCommandPool(device, cmdPool, nullptr);
     vkDestroyFramebuffer(device, framebuffer, nullptr);

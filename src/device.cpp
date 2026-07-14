@@ -202,6 +202,25 @@ namespace {
             if (hasExt(vk.phys, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
                 devExts.pushBack(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
             }
+
+            if (hasExt(vk.phys, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+                VkPhysicalDeviceExternalSemaphoreInfo semInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO};
+
+                semInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+
+                VkExternalSemaphoreProperties semProps{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
+
+                vkGetPhysicalDeviceExternalSemaphoreProperties(vk.phys, &semInfo, &semProps);
+
+                if ((semProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) && (semProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT)) {
+                    devExts.pushBack(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
+                    vk.hasSyncFd = true;
+                }
+            }
+
+            if (!vk.hasSyncFd) {
+                sysO << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
+            }
         }
 
         float prio = 1.f;
