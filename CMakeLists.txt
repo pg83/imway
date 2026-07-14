@@ -79,6 +79,14 @@ add_custom_command(OUTPUT "${PROTO_DIR}/xdg-decoration-unstable-v1-protocol.c"
     COMMAND ${WAYLAND_SCANNER} private-code "${XDG_DECO_XML}" "${PROTO_DIR}/xdg-decoration-unstable-v1-protocol.c"
     DEPENDS "${XDG_DECO_XML}")
 
+set(PRIMARY_XML "${WAYLAND_PROTOCOLS_DIR}/unstable/primary-selection/primary-selection-unstable-v1.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${PRIMARY_XML}" "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h"
+    DEPENDS "${PRIMARY_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${PRIMARY_XML}" "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c"
+    DEPENDS "${PRIMARY_XML}")
+
 add_library(protocols STATIC
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
@@ -90,7 +98,9 @@ add_library(protocols STATIC
     "${PROTO_DIR}/linux-dmabuf-v1-server-protocol.h"
     "${PROTO_DIR}/linux-dmabuf-v1-client-protocol.h"
     "${PROTO_DIR}/xdg-decoration-unstable-v1-protocol.c"
-    "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h")
+    "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h"
+    "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c"
+    "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
 
 # ---- Dear ImGui (vendored) ----

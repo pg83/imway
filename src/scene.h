@@ -113,4 +113,6 @@ struct Scene {
 
     bool needsFrame = true;
     bool drawCursor = false;
+
+    Surface* dragIcon = nullptr;
 };

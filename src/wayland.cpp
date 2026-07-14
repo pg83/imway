@@ -12,6 +12,7 @@
 
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
+#include <primary-selection-unstable-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
@@ -134,11 +135,41 @@ namespace {
         BufferBox* pending = nullptr;
     };
 
+    struct Mime {
+        char s[128] = {};
+    };
+
+    struct DataSource {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        bool primary = false;
+        Vector<Mime> mimes;
+        Vector<wl_resource*> offers;
+        u32 dndActions = 0;
+        bool dropPerformed = false;
+    };
+
     struct SeatState {
         WaylandImpl* srv = nullptr;
 
         Vector<wl_resource*> keyboards;
         Vector<wl_resource*> pointers;
+        Vector<wl_resource*> dataDevices;
+        Vector<wl_resource*> primaryDevices;
+
+        DataSource* clipboard = nullptr;
+        DataSource* primarySel = nullptr;
+
+        DataSource* dragSource = nullptr;
+        Surface* dragTarget = nullptr;
+        u32 lastPressedButton = 0;
+
+        void setSelection(DataSource* src, bool primary);
+        void sendSelections(wl_client* client);
+        void sourceGone(DataSource* src);
+        void startDrag(DataSource* src, Surface* icon);
+        void dragMotion();
+        void endDrag();
 
         xkb_context* xkb = nullptr;
         xkb_keymap* keymap = nullptr;
@@ -208,6 +239,7 @@ namespace {
         ObjList<RegionBox>* regionAlloc = nullptr;
         ObjList<Positioner>* positionerAlloc = nullptr;
         ObjList<BufferBox>* dmabufBoxAlloc = nullptr;
+        ObjList<DataSource>* dataSourceAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
 
         WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
@@ -673,6 +705,14 @@ namespace {
     void surfaceResourceDestroyed(wl_resource* res) {
         SurfaceImpl* s = surfaceFrom(res);
         WaylandImpl* srv = s->srv;
+
+        if (srv->scene->dragIcon == s) {
+            srv->scene->dragIcon = nullptr;
+        }
+
+        if (srv->seat.dragTarget == s) {
+            srv->seat.dragTarget = nullptr;
+        }
 
         detachPendingBuffer(*s);
 
@@ -1496,10 +1536,27 @@ namespace {
         }
     }
 
-    void sourceOffer(wl_client*, wl_resource*, const char*) {
+    DataSource* sourceFrom(wl_resource* res) {
+        return res ? (DataSource*)wl_resource_get_user_data(res) : nullptr;
     }
 
-    void sourceSetActions(wl_client*, wl_resource*, u32) {
+    void sourceOffer(wl_client*, wl_resource* res, const char* mime) {
+        DataSource* src = sourceFrom(res);
+
+        if (!src || src->mimes.length() >= 64 || strlen(mime) >= sizeof(Mime::s)) {
+            return;
+        }
+
+        Mime m;
+
+        strcpy(m.s, mime);
+        src->mimes.pushBack(m);
+    }
+
+    void sourceSetActions(wl_client*, wl_resource* res, u32 actions) {
+        if (DataSource* src = sourceFrom(res)) {
+            src->dndActions = actions;
+        }
     }
 
     const struct wl_data_source_interface dataSourceImpl = {
@@ -1508,10 +1565,162 @@ namespace {
         .set_actions = sourceSetActions,
     };
 
-    void deviceStartDrag(wl_client*, wl_resource*, wl_resource*, wl_resource*, wl_resource*, u32) {
+    void sourceResourceDestroyed(wl_resource* res) {
+        DataSource* src = sourceFrom(res);
+
+        if (!src) {
+            return;
+        }
+
+        for (wl_resource* o : src->offers) {
+            wl_resource_set_user_data(o, nullptr);
+        }
+
+        src->srv->seat.sourceGone(src);
+        src->srv->dataSourceAlloc->release(src);
     }
 
-    void deviceSetSelection(wl_client*, wl_resource*, wl_resource*, u32) {
+    u32 chooseDndAction(u32 offered) {
+        if (offered & WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY) {
+            return WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY;
+        }
+
+        if (offered & WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE) {
+            return WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE;
+        }
+
+        return WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
+    }
+
+    void offerAccept(wl_client*, wl_resource* res, u32, const char* mime) {
+        DataSource* src = sourceFrom(res);
+
+        if (src && !src->primary) {
+            wl_data_source_send_target(src->res, mime);
+        }
+    }
+
+    void offerReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
+        DataSource* src = sourceFrom(res);
+
+        if (src) {
+            if (src->primary) {
+                zwp_primary_selection_source_v1_send_send(src->res, mime, fd);
+            } else {
+                wl_data_source_send_send(src->res, mime, fd);
+            }
+        }
+
+        close(fd);
+    }
+
+    void offerFinish(wl_client*, wl_resource* res) {
+        DataSource* src = sourceFrom(res);
+
+        if (src && !src->primary && src->dropPerformed && wl_resource_get_version(src->res) >= 3) {
+            wl_data_source_send_dnd_finished(src->res);
+        }
+    }
+
+    void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32) {
+        DataSource* src = sourceFrom(res);
+
+        if (!src || src->primary) {
+            return;
+        }
+
+        u32 action = chooseDndAction(actions & src->dndActions);
+
+        if (wl_resource_get_version(res) >= 3) {
+            wl_data_offer_send_action(res, action);
+        }
+
+        if (wl_resource_get_version(src->res) >= 3) {
+            wl_data_source_send_action(src->res, action);
+        }
+    }
+
+    const struct wl_data_offer_interface dataOfferImpl = {
+        .accept = offerAccept,
+        .receive = offerReceive,
+        .destroy = resDestroy,
+        .finish = offerFinish,
+        .set_actions = offerSetActions,
+    };
+
+    void offerResourceDestroyed(wl_resource* res) {
+        if (DataSource* src = sourceFrom(res)) {
+            removeOne(src->offers, res);
+        }
+    }
+
+    const struct zwp_primary_selection_offer_v1_interface primaryOfferImpl = {
+        .receive = offerReceive,
+        .destroy = resDestroy,
+    };
+
+    wl_resource* makeOffer(wl_resource* device, DataSource* src, bool dnd) {
+        wl_client* client = wl_resource_get_client(device);
+        u32 version = (u32)wl_resource_get_version(device);
+        wl_resource* offer;
+
+        if (src->primary) {
+            offer = wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0);
+
+            if (!offer) {
+                return nullptr;
+            }
+
+            wl_resource_set_implementation(offer, &primaryOfferImpl, src, offerResourceDestroyed);
+            src->offers.pushBack(offer);
+            zwp_primary_selection_device_v1_send_data_offer(device, offer);
+
+            for (const Mime& m : src->mimes) {
+                zwp_primary_selection_offer_v1_send_offer(offer, m.s);
+            }
+
+            return offer;
+        }
+
+        offer = wl_resource_create(client, &wl_data_offer_interface, (int)version, 0);
+
+        if (!offer) {
+            return nullptr;
+        }
+
+        wl_resource_set_implementation(offer, &dataOfferImpl, src, offerResourceDestroyed);
+        src->offers.pushBack(offer);
+        wl_data_device_send_data_offer(device, offer);
+
+        for (const Mime& m : src->mimes) {
+            wl_data_offer_send_offer(offer, m.s);
+        }
+
+        if (dnd && version >= 3) {
+            wl_data_offer_send_source_actions(offer, src->dndActions);
+        }
+
+        return offer;
+    }
+
+    void deviceStartDrag(wl_client*, wl_resource* res, wl_resource* sourceRes, wl_resource* originRes, wl_resource* iconRes, u32) {
+        auto* seat = (SeatState*)wl_resource_get_user_data(res);
+        DataSource* src = sourceFrom(sourceRes);
+
+        if (!src || !seat) {
+            return;
+        }
+
+        Surface* icon = iconRes ? (Surface*)surfaceFrom(iconRes) : nullptr;
+
+        (void)originRes;
+        seat->startDrag(src, icon);
+    }
+
+    void deviceSetSelection(wl_client*, wl_resource* res, wl_resource* sourceRes, u32) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            seat->setSelection(sourceFrom(sourceRes), false);
+        }
     }
 
     const struct wl_data_device_interface dataDeviceImpl = {
@@ -1520,20 +1729,46 @@ namespace {
         .release = resDestroy,
     };
 
-    void managerCreateDataSource(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* s = wl_resource_create(client, &wl_data_source_interface, wl_resource_get_version(res), id);
-
-        if (s) {
-            wl_resource_set_implementation(s, &dataSourceImpl, nullptr, nullptr);
+    void dataDeviceResourceDestroyed(wl_resource* res) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            removeOne(seat->dataDevices, res);
         }
     }
 
+    void managerCreateDataSource(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* s = wl_resource_create(client, &wl_data_source_interface, wl_resource_get_version(res), id);
+
+        if (!s) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        DataSource* src = srv->dataSourceAlloc->make();
+
+        src->srv = srv;
+        src->res = s;
+        src->primary = false;
+        src->mimes.clear();
+        src->offers.clear();
+        src->dndActions = 0;
+        src->dropPerformed = false;
+        wl_resource_set_implementation(s, &dataSourceImpl, src, sourceResourceDestroyed);
+    }
+
     void managerGetDataDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* d = wl_resource_create(client, &wl_data_device_interface, wl_resource_get_version(res), id);
 
-        if (d) {
-            wl_resource_set_implementation(d, &dataDeviceImpl, nullptr, nullptr);
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
         }
+
+        wl_resource_set_implementation(d, &dataDeviceImpl, &srv->seat, dataDeviceResourceDestroyed);
+        srv->seat.dataDevices.pushBack(d);
     }
 
     const struct wl_data_device_manager_interface dataManagerImpl = {
@@ -1551,6 +1786,86 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &dataManagerImpl, data, nullptr);
+    }
+
+    void primarySourceOffer(wl_client*, wl_resource* res, const char* mime) {
+        sourceOffer(nullptr, res, mime);
+    }
+
+    const struct zwp_primary_selection_source_v1_interface primarySourceImpl = {
+        .offer = primarySourceOffer,
+        .destroy = resDestroy,
+    };
+
+    void primaryDeviceSetSelection(wl_client*, wl_resource* res, wl_resource* sourceRes, u32) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            seat->setSelection(sourceFrom(sourceRes), true);
+        }
+    }
+
+    const struct zwp_primary_selection_device_v1_interface primaryDeviceImpl = {
+        .set_selection = primaryDeviceSetSelection,
+        .destroy = resDestroy,
+    };
+
+    void primaryDeviceResourceDestroyed(wl_resource* res) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            removeOne(seat->primaryDevices, res);
+        }
+    }
+
+    void primaryManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* s = wl_resource_create(client, &zwp_primary_selection_source_v1_interface, wl_resource_get_version(res), id);
+
+        if (!s) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        DataSource* src = srv->dataSourceAlloc->make();
+
+        src->srv = srv;
+        src->res = s;
+        src->primary = true;
+        src->mimes.clear();
+        src->offers.clear();
+        src->dndActions = 0;
+        src->dropPerformed = false;
+        wl_resource_set_implementation(s, &primarySourceImpl, src, sourceResourceDestroyed);
+    }
+
+    void primaryManagerGetDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* d = wl_resource_create(client, &zwp_primary_selection_device_v1_interface, wl_resource_get_version(res), id);
+
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(d, &primaryDeviceImpl, &srv->seat, primaryDeviceResourceDestroyed);
+        srv->seat.primaryDevices.pushBack(d);
+    }
+
+    const struct zwp_primary_selection_device_manager_v1_interface primaryManagerImpl = {
+        .create_source = primaryManagerCreateSource,
+        .get_device = primaryManagerGetDevice,
+        .destroy = resDestroy,
+    };
+
+    void primaryManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_primary_selection_device_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &primaryManagerImpl, data, nullptr);
     }
 
     void decoSetMode(wl_client*, wl_resource* res, u32) {
@@ -2272,6 +2587,12 @@ void SeatState::handleMotion(double x, double y) {
     curY = y;
     srv->scene->needsFrame = true;
 
+    if (dragSource) {
+        dragMotion();
+
+        return;
+    }
+
     Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
 
     if (target != ptrFocus) {
@@ -2303,6 +2624,20 @@ void SeatState::handleMotion(double x, double y) {
 
 void SeatState::handleButton(u32 button, bool pressed) {
     srv->scene->needsFrame = true;
+
+    if (pressed) {
+        lastPressedButton = button;
+    }
+
+    if (dragSource) {
+        buttonsDown += pressed ? 1 : -1;
+
+        if (!pressed && buttonsDown <= 0) {
+            endDrag();
+        }
+
+        return;
+    }
 
     if (pressed && buttonsDown == 0) {
         Surface* target = pickPointerTarget();
@@ -2426,6 +2761,9 @@ void SeatState::kbSendEnter(wl_resource* target) {
     }
 
     wl_array_release(&keys);
+    if (target) {
+        sendSelections(wl_resource_get_client(target));
+    }
 }
 
 void SeatState::updateModifiers() {
@@ -2480,6 +2818,159 @@ void SeatState::handleKey(u32 code, bool pressed) {
     }
 
     updateModifiers();
+}
+
+void SeatState::setSelection(DataSource* src, bool primary) {
+    DataSource*& slot = primary ? primarySel : clipboard;
+
+    if (slot == src) {
+        return;
+    }
+
+    if (slot) {
+        if (primary) {
+            zwp_primary_selection_source_v1_send_cancelled(slot->res);
+        } else {
+            wl_data_source_send_cancelled(slot->res);
+        }
+    }
+
+    slot = src;
+
+    if (wl_resource* target = kbTargetRes()) {
+        sendSelections(wl_resource_get_client(target));
+    }
+}
+
+void SeatState::sendSelections(wl_client* client) {
+    for (wl_resource* d : dataDevices) {
+        if (wl_resource_get_client(d) != client) {
+            continue;
+        }
+
+        wl_data_device_send_selection(d, clipboard ? makeOffer(d, clipboard, false) : nullptr);
+    }
+
+    for (wl_resource* d : primaryDevices) {
+        if (wl_resource_get_client(d) != client) {
+            continue;
+        }
+
+        zwp_primary_selection_device_v1_send_selection(d, primarySel ? makeOffer(d, primarySel, false) : nullptr);
+    }
+}
+
+void SeatState::sourceGone(DataSource* src) {
+    bool resend = false;
+
+    if (clipboard == src) {
+        clipboard = nullptr;
+        resend = true;
+    }
+
+    if (primarySel == src) {
+        primarySel = nullptr;
+        resend = true;
+    }
+
+    if (dragSource == src) {
+        dragSource = nullptr;
+        dragTarget = nullptr;
+        srv->scene->dragIcon = nullptr;
+    }
+
+    if (resend) {
+        if (wl_resource* target = kbTargetRes()) {
+            sendSelections(wl_resource_get_client(target));
+        }
+    }
+}
+
+void SeatState::startDrag(DataSource* src, Surface* icon) {
+    if (buttonsDown <= 0) {
+        if (wl_resource_get_version(src->res) >= 3) {
+            wl_data_source_send_cancelled(src->res);
+        }
+
+        return;
+    }
+
+    dragSource = src;
+    dragTarget = nullptr;
+    srv->scene->dragIcon = icon;
+    srv->scene->needsFrame = true;
+    pointerSetFocus(nullptr, 0, 0);
+    dragMotion();
+}
+
+void SeatState::dragMotion() {
+    Surface* target = pickPointerTarget();
+
+    if (target != dragTarget) {
+        if (dragTarget) {
+            for (wl_resource* d : dataDevices) {
+                if (sameClientS(d, dragTarget)) {
+                    wl_data_device_send_leave(d);
+                }
+            }
+        }
+
+        dragTarget = target;
+
+        if (target) {
+            u32 serial = wl_display_next_serial(srv->display);
+
+            for (wl_resource* d : dataDevices) {
+                if (!sameClientS(d, target)) {
+                    continue;
+                }
+
+                wl_resource* offer = makeOffer(d, dragSource, true);
+
+                wl_data_device_send_enter(d, serial, resOf(target), wl_fixed_from_double(curX - target->imgX), wl_fixed_from_double(curY - target->imgY), offer);
+            }
+        }
+
+        return;
+    }
+
+    if (!target) {
+        return;
+    }
+
+    u32 t = nowMsec();
+
+    for (wl_resource* d : dataDevices) {
+        if (sameClientS(d, target)) {
+            wl_data_device_send_motion(d, t, wl_fixed_from_double(curX - target->imgX), wl_fixed_from_double(curY - target->imgY));
+        }
+    }
+}
+
+void SeatState::endDrag() {
+    DataSource* src = dragSource;
+
+    dragSource = nullptr;
+    srv->scene->dragIcon = nullptr;
+    srv->scene->needsFrame = true;
+
+    if (dragTarget) {
+        for (wl_resource* d : dataDevices) {
+            if (sameClientS(d, dragTarget)) {
+                wl_data_device_send_drop(d);
+            }
+        }
+
+        src->dropPerformed = true;
+
+        if (wl_resource_get_version(src->res) >= 3) {
+            wl_data_source_send_dnd_drop_performed(src->res);
+        }
+    } else {
+        wl_data_source_send_cancelled(src->res);
+    }
+
+    dragTarget = nullptr;
 }
 
 void SeatState::focusToplevel(Toplevel* t) {
@@ -2574,6 +3065,7 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     regionAlloc = pool->make<ObjList<RegionBox>>(pool);
     positionerAlloc = pool->make<ObjList<Positioner>>(pool);
     dmabufBoxAlloc = pool->make<ObjList<BufferBox>>(pool);
+    dataSourceAlloc = pool->make<ObjList<DataSource>>(pool);
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
 
     if (wl_display_add_socket(display, socketName) != 0) {
@@ -2621,6 +3113,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
+    wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 
@@ -2652,6 +3145,10 @@ void WaylandImpl::frameShown(u32 msec) {
         if (p->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)p->surface, msec);
         }
+    }
+
+    if (scene->dragIcon) {
+        fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon, msec);
     }
 
     for (Toplevel* tl : scene->toplevels) {

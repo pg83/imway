@@ -914,6 +914,12 @@ void RendererImpl::buildUi(Scene& scene) {
     }
 
     ImGui::Render();
+    if (scene.dragIcon && scene.dragIcon->texture) {
+        ImVec2 mp = ImGui::GetMousePos();
+
+        drawSurfaceTreeOverlay(*scene.dragIcon, mp.x + 4, mp.y + 4);
+    }
+
 }
 
 void RendererImpl::renderFrame(int scanIdx) {

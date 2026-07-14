@@ -35,6 +35,7 @@ packages:
   - libxkbcommon-dev
   - libseat-dev
   - seatd
+  - wl-clipboard
   - libseat-dev
   - libvulkan-dev
   # vulkan runtime (lavapipe в mesa-vulkan-drivers) и инструменты
@@ -45,6 +46,7 @@ packages:
   - spirv-tools
   # обвязка для ручного тестирования
   - seatd
+  - wl-clipboard
   - sway
   - foot
   - wayland-utils

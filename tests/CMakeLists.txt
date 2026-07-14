@@ -53,3 +53,7 @@ set_tests_properties(headless_dmabuf PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
 add_test(NAME headless_input
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_input.sh $<TARGET_FILE:imway>)
 set_tests_properties(headless_input PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
+
+add_test(NAME headless_clipboard
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_clipboard.sh $<TARGET_FILE:imway>)
+set_tests_properties(headless_clipboard PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 127)
