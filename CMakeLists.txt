@@ -16,14 +16,32 @@ pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(SEAT           REQUIRED IMPORTED_TARGET libseat)
 
-# homegrown standard library (github.com/pg83/std), built with make
-set(STD_ROOT "" CACHE PATH "root of the std repository (libstd.a must be built)")
-if(NOT STD_ROOT)
-    message(FATAL_ERROR "-DSTD_ROOT=/path/to/std is required")
+# homegrown standard library (github.com/pg83/std)
+option(IMWAY_USE_VENDORED_STD "Build libstd from third_party/libstd; OFF = link the system-installed one with -lstd" ON)
+
+if(IMWAY_USE_VENDORED_STD)
+    set(STD_ROOT "${CMAKE_SOURCE_DIR}/third_party/libstd")
+
+    include(ProcessorCount)
+    ProcessorCount(NCPU)
+    if(NCPU EQUAL 0)
+        set(NCPU 2)
+    endif()
+
+    add_custom_target(pgstd_build
+        COMMAND make -C "${STD_ROOT}" -j${NCPU} CXX=${CMAKE_CXX_COMPILER} std/libstd.a
+        BYPRODUCTS "${STD_ROOT}/std/libstd.a"
+        COMMENT "building vendored libstd")
+
+    add_library(pgstd STATIC IMPORTED)
+    set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_ROOT}/std/libstd.a")
+    target_include_directories(pgstd INTERFACE "${STD_ROOT}")
+    add_dependencies(pgstd pgstd_build)
+else()
+    # system libstd: headers on the compiler's default include path, plain -lstd
+    add_library(pgstd INTERFACE)
+    target_link_libraries(pgstd INTERFACE std)
 endif()
-add_library(pgstd STATIC IMPORTED)
-set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_ROOT}/std/libstd.a")
-target_include_directories(pgstd INTERFACE "${STD_ROOT}")
 
 # libev does not install a pkg-config file
 find_library(EV_LIBRARY ev REQUIRED)

@@ -36,12 +36,16 @@ Raw, no frameworks (no wlroots/Smithay):
 The code is built and tested in a QEMU VM (Debian, aarch64+hvf on macOS):
 
 ```sh
+git submodule update --init   # vendored libstd (third_party/libstd)
 dev/vm/create.sh   # one-time: download the image, cloud-init with the toolchain
 dev/build.sh       # rsync sources into the VM + build + ctest
 dev/vm/gui.sh      # QEMU window with imway on KMS + foot (mouse/keyboard work)
 ```
 
-On Linux `dev/build.sh` builds natively. Tests are headless screenshots with
+On Linux `dev/build.sh` builds natively. The vendored
+[libstd](https://github.com/pg83/std) is built as part of the build; configure
+with `-DIMWAY_USE_VENDORED_STD=OFF` to link a system-installed one (`-lstd`,
+headers expected on the compiler's default include path). Tests are headless screenshots with
 pixel checks: shm, subsurfaces, viewporter, dmabuf (via udmabuf), and a
 keyboard e2e test (typing a command into foot).
 

@@ -372,7 +372,9 @@ Roadmap status: M1–M4 done (clipboard/DnD included; see the production batch
 at the end of §14.3). Firefox-esr works (rendering, clicks, menus). Next: M5 —
 the stal/ix port.
 The code was moved onto the [pg83/std](https://github.com/pg83/std) library (namespace
-`stl`): zero dependencies on the C++ STL, ownership via `ObjPool` (creation in a pool,
+`stl`), vendored as the `third_party/libstd` submodule and built as part of the
+build by default (`-DIMWAY_USE_VENDORED_STD=OFF` links a system `-lstd` instead —
+the stal/ix path): zero dependencies on the C++ STL, ownership via `ObjPool` (creation in a pool,
 LIFO death), interfaces in headers / implementations entirely in .cpp, builds only with
 clang++ (the library uses clang builtins). Rings 0 and 3 (§12) were never
 needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and KMS).
