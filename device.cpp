@@ -665,6 +665,7 @@ namespace {
 
         void pickPipe(const char* connector, const char* modeStr);
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
+        int tryCommit(u32 fbId, bool doModeset, bool withCursor);
         bool commit(u32 fbId, bool doModeset);
         void addCursorProps(drmModeAtomicReq* req);
 
@@ -1309,7 +1310,7 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-bool KmsOutput::commit(u32 fbId, bool doModeset) {
+int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     if (doModeset) {
@@ -1329,7 +1330,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
     drmModeAtomicAddProperty(req, planeId, plCrtcW, mode.hdisplay);
     drmModeAtomicAddProperty(req, planeId, plCrtcH, mode.vdisplay);
 
-    if (cursorPlaneId && cursorEnabled) {
+    if (withCursor && cursorPlaneId && cursorEnabled) {
         addCursorProps(req);
     }
 
@@ -1343,10 +1344,37 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
 
     drmModeAtomicFree(req);
 
-    if (ret != 0) {
-        if (errno != EBUSY) {
-            sysE << "imway: kms atomic commit failed, errno "_sv << errno << endL;
+    return ret == 0 ? 0 : errno;
+}
+
+bool KmsOutput::commit(u32 fbId, bool doModeset) {
+    int err = tryCommit(fbId, doModeset, true);
+
+    if (err == EBUSY) {
+        return false;
+    }
+
+    // bisect: some driver/mode combinations reject the cursor plane in the
+    // same commit — retry without it and fall back to the software cursor
+    if (err != 0 && cursorPlaneId && cursorEnabled) {
+        int errNoCursor = tryCommit(fbId, doModeset, false);
+
+        if (errNoCursor == 0) {
+            sysE << "imway: cursor plane rejected by this mode (errno "_sv << err << "), software cursor"_sv << endL;
+            cursorPlaneId = 0;
+            curW = curH = 0;
+            cursorEnabled = false;
+
+            flipPending = true;
+
+            return true;
         }
+
+        err = errNoCursor;
+    }
+
+    if (err != 0) {
+        sysE << "imway: kms atomic commit failed, errno "_sv << err << (doModeset ? " (modeset)"_sv : ""_sv) << endL;
 
         return false;
     }

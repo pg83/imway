@@ -1480,9 +1480,12 @@ void RendererImpl::buildUi(Scene& scene) {
     ImVec2 mp = ImGui::GetMousePos();
     int kind = ImGui::GetMouseCursor();
 
+    // the plane can get rejected at runtime (mode-dependent), re-check live
+    bool hwCursor = hwCursorReady && output->cursorCapW() > 0;
+
     if (cs) {
         // client-provided cursor surface: feed its pixels to the cursor plane
-        bool hwOk = hwCursorReady && !cs->dmabuf && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
+        bool hwOk = hwCursor && !cs->dmabuf && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
 
         if (hwOk) {
             if (hwSurf != cs || hwSurfStale) {
@@ -1503,7 +1506,7 @@ void RendererImpl::buildUi(Scene& scene) {
             hwVisible = true;
             output->setCursorPos((int)mp.x - hwHotX, (int)mp.y - hwHotY, true);
         } else {
-            if (hwCursorReady) {
+            if (hwCursor) {
                 hwVisible = false;
                 output->setCursorPos(0, 0, false);
             }
@@ -1514,7 +1517,9 @@ void RendererImpl::buildUi(Scene& scene) {
         return;
     }
 
-    if (!hwCursorReady) {
+    if (!hwCursor) {
+        hwVisible = false;
+
         if (kind != ImGuiMouseCursor_None) {
             drawMouseCursor(ImGui::GetForegroundDrawList(), mp, uiScale, kind);
         }
