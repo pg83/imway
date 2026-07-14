@@ -41,3 +41,51 @@ Toplevel* Surface::rootToplevel() {
 
     return s->toplevel;
 }
+
+void unionRect(RectI& a, const RectI& b) {
+    if (b.empty()) {
+        return;
+    }
+
+    if (a.empty()) {
+        a = b;
+
+        return;
+    }
+
+    i32 x2 = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w;
+    i32 y2 = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+
+    a.x = a.x < b.x ? a.x : b.x;
+    a.y = a.y < b.y ? a.y : b.y;
+    a.w = x2 - a.x;
+    a.h = y2 - a.y;
+}
+
+void clipRect(RectI& r, i32 w, i32 h) {
+    if (r.x < 0) {
+        r.w += r.x;
+        r.x = 0;
+    }
+
+    if (r.y < 0) {
+        r.h += r.y;
+        r.y = 0;
+    }
+
+    if (r.x + r.w > w) {
+        r.w = w - r.x;
+    }
+
+    if (r.y + r.h > h) {
+        r.h = h - r.y;
+    }
+
+    if (r.w < 0) {
+        r.w = 0;
+    }
+
+    if (r.h < 0) {
+        r.h = 0;
+    }
+}

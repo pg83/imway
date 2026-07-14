@@ -57,6 +57,8 @@ namespace {
             Vector<wl_resource*> frames;
             bool inputRegionSet = false;
             Vector<RectI> inputRegion;
+            RectI damage;
+            bool damageAll = false;
         } pending;
 
         Vector<wl_resource*> frameCbs;
@@ -387,7 +389,16 @@ namespace {
         }
     }
 
-    void surfaceDamage(wl_client*, wl_resource*, i32, i32, i32, i32) {
+    void surfaceDamage(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        SurfaceImpl& s = *surfaceFrom(res);
+
+        if (s.vp.hasSrc || s.vp.hasDst) {
+            s.pending.damageAll = true;
+
+            return;
+        }
+
+        unionRect(s.pending.damage, {x, y, w, h});
     }
 
     void frameCallbackDestroyed(wl_resource* cb) {
@@ -435,7 +446,7 @@ namespace {
         s.pending.inputRegion.append(box->rects.begin(), box->rects.length());
     }
 
-    void copyShmBufferTo(wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out) {
+    void copyShmBufferTo(wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
         i32 w = wl_shm_buffer_get_width(&shm);
         i32 h = wl_shm_buffer_get_height(&shm);
         i32 stride = wl_shm_buffer_get_stride(&shm);
@@ -448,24 +459,33 @@ namespace {
             return;
         }
 
+        bool incremental = rect && !rect->empty() && outW == w && outH == h && out.length() == (size_t)w * h * 4;
+
         outW = w;
         outH = h;
-        out.clear();
-        out.grow((size_t)w * h * 4);
 
         wl_shm_buffer_begin_access(&shm);
 
         auto* src = (const u8*)wl_shm_buffer_get_data(&shm);
 
-        for (i32 y = 0; y < h; y++) {
-            out.append(src + (size_t)y * stride, (size_t)w * 4);
+        if (incremental) {
+            for (i32 y = rect->y; y < rect->y + rect->h; y++) {
+                memcpy(out.mutData() + ((size_t)y * w + rect->x) * 4, src + (size_t)y * stride + (size_t)rect->x * 4, (size_t)rect->w * 4);
+            }
+        } else {
+            out.clear();
+            out.grow((size_t)w * h * 4);
+
+            for (i32 y = 0; y < h; y++) {
+                out.append(src + (size_t)y * stride, (size_t)w * 4);
+            }
         }
 
         wl_shm_buffer_end_access(&shm);
     }
 
-    void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm) {
-        copyShmBufferTo(*shm, s.width, s.height, s.pixels);
+    void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm, const RectI* rect) {
+        copyShmBufferTo(*shm, s.width, s.height, s.pixels, rect);
 
         if (s.width > 0) {
             s.dirty = true;
@@ -504,6 +524,7 @@ namespace {
             if (sub.cache.hasContent && !sub.cache.pixels.empty()) {
                 s.pixels.xchg(sub.cache.pixels);
                 s.dirty = true;
+                s.damageAll = true;
             }
 
             for (wl_resource* cb : sub.cache.frames) {
@@ -554,12 +575,23 @@ namespace {
                     s.width = s.height = 0;
                 }
             } else if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
+                RectI dmg = s.pending.damage;
+                bool all = s.pending.damageAll || dmg.empty();
+
+                clipRect(dmg, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm));
+
                 if (toCache) {
-                    copyShmBufferTo(*shm, sub->cache.width, sub->cache.height, sub->cache.pixels);
+                    copyShmBufferTo(*shm, sub->cache.width, sub->cache.height, sub->cache.pixels, nullptr);
                     sub->cache.hasContent = sub->cache.width > 0;
                     sub->cache.valid = true;
                 } else {
-                    copyShmBuffer(s, shm);
+                    copyShmBuffer(s, shm, all ? nullptr : &dmg);
+
+                    if (all) {
+                        s.damageAll = true;
+                    } else {
+                        unionRect(s.damage, dmg);
+                    }
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
@@ -578,6 +610,9 @@ namespace {
             detachPendingBuffer(s);
             s.pending.newlyAttached = false;
         }
+
+        s.pending.damage = {};
+        s.pending.damageAll = false;
 
         s.inputRegionSet = s.pending.inputRegionSet;
         s.inputRegion.clear();
@@ -614,7 +649,8 @@ namespace {
     void surfaceSetBufferScale(wl_client*, wl_resource*, i32) {
     }
 
-    void surfaceDamageBuffer(wl_client*, wl_resource*, i32, i32, i32, i32) {
+    void surfaceDamageBuffer(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        unionRect(surfaceFrom(res)->pending.damage, {x, y, w, h});
     }
 
     void surfaceOffset(wl_client*, wl_resource*, i32, i32) {
@@ -1716,6 +1752,8 @@ namespace {
 
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
+
+        box->srv->scene->deadDmabufs.pushBack(&box->buf);
 
         for (int i = 0; i < box->buf.nplanes; i++) {
             if (box->buf.fds[i] >= 0) {

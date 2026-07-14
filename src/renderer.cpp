@@ -36,6 +36,7 @@ struct SurfaceTexture {
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
     void* stagingMap = nullptr;
     VkDescriptorSet ds = VK_NULL_HANDLE;
+    RectI uploadRect;
     bool needsUpload = false;
     bool firstUse = true;
     bool external = false;
@@ -45,6 +46,7 @@ struct SurfaceTexture {
 
 namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
+    void prepareCb(struct ev_loop*, ev_prepare* w, int);
 
     struct RendererImpl: public Renderer, public InputSink {
         InputSink* sink() override { return this; }
@@ -83,6 +85,22 @@ namespace {
         ObjList<SurfaceTexture>* textureAlloc = nullptr;
         Vector<SurfaceTexture*> textures;
 
+        struct DmabufCacheEntry {
+            DmabufBuffer* key = nullptr;
+            SurfaceTexture* tex = nullptr;
+        };
+
+        Vector<DmabufCacheEntry> dmabufCache;
+
+        bool scanout = false;
+        Vector<VkImageView> scanViews;
+        Vector<VkFramebuffer> scanFbs;
+
+        ev_prepare prep{};
+        bool haveFrame = false;
+        VkImage lastImage = VK_NULL_HANDLE;
+        VkImageLayout lastLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
@@ -91,13 +109,24 @@ namespace {
 
             ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
 
-            ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
-            frameTimer.data = this;
-            ev_timer_start(loop, &frameTimer);
+            if (out.vsynced()) {
+                ev_prepare_init(&prep, prepareCb);
+                prep.data = this;
+                ev_prepare_start(loop, &prep);
+            } else {
+                ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
+                frameTimer.data = this;
+                ev_timer_start(loop, &frameTimer);
+            }
         }
 
         ~RendererImpl() noexcept {
-            ev_timer_stop(loop, &frameTimer);
+            if (output->vsynced()) {
+                ev_prepare_stop(loop, &prep);
+            } else {
+                ev_timer_stop(loop, &frameTimer);
+            }
+
             shutdown();
         }
 
@@ -138,9 +167,27 @@ namespace {
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
         void destroyTexture(SurfaceTexture* tex);
-        void renderFrame();
+        SurfaceTexture* cacheFind(DmabufBuffer* b);
+        bool cacheContainsTex(const SurfaceTexture* tex) const;
+        void releaseSurfaceTexture(Surface& s);
+        void drainDead();
+
+        bool wantFrame() const {
+            return scene->needsFrame || settleFrames > 0;
+        }
+
+        void frameNow();
+        void renderFrame(int scanIdx);
         bool screenshot(const char* path) override;
     };
+
+    void prepareCb(struct ev_loop*, ev_prepare* w, int) {
+        auto* r = (RendererImpl*)w->data;
+
+        if (r->wantFrame() && r->output->ready()) {
+            r->frameNow();
+        }
+    }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->tick();
@@ -210,16 +257,19 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 void RendererImpl::setup(int w, int h) {
     width = w;
     height = h;
+    scanout = output->scanoutCount() > 0;
 
-    createImage(width, height, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
+    if (!scanout) {
+        createImage(width, height, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
 
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
-    vci.image = target;
-    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = kVkFormat;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
+        vci.image = target;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = kVkFormat;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
+    }
 
     createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
 
@@ -232,7 +282,7 @@ void RendererImpl::setup(int w, int h) {
     att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    att.finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    att.finalLayout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
     VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub{};
@@ -249,15 +299,45 @@ void RendererImpl::setup(int w, int h) {
     rpci.pSubpasses = &sub;
     VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &renderPass));
 
-    VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    if (scanout) {
+        for (int i = 0; i < output->scanoutCount(); i++) {
+            VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
-    fci.renderPass = renderPass;
-    fci.attachmentCount = 1;
-    fci.pAttachments = &targetView;
-    fci.width = width;
-    fci.height = height;
-    fci.layers = 1;
-    VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &framebuffer));
+            vci.image = output->scanoutBuffer(i)->image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = kVkFormat;
+            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+            VkImageView view = VK_NULL_HANDLE;
+
+            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &view));
+            scanViews.pushBack(view);
+
+            VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+            fci.renderPass = renderPass;
+            fci.attachmentCount = 1;
+            fci.pAttachments = &view;
+            fci.width = width;
+            fci.height = height;
+            fci.layers = 1;
+
+            VkFramebuffer fb = VK_NULL_HANDLE;
+
+            VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &fb));
+            scanFbs.pushBack(fb);
+        }
+    } else {
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+        fci.renderPass = renderPass;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &targetView;
+        fci.width = width;
+        fci.height = height;
+        fci.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &framebuffer));
+    }
 
     VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 
@@ -318,11 +398,18 @@ void RendererImpl::uploadSurface(Surface& s) {
 
     SurfaceTexture* tex = s.texture;
 
+    if (tex && tex->external) {
+        releaseSurfaceTexture(s);
+        tex = nullptr;
+    }
+
     if (tex && (tex->w != s.width || tex->h != s.height)) {
         destroyTexture(tex);
         tex = nullptr;
         s.texture = nullptr;
     }
+
+    bool fresh = tex == nullptr;
 
     if (!tex) {
         tex = textureAlloc->make();
@@ -351,8 +438,103 @@ void RendererImpl::uploadSurface(Surface& s) {
         s.texture = tex;
     }
 
-    memcpy(tex->stagingMap, s.pixels.data(), s.pixels.length());
+    RectI r{0, 0, tex->w, tex->h};
+
+    if (!fresh && !s.damageAll && !s.damage.empty()) {
+        r = s.damage;
+        clipRect(r, tex->w, tex->h);
+    }
+
+    if (r.x == 0 && r.y == 0 && r.w == tex->w && r.h == tex->h) {
+        memcpy(tex->stagingMap, s.pixels.data(), s.pixels.length());
+    } else {
+        for (i32 y = r.y; y < r.y + r.h; y++) {
+            size_t off = ((size_t)y * tex->w + r.x) * 4;
+
+            memcpy((u8*)tex->stagingMap + off, s.pixels.data() + off, (size_t)r.w * 4);
+        }
+    }
+
+    unionRect(tex->uploadRect, r);
     tex->needsUpload = true;
+    s.damage = {};
+    s.damageAll = false;
+}
+
+SurfaceTexture* RendererImpl::cacheFind(DmabufBuffer* b) {
+    for (const auto& e : dmabufCache) {
+        if (e.key == b) {
+            return e.tex;
+        }
+    }
+
+    return nullptr;
+}
+
+bool RendererImpl::cacheContainsTex(const SurfaceTexture* tex) const {
+    for (const auto& e : dmabufCache) {
+        if (e.tex == tex) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void RendererImpl::releaseSurfaceTexture(Surface& s) {
+    SurfaceTexture* tex = s.texture;
+
+    s.texture = nullptr;
+
+    if (!tex) {
+        return;
+    }
+
+    if (tex->external && cacheContainsTex(tex)) {
+        return;
+    }
+
+    destroyTexture(tex);
+}
+
+void RendererImpl::drainDead() {
+    while (!scene->orphanedTextures.empty()) {
+        SurfaceTexture* t = scene->orphanedTextures.popBack();
+
+        if (!cacheContainsTex(t)) {
+            destroyTexture(t);
+        }
+    }
+
+    while (!scene->deadDmabufs.empty()) {
+        DmabufBuffer* b = scene->deadDmabufs.popBack();
+        SurfaceTexture* tex = cacheFind(b);
+
+        if (!tex) {
+            continue;
+        }
+
+        bool inUse = false;
+
+        for (Surface* s : scene->surfaces) {
+            if (s->texture == tex) {
+                inUse = true;
+            }
+        }
+
+        for (size_t i = 0; i < dmabufCache.length(); i++) {
+            if (dmabufCache[i].key == b) {
+                dmabufCache.mut(i) = dmabufCache.back();
+                dmabufCache.popBack();
+
+                break;
+            }
+        }
+
+        if (!inUse) {
+            destroyTexture(tex);
+        }
+    }
 }
 
 void RendererImpl::destroyTexture(SurfaceTexture* tex) {
@@ -360,7 +542,14 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
         return;
     }
 
-    vkQueueWaitIdle(queue);
+    for (size_t i = 0; i < dmabufCache.length(); i++) {
+        if (dmabufCache[i].tex == tex) {
+            dmabufCache.mut(i) = dmabufCache.back();
+            dmabufCache.popBack();
+
+            break;
+        }
+    }
 
     if (tex->ds) {
         ImGui_ImplVulkan_RemoveTexture(tex->ds);
@@ -401,8 +590,17 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    destroyTexture(s.texture);
-    s.texture = nullptr;
+    SurfaceTexture* cached = cacheFind(b);
+
+    if (s.texture && s.texture != cached) {
+        releaseSurfaceTexture(s);
+    }
+
+    if (cached) {
+        s.texture = cached;
+
+        return true;
+    }
 
     auto* tex = textureAlloc->make();
 
@@ -553,6 +751,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     tex->firstUse = false;
     textures.pushBack(tex);
+    dmabufCache.pushBack({b, tex});
     s.texture = tex;
 
     return true;
@@ -717,7 +916,7 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui::Render();
 }
 
-void RendererImpl::renderFrame() {
+void RendererImpl::renderFrame(int scanIdx) {
     buildUi(*scene);
 
     vkResetCommandBuffer(cmd, 0);
@@ -744,11 +943,21 @@ void RendererImpl::renderFrame() {
         toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, tex->firstUse ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
 
+        RectI r = tex->uploadRect;
+
+        if (r.empty()) {
+            r = {0, 0, tex->w, tex->h};
+        }
+
         VkBufferImageCopy region{};
 
+        region.bufferOffset = ((VkDeviceSize)r.y * tex->w + r.x) * 4;
+        region.bufferRowLength = (u32)tex->w;
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {(u32)tex->w, (u32)tex->h, 1};
+        region.imageOffset = {r.x, r.y, 0};
+        region.imageExtent = {(u32)r.w, (u32)r.h, 1};
         vkCmdCopyBufferToImage(cmd, tex->staging, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        tex->uploadRect = {};
 
         VkImageMemoryBarrier toRead = toDst;
 
@@ -768,7 +977,7 @@ void RendererImpl::renderFrame() {
     VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
     rbi.renderPass = renderPass;
-    rbi.framebuffer = framebuffer;
+    rbi.framebuffer = scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer;
     rbi.renderArea = {{0, 0}, {(u32)width, (u32)height}};
     rbi.clearValueCount = 1;
     rbi.pClearValues = &clear;
@@ -776,11 +985,17 @@ void RendererImpl::renderFrame() {
     ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
     vkCmdEndRenderPass(cmd);
 
-    VkBufferImageCopy region{};
+    lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;
+    lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    haveFrame = true;
 
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {(u32)width, (u32)height, 1};
-    vkCmdCopyImageToBuffer(cmd, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback, 1, &region);
+    if (output->presentNeedsPixels()) {
+        VkBufferImageCopy region{};
+
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
+    }
 
     vkEndCommandBuffer(cmd);
 
@@ -794,6 +1009,34 @@ void RendererImpl::renderFrame() {
 }
 
 bool RendererImpl::screenshot(const char* path) {
+    if (!haveFrame) {
+        return false;
+    }
+
+    if (!output->presentNeedsPixels()) {
+        vkResetCommandBuffer(cmd, 0);
+
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+
+        VkBufferImageCopy region{};
+
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
+        vkEndCommandBuffer(cmd);
+
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(queue, 1, &si, fence);
+        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(device, 1, &fence);
+    }
+
     FILE* f = fopen(path, "wb");
 
     if (!f) {
@@ -841,6 +1084,15 @@ void RendererImpl::shutdown() noexcept {
     vkDestroyFence(device, fence, nullptr);
     vkDestroyCommandPool(device, cmdPool, nullptr);
     vkDestroyFramebuffer(device, framebuffer, nullptr);
+
+    for (VkFramebuffer fb : scanFbs) {
+        vkDestroyFramebuffer(device, fb, nullptr);
+    }
+
+    for (VkImageView v : scanViews) {
+        vkDestroyImageView(device, v, nullptr);
+    }
+
     vkDestroyRenderPass(device, renderPass, nullptr);
 
     if (readbackMap) {
@@ -855,40 +1107,54 @@ void RendererImpl::shutdown() noexcept {
     device = VK_NULL_HANDLE;
 }
 
-void RendererImpl::tick() {
+void RendererImpl::frameNow() {
     if (scene->needsFrame) {
         settleFrames = 3;
     }
 
-    bool active = scene->needsFrame || settleFrames > 0;
-
     scene->needsFrame = false;
+    settleFrames--;
 
-    if (active) {
-        settleFrames--;
+    drainDead();
 
-        while (!scene->orphanedTextures.empty()) {
-            destroyTexture(scene->orphanedTextures.popBack());
-        }
-
-        for (Surface* s : scene->surfaces) {
-            if (s->dirty && s->hasContent) {
-                if (s->dmabuf) {
-                    importDmabuf(*s);
-                } else {
-                    uploadSurface(*s);
-                }
-
-                s->dirty = false;
+    for (Surface* s : scene->surfaces) {
+        if (s->dirty && s->hasContent) {
+            if (s->dmabuf) {
+                importDmabuf(*s);
+            } else {
+                uploadSurface(*s);
             }
-        }
 
-        renderFrame();
-        output->present(readbackMap);
-
-        if (listener) {
-            listener->frameShown(nowMsec());
+            s->dirty = false;
         }
+    }
+
+    int idx = output->scanoutCount() > 0 ? output->acquire() : -1;
+
+    renderFrame(idx);
+
+    if (idx >= 0) {
+        output->presentImage(idx);
+    } else {
+        output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
+    }
+
+    if (listener) {
+        listener->frameShown(nowMsec());
+    }
+
+    scene->framesDone++;
+
+    if (framesLimit > 0 && scene->framesDone >= framesLimit) {
+        ev_break(loop, EVBREAK_ALL);
+    }
+}
+
+void RendererImpl::tick() {
+    if (wantFrame()) {
+        frameNow();
+
+        return;
     }
 
     scene->framesDone++;

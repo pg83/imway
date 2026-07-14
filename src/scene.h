@@ -11,7 +11,14 @@ struct SurfaceTexture;
 
 struct RectI {
     i32 x = 0, y = 0, w = 0, h = 0;
+
+    bool empty() const {
+        return w <= 0 || h <= 0;
+    }
 };
+
+void unionRect(RectI& a, const RectI& b);
+void clipRect(RectI& r, i32 w, i32 h);
 
 struct DmabufFormat {
     u32 fourcc = 0;
@@ -34,6 +41,8 @@ struct Surface {
     int width = 0, height = 0;
     bool hasContent = false;
     bool dirty = false;
+    RectI damage;
+    bool damageAll = false;
     stl::Vector<u8> pixels;
     DmabufBuffer* dmabuf = nullptr;
 
@@ -96,6 +105,7 @@ struct Scene {
     stl::Vector<Popup*> popups;
 
     stl::Vector<SurfaceTexture*> orphanedTextures;
+    stl::Vector<DmabufBuffer*> deadDmabufs;
 
     int outW = 1280, outH = 800;
     double hz = 60.0;

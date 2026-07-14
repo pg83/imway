@@ -257,6 +257,13 @@ namespace {
         sysO << "imway: dmabuf formats: "_sv << out.length() << " (modifiers per fourcc: "_sv << out.length() / 2 << ")"_sv << endL;
     }
 
+    struct ScanBuf {
+        ScanoutBuffer pub;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        u32 gemHandle = 0;
+        u32 fbId = 0;
+    };
+
     struct DumbBuffer {
         u32 handle = 0;
         u32 fbId = 0;
@@ -291,11 +298,289 @@ namespace {
         return id;
     }
 
+    u32 planeModifiers(int fd, u32 planeId, u32 fourcc, u64* out, u32 max) {
+        u32 propId = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "IN_FORMATS");
+        u32 n = 0;
+
+        if (!propId) {
+            out[n++] = DRM_FORMAT_MOD_LINEAR;
+
+            return n;
+        }
+
+        drmModeObjectProperties* props = drmModeObjectGetProperties(fd, planeId, DRM_MODE_OBJECT_PLANE);
+
+        if (!props) {
+            return 0;
+        }
+
+        u64 blobId = 0;
+
+        for (u32 i = 0; i < props->count_props; i++) {
+            if (props->props[i] == propId) {
+                blobId = props->prop_values[i];
+            }
+        }
+
+        drmModeFreeObjectProperties(props);
+
+        drmModePropertyBlobRes* blob = blobId ? drmModeGetPropertyBlob(fd, (u32)blobId) : nullptr;
+
+        if (!blob) {
+            out[n++] = DRM_FORMAT_MOD_LINEAR;
+
+            return n;
+        }
+
+        const auto* hdr = (const drm_format_modifier_blob*)blob->data;
+        const u32* formats = (const u32*)((const u8*)hdr + hdr->formats_offset);
+        const auto* mods = (const drm_format_modifier*)((const u8*)hdr + hdr->modifiers_offset);
+        u32 fmtIdx = UINT32_MAX;
+
+        for (u32 i = 0; i < hdr->count_formats; i++) {
+            if (formats[i] == fourcc) {
+                fmtIdx = i;
+            }
+        }
+
+        for (u32 i = 0; fmtIdx != UINT32_MAX && i < hdr->count_modifiers && n < max; i++) {
+            const drm_format_modifier& m = mods[i];
+
+            if (fmtIdx >= m.offset && fmtIdx < m.offset + 64 && (m.formats & (1ull << (fmtIdx - m.offset)))) {
+                out[n++] = m.modifier;
+            }
+        }
+
+        drmModeFreePropertyBlob(blob);
+
+        return n;
+    }
+
+    void destroyScanBuf(const DeviceVk& vk, int fd, ScanBuf& sb) {
+        if (sb.fbId) {
+            drmModeRmFB(fd, sb.fbId);
+        }
+
+        if (sb.gemHandle) {
+            drm_gem_close gc{};
+
+            gc.handle = sb.gemHandle;
+            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+        }
+
+        if (sb.pub.image) {
+            vkDestroyImage(vk.device, sb.pub.image, nullptr);
+        }
+
+        if (sb.memory) {
+            vkFreeMemory(vk.device, sb.memory, nullptr);
+        }
+
+        sb = ScanBuf{};
+    }
+
+    bool createScanBuf(const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, ScanBuf& sb) {
+        VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
+        VkFormatProperties2 fprops{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+
+        fprops.pNext = &modList;
+        vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &fprops);
+
+        Vector<VkDrmFormatModifierPropertiesEXT> vkMods;
+
+        vkMods.zero(modList.drmFormatModifierCount);
+        modList.pDrmFormatModifierProperties = vkMods.mutData();
+        vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &fprops);
+
+        Vector<u64> cands;
+
+        for (const auto& m : vkMods) {
+            if (m.drmFormatModifierPlaneCount != 1) {
+                continue;
+            }
+
+            if (!(m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+                continue;
+            }
+
+            bool planeOk = false;
+
+            for (u32 i = 0; i < nPlaneMods; i++) {
+                if (planeMods[i] == m.drmFormatModifier) {
+                    planeOk = true;
+                }
+            }
+
+            if (!planeOk) {
+                continue;
+            }
+
+            VkPhysicalDeviceImageDrmFormatModifierInfoEXT modInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT};
+
+            modInfo.drmFormatModifier = m.drmFormatModifier;
+            modInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            VkPhysicalDeviceExternalImageFormatInfo extInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO};
+
+            extInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+            extInfo.pNext = &modInfo;
+
+            VkPhysicalDeviceImageFormatInfo2 ifi{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
+
+            ifi.pNext = &extInfo;
+            ifi.format = kVkFormat;
+            ifi.type = VK_IMAGE_TYPE_2D;
+            ifi.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+            ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+
+            VkExternalImageFormatProperties extProps{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
+            VkImageFormatProperties2 iprops{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+
+            iprops.pNext = &extProps;
+
+            if (vkGetPhysicalDeviceImageFormatProperties2(vk.phys, &ifi, &iprops) != VK_SUCCESS) {
+                continue;
+            }
+
+            if (!(extProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
+                continue;
+            }
+
+            cands.pushBack(m.drmFormatModifier);
+        }
+
+        if (cands.empty()) {
+            sysE << "imway: scanout: no common modifier (vulkan x plane)"_sv << endL;
+
+            return false;
+        }
+
+        VkImageDrmFormatModifierListCreateInfoEXT modCreate{VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT};
+
+        modCreate.drmFormatModifierCount = (u32)cands.length();
+        modCreate.pDrmFormatModifiers = cands.data();
+
+        VkExternalMemoryImageCreateInfo extCreate{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+
+        extCreate.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        extCreate.pNext = &modCreate;
+
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+
+        ici.pNext = &extCreate;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = kVkFormat;
+        ici.extent = {(u32)w, (u32)h, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        if (vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image) != VK_SUCCESS) {
+            sysE << "imway: scanout: vkCreateImage failed"_sv << endL;
+
+            return false;
+        }
+
+        VkMemoryRequirements req{};
+
+        vkGetImageMemoryRequirements(vk.device, sb.pub.image, &req);
+
+        VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+
+        dedicated.image = sb.pub.image;
+
+        VkExportMemoryAllocateInfo exportInfo{VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO};
+
+        exportInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        exportInfo.pNext = &dedicated;
+
+        u32 typeIdx = 0;
+
+        while (typeIdx < 32 && !(req.memoryTypeBits & (1u << typeIdx))) {
+            typeIdx++;
+        }
+
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.pNext = &exportInfo;
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = typeIdx;
+
+        if (vkAllocateMemory(vk.device, &mai, nullptr, &sb.memory) != VK_SUCCESS || vkBindImageMemory(vk.device, sb.pub.image, sb.memory, 0) != VK_SUCCESS) {
+            sysE << "imway: scanout: exportable allocation failed"_sv << endL;
+            destroyScanBuf(vk, fd, sb);
+
+            return false;
+        }
+
+        auto getModProps = (PFN_vkGetImageDrmFormatModifierPropertiesEXT)vkGetDeviceProcAddr(vk.device, "vkGetImageDrmFormatModifierPropertiesEXT");
+        auto getMemoryFd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(vk.device, "vkGetMemoryFdKHR");
+
+        VkImageDrmFormatModifierPropertiesEXT chosen{VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT};
+
+        if (!getModProps || !getMemoryFd || getModProps(vk.device, sb.pub.image, &chosen) != VK_SUCCESS) {
+            destroyScanBuf(vk, fd, sb);
+
+            return false;
+        }
+
+        VkImageSubresource sub{VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, 0, 0};
+        VkSubresourceLayout layout{};
+
+        vkGetImageSubresourceLayout(vk.device, sb.pub.image, &sub, &layout);
+
+        VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+
+        gfi.memory = sb.memory;
+        gfi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
+        int dmaFd = -1;
+
+        if (getMemoryFd(vk.device, &gfi, &dmaFd) != VK_SUCCESS || dmaFd < 0) {
+            sysE << "imway: scanout: dmabuf export failed (udmabuf?)"_sv << endL;
+            destroyScanBuf(vk, fd, sb);
+
+            return false;
+        }
+
+        if (drmPrimeFDToHandle(fd, dmaFd, &sb.gemHandle) != 0) {
+            sysE << "imway: scanout: kms prime import failed, errno "_sv << errno << endL;
+            close(dmaFd);
+            destroyScanBuf(vk, fd, sb);
+
+            return false;
+        }
+
+        close(dmaFd);
+
+        u32 handles[4] = {sb.gemHandle};
+        u32 pitches[4] = {(u32)layout.rowPitch};
+        u32 offsets[4] = {(u32)layout.offset};
+        u64 modifiers[4] = {chosen.drmFormatModifier};
+
+        if (drmModeAddFB2WithModifiers(fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifiers, &sb.fbId, DRM_MODE_FB_MODIFIERS) != 0) {
+            sysE << "imway: scanout: AddFB2WithModifiers failed, errno "_sv << errno << endL;
+            destroyScanBuf(vk, fd, sb);
+
+            return false;
+        }
+
+        return true;
+    }
+
     struct KmsOutput: public ::Output, public SessionListener {
         int fd = -1;
         int ttyFd = -1;
         long oldKbMode = -1;
         bool sessionActive = true;
+        DeviceVk vk{};
+
+        ScanBuf scan[2];
+        int scanCount = 0;
+        int scanNext = 0;
 
         u32 connectorId = 0;
         u32 crtcId = 0;
@@ -312,9 +597,10 @@ namespace {
         DumbBuffer bufs[2];
         int nextBuf = 0;
         bool flipPending = false;
-        bool modeSet = false;
+        bool started = false;
+        bool modesetDone = false;
 
-        KmsOutput(int drmFd, Session& session, const char* connector, const char* modeStr);
+        KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -334,11 +620,38 @@ namespace {
 
         void pickPipe(const char* connector, const char* modeStr);
         void createDumb(DumbBuffer& b);
-        bool commit(DumbBuffer& b, bool doModeset);
+        bool commit(u32 fbId, bool doModeset);
         void setupVt();
         void restoreVt() noexcept;
 
         bool start() override;
+
+        bool ready() const override {
+            return started && !flipPending && sessionActive;
+        }
+
+        bool vsynced() const override {
+            return true;
+        }
+
+        int scanoutCount() const override {
+            return scanCount;
+        }
+
+        ScanoutBuffer* scanoutBuffer(int i) override {
+            return &scan[i].pub;
+        }
+
+        int acquire() override {
+            return scanNext;
+        }
+
+        void presentImage(int i) override;
+
+        bool presentNeedsPixels() const override {
+            return scanCount == 0;
+        }
+
         void present(const void* pixels) override;
     };
 
@@ -376,7 +689,7 @@ namespace {
         }
 
         ::Output* createOutput(const char* connector, const char* modeStr) override {
-            return pool->make<KmsOutput>(fd, *session, connector, modeStr);
+            return pool->make<KmsOutput>(fd, vk, *session, connector, modeStr);
         }
 
         Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, int framesLimit) override {
@@ -405,6 +718,33 @@ namespace {
 
         bool start() override {
             return true;
+        }
+
+        bool ready() const override {
+            return true;
+        }
+
+        bool vsynced() const override {
+            return false;
+        }
+
+        int scanoutCount() const override {
+            return 0;
+        }
+
+        ScanoutBuffer* scanoutBuffer(int) override {
+            return nullptr;
+        }
+
+        int acquire() override {
+            return -1;
+        }
+
+        void presentImage(int) override {
+        }
+
+        bool presentNeedsPixels() const override {
+            return false;
         }
 
         void present(const void*) override {
@@ -505,7 +845,7 @@ KmsDevice::~KmsDevice() noexcept {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, Session& session, const char* connector, const char* modeStr) : fd(drmFd) {
+KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr) : fd(drmFd), vk(v) {
     session.addListener(this);
     pickPipe(connector, modeStr);
 
@@ -525,8 +865,35 @@ KmsOutput::KmsOutput(int drmFd, Session& session, const char* connector, const c
 
     drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob);
 
-    for (auto& b : bufs) {
-        createDumb(b);
+    if (vk.hasDmabuf) {
+        u64 mods[64];
+        u32 nmods = planeModifiers(fd, planeId, DRM_FORMAT_XRGB8888, mods, 64);
+
+        for (auto& sb : scan) {
+            if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, sb)) {
+                scanCount++;
+            } else {
+                break;
+            }
+        }
+
+        if (scanCount < 2) {
+            for (auto& sb : scan) {
+                destroyScanBuf(vk, fd, sb);
+            }
+
+            scanCount = 0;
+        }
+    }
+
+    if (scanCount > 0) {
+        sysO << "imway: scanout swapchain: "_sv << scanCount << " images"_sv << endL;
+    } else {
+        sysO << "imway: dumb-buffer path (no zero-copy scanout)"_sv << endL;
+
+        for (auto& b : bufs) {
+            createDumb(b);
+        }
     }
 
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
@@ -534,6 +901,10 @@ KmsOutput::KmsOutput(int drmFd, Session& session, const char* connector, const c
 
 KmsOutput::~KmsOutput() noexcept {
     restoreVt();
+
+    for (auto& sb : scan) {
+        destroyScanBuf(vk, fd, sb);
+    }
 
     for (auto& b : bufs) {
         if (b.map && b.map != MAP_FAILED) {
@@ -716,7 +1087,7 @@ void KmsOutput::createDumb(DumbBuffer& b) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-bool KmsOutput::commit(DumbBuffer& b, bool doModeset) {
+bool KmsOutput::commit(u32 fbId, bool doModeset) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     if (doModeset) {
@@ -725,7 +1096,7 @@ bool KmsOutput::commit(DumbBuffer& b, bool doModeset) {
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 1);
     }
 
-    drmModeAtomicAddProperty(req, planeId, plFbId, b.fbId);
+    drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
     drmModeAtomicAddProperty(req, planeId, plCrtcId, crtcId);
     drmModeAtomicAddProperty(req, planeId, plSrcX, 0);
     drmModeAtomicAddProperty(req, planeId, plSrcY, 0);
@@ -791,18 +1162,36 @@ void KmsOutput::restoreVt() noexcept {
 bool KmsOutput::start() {
     setupVt();
 
+    if (scanCount > 0) {
+        started = true;
+
+        return true;
+    }
+
     memset(bufs[0].map, 0, bufs[0].size);
 
-    if (!commit(bufs[0], true)) {
+    if (!commit(bufs[0].fbId, true)) {
         sysE << "imway: kms modeset failed"_sv << endL;
 
         return false;
     }
 
     nextBuf = 1;
-    modeSet = true;
+    started = true;
+    modesetDone = true;
 
     return true;
+}
+
+void KmsOutput::presentImage(int i) {
+    if (!started || flipPending || !sessionActive) {
+        return;
+    }
+
+    if (commit(scan[i].fbId, !modesetDone)) {
+        modesetDone = true;
+        scanNext = i ^ 1;
+    }
 }
 
 void KmsOutput::sessionDisabled() {
@@ -816,13 +1205,19 @@ void KmsOutput::sessionEnabled() {
     sessionActive = true;
     flipPending = false;
 
-    if (comeback && modeSet && commit(bufs[nextBuf ^ 1], true)) {
+    if (!comeback || !modesetDone) {
+        return;
+    }
+
+    u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
+
+    if (commit(lastFb, true)) {
         sysO << "imway: session enabled, remodeset"_sv << endL;
     }
 }
 
 void KmsOutput::present(const void* pixels) {
-    if (!modeSet || flipPending || !sessionActive) {
+    if (!modesetDone || flipPending || !sessionActive || !pixels) {
         return;
     }
 
@@ -830,11 +1225,15 @@ void KmsOutput::present(const void* pixels) {
     const auto* src = (const u8*)pixels;
     size_t row = (size_t)mode.hdisplay * 4;
 
-    for (int y = 0; y < mode.vdisplay; y++) {
-        memcpy(b.map + (size_t)y * b.pitch, src + (size_t)y * row, row);
+    if (b.pitch == row) {
+        memcpy(b.map, src, row * mode.vdisplay);
+    } else {
+        for (int y = 0; y < mode.vdisplay; y++) {
+            memcpy(b.map + (size_t)y * b.pitch, src + (size_t)y * row, row);
+        }
     }
 
-    if (commit(b, false)) {
+    if (commit(b.fbId, false)) {
         nextBuf ^= 1;
     }
 }

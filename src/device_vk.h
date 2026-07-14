@@ -17,3 +17,7 @@ struct DeviceVk {
     bool hasDmabuf = false;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 };
+
+struct ScanoutBuffer {
+    VkImage image = VK_NULL_HANDLE;
+};
