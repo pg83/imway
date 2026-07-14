@@ -628,9 +628,6 @@ namespace {
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
         u32 cursorPlaneId = 0;
-        u32 cuFbId = 0, cuCrtcId = 0;
-        u32 cuSrcX = 0, cuSrcY = 0, cuSrcW = 0, cuSrcH = 0;
-        u32 cuCrtcX = 0, cuCrtcY = 0, cuCrtcW = 0, cuCrtcH = 0;
         DumbBuffer cursorBuf{};
         int curW = 0, curH = 0;
         bool cursorEnabled = false;
@@ -665,8 +662,7 @@ namespace {
         void pickPipe(const char* connector, const char* modeStr);
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         bool commit(u32 fbId, bool doModeset);
-        void addCursorProps(drmModeAtomicReq* req);
-        void cursorCommit();
+        void applyCursor();
 
         int cursorCapW() const override {
             return curW;
@@ -1041,17 +1037,6 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
 
             createDumb(cursorBuf, (u32)cw, (u32)ch, DRM_FORMAT_ARGB8888);
 
-            cuFbId = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "FB_ID");
-            cuCrtcId = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
-            cuSrcX = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_X");
-            cuSrcY = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_Y");
-            cuSrcW = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_W");
-            cuSrcH = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_H");
-            cuCrtcX = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_X");
-            cuCrtcY = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
-            cuCrtcW = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
-            cuCrtcH = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
-
             curW = (int)cw;
             curH = (int)ch;
             sysO << "imway: cursor plane "_sv << cursorPlaneId << ", "_sv << curW << "x"_sv << curH << endL;
@@ -1315,10 +1300,6 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
     drmModeAtomicAddProperty(req, planeId, plCrtcW, mode.hdisplay);
     drmModeAtomicAddProperty(req, planeId, plCrtcH, mode.vdisplay);
 
-    if (cursorPlaneId && cursorEnabled) {
-        addCursorProps(req);
-    }
-
     u32 flags = DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
 
     if (doModeset) {
@@ -1339,44 +1320,32 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
 
     flipPending = true;
 
+    if (doModeset) {
+        applyCursor();
+    }
+
     return true;
 }
 
-void KmsOutput::addCursorProps(drmModeAtomicReq* req) {
-    bool on = cursorVisible;
-
-    drmModeAtomicAddProperty(req, cursorPlaneId, cuFbId, on ? cursorBuf.fbId : 0);
-    drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcId, on ? crtcId : 0);
-
-    if (on) {
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcX, 0);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcY, 0);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcW, (u64)curW << 16);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcH, (u64)curH << 16);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcX, (u64)(i64)cursorX);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcY, (u64)(i64)cursorY);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcW, (u64)curW);
-        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcH, (u64)curH);
-    }
-}
-
-// tiny cursor-only commit, applied by the hardware without waiting for our
-// render loop; EBUSY (a flip in flight) is fine — the next frame commit
-// carries the same properties anyway
-void KmsOutput::cursorCommit() {
-    if (!started || !modesetDone || !sessionActive || !connectorConnected) {
+// the legacy cursor ioctls hit the kernel's legacy_cursor_update fast path:
+// they are applied immediately and never EBUSY against pending atomic flips,
+// unlike a cursor-plane atomic commit which occupies the CRTC until vblank
+// and makes the next frame commit fail
+void KmsOutput::applyCursor() {
+    if (!curW || !cursorEnabled) {
         return;
     }
 
-    drmModeAtomicReq* req = drmModeAtomicAlloc();
-
-    addCursorProps(req);
-    drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_NONBLOCK, nullptr);
-    drmModeAtomicFree(req);
+    if (cursorVisible) {
+        drmModeSetCursor2(fd, crtcId, cursorBuf.handle, (u32)curW, (u32)curH, 0, 0);
+        drmModeMoveCursor(fd, crtcId, cursorX, cursorY);
+    } else {
+        drmModeSetCursor2(fd, crtcId, 0, 0, 0, 0, 0);
+    }
 }
 
 void KmsOutput::setCursorImage(const u32* argb) {
-    if (!cursorPlaneId) {
+    if (!curW) {
         return;
     }
 
@@ -1385,11 +1354,11 @@ void KmsOutput::setCursorImage(const u32* argb) {
     }
 
     cursorEnabled = true;
-    cursorCommit();
+    applyCursor();
 }
 
 void KmsOutput::setCursorPos(int x, int y, bool visible) {
-    if (!cursorPlaneId || !cursorEnabled) {
+    if (!curW || !cursorEnabled) {
         return;
     }
 
@@ -1397,10 +1366,17 @@ void KmsOutput::setCursorPos(int x, int y, bool visible) {
         return;
     }
 
+    bool toggled = visible != cursorVisible;
+
     cursorX = x;
     cursorY = y;
     cursorVisible = visible;
-    cursorCommit();
+
+    if (toggled) {
+        applyCursor();
+    } else if (visible) {
+        drmModeMoveCursor(fd, crtcId, cursorX, cursorY);
+    }
 }
 
 void KmsOutput::setupVt() {
