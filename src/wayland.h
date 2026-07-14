@@ -12,6 +12,7 @@ struct Scene;
 struct InputSink;
 struct DmabufFormat;
 struct FrameListener;
+struct SessionListener;
 
 struct WaylandConfig {
     const char* socketName = "imway-0";
@@ -26,6 +27,7 @@ struct Wayland {
     virtual void run() = 0;
     virtual InputSink* sink() = 0;
     virtual FrameListener* frameListener() = 0;
+    virtual SessionListener* sessionListener() = 0;
 
     static Wayland* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig&);
 };

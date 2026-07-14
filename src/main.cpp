@@ -137,6 +137,10 @@ int main(int argc, char** argv) {
 
         Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), fontPath, framesLimit);
 
+        if (session) {
+            session->addListener(wayland->sessionListener());
+        }
+
         InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer->sink(), *wayland->sink());
 
         if (kms) {

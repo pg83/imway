@@ -4,6 +4,7 @@
 #include "input_sink.h"
 #include "frame_listener.h"
 #include "scene.h"
+#include "session.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -178,6 +179,7 @@ namespace {
         Surface* dragTarget = nullptr;
         u32 lastPressedButton = 0;
 
+        void releaseAllKeys();
         void setSelection(DataSource* src, bool primary);
         void sendSelections(wl_client* client);
         void sourceGone(DataSource* src);
@@ -226,7 +228,7 @@ namespace {
         void toplevelGone(Toplevel* t);
     };
 
-    struct WaylandImpl: public Wayland, public InputSink, public FrameListener {
+    struct WaylandImpl: public Wayland, public InputSink, public FrameListener, public SessionListener {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
@@ -241,6 +243,15 @@ namespace {
         int fbTableFd = -1;
         u32 fbTableSize = 0;
         u64 tokenCounter = 0;
+
+        struct WmBasePing {
+            wl_resource* res = nullptr;
+            bool acked = true;
+        };
+
+        Vector<WmBasePing> wmBases;
+        ev_timer pingTimer{};
+        u32 pingSerial = 0;
 
         SeatState seat;
 
@@ -274,6 +285,17 @@ namespace {
 
         FrameListener* frameListener() override {
             return this;
+        }
+
+        SessionListener* sessionListener() override {
+            return this;
+        }
+
+        void sessionEnabled() override {
+        }
+
+        void sessionDisabled() override {
+            seat.releaseAllKeys();
         }
 
         void motion(double x, double y) override {
@@ -324,6 +346,44 @@ namespace {
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h);
     void xdgToplevelReconfigure(ToplevelImpl& t);
+
+    void wmBasePong(wl_client*, wl_resource* res, u32) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        for (size_t i = 0; i < srv->wmBases.length(); i++) {
+            if (srv->wmBases[i].res == res) {
+                srv->wmBases.mut(i).acked = true;
+            }
+        }
+    }
+
+    void wmBaseResourceDestroyed(wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        for (size_t i = 0; i < srv->wmBases.length(); i++) {
+            if (srv->wmBases[i].res == res) {
+                srv->wmBases.mut(i) = srv->wmBases.back();
+                srv->wmBases.popBack();
+
+                break;
+            }
+        }
+    }
+
+    void pingTimerCb(struct ev_loop*, ev_timer* w, int) {
+        auto* srv = (WaylandImpl*)w->data;
+
+        for (size_t i = 0; i < srv->wmBases.length(); i++) {
+            auto& p = srv->wmBases.mut(i);
+
+            if (!p.acked) {
+                sysE << "imway: client is not answering ping"_sv << endL;
+            }
+
+            p.acked = false;
+            xdg_wm_base_send_ping(p.res, ++srv->pingSerial);
+        }
+    }
 
     void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
         Vector<wl_resource*> cbs;
@@ -1526,8 +1586,7 @@ namespace {
         wl_resource_set_implementation(xres, &xdgSurfaceImpl, xs, xdgSurfaceResourceDestroyed);
     }
 
-    void wmBasePong(wl_client*, wl_resource*, u32) {
-    }
+    void wmBasePong(wl_client*, wl_resource* res, u32);
 
     const struct xdg_wm_base_interface wmBaseImpl = {
         .destroy = wmBaseDestroy,
@@ -1545,7 +1604,11 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(res, &wmBaseImpl, data, nullptr);
+        wl_resource_set_implementation(res, &wmBaseImpl, data, wmBaseResourceDestroyed);
+
+        auto* srv = (WaylandImpl*)data;
+
+        srv->wmBases.pushBack({res, true});
     }
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h) {
@@ -3281,6 +3344,32 @@ void SeatState::updateModifiers() {
     }
 }
 
+void SeatState::releaseAllKeys() {
+    if (pressedKeys.empty()) {
+        return;
+    }
+
+    if (wl_resource* target = kbTargetRes()) {
+        u32 t = nowMsec();
+
+        for (u32 code : pressedKeys) {
+            u32 serial = wl_display_next_serial(srv->display);
+
+            for (wl_resource* k : keyboards) {
+                if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+                    wl_keyboard_send_key(k, serial, t, code, WL_KEYBOARD_KEY_STATE_RELEASED);
+                }
+            }
+        }
+    }
+
+    for (u32 code : pressedKeys) {
+        xkb_state_update_key(xkbState, code + 8, XKB_KEY_UP);
+    }
+
+    pressedKeys.clear();
+}
+
 void SeatState::handleKey(u32 code, bool pressed) {
     srv->scene->needsFrame = true;
     xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
@@ -3593,10 +3682,16 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
+    ev_timer_init(&pingTimer, pingTimerCb, 5., 5.);
+    pingTimer.data = this;
+    ev_timer_start(loop, &pingTimer);
+
     sysO << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
 }
 
 WaylandImpl::~WaylandImpl() noexcept {
+    ev_timer_stop(loop, &pingTimer);
+
     if (watchersStarted) {
         ev_io_stop(loop, &wlIo);
         ev_prepare_stop(loop, &flushPrepare);
