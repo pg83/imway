@@ -536,10 +536,44 @@ clang++ (библиотека использует клэнговые builtins).
 - **xdg**: первый configure — в ответ на commit без буфера (спека, GTK на этом
   ломается в обе стороны); focus-on-map; начальный размер ImGui-окна — под
   первый буфер, дальше размером владеет пользователь.
-- **Инертные заглушки**: `wl_data_device_manager` (клипборд — следующий этап),
-  decoration — всегда `server_side` без переговоров. `set_cursor` клиентов
-  игнорируется — курсор рисует ImGui (`MouseDrawCursor` на kms-выводе).
-  Дефолтный шрифт ImGui — ASCII-only, кириллица в заголовках будет □□□.
+- **Прод-добор (2026-07-14, после «пили одно за другим»)**:
+  - clipboard: `wl_data_device_manager` v3 целиком (selection + DnD с иконкой у
+    курсора и каскадом enter/leave/motion/drop; действия — copy>move) +
+    `zwp_primary_selection_v1`; офферы рассылаются при每 keyboard enter; e2e-тест
+    wl-copy/wl-paste (оба буфера) в ctest.
+  - `xdg_toplevel.move/resize` — драг ImGui-окна до отпускания кнопки (resize по
+    битам edges, минимум 120×80); `set_fullscreen` (окно без декораций на весь
+    вывод, prev-размер восстанавливается) и state `activated` по фокусу.
+  - курсоры: `wp_cursor_shape_v1` (enum → нейтральный `CursorKind` в сцене →
+    курсоры ImGui) и легаси `set_cursor` (поверхность в foreground draw list у
+    hotspot, с frame callbacks — анимированные курсоры живут). Применяется
+    только когда указатель над клиентом; над хромом курсором владеет ImGui.
+  - раскладки: `--xkb-layout us,ru --xkb-options grp:alt_shift_toggle` —
+    переключение делает сам xkbcommon (группа уезжает клиентам в modifiers);
+    шрифт с кириллицей: `--font PATH`, дефолт — DejaVuSans из системы.
+  - SIGBUS: защита libwayland через begin/end_access подтверждена злым тестом
+    (клиент ftruncate'ит пул под ногами — композитор выживает, клиент получает
+    protocol error).
+  - radv-блок: multi-plane dmabuf-импорт (один fd = single-memory bind, разные
+    fd = DISJOINT + BindImageMemory2 по MEMORY_PLANE_i); linux-dmabuf **v4
+    feedback** (format table в sealed memfd, main_device = render node из
+    `VK_EXT_physical_device_drm`; без drm-узла — v3, как на lavapipe);
+    **implicit-sync мост** — перед submit'ом wait клиентских WRITE-фенсов
+    (EXPORT_SYNC_FILE → временный импорт в семафор), после кадра наш
+    READ-фенс в буферы (экспорт SYNC_FD-семафора → IMPORT_SYNC_FILE); гейт —
+    SYNC_FD-семафоры девайса (lavapipe их не имеет — мост выключен, лог).
+  - мелочь: скролл по двум осям + `axis_discrete` (value120 — при переходе
+    seat v8+), `set_buffer_scale` (viewW/H = буфер/скейл, damage
+    масштабируется), `wp_single_pixel_buffer_v1`, `wp_presentation`
+    (presented по показу кадра, CLOCK_MONOTONIC), `xdg_activation_v1`
+    (токены + фокус + raise окна), отпускание зажатых клавиш при VT-switch
+    (SM подписан на Session), ping/pong-вотчдог 5с (лог о зависших),
+    hotplug коннектора (udev monitor: disconnect глушит present'ы,
+    reconnect — remodeset последним FB).
+  - decoration — всегда `server_side` без переговоров. XWayland — не нужен.
+  - **Не сделано**: второй монитор (нужен ресайзабельный рендер-пайплайн и
+    per-output ImGui-контексты — отдельный проект), fractional-scale,
+    value120, смена режима по hotplug (только та же мода).
 
 ### 14.4 Грабли (найдены отладкой — не наступать повторно)
 

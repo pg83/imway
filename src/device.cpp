@@ -20,6 +20,7 @@
 
 #include <drm_fourcc.h>
 #include <linux/kd.h>
+#include <libudev.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
 
@@ -632,6 +633,7 @@ namespace {
         bool flipPending = false;
         bool started = false;
         bool modesetDone = false;
+        bool connectorConnected = true;
 
         KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr);
 
@@ -660,8 +662,10 @@ namespace {
         bool start() override;
 
         bool ready() const override {
-            return started && !flipPending && sessionActive;
+            return started && !flipPending && sessionActive && connectorConnected;
         }
+
+        void hotplug();
 
         bool vsynced() const override {
             return true;
@@ -700,6 +704,8 @@ namespace {
         drmHandleEvent((int)(intptr_t)w->data, &ctx);
     }
 
+    void udevIoCb(struct ev_loop*, ev_io* w, int);
+
     struct KmsDevice: public Device {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
@@ -709,6 +715,10 @@ namespace {
         DeviceVk vk{};
         Vector<DmabufFormat> formats;
         ev_io drmIo{};
+        udev* ud = nullptr;
+        udev_monitor* mon = nullptr;
+        ev_io udevIo{};
+        KmsOutput* output = nullptr;
 
         KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
         ~KmsDevice() noexcept;
@@ -726,7 +736,9 @@ namespace {
         }
 
         ::Output* createOutput(const char* connector, const char* modeStr) override {
-            return pool->make<KmsOutput>(fd, vk, *session, connector, modeStr);
+            output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr);
+
+            return output;
         }
 
         Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, int framesLimit) override {
@@ -873,16 +885,91 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char*
     drmIo.data = (void*)(intptr_t)fd;
     ev_io_start(loop, &drmIo);
 
+    ud = udev_new();
+
+    if (ud) {
+        mon = udev_monitor_new_from_netlink(ud, "udev");
+    }
+
+    if (mon) {
+        udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
+        udev_monitor_enable_receiving(mon);
+        ev_io_init(&udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
+        udevIo.data = this;
+        ev_io_start(loop, &udevIo);
+    }
+
     sysO << "imway: device "_sv << (const char*)path << endL;
 }
 
 KmsDevice::~KmsDevice() noexcept {
+    if (mon) {
+        ev_io_stop(loop, &udevIo);
+        udev_monitor_unref(mon);
+    }
+
+    if (ud) {
+        udev_unref(ud);
+    }
+
     ev_io_stop(loop, &drmIo);
     destroyVulkan(vk);
 
     if (fd >= 0) {
         session->closeDevice(fd);
         fd = -1;
+    }
+}
+
+namespace {
+    void udevIoCb(struct ev_loop*, ev_io* w, int) {
+        auto* dev = (KmsDevice*)w->data;
+        udev_device* d = udev_monitor_receive_device(dev->mon);
+
+        if (!d) {
+            return;
+        }
+
+        const char* node = udev_device_get_devnode(d);
+        bool ours = node && !strcmp(node, dev->path);
+
+        udev_device_unref(d);
+
+        if (ours && dev->output) {
+            dev->output->hotplug();
+        }
+    }
+}
+
+void KmsOutput::hotplug() {
+    drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
+
+    if (!conn) {
+        return;
+    }
+
+    bool connected = conn->connection == DRM_MODE_CONNECTED;
+
+    drmModeFreeConnector(conn);
+
+    if (connected == connectorConnected) {
+        return;
+    }
+
+    connectorConnected = connected;
+
+    if (!connected) {
+        sysO << "imway: connector disconnected"_sv << endL;
+
+        return;
+    }
+
+    flipPending = false;
+
+    u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
+
+    if (modesetDone && commit(lastFb, true)) {
+        sysO << "imway: connector reconnected, remodeset"_sv << endL;
     }
 }
 
