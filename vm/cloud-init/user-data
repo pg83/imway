@@ -36,6 +36,7 @@ packages:
   - libseat-dev
   - seatd
   - wl-clipboard
+  - fonts-dejavu-core
   - libseat-dev
   - libvulkan-dev
   # vulkan runtime (lavapipe в mesa-vulkan-drivers) и инструменты
@@ -47,10 +48,12 @@ packages:
   # обвязка для ручного тестирования
   - seatd
   - wl-clipboard
+  - fonts-dejavu-core
   - sway
   - foot
   - wayland-utils
   - wl-clipboard
+  - fonts-dejavu-core
   - libinput-tools
   - drm-info
 

@@ -15,6 +15,8 @@ struct FrameListener;
 
 struct WaylandConfig {
     const char* socketName = "imway-0";
+    const char* xkbLayout = nullptr;
+    const char* xkbOptions = nullptr;
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;
 };

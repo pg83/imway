@@ -24,7 +24,7 @@ using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device headless|auto|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--frames N] [--screenshot PATH] [--control FIFO] [--list]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device headless|auto|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list]"_sv << endL;
     }
 }
 
@@ -33,6 +33,9 @@ int main(int argc, char** argv) {
     const char* outputName = nullptr;
     const char* modeStr = nullptr;
     const char* socketName = "imway-0";
+    const char* xkbLayout = nullptr;
+    const char* xkbOptions = nullptr;
+    const char* fontPath = nullptr;
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
     int framesLimit = 0;
@@ -55,6 +58,12 @@ int main(int argc, char** argv) {
             outputName = next();
         } else if (!strcmp(argv[i], "--mode")) {
             modeStr = next();
+        } else if (!strcmp(argv[i], "--xkb-layout")) {
+            xkbLayout = next();
+        } else if (!strcmp(argv[i], "--xkb-options")) {
+            xkbOptions = next();
+        } else if (!strcmp(argv[i], "--font")) {
+            fontPath = next();
         } else if (!strcmp(argv[i], "--frames")) {
             framesLimit = atoi(next());
         } else if (!strcmp(argv[i], "--screenshot")) {
@@ -118,12 +127,14 @@ int main(int argc, char** argv) {
         WaylandConfig wcfg;
 
         wcfg.socketName = socketName;
+        wcfg.xkbLayout = xkbLayout;
+        wcfg.xkbOptions = xkbOptions;
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), framesLimit);
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), fontPath, framesLimit);
 
         InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer->sink(), *wayland->sink());
 

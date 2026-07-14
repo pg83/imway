@@ -692,8 +692,8 @@ namespace {
             return pool->make<KmsOutput>(fd, vk, *session, connector, modeStr);
         }
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
         }
     };
 
@@ -770,8 +770,8 @@ namespace {
 
         ::Output* createOutput(const char*, const char* modeStr) override;
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
         }
     };
 

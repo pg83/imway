@@ -102,6 +102,8 @@ namespace {
         u32 activeEdges = 0;
         ImVec2 resizeStartSz{}, resizeStartPos{}, resizeStartMouse{};
 
+        const char* fontPath = nullptr;
+
         ev_prepare prep{};
         bool haveFrame = false;
         VkImage lastImage = VK_NULL_HANDLE;
@@ -110,7 +112,8 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
+        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, const char* font, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
+            fontPath = font;
             setup(scn.outW, scn.outH);
 
             ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
@@ -375,6 +378,14 @@ void RendererImpl::setup(int w, int h) {
     ImGui::CreateContext();
 
     ImGuiIO& io = ImGui::GetIO();
+
+    const char* fontCandidates[] = {fontPath, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"};
+
+    for (const char* f : fontCandidates) {
+        if (f && access(f, R_OK) == 0 && io.Fonts->AddFontFromFileTTF(f, 16.f, nullptr, io.Fonts->GetGlyphRangesCyrillic())) {
+            break;
+        }
+    }
 
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2((float)width, (float)height);
@@ -1294,6 +1305,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, const char* fontPath, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
 }

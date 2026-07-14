@@ -222,6 +222,8 @@ namespace {
         wl_event_loop* wlLoop = nullptr;
 
         const char* socketName = nullptr;
+        const char* xkbLayout = nullptr;
+        const char* xkbOptions = nullptr;
         Vector<DmabufFormat> formats;
 
         SeatState seat;
@@ -2628,7 +2630,17 @@ SeatState::SeatState(WaylandImpl& impl) : srv(&impl) {
     xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(xkb);
 
-    keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    xkb_rule_names names{};
+
+    names.layout = srv->xkbLayout;
+    names.options = srv->xkbOptions;
+    keymap = xkb_keymap_new_from_names(xkb, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+    if (!keymap && (names.layout || names.options)) {
+        sysE << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
+        keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    }
+
     STD_VERIFY(keymap);
 
     xkbState = xkb_state_new(keymap);
@@ -3245,7 +3257,7 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), seat(*this) {
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), xkbLayout(cfg.xkbLayout), xkbOptions(cfg.xkbOptions), seat(*this) {
     formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();
