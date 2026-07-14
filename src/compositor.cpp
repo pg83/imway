@@ -11,13 +11,16 @@
 #include "seat.hpp"
 #include "server.hpp"
 
-Toplevel* Surface::root_toplevel() {
+Surface* Surface::root_surface() {
     Surface* s = this;
     // вверх по цепочке субповерхностей до корня
-    while (s->sub) {
-        if (!s->sub->parent) return nullptr; // сирота
-        s = s->sub->parent;
-    }
+    while (s->sub && s->sub->parent) s = s->sub->parent;
+    return s;
+}
+
+Toplevel* Surface::root_toplevel() {
+    Surface* s = root_surface();
+    if (s->sub) return nullptr; // сирота: родитель умер
     return s->xdg ? s->xdg->toplevel : nullptr;
 }
 
@@ -282,6 +285,11 @@ void surface_resource_destroyed(wl_resource* res) {
     }
     for (Subsurface* c : s->stack_below) c->parent = nullptr; // дети-сироты не рендерятся
     for (Subsurface* c : s->stack_above) c->parent = nullptr;
+    for (Popup* p : s->server->popups) // попапы умершего родителя гаснут
+        if (p->parent == s) {
+            p->parent = nullptr;
+            if (p->mapped) xdg_popup_dismiss(*p);
+        }
     if (s->server->seat) s->server->seat->surface_gone(s);
     release_held_dmabuf(*s);
     viewport_surface_gone(*s);

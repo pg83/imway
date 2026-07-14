@@ -34,6 +34,14 @@ add_test(NAME headless_viewport
             $<TARGET_FILE:imway> $<TARGET_FILE:client_viewport>)
 set_tests_properties(headless_viewport PROPERTIES TIMEOUT 60)
 
+add_executable(client_popup client_popup.c)
+target_link_libraries(client_popup PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+
+add_test(NAME headless_popup
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_popup.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_popup>)
+set_tests_properties(headless_popup PROPERTIES TIMEOUT 60)
+
 add_executable(client_dmabuf client_dmabuf.c)
 target_link_libraries(client_dmabuf PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
 

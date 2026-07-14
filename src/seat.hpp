@@ -7,6 +7,7 @@
 #include <wayland-server-core.h>
 #include <xkbcommon/xkbcommon.h>
 
+struct Popup;
 struct Server;
 struct Surface;
 struct Toplevel;
@@ -24,8 +25,9 @@ struct Seat {
     uint32_t keymap_size = 0;
 
     Toplevel* kb_focus = nullptr;
-    Surface* ptr_focus = nullptr; // поверхность (в т.ч. суб-), куда идут pointer-события
-    int buttons_down = 0;         // implicit grab, пока >0 — ptr_focus залочен
+    Surface* kb_override = nullptr; // grab-попап: клавиатура идёт сюда, не в kb_focus
+    Surface* ptr_focus = nullptr;   // поверхность (в т.ч. суб-), куда идут pointer-события
+    int buttons_down = 0;           // implicit grab, пока >0 — ptr_focus залочен
 
     double cur_x = 0, cur_y = 0; // координаты output
     std::vector<uint32_t> pressed_keys;
@@ -44,6 +46,8 @@ struct Seat {
     void focus_toplevel(Toplevel*); // клавиатурный фокус (focus-on-map, click-to-focus)
     void toplevel_gone(Toplevel*);
     void surface_gone(Surface*);
+    void popup_grab_start(Popup*); // клавиатура → попапу на время grab'а
+    void popup_gone(Popup*);
 
 private:
     void send_keymap(wl_resource* kb);
@@ -53,6 +57,9 @@ private:
     void pointer_set_focus(Surface*, double sx, double sy);
     bool same_client(wl_resource* res, Toplevel* t);
     bool same_client_s(wl_resource* res, Surface* s);
+    wl_resource* kb_target_res(); // куда сейчас идёт клавиатура (override > kb_focus)
+    void kb_send_leave(wl_resource* target);
+    void kb_send_enter(wl_resource* target);
 };
 
 void seat_create_global(Server&);

@@ -359,6 +359,39 @@ void Renderer::build_ui(Server& server) {
         ImGui::End();
     }
 
+    // попапы — безрамочные окна поверх родителя (координаты позиционера
+    // относительно поверхности родителя, чей img_x/img_y уже записан этим кадром)
+    for (Popup* p : server.popups) {
+        Surface* ps = p->xdg ? p->xdg->surface : nullptr;
+        if (!p->mapped || !ps || !ps->texture || !p->parent) {
+            if (ps) mark_tree_unhovered(*ps);
+            continue;
+        }
+        ImGui::SetNextWindowPos(
+            ImVec2(p->parent->img_x + (float)p->x, p->parent->img_y + (float)p->y),
+            ImGuiCond_Always);
+        if (!p->focus_set) {
+            ImGui::SetNextWindowFocus(); // наверх при появлении
+            p->focus_set = true;
+        }
+        char label[64];
+        std::snprintf(label, sizeof label, "###popup%p", (void*)p);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                 ImGuiWindowFlags_NoScrollWithMouse |
+                                 ImGuiWindowFlags_AlwaysAutoResize |
+                                 ImGuiWindowFlags_NoSavedSettings;
+        if (ImGui::Begin(label, nullptr, flags)) {
+            ImVec2 origin = ImGui::GetCursorScreenPos();
+            draw_surface_tree(*ps, origin.x, origin.y);
+        } else {
+            mark_tree_unhovered(*ps);
+        }
+        ImGui::End();
+        ImGui::PopStyleVar(2);
+    }
+
     ImGui::Render();
 }
 

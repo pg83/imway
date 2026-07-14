@@ -71,6 +71,8 @@ struct Surface {
     std::vector<Subsurface*> stack_below;
     std::vector<Subsurface*> stack_above;
 
+    // корень дерева субповерхностей (сама поверхность, если не суб-)
+    Surface* root_surface();
     // toplevel корня дерева (nullptr для orphan/попапов)
     Toplevel* root_toplevel();
 };
@@ -102,8 +104,21 @@ struct XdgSurface {
     wl_resource* res = nullptr;
     Surface* surface = nullptr;
     Toplevel* toplevel = nullptr;
+    struct Popup* popup = nullptr;
     bool initial_configure_sent = false;
     bool acked = false;
+};
+
+struct Popup {
+    Server* server = nullptr;
+    wl_resource* res = nullptr;
+    XdgSurface* xdg = nullptr;
+    Surface* parent = nullptr; // поверхность родителя (toplevel или другой попап)
+    int x = 0, y = 0;          // позиция относительно родителя (из позиционера)
+    int w = 0, h = 0;          // размер из позиционера
+    bool mapped = false;
+    bool grab = false;
+    bool focus_set = false; // ImGui-окно поднято наверх при появлении
 };
 
 struct Toplevel {
@@ -133,6 +148,7 @@ struct Server {
 
     std::list<Surface*> surfaces;
     std::list<Toplevel*> toplevels;
+    std::list<Popup*> popups; // порядок создания = порядок стека
     Renderer* renderer = nullptr;
     struct Seat* seat = nullptr;
     struct Control* control = nullptr;
@@ -177,6 +193,8 @@ void viewport_surface_gone(Surface&);
 void xdg_handle_commit(Surface&);
 // послать клиенту configure с новым размером (ресайз ImGui-окном)
 void xdg_toplevel_configure_size(Toplevel&, int w, int h);
+// закрыть попап (popup_done + unmap); клиент затем уничтожит ресурс
+void xdg_popup_dismiss(Popup&);
 
 // control-канал (FIFO)
 struct Control* control_create(Server&, const char* path);
