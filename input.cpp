@@ -63,6 +63,22 @@ namespace {
     void inputIoCb(struct ev_loop*, ev_io* w, int) {
         ((LibinputSource*)w->data)->dispatch();
     }
+
+    int drainDeviceAdded(libinput* li) {
+        libinput_dispatch(li);
+
+        int n = 0;
+
+        while (libinput_event* ev = libinput_get_event(li)) {
+            if (libinput_event_get_type(ev) == LIBINPUT_EVENT_DEVICE_ADDED) {
+                n++;
+            }
+
+            libinput_event_destroy(ev);
+        }
+
+        return n;
+    }
 }
 
 LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, int w, int h) : loop(evLoop), session(&ses), sink(&s), outW(w), outH(h), relX(w / 2.0), relY(h / 2.0) {
@@ -71,13 +87,34 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
     STD_VERIFY(li);
 
     STD_VERIFY(libinput_udev_assign_seat(li, ses.seatName()) == 0);
+
+    int devices = drainDeviceAdded(li);
+
+    if (devices == 0) {
+        // empty udev db (no udevd running): enumeration finds nothing,
+        // open /dev/input/event* directly; no input hotplug in this mode
+        libinput_unref(li);
+        li = libinput_path_create_context(&liIface, this);
+        STD_VERIFY(li);
+
+        for (int i = 0; i < 64; i++) {
+            CStr<32> p;
+
+            p << "/dev/input/event"_sv << i;
+
+            if (libinput_path_add_device(li, p.cStr())) {
+                devices++;
+            }
+        }
+    }
+
     ses.addListener(this);
 
     ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
     dispatch();
-    sysO << "imway: libinput ready"_sv << endL;
+    sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }
 
 LibinputSource::~LibinputSource() noexcept {

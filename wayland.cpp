@@ -426,13 +426,10 @@ namespace {
     }
 
     void copyBounded(char* dst, size_t cap, const char* src) {
-        size_t len = strlen(src);
+        StringView s(src);
+        size_t len = s.length() < cap ? s.length() : cap - 1;
 
-        if (len >= cap) {
-            len = cap - 1;
-        }
-
-        memcpy(dst, src, len);
+        memcpy(dst, s.data(), len);
         dst[len] = 0;
     }
 
@@ -1736,14 +1733,16 @@ namespace {
 
     void sourceOffer(wl_client*, wl_resource* res, const char* mime) {
         DataSource* src = sourceFrom(res);
+        StringView mv(mime);
 
-        if (!src || src->mimes.length() >= 64 || strlen(mime) >= sizeof(Mime::s)) {
+        if (!src || src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
             return;
         }
 
         Mime m;
 
-        strcpy(m.s, mime);
+        memcpy(m.s, mv.data(), mv.length());
+        m.s[mv.length()] = 0;
         src->mimes.pushBack(m);
     }
 
@@ -2341,10 +2340,10 @@ namespace {
 
     void activationTokenCommit(wl_client*, wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        char token[64];
+        CStr<64> token;
 
-        snprintf(token, sizeof(token), "imway-%llu", (unsigned long long)++srv->tokenCounter);
-        xdg_activation_token_v1_send_done(res, token);
+        token << "imway-"_sv << (u64)++srv->tokenCounter;
+        xdg_activation_token_v1_send_done(res, token.cStr());
     }
 
     const struct xdg_activation_token_v1_interface activationTokenImpl = {
@@ -2987,7 +2986,7 @@ SeatState::SeatState(WaylandImpl& impl) : srv(&impl) {
 
     char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
 
-    keymapSize = (u32)strlen(str) + 1;
+    keymapSize = (u32)StringView(str).length() + 1;
     keymapFd = memfd_create("imway-keymap", 0);
 
     bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;

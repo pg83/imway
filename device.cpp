@@ -10,7 +10,6 @@
 #include <ev.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -61,10 +60,10 @@ namespace {
         return m.w > 0 && m.h > 0;
     }
 
-    void connectorName(const drmModeConnector* c, char* buf, size_t len) {
+    void connectorName(const drmModeConnector* c, CStr<64>& out) {
         const char* t = drmModeGetConnectorTypeName(c->connector_type);
 
-        snprintf(buf, len, "%s-%u", t ? t : "Unknown", c->connector_type_id);
+        out << (t ? t : "Unknown") << "-"_sv << c->connector_type_id;
     }
 
     void initVulkan(DeviceVk& vk, int drmFd) {
@@ -99,7 +98,7 @@ namespace {
             vkEnumerateDeviceExtensionProperties(d, nullptr, &en, eprops.mutData());
 
             for (const auto& e : eprops) {
-                if (!strcmp(e.extensionName, name)) {
+                if (StringView(e.extensionName) == StringView(name)) {
                     return true;
                 }
             }
@@ -319,7 +318,7 @@ namespace {
             drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
 
             if (p) {
-                if (!strcmp(p->name, name)) {
+                if (StringView(p->name) == StringView(name)) {
                     id = p->prop_id;
                 }
 
@@ -628,6 +627,16 @@ namespace {
         u32 plSrcX = 0, plSrcY = 0, plSrcW = 0, plSrcH = 0;
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
+        u32 cursorPlaneId = 0;
+        u32 cuFbId = 0, cuCrtcId = 0;
+        u32 cuSrcX = 0, cuSrcY = 0, cuSrcW = 0, cuSrcH = 0;
+        u32 cuCrtcX = 0, cuCrtcY = 0, cuCrtcW = 0, cuCrtcH = 0;
+        DumbBuffer cursorBuf{};
+        int curW = 0, curH = 0;
+        bool cursorEnabled = false;
+        bool cursorVisible = false;
+        int cursorX = 0, cursorY = 0;
+
         DumbBuffer bufs[2];
         int nextBuf = 0;
         bool flipPending = false;
@@ -654,8 +663,21 @@ namespace {
         }
 
         void pickPipe(const char* connector, const char* modeStr);
-        void createDumb(DumbBuffer& b);
+        void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         bool commit(u32 fbId, bool doModeset);
+        void addCursorProps(drmModeAtomicReq* req);
+        void cursorCommit();
+
+        int cursorCapW() const override {
+            return curW;
+        }
+
+        int cursorCapH() const override {
+            return curH;
+        }
+
+        void setCursorImage(const u32* argb) override;
+        void setCursorPos(int x, int y, bool visible) override;
         void setupVt();
         void restoreVt() noexcept;
 
@@ -711,7 +733,7 @@ namespace {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         int fd = -1;
-        char path[64] = {};
+        CStr<64> path;
         DeviceVk vk{};
         Vector<DmabufFormat> formats;
         ev_io drmIo{};
@@ -741,8 +763,8 @@ namespace {
             return output;
         }
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
         }
     };
 
@@ -763,6 +785,20 @@ namespace {
 
         double refresh() const override {
             return hz;
+        }
+
+        int cursorCapW() const override {
+            return 0;
+        }
+
+        int cursorCapH() const override {
+            return 0;
+        }
+
+        void setCursorImage(const u32*) override {
+        }
+
+        void setCursorPos(int, int, bool) override {
         }
 
         bool start() override {
@@ -823,12 +859,12 @@ namespace {
 
         ::Output* createOutput(const char*, const char* modeStr) override;
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
         }
     };
 
-    int openKmsNode(Session& session, const char* devPath, char* outPath, size_t outLen) {
+    int openKmsNode(Session& session, const char* devPath, CStr<64>& outPath) {
         if (devPath) {
             int fd = session.openDevice(devPath);
 
@@ -836,17 +872,17 @@ namespace {
                 Errno(-fd).raise(StringBuilder() << "kms: open "_sv << devPath);
             }
 
-            snprintf(outPath, outLen, "%s", devPath);
+            outPath << devPath;
 
             return fd;
         }
 
         for (int i = 0; i < 8; i++) {
-            char p[32];
+            CStr<32> p;
 
-            snprintf(p, sizeof(p), "/dev/dri/card%d", i);
+            p << "/dev/dri/card"_sv << i;
 
-            int fd = session.openDevice(p);
+            int fd = session.openDevice(p.cStr());
 
             if (fd < 0) {
                 continue;
@@ -858,7 +894,7 @@ namespace {
                 continue;
             }
 
-            snprintf(outPath, outLen, "%s", p);
+            outPath << p.view();
 
             return fd;
         }
@@ -870,7 +906,7 @@ namespace {
 }
 
 KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath) : pool(p), loop(evLoop), session(&s) {
-    fd = openKmsNode(s, devPath, path, sizeof(path));
+    fd = openKmsNode(s, devPath, path);
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
@@ -899,7 +935,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char*
         ev_io_start(loop, &udevIo);
     }
 
-    sysO << "imway: device "_sv << (const char*)path << endL;
+    sysO << "imway: device "_sv << path.view() << endL;
 }
 
 KmsDevice::~KmsDevice() noexcept {
@@ -931,7 +967,7 @@ namespace {
         }
 
         const char* node = udev_device_get_devnode(d);
-        bool ours = node && !strcmp(node, dev->path);
+        bool ours = node && StringView(node) == dev->path.view();
 
         udev_device_unref(d);
 
@@ -991,6 +1027,40 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
     plCrtcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     plCrtcH = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
 
+    if (cursorPlaneId) {
+        try {
+            u64 cw = 0, ch = 0;
+
+            if (drmGetCap(fd, DRM_CAP_CURSOR_WIDTH, &cw) != 0 || !cw) {
+                cw = 64;
+            }
+
+            if (drmGetCap(fd, DRM_CAP_CURSOR_HEIGHT, &ch) != 0 || !ch) {
+                ch = 64;
+            }
+
+            createDumb(cursorBuf, (u32)cw, (u32)ch, DRM_FORMAT_ARGB8888);
+
+            cuFbId = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "FB_ID");
+            cuCrtcId = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+            cuSrcX = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_X");
+            cuSrcY = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_Y");
+            cuSrcW = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_W");
+            cuSrcH = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "SRC_H");
+            cuCrtcX = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_X");
+            cuCrtcY = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
+            cuCrtcW = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
+            cuCrtcH = getPropId(fd, cursorPlaneId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+
+            curW = (int)cw;
+            curH = (int)ch;
+            sysO << "imway: cursor plane "_sv << cursorPlaneId << ", "_sv << curW << "x"_sv << curH << endL;
+        } catch (...) {
+            sysE << "imway: cursor plane setup failed: "_sv << Exception::current() << ", software cursor"_sv << endL;
+            cursorPlaneId = 0;
+        }
+    }
+
     drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob);
 
     if (vk.hasDmabuf) {
@@ -1020,7 +1090,7 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
         sysO << "imway: dumb-buffer path (no zero-copy scanout)"_sv << endL;
 
         for (auto& b : bufs) {
-            createDumb(b);
+            createDumb(b, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888);
         }
     }
 
@@ -1034,7 +1104,7 @@ KmsOutput::~KmsOutput() noexcept {
         destroyScanBuf(vk, fd, sb);
     }
 
-    for (auto& b : bufs) {
+    auto freeDumb = [&](DumbBuffer& b) {
         if (b.map && b.map != MAP_FAILED) {
             munmap(b.map, b.size);
         }
@@ -1049,7 +1119,13 @@ KmsOutput::~KmsOutput() noexcept {
             d.handle = b.handle;
             drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d);
         }
+    };
+
+    for (auto& b : bufs) {
+        freeDumb(b);
     }
+
+    freeDumb(cursorBuf);
 
     if (modeBlob) {
         drmModeDestroyPropertyBlob(fd, modeBlob);
@@ -1073,10 +1149,10 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
         bool ok = c->connection == DRM_MODE_CONNECTED && c->count_modes > 0;
 
         if (ok && connector) {
-            char name[64];
+            CStr<64> name;
 
-            connectorName(c, name, sizeof(name));
-            ok = !strcmp(name, connector);
+            connectorName(c, name);
+            ok = name.view() == StringView(connector);
         }
 
         if (ok) {
@@ -1163,7 +1239,7 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
 
     drmModePlaneRes* planes = drmModeGetPlaneResources(fd);
 
-    for (u32 i = 0; i < planes->count_planes && !planeId; i++) {
+    for (u32 i = 0; i < planes->count_planes && !(planeId && cursorPlaneId); i++) {
         drmModePlane* p = drmModeGetPlane(fd, planes->planes[i]);
 
         if (!p) {
@@ -1175,8 +1251,12 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
             drmModeObjectProperties* pp = drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
 
             for (u32 j = 0; j < pp->count_props; j++) {
-                if (pp->props[j] == typeProp && pp->prop_values[j] == DRM_PLANE_TYPE_PRIMARY) {
-                    planeId = p->plane_id;
+                if (pp->props[j] == typeProp) {
+                    if (pp->prop_values[j] == DRM_PLANE_TYPE_PRIMARY && !planeId) {
+                        planeId = p->plane_id;
+                    } else if (pp->prop_values[j] == DRM_PLANE_TYPE_CURSOR && !cursorPlaneId) {
+                        cursorPlaneId = p->plane_id;
+                    }
                 }
             }
 
@@ -1190,11 +1270,11 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
     STD_VERIFY(planeId);
 }
 
-void KmsOutput::createDumb(DumbBuffer& b) {
+void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     drm_mode_create_dumb create{};
 
-    create.width = mode.hdisplay;
-    create.height = mode.vdisplay;
+    create.width = w;
+    create.height = h;
     create.bpp = 32;
     STD_VERIFY(drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) == 0);
 
@@ -1204,7 +1284,7 @@ void KmsOutput::createDumb(DumbBuffer& b) {
 
     u32 handles[4] = {b.handle}, pitches[4] = {b.pitch}, offsets[4] = {};
 
-    STD_VERIFY(drmModeAddFB2(fd, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888, handles, pitches, offsets, &b.fbId, 0) == 0);
+    STD_VERIFY(drmModeAddFB2(fd, w, h, format, handles, pitches, offsets, &b.fbId, 0) == 0);
 
     drm_mode_map_dumb mapReq{};
 
@@ -1235,6 +1315,10 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
     drmModeAtomicAddProperty(req, planeId, plCrtcW, mode.hdisplay);
     drmModeAtomicAddProperty(req, planeId, plCrtcH, mode.vdisplay);
 
+    if (cursorPlaneId && cursorEnabled) {
+        addCursorProps(req);
+    }
+
     u32 flags = DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
 
     if (doModeset) {
@@ -1256,6 +1340,67 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
     flipPending = true;
 
     return true;
+}
+
+void KmsOutput::addCursorProps(drmModeAtomicReq* req) {
+    bool on = cursorVisible;
+
+    drmModeAtomicAddProperty(req, cursorPlaneId, cuFbId, on ? cursorBuf.fbId : 0);
+    drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcId, on ? crtcId : 0);
+
+    if (on) {
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcX, 0);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcY, 0);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcW, (u64)curW << 16);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuSrcH, (u64)curH << 16);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcX, (u64)(i64)cursorX);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcY, (u64)(i64)cursorY);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcW, (u64)curW);
+        drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcH, (u64)curH);
+    }
+}
+
+// tiny cursor-only commit, applied by the hardware without waiting for our
+// render loop; EBUSY (a flip in flight) is fine — the next frame commit
+// carries the same properties anyway
+void KmsOutput::cursorCommit() {
+    if (!started || !modesetDone || !sessionActive || !connectorConnected) {
+        return;
+    }
+
+    drmModeAtomicReq* req = drmModeAtomicAlloc();
+
+    addCursorProps(req);
+    drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_NONBLOCK, nullptr);
+    drmModeAtomicFree(req);
+}
+
+void KmsOutput::setCursorImage(const u32* argb) {
+    if (!cursorPlaneId) {
+        return;
+    }
+
+    for (int y = 0; y < curH; y++) {
+        memcpy(cursorBuf.map + (size_t)y * cursorBuf.pitch, argb + (size_t)y * curW, (size_t)curW * 4);
+    }
+
+    cursorEnabled = true;
+    cursorCommit();
+}
+
+void KmsOutput::setCursorPos(int x, int y, bool visible) {
+    if (!cursorPlaneId || !cursorEnabled) {
+        return;
+    }
+
+    if (x == cursorX && y == cursorY && visible == cursorVisible) {
+        return;
+    }
+
+    cursorX = x;
+    cursorY = y;
+    cursorVisible = visible;
+    cursorCommit();
 }
 
 void KmsOutput::setupVt() {
@@ -1398,11 +1543,11 @@ Device* Device::createHeadless(ObjPool* pool, struct ev_loop* loop) {
 
 void Device::list() {
     for (int i = 0; i < 8; i++) {
-        char p[32];
+        CStr<32> p;
 
-        snprintf(p, sizeof(p), "/dev/dri/card%d", i);
+        p << "/dev/dri/card"_sv << i;
 
-        int fd = open(p, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+        int fd = open(p.cStr(), O_RDWR | O_CLOEXEC | O_NONBLOCK);
 
         if (fd < 0) {
             continue;
@@ -1411,7 +1556,7 @@ void Device::list() {
         bool atomic = drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0;
         drmVersion* ver = drmGetVersion(fd);
 
-        sysO << (const char*)p << ": "_sv << (ver && ver->name ? ver->name : "?") << (atomic ? ", atomic"_sv : ", NO atomic (unusable)"_sv) << endL;
+        sysO << p.view() << ": "_sv << (ver && ver->name ? ver->name : "?") << (atomic ? ", atomic"_sv : ", NO atomic (unusable)"_sv) << endL;
 
         if (ver) {
             drmFreeVersion(ver);
@@ -1427,10 +1572,10 @@ void Device::list() {
                     continue;
                 }
 
-                char name[64];
+                CStr<64> name;
 
-                connectorName(conn, name, sizeof(name));
-                sysO << "  "_sv << (const char*)name << (conn->connection == DRM_MODE_CONNECTED ? ": connected"_sv : ": disconnected"_sv);
+                connectorName(conn, name);
+                sysO << "  "_sv << name.view() << (conn->connection == DRM_MODE_CONNECTED ? ": connected"_sv : ": disconnected"_sv);
 
                 for (int m = 0; m < conn->count_modes; m++) {
                     const drmModeModeInfo& mi = conn->modes[m];

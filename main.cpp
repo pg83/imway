@@ -9,9 +9,7 @@
 #include "util.h"
 #include "wayland.h"
 
-#include <errno.h>
 #include <stdlib.h>
-#include <string.h>
 #include <unistd.h>
 
 #include <ev.h>
@@ -20,13 +18,14 @@
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
+#include <std/str/builder.h>
 #include <std/sys/throw.h>
 
 using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list] [-- CMD ARG...]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
     void childCb(struct ev_loop* loop, ev_child* w, int) {
@@ -43,6 +42,7 @@ int main(int argc, char** argv) {
     const char* xkbLayout = nullptr;
     const char* xkbOptions = nullptr;
     const char* fontPath = nullptr;
+    float uiScale = 1.f;
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
     int framesLimit = 0;
@@ -58,27 +58,37 @@ int main(int argc, char** argv) {
             return argv[++i];
         };
 
-        if (!strcmp(argv[i], "--socket")) {
+        StringView arg(argv[i]);
+
+        if (arg == "--socket"_sv) {
             socketName = next();
-        } else if (!strcmp(argv[i], "--device")) {
+        } else if (arg == "--device"_sv) {
             devicePath = next();
-        } else if (!strcmp(argv[i], "--output")) {
+        } else if (arg == "--output"_sv) {
             outputName = next();
-        } else if (!strcmp(argv[i], "--mode")) {
+        } else if (arg == "--mode"_sv) {
             modeStr = next();
-        } else if (!strcmp(argv[i], "--xkb-layout")) {
+        } else if (arg == "--xkb-layout"_sv) {
             xkbLayout = next();
-        } else if (!strcmp(argv[i], "--xkb-options")) {
+        } else if (arg == "--xkb-options"_sv) {
             xkbOptions = next();
-        } else if (!strcmp(argv[i], "--font")) {
+        } else if (arg == "--font"_sv) {
             fontPath = next();
-        } else if (!strcmp(argv[i], "--frames")) {
-            framesLimit = atoi(next());
-        } else if (!strcmp(argv[i], "--screenshot")) {
+        } else if (arg == "--scale"_sv) {
+            uiScale = (float)parseFloat(StringView(next()));
+
+            if (!(uiScale > 0.f)) {
+                usage(argv[0]);
+
+                return 2;
+            }
+        } else if (arg == "--frames"_sv) {
+            framesLimit = (int)StringView(next()).stou();
+        } else if (arg == "--screenshot"_sv) {
             screenshotPath = next();
-        } else if (!strcmp(argv[i], "--control")) {
+        } else if (arg == "--control"_sv) {
             controlPath = next();
-        } else if (!strcmp(argv[i], "--")) {
+        } else if (arg == "--"_sv) {
             if (i + 1 >= argc) {
                 usage(argv[0]);
 
@@ -88,7 +98,7 @@ int main(int argc, char** argv) {
             cmdArgv = argv + i + 1;
 
             break;
-        } else if (!strcmp(argv[i], "--list")) {
+        } else if (arg == "--list"_sv) {
             Device::list();
 
             return 0;
@@ -99,7 +109,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    bool kms = strcmp(devicePath, "headless") != 0;
+    bool kms = StringView(devicePath) != "headless"_sv;
 
     if (!getenv("XDG_RUNTIME_DIR")) {
         sysE << "XDG_RUNTIME_DIR is not set"_sv << endL;
@@ -125,7 +135,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, strcmp(devicePath, "auto") ? devicePath : nullptr) : Device::createHeadless(pool.mutPtr(), loop);
+        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, StringView(devicePath) == "auto"_sv ? nullptr : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(outputName, modeStr);
 
@@ -153,7 +163,7 @@ int main(int argc, char** argv) {
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), fontPath, framesLimit);
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), fontPath, uiScale, framesLimit);
 
         if (session) {
             session->addListener(wayland->sessionListener());
@@ -186,9 +196,12 @@ int main(int argc, char** argv) {
                 setenv("WAYLAND_DISPLAY", socketName, 1);
                 execvp(cmd, cmdArgv);
 
-                const char* err = strerror(errno);
+                try {
+                    Errno().raise(StringBuilder() << "imway: exec "_sv << cmd);
+                } catch (...) {
+                    sysE << Exception::current() << endL;
+                }
 
-                sysE << "imway: exec "_sv << cmd << ": "_sv << err << endL;
                 _exit(127);
             }
 

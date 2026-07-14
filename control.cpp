@@ -4,10 +4,7 @@
 #include "util.h"
 
 #include <ev.h>
-#include <ctype.h>
 #include <fcntl.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -46,7 +43,7 @@ namespace {
         };
 
         if (c >= 'A' && c <= 'Z') {
-            c = (char)tolower(c);
+            c = (char)(c - 'A' + 'a');
             shift = true;
         } else {
             shift = false;
@@ -72,14 +69,14 @@ namespace {
         Renderer* renderer = nullptr;
         int fd = -1;
         ev_io io{};
-        char path[256] = "";
+        CStr<256> path;
         char line[1024] = "";
         size_t lineLen = 0;
 
         ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath);
         ~ControlImpl() noexcept;
 
-        void handleLine(const char* cmd);
+        void handleLine(StringView cmd);
         void handleInput();
         void reopen();
     };
@@ -90,18 +87,18 @@ namespace {
 }
 
 ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath) : loop(evLoop), sink(&s), renderer(&rnd) {
-    STD_VERIFY(strlen(fifoPath) < sizeof(path));
-    strcpy(path, fifoPath);
-    unlink(path);
-    STD_VERIFY(mkfifo(path, 0600) == 0);
+    STD_VERIFY(StringView(fifoPath).length() < 256);
+    path << fifoPath;
+    unlink(path.cStr());
+    STD_VERIFY(mkfifo(path.cStr(), 0600) == 0);
 
-    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     STD_VERIFY(fd >= 0);
 
     ev_io_init(&io, controlIoCb, fd, EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
-    sysO << "imway: control FIFO: "_sv << (const char*)path << endL;
+    sysO << "imway: control FIFO: "_sv << path.view() << endL;
 }
 
 ControlImpl::~ControlImpl() noexcept {
@@ -110,30 +107,45 @@ ControlImpl::~ControlImpl() noexcept {
         close(fd);
     }
 
-    if (path[0]) {
-        unlink(path);
+    if (!path.view().empty()) {
+        unlink(path.cStr());
     }
 }
 
-void ControlImpl::handleLine(const char* cmd) {
-    char a[64] = {0}, b[64] = {0};
-    double x, y;
-    u32 code;
+void ControlImpl::handleLine(StringView cmd) {
+    StringView verb, args;
 
-    if (sscanf(cmd, "motion %lf %lf", &x, &y) == 2) {
-        sink->motion(x, y);
-    } else if (sscanf(cmd, "button %63s %63s", a, b) == 2) {
-        u32 btn = !strcmp(a, "left") ? BTN_LEFT : !strcmp(a, "right") ? BTN_RIGHT : BTN_MIDDLE;
+    if (!cmd.split(' ', verb, args)) {
+        verb = cmd;
+        args = {};
+    }
 
-        sink->button(btn, !strcmp(b, "press"));
-    } else if (sscanf(cmd, "key %u %63s", &code, b) == 2) {
-        sink->key(code, !strcmp(b, "press"));
-    } else if (!strncmp(cmd, "type ", 5)) {
-        for (const char* p = cmd + 5; *p; p++) {
+    if (verb == "motion"_sv) {
+        StringView xs, ys;
+
+        if (args.split(' ', xs, ys)) {
+            sink->motion(parseFloat(xs), parseFloat(ys));
+        }
+    } else if (verb == "button"_sv) {
+        StringView which, state;
+
+        if (args.split(' ', which, state)) {
+            u32 btn = which == "left"_sv ? BTN_LEFT : which == "right"_sv ? BTN_RIGHT : BTN_MIDDLE;
+
+            sink->button(btn, state == "press"_sv);
+        }
+    } else if (verb == "key"_sv) {
+        StringView code, state;
+
+        if (args.split(' ', code, state)) {
+            sink->key((u32)code.stou(), state == "press"_sv);
+        }
+    } else if (verb == "type"_sv) {
+        for (u8 c : args) {
             u32 kc;
             bool shift;
 
-            if (!asciiToKey(*p, kc, shift)) {
+            if (!asciiToKey((char)c, kc, shift)) {
                 continue;
             }
 
@@ -148,14 +160,17 @@ void ControlImpl::handleLine(const char* cmd) {
                 sink->key(KEY_LEFTSHIFT, false);
             }
         }
-    } else if (sscanf(cmd, "hscroll %lf", &x) == 1) {
-        sink->scroll(x, 0);
-    } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
-        sink->scroll(0, y);
-    } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
-        renderer->screenshot(a);
-        sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
-    } else if (!strcmp(cmd, "quit")) {
+    } else if (verb == "hscroll"_sv) {
+        sink->scroll(parseFloat(args), 0);
+    } else if (verb == "scroll"_sv) {
+        sink->scroll(0, parseFloat(args));
+    } else if (verb == "screenshot"_sv) {
+        CStr<256> p;
+
+        p << args;
+        renderer->screenshot(p.cStr());
+        sysO << "imway: screenshot by command: "_sv << args << endL;
+    } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
     } else {
         sysE << "imway: unknown command: "_sv << cmd << endL;
@@ -171,12 +186,11 @@ void ControlImpl::handleInput() {
         if (n > 0) {
             for (ssize_t i = 0; i < n; i++) {
                 if (tmp[i] == '\n') {
-                    line[lineLen] = 0;
-                    lineLen = 0;
-
-                    if (line[0]) {
-                        handleLine(line);
+                    if (lineLen) {
+                        handleLine({(const u8*)line, lineLen});
                     }
+
+                    lineLen = 0;
                 } else if (lineLen + 1 < sizeof(line)) {
                     line[lineLen++] = tmp[i];
                 }
@@ -195,7 +209,7 @@ void ControlImpl::reopen() {
     ev_io_stop(loop, &io);
     close(fd);
 
-    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
 
     if (fd < 0) {
         return;

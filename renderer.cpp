@@ -7,7 +7,7 @@
 #include "scene.h"
 #include "util.h"
 
-#include <stdio.h>
+#include <fcntl.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
@@ -27,6 +27,8 @@
 #include <std/lib/vector.h>
 #include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
+#include <std/str/builder.h>
+#include <std/sys/fd.h>
 
 using namespace stl;
 
@@ -107,6 +109,29 @@ namespace {
         ImVec2 resizeStartSz{}, resizeStartPos{}, resizeStartMouse{};
 
         const char* fontPath = nullptr;
+        float uiScale = 1.f;
+
+        // hardware cursor plane state
+        bool hwCursorReady = false;
+        int hwCapW = 0, hwCapH = 0;
+        int hwHotX = 0, hwHotY = 0;
+        bool hwVisible = false;
+        int hwKind = -2;               // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
+        Surface* hwSurf = nullptr;
+        bool hwSurfStale = false;
+        Vector<u32> hwShapeCache[ImGuiMouseCursor_COUNT];
+        Vector<u32> hwScratch;
+
+        // one-off offscreen rendering of cursor shapes
+        VkImage curImg = VK_NULL_HANDLE;
+        VkDeviceMemory curImgMem = VK_NULL_HANDLE;
+        VkImageView curView = VK_NULL_HANDLE;
+        VkFramebuffer curFb = VK_NULL_HANDLE;
+        VkBuffer curReadback = VK_NULL_HANDLE;
+        VkDeviceMemory curReadbackMem = VK_NULL_HANDLE;
+        void* curReadbackMap = nullptr;
+        VkCommandBuffer curCmd = VK_NULL_HANDLE;
+        VkFence curFence = VK_NULL_HANDLE;
 
         bool hasSyncFd = false;
         VkSemaphore syncOut = VK_NULL_HANDLE;
@@ -123,12 +148,11 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, const char* font, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
+        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, const char* font, float scale, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
             fontPath = font;
+            uiScale = scale;
             hasSyncFd = vk.hasSyncFd;
             setup(scn.outW, scn.outH);
-
-            ImGui::GetIO().MouseDrawCursor = scn.drawCursor;
 
             if (out.vsynced()) {
                 ev_prepare_init(&prep, prepareCb);
@@ -163,10 +187,16 @@ namespace {
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
+        void rasterizeShape(int kind, u32* out);
 
         void motion(double x, double y) override {
             scene->needsFrame = true;
             ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
+
+            // move the hardware cursor right away, without waiting for a frame
+            if (hwCursorReady && hwVisible) {
+                output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
+            }
         }
 
         void button(u32 btn, bool pressed) override {
@@ -426,6 +456,13 @@ void RendererImpl::setup(int w, int h) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
+    if (uiScale != 1.f) {
+        ImGuiStyle& st = ImGui::GetStyle();
+
+        st.FontScaleMain = uiScale;
+        st.ScaleAllSizes(uiScale);
+    }
+
     ImGui_ImplVulkan_InitInfo ii{};
 
     ii.ApiVersion = VK_API_VERSION_1_2;
@@ -441,6 +478,45 @@ void RendererImpl::setup(int w, int h) {
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
     STD_VERIFY(ImGui_ImplVulkan_Init(&ii));
+
+    hwCapW = output->cursorCapW();
+    hwCapH = output->cursorCapH();
+
+    if (hwCapW > 0 && hwCapH > 0) {
+        createImage(hwCapW, hwCapH, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
+
+        VkImageViewCreateInfo cvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+        cvi.image = curImg;
+        cvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        cvi.format = kVkFormat;
+        cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curView));
+
+        VkFramebufferCreateInfo cfi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+        cfi.renderPass = renderPass;
+        cfi.attachmentCount = 1;
+        cfi.pAttachments = &curView;
+        cfi.width = (u32)hwCapW;
+        cfi.height = (u32)hwCapH;
+        cfi.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &cfi, nullptr, &curFb));
+
+        createHostBuffer((VkDeviceSize)hwCapW * hwCapH * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, curReadback, curReadbackMem, &curReadbackMap);
+
+        VkCommandBufferAllocateInfo cba{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+
+        cba.commandPool = cmdPool;
+        cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cba.commandBufferCount = 1;
+        VK_CHECK(vkAllocateCommandBuffers(device, &cba, &curCmd));
+
+        VkFenceCreateInfo cfe{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+
+        VK_CHECK(vkCreateFence(device, &cfe, nullptr, &curFence));
+        hwCursorReady = true;
+    }
 }
 
 void RendererImpl::uploadSurface(Surface& s) {
@@ -979,6 +1055,179 @@ void RendererImpl::markTreeUnhovered(Surface& s) {
     }
 }
 
+namespace {
+    // vector mouse cursor: the atlas-baked imgui one is a 12x19 bitmap and turns
+    // to mush when scaled, so draw crisp shapes at any --scale instead
+    void cursorPoly(ImDrawList* dl, const ImVec2* src, int n, ImVec2 p, float s, float rc, float rs) {
+        ImVec2 pts[16], sh[16];
+
+        for (int i = 0; i < n; i++) {
+            float x = src[i].x * rc - src[i].y * rs;
+            float y = src[i].x * rs + src[i].y * rc;
+
+            pts[i] = ImVec2(p.x + x * s, p.y + y * s);
+            sh[i] = ImVec2(pts[i].x + 1.5f * s, pts[i].y + 1.5f * s);
+        }
+
+        dl->AddConcavePolyFilled(sh, n, IM_COL32(0, 0, 0, 48));
+        dl->AddConcavePolyFilled(pts, n, IM_COL32_WHITE);
+        dl->AddPolyline(pts, n, IM_COL32_BLACK, ImDrawFlags_Closed, s > 1.f ? 1.2f * s : 1.2f);
+    }
+
+    void cursorStroke(ImDrawList* dl, ImVec2 p, float s, float x0, float y0, float x1, float y1, ImU32 col, float th) {
+        dl->AddLine(ImVec2(p.x + x0 * s, p.y + y0 * s), ImVec2(p.x + x1 * s, p.y + y1 * s), col, th * s);
+    }
+
+    void drawMouseCursor(ImDrawList* dl, ImVec2 p, float s, ImGuiMouseCursor c) {
+        static const ImVec2 arrow[] = {{0.f, 0.f}, {0.f, 16.5f}, {4.2f, 12.9f}, {6.9f, 18.9f}, {9.5f, 17.8f}, {6.8f, 11.8f}, {12.2f, 11.8f}};
+        static const ImVec2 ns[] = {{0.f, -9.f}, {4.5f, -4.5f}, {1.7f, -4.5f}, {1.7f, 4.5f}, {4.5f, 4.5f}, {0.f, 9.f}, {-4.5f, 4.5f}, {-1.7f, 4.5f}, {-1.7f, -4.5f}, {-4.5f, -4.5f}};
+        static const ImVec2 hand[] = {{0.f, 0.f}, {2.6f, 0.f}, {2.6f, 5.5f}, {4.f, 4.f}, {6.f, 4.f}, {7.6f, 5.6f}, {7.6f, 10.f}, {5.6f, 14.5f}, {-0.5f, 14.5f}, {-3.4f, 10.5f}, {-3.4f, 6.5f}, {-1.6f, 4.8f}, {0.f, 6.f}};
+        const float R = 0.70710678f;
+
+        switch (c) {
+            case ImGuiMouseCursor_None:
+                return;
+            case ImGuiMouseCursor_TextInput:
+                cursorStroke(dl, p, s, -2.5f, -8.f, 2.5f, -8.f, IM_COL32_BLACK, 3.4f);
+                cursorStroke(dl, p, s, 0.f, -8.f, 0.f, 8.f, IM_COL32_BLACK, 3.4f);
+                cursorStroke(dl, p, s, -2.5f, 8.f, 2.5f, 8.f, IM_COL32_BLACK, 3.4f);
+                cursorStroke(dl, p, s, -2.5f, -8.f, 2.5f, -8.f, IM_COL32_WHITE, 1.4f);
+                cursorStroke(dl, p, s, 0.f, -8.f, 0.f, 8.f, IM_COL32_WHITE, 1.4f);
+                cursorStroke(dl, p, s, -2.5f, 8.f, 2.5f, 8.f, IM_COL32_WHITE, 1.4f);
+                return;
+            case ImGuiMouseCursor_ResizeNS:
+                cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
+                return;
+            case ImGuiMouseCursor_ResizeEW:
+                cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
+                return;
+            case ImGuiMouseCursor_ResizeNESW:
+                cursorPoly(dl, ns, 10, p, s, R, -R);
+                return;
+            case ImGuiMouseCursor_ResizeNWSE:
+                cursorPoly(dl, ns, 10, p, s, R, R);
+                return;
+            case ImGuiMouseCursor_ResizeAll:
+                cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
+                cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
+                return;
+            case ImGuiMouseCursor_Hand:
+                cursorPoly(dl, hand, 13, p, s, 1.f, 0.f);
+                return;
+            case ImGuiMouseCursor_NotAllowed:
+                dl->AddCircle(p, 7.5f * s, IM_COL32_BLACK, 0, 4.f * s);
+                dl->AddCircle(p, 7.5f * s, IM_COL32_WHITE, 0, 2.f * s);
+                cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_BLACK, 4.f);
+                cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_WHITE, 2.f);
+                return;
+            case ImGuiMouseCursor_Wait:
+            case ImGuiMouseCursor_Progress: {
+                float a0 = (float)(nowMsec() % 1000) * 0.0062831853f;
+                float a1 = a0 + 5.2f;
+
+                if (c == ImGuiMouseCursor_Progress) {
+                    cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                    p = ImVec2(p.x + 14.f * s, p.y - 1.f * s);
+                }
+
+                dl->PathArcTo(p, 6.5f * s, a0, a1);
+                dl->PathStroke(IM_COL32_BLACK, ImDrawFlags_None, 3.6f * s);
+                dl->PathArcTo(p, 6.5f * s, a0, a1);
+                dl->PathStroke(IM_COL32_WHITE, ImDrawFlags_None, 1.8f * s);
+                return;
+            }
+            default:
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                return;
+        }
+    }
+}
+
+// one-off offscreen render of a cursor shape into a premultiplied ARGB image
+// for the KMS cursor plane; the hotspot lands at the canvas center
+void RendererImpl::rasterizeShape(int kind, u32* out) {
+    ImDrawList dl(ImGui::GetDrawListSharedData());
+
+    dl._ResetForNewFrame();
+    dl.PushClipRect(ImVec2(0.f, 0.f), ImVec2((float)hwCapW, (float)hwCapH), false);
+
+    float s = uiScale;
+    float half = (float)(hwCapW < hwCapH ? hwCapW : hwCapH) * 0.5f;
+
+    // the plane cannot scale: clamp so the largest shape fits the buffer
+    if (21.f * s > half - 2.f) {
+        s = (half - 2.f) / 21.f;
+    }
+
+    drawMouseCursor(&dl, ImVec2((float)hwCapW * 0.5f, (float)hwCapH * 0.5f), s, kind);
+    dl.PopClipRect();
+
+    ImDrawData dd;
+
+    dd.Valid = true;
+    dd.CmdLists.push_back(&dl);
+    dd.CmdListsCount = 1;
+    dd.TotalVtxCount = dl.VtxBuffer.Size;
+    dd.TotalIdxCount = dl.IdxBuffer.Size;
+    dd.DisplayPos = ImVec2(0.f, 0.f);
+    dd.DisplaySize = ImVec2((float)hwCapW, (float)hwCapH);
+    dd.FramebufferScale = ImVec2(1.f, 1.f);
+    dd.Textures = &ImGui::GetPlatformIO().Textures;
+
+    // the imgui backend cycles shared vertex buffers; make sure no frame is in flight
+    vkQueueWaitIdle(queue);
+
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkResetCommandBuffer(curCmd, 0);
+    vkBeginCommandBuffer(curCmd, &bi);
+
+    VkClearValue clear{};
+    VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+
+    rbi.renderPass = renderPass;
+    rbi.framebuffer = curFb;
+    rbi.renderArea = {{0, 0}, {(u32)hwCapW, (u32)hwCapH}};
+    rbi.clearValueCount = 1;
+    rbi.pClearValues = &clear;
+    vkCmdBeginRenderPass(curCmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    ImGui_ImplVulkan_RenderDrawData(&dd, curCmd);
+    vkCmdEndRenderPass(curCmd);
+
+    VkImageLayout layout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+    bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    bar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bar.oldLayout = layout;
+    bar.newLayout = layout;
+    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.image = curImg;
+    bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(curCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+
+    VkBufferImageCopy region{};
+
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {(u32)hwCapW, (u32)hwCapH, 1};
+    vkCmdCopyImageToBuffer(curCmd, curImg, layout, curReadback, 1, &region);
+    vkEndCommandBuffer(curCmd);
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &curCmd;
+    vkQueueSubmit(queue, 1, &si, curFence);
+    vkWaitForFences(device, 1, &curFence, VK_TRUE, UINT64_MAX);
+    vkResetFences(device, 1, &curFence);
+
+    // B8G8R8A8 bytes match DRM ARGB8888, and rendering onto transparent
+    // black with src-alpha blending yields premultiplied pixels
+    memcpy(out, curReadbackMap, (size_t)hwCapW * hwCapH * 4);
+}
+
 void RendererImpl::buildUi(Scene& scene) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -1018,9 +1267,15 @@ void RendererImpl::buildUi(Scene& scene) {
             continue;
         }
 
-        char label[320];
+        StringView title(t->title);
 
-        snprintf(label, sizeof label, "%s###toplevel%llu", t->title, (unsigned long long)t->id);
+        if (title.length() > 280) {
+            title = title.prefix(280);
+        }
+
+        CStr<320> label;
+
+        label << title << "###toplevel"_sv << (u64)t->id;
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
 
@@ -1039,7 +1294,7 @@ void RendererImpl::buildUi(Scene& scene) {
             flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus;
         }
 
-        if (ImGui::Begin(label, nullptr, flags)) {
+        if (ImGui::Begin(label.cStr(), nullptr, flags)) {
             if (t->raiseRequested) {
                 t->raiseRequested = false;
                 ImGui::SetWindowFocus();
@@ -1159,10 +1414,9 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
-    if (overClient && scene.cursorSurface && scene.cursorSurface->texture) {
-        ImVec2 mp = ImGui::GetMousePos();
+    Surface* cs = overClient && scene.cursorSurface && scene.cursorSurface->texture ? scene.cursorSurface : nullptr;
 
-        drawSurfaceTreeOverlay(*scene.cursorSurface, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
+    if (cs) {
         ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     } else if (overClient && scene.cursorShape != CursorKind::unset) {
         ImGuiMouseCursor c = ImGuiMouseCursor_Arrow;
@@ -1185,6 +1439,83 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::SetMouseCursor(c);
     }
 
+    if (!scene.drawCursor) {
+        return;
+    }
+
+    ImVec2 mp = ImGui::GetMousePos();
+    int kind = ImGui::GetMouseCursor();
+
+    if (cs) {
+        // client-provided cursor surface: feed its pixels to the cursor plane
+        bool hwOk = hwCursorReady && !cs->dmabuf && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
+
+        if (hwOk) {
+            if (hwSurf != cs || hwSurfStale) {
+                hwScratch.zero((size_t)hwCapW * hwCapH);
+
+                for (int y = 0; y < cs->height; y++) {
+                    memcpy(hwScratch.mutData() + (size_t)y * hwCapW, (const u32*)cs->pixels.data() + (size_t)y * cs->width, (size_t)cs->width * 4);
+                }
+
+                output->setCursorImage(hwScratch.data());
+                hwSurf = cs;
+                hwKind = -3;
+                hwSurfStale = false;
+            }
+
+            hwHotX = scene.cursorHotX;
+            hwHotY = scene.cursorHotY;
+            hwVisible = true;
+            output->setCursorPos((int)mp.x - hwHotX, (int)mp.y - hwHotY, true);
+        } else {
+            if (hwCursorReady) {
+                hwVisible = false;
+                output->setCursorPos(0, 0, false);
+            }
+
+            drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
+        }
+
+        return;
+    }
+
+    if (!hwCursorReady) {
+        if (kind != ImGuiMouseCursor_None) {
+            drawMouseCursor(ImGui::GetForegroundDrawList(), mp, uiScale, kind);
+        }
+
+        return;
+    }
+
+    if (kind == ImGuiMouseCursor_None) {
+        hwVisible = false;
+        output->setCursorPos(0, 0, false);
+
+        return;
+    }
+
+    if (kind < 0 || kind >= ImGuiMouseCursor_COUNT) {
+        kind = ImGuiMouseCursor_Arrow;
+    }
+
+    if (hwKind != kind) {
+        Vector<u32>& img = hwShapeCache[kind];
+
+        if (!img.length()) {
+            img.zero((size_t)hwCapW * hwCapH);
+            rasterizeShape(kind, img.mutData());
+        }
+
+        output->setCursorImage(img.data());
+        hwKind = kind;
+        hwSurf = nullptr;
+    }
+
+    hwHotX = hwCapW / 2;
+    hwHotY = hwCapH / 2;
+    hwVisible = true;
+    output->setCursorPos((int)mp.x - hwHotX, (int)mp.y - hwHotY, true);
 }
 
 void RendererImpl::renderFrame(int scanIdx) {
@@ -1390,13 +1721,27 @@ bool RendererImpl::screenshot(const char* path) {
         vkResetFences(device, 1, &fence);
     }
 
-    FILE* f = fopen(path, "wb");
+    ScopedFD f(open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
-    if (!f) {
+    if (f.get() < 0) {
         return false;
     }
 
-    fprintf(f, "P6\n%d %d\n255\n", width, height);
+    auto writeAll = [&f](const void* data, size_t len) {
+        auto* b = (const u8*)data;
+
+        while (len) {
+            size_t n = f.write(b, len);
+
+            b += n;
+            len -= n;
+        }
+    };
+
+    StringBuilder ppm;
+
+    ppm << "P6\n"_sv << width << " "_sv << height << "\n255\n"_sv;
+    writeAll(ppm.data(), StringView(ppm).length());
 
     auto* px = (const unsigned char*)readbackMap;
     Vector<u8> row;
@@ -1412,10 +1757,8 @@ bool RendererImpl::screenshot(const char* path) {
             row.mut(x * 3 + 2) = src[x * 4 + 0];
         }
 
-        fwrite(row.data(), 1, row.length(), f);
+        writeAll(row.data(), row.length());
     }
-
-    fclose(f);
 
     return true;
 }
@@ -1443,6 +1786,38 @@ void RendererImpl::shutdown() noexcept {
         if (sem) {
             vkDestroySemaphore(device, sem, nullptr);
         }
+    }
+
+    if (curFence) {
+        vkDestroyFence(device, curFence, nullptr);
+    }
+
+    if (curFb) {
+        vkDestroyFramebuffer(device, curFb, nullptr);
+    }
+
+    if (curView) {
+        vkDestroyImageView(device, curView, nullptr);
+    }
+
+    if (curImg) {
+        vkDestroyImage(device, curImg, nullptr);
+    }
+
+    if (curImgMem) {
+        vkFreeMemory(device, curImgMem, nullptr);
+    }
+
+    if (curReadbackMap) {
+        vkUnmapMemory(device, curReadbackMem);
+    }
+
+    if (curReadback) {
+        vkDestroyBuffer(device, curReadback, nullptr);
+    }
+
+    if (curReadbackMem) {
+        vkFreeMemory(device, curReadbackMem, nullptr);
     }
 
     vkDestroyFence(device, fence, nullptr);
@@ -1489,6 +1864,10 @@ void RendererImpl::frameNow() {
                 uploadSurface(*s);
             }
 
+            if (s == scene->cursorSurface) {
+                hwSurfStale = true;
+            }
+
             s->dirty = false;
         }
     }
@@ -1528,6 +1907,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, const char* fontPath, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, fontPath, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
 }

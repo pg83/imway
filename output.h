@@ -1,11 +1,20 @@
 #pragma once
 
+#include <std/sys/types.h>
+
 struct ScanoutBuffer;
 
 struct Output {
     virtual int width() const = 0;
     virtual int height() const = 0;
     virtual double refresh() const = 0;
+
+    // hardware cursor plane; the image is capW x capH premultiplied ARGB8888,
+    // cap of 0 means no hardware cursor on this output
+    virtual int cursorCapW() const = 0;
+    virtual int cursorCapH() const = 0;
+    virtual void setCursorImage(const u32* argb) = 0;
+    virtual void setCursorPos(int x, int y, bool visible) = 0;
 
     virtual bool start() = 0;
 
