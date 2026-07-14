@@ -16,6 +16,9 @@ struct Output {
     virtual void setCursorImage(const u32* argb) = 0;
     virtual void setCursorPos(int x, int y, bool visible) = 0;
 
+    // false turns the display off (DPMS), true brings it back
+    virtual void setPowerSave(bool on) = 0;
+
     virtual bool start() = 0;
 
     virtual bool ready() const = 0;

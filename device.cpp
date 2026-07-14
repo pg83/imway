@@ -643,6 +643,7 @@ namespace {
         bool started = false;
         bool modesetDone = false;
         bool connectorConnected = true;
+        bool powered = true;
 
         KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr);
 
@@ -677,13 +678,14 @@ namespace {
 
         void setCursorImage(const u32* argb) override;
         void setCursorPos(int x, int y, bool visible) override;
+        void setPowerSave(bool on) override;
         void setupVt();
         void restoreVt() noexcept;
 
         bool start() override;
 
         bool ready() const override {
-            return started && !flipPending && sessionActive && connectorConnected;
+            return started && !flipPending && sessionActive && connectorConnected && powered;
         }
 
         void hotplug();
@@ -798,6 +800,9 @@ namespace {
         }
 
         void setCursorPos(int, int, bool) override {
+        }
+
+        void setPowerSave(bool) override {
         }
 
         bool start() override {
@@ -1383,6 +1388,33 @@ void KmsOutput::setCursorPos(int x, int y, bool visible) {
     cursorX = x;
     cursorY = y;
     cursorVisible = visible;
+}
+
+void KmsOutput::setPowerSave(bool on) {
+    if (!modesetDone || !sessionActive || on == powered) {
+        return;
+    }
+
+    powered = on;
+
+    if (on) {
+        flipPending = false;
+
+        u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
+
+        if (commit(lastFb, true)) {
+            sysO << "imway: display back on"_sv << endL;
+        }
+    } else {
+        // blocking commit, just drops ACTIVE; planes keep their state
+        drmModeAtomicReq* req = drmModeAtomicAlloc();
+
+        drmModeAtomicAddProperty(req, crtcId, crtcActive, 0);
+        drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
+        drmModeAtomicFree(req);
+        flipPending = false;
+        sysO << "imway: display off (idle)"_sv << endL;
+    }
 }
 
 void KmsOutput::setupVt() {

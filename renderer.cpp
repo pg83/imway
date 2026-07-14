@@ -215,6 +215,34 @@ namespace {
             ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
         }
 
+        // relative motion and touchpad gestures are for wayland clients only
+        void relMotion(double, double, double, double) override {
+        }
+
+        void swipeBegin(u32) override {
+        }
+
+        void swipeUpdate(double, double) override {
+        }
+
+        void swipeEnd(bool) override {
+        }
+
+        void pinchBegin(u32) override {
+        }
+
+        void pinchUpdate(double, double, double, double) override {
+        }
+
+        void pinchEnd(bool) override {
+        }
+
+        void holdBegin(u32) override {
+        }
+
+        void holdEnd(bool) override {
+        }
+
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
         void destroyTexture(SurfaceTexture* tex);

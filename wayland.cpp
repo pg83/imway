@@ -3,6 +3,7 @@
 
 #include "input_sink.h"
 #include "frame_listener.h"
+#include "output.h"
 #include "scene.h"
 #include "session.h"
 #include "util.h"
@@ -16,10 +17,18 @@
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
+#include <ext-idle-notify-v1-server-protocol.h>
+#include <fractional-scale-v1-server-protocol.h>
+#include <idle-inhibit-unstable-v1-server-protocol.h>
+#include <keyboard-shortcuts-inhibit-unstable-v1-server-protocol.h>
+#include <pointer-constraints-unstable-v1-server-protocol.h>
+#include <pointer-gestures-unstable-v1-server-protocol.h>
 #include <presentation-time-server-protocol.h>
 #include <primary-selection-unstable-v1-server-protocol.h>
+#include <relative-pointer-unstable-v1-server-protocol.h>
 #include <single-pixel-buffer-v1-server-protocol.h>
 #include <xdg-activation-v1-server-protocol.h>
+#include <xdg-output-unstable-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
@@ -42,6 +51,7 @@ namespace {
     struct SurfaceImpl;
     struct ToplevelImpl;
     struct WaylandImpl;
+    struct ConstraintBox;
 
     struct XdgSurface {
         WaylandImpl* srv = nullptr;
@@ -80,6 +90,10 @@ namespace {
         wl_resource* vpRes = nullptr;
         double pendSx = -1, pendSy = -1, pendSw = -1, pendSh = -1;
         int pendDw = -1, pendDh = -1;
+
+        wl_resource* fracRes = nullptr;
+        ConstraintBox* constraint = nullptr;
+        wl_resource* kbInhibitRes = nullptr;
 
         XdgSurface* xdg = nullptr;
     };
@@ -121,6 +135,17 @@ namespace {
     struct RegionBox {
         WaylandImpl* srv = nullptr;
         Vector<RectI> rects;
+    };
+
+    struct ConstraintBox {
+        WaylandImpl* srv = nullptr;
+        SurfaceImpl* surface = nullptr;
+        wl_resource* res = nullptr;
+        bool isLock = false;
+        bool oneshot = false;
+        bool dead = false;
+        bool hasRegion = false;
+        RectI regionBox;
     };
 
     struct Positioner {
@@ -171,6 +196,12 @@ namespace {
         Vector<wl_resource*> pointers;
         Vector<wl_resource*> dataDevices;
         Vector<wl_resource*> primaryDevices;
+        Vector<wl_resource*> relPointers;
+        Vector<wl_resource*> swipes;
+        Vector<wl_resource*> pinches;
+        Vector<wl_resource*> holds;
+
+        ConstraintBox* activeConstraint = nullptr;
 
         DataSource* clipboard = nullptr;
         DataSource* primarySel = nullptr;
@@ -215,6 +246,20 @@ namespace {
         void handleButton(u32 button, bool pressed);
         void handleScroll(double dx, double dy);
         void handleKey(u32 code, bool pressed);
+
+        void handleRelMotion(double dx, double dy, double dxRaw, double dyRaw);
+        void handleSwipeBegin(u32 fingers);
+        void handleSwipeUpdate(double dx, double dy);
+        void handleSwipeEnd(bool cancelled);
+        void handlePinchBegin(u32 fingers);
+        void handlePinchUpdate(double dx, double dy, double scale, double rotation);
+        void handlePinchEnd(bool cancelled);
+        void handleHoldBegin(u32 fingers);
+        void handleHoldEnd(bool cancelled);
+
+        void constraintActivate();
+        void constraintDeactivate();
+        void updateConfineRect();
 
         wl_resource* kbTargetRes();
         void kbSendLeave(wl_resource* target);
@@ -273,6 +318,24 @@ namespace {
         ObjList<DataSource>* dataSourceAlloc = nullptr;
         ObjList<SpbBox>* spbAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
+        ObjList<ConstraintBox>* constraintAlloc = nullptr;
+
+        struct IdleNotif {
+            WaylandImpl* srv = nullptr;
+            wl_resource* res = nullptr;
+            bool idled = false;
+            ev_timer timer{};
+        };
+
+        ObjList<IdleNotif>* idleAlloc = nullptr;
+        Vector<IdleNotif*> idleNotifs;
+        int idleInhibitors = 0;
+        ::Output* output = nullptr;
+        double dpmsSec = 0;
+        bool dpmsOff = false;
+        ev_timer dpmsTimer{};
+
+        void activity();
 
         WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
@@ -299,19 +362,63 @@ namespace {
         }
 
         void motion(double x, double y) override {
+            activity();
             seat.handleMotion(x, y);
         }
 
         void button(u32 btn, bool pressed) override {
+            activity();
             seat.handleButton(btn, pressed);
         }
 
         void key(u32 code, bool pressed) override {
+            activity();
             seat.handleKey(code, pressed);
         }
 
         void scroll(double dx, double dy) override {
+            activity();
             seat.handleScroll(dx, dy);
+        }
+
+        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
+            activity();
+            seat.handleRelMotion(dx, dy, dxRaw, dyRaw);
+        }
+
+        void swipeBegin(u32 fingers) override {
+            activity();
+            seat.handleSwipeBegin(fingers);
+        }
+
+        void swipeUpdate(double dx, double dy) override {
+            seat.handleSwipeUpdate(dx, dy);
+        }
+
+        void swipeEnd(bool cancelled) override {
+            seat.handleSwipeEnd(cancelled);
+        }
+
+        void pinchBegin(u32 fingers) override {
+            activity();
+            seat.handlePinchBegin(fingers);
+        }
+
+        void pinchUpdate(double dx, double dy, double scale, double rotation) override {
+            seat.handlePinchUpdate(dx, dy, scale, rotation);
+        }
+
+        void pinchEnd(bool cancelled) override {
+            seat.handlePinchEnd(cancelled);
+        }
+
+        void holdBegin(u32 fingers) override {
+            activity();
+            seat.handleHoldBegin(fingers);
+        }
+
+        void holdEnd(bool cancelled) override {
+            seat.handleHoldEnd(cancelled);
         }
 
         void frameShown(u32 msec) override;
@@ -443,6 +550,9 @@ namespace {
     void xdgPopupDismiss(PopupImpl&);
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
+    void fracSurfaceGone(SurfaceImpl&);
+    void constraintSurfaceGone(SurfaceImpl&);
+    void kbInhibitSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
     struct SpbBox;
     SpbBox* spbFromRes(wl_resource*);
@@ -905,6 +1015,9 @@ namespace {
 
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
+        fracSurfaceGone(*s);
+        constraintSurfaceGone(*s);
+        kbInhibitSurfaceGone(*s);
 
         if (s->texture) {
             srv->scene->orphanedTextures.pushBack(s->texture);
@@ -2248,6 +2361,566 @@ namespace {
         }
     }
 
+    // ---- xdg-output ----
+    void xdgOutputDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    const struct zxdg_output_v1_interface xdgOutputImpl = {.destroy = xdgOutputDestroy};
+
+    void xdgOutputManagerGetXdgOutput(wl_client* client, wl_resource* res, u32 id, wl_resource* outputRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        u32 version = wl_resource_get_version(res);
+        wl_resource* xres = wl_resource_create(client, &zxdg_output_v1_interface, version, id);
+
+        if (!xres) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(xres, &xdgOutputImpl, srv, nullptr);
+
+        zxdg_output_v1_send_logical_position(xres, 0, 0);
+        zxdg_output_v1_send_logical_size(xres, srv->scene->outW, srv->scene->outH);
+
+        if (version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION) {
+            zxdg_output_v1_send_name(xres, "HEADLESS-1");
+        }
+
+        // since v3 xdg_output.done is deprecated in favor of wl_output.done
+        if (version >= 3) {
+            if (wl_resource_get_version(outputRes) >= WL_OUTPUT_DONE_SINCE_VERSION) {
+                wl_output_send_done(outputRes);
+            }
+        } else {
+            zxdg_output_v1_send_done(xres);
+        }
+    }
+
+    const struct zxdg_output_manager_v1_interface xdgOutputManagerImpl = {
+        .destroy = xdgOutputDestroy,
+        .get_xdg_output = xdgOutputManagerGetXdgOutput,
+    };
+
+    void xdgOutputManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zxdg_output_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &xdgOutputManagerImpl, data, nullptr);
+    }
+
+    // ---- fractional-scale ----
+    void fracResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->fracRes = nullptr;
+        }
+    }
+
+    void fracDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    const struct wp_fractional_scale_v1_interface fracImpl = {.destroy = fracDestroy};
+
+    void fracManagerGetFractionalScale(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->fracRes) {
+            wl_resource_post_error(res, WP_FRACTIONAL_SCALE_MANAGER_V1_ERROR_FRACTIONAL_SCALE_EXISTS, "surface already has a fractional scale object");
+
+            return;
+        }
+
+        wl_resource* fres = wl_resource_create(client, &wp_fractional_scale_v1_interface, wl_resource_get_version(res), id);
+
+        if (!fres) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->fracRes = fres;
+        wl_resource_set_implementation(fres, &fracImpl, s, fracResourceDestroyed);
+
+        // scale in 1/120ths; fixed 1.0 for now, output scaling is not wired up yet
+        wp_fractional_scale_v1_send_preferred_scale(fres, 120);
+    }
+
+    const struct wp_fractional_scale_manager_v1_interface fracManagerImpl = {
+        .destroy = fracDestroy,
+        .get_fractional_scale = fracManagerGetFractionalScale,
+    };
+
+    void fracManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_fractional_scale_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &fracManagerImpl, data, nullptr);
+    }
+
+    void fracSurfaceGone(SurfaceImpl& s) {
+        if (s.fracRes) {
+            wl_resource_set_user_data(s.fracRes, nullptr);
+        }
+    }
+
+    // ---- relative-pointer ----
+    void relPointerResourceDestroyed(wl_resource* res) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            removeOne(seat->relPointers, res);
+        }
+    }
+
+    void relPointerDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    const struct zwp_relative_pointer_v1_interface relPointerImpl = {.destroy = relPointerDestroy};
+
+    void relPointerManagerGetRelativePointer(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
+        auto* seat = (SeatState*)wl_resource_get_user_data(pointerRes);
+        wl_resource* r = wl_resource_create(client, &zwp_relative_pointer_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(r, &relPointerImpl, seat, relPointerResourceDestroyed);
+        seat->relPointers.pushBack(r);
+    }
+
+    const struct zwp_relative_pointer_manager_v1_interface relPointerManagerImpl = {
+        .destroy = relPointerDestroy,
+        .get_relative_pointer = relPointerManagerGetRelativePointer,
+    };
+
+    void relPointerManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_relative_pointer_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &relPointerManagerImpl, data, nullptr);
+    }
+
+    // ---- pointer-gestures ----
+    void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list, wl_resource* res) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            removeOne(seat->*list, res);
+        }
+    }
+
+    void swipeResourceDestroyed(wl_resource* res) {
+        gestureResourceDestroyed(&SeatState::swipes, res);
+    }
+
+    void pinchResourceDestroyed(wl_resource* res) {
+        gestureResourceDestroyed(&SeatState::pinches, res);
+    }
+
+    void holdResourceDestroyed(wl_resource* res) {
+        gestureResourceDestroyed(&SeatState::holds, res);
+    }
+
+    const struct zwp_pointer_gesture_swipe_v1_interface gestureSwipeImpl = {.destroy = relPointerDestroy};
+    const struct zwp_pointer_gesture_pinch_v1_interface gesturePinchImpl = {.destroy = relPointerDestroy};
+    const struct zwp_pointer_gesture_hold_v1_interface gestureHoldImpl = {.destroy = relPointerDestroy};
+
+    template <typename Iface>
+    void gestureCreate(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes, const wl_interface* iface, const Iface* impl, Vector<wl_resource*> SeatState::* list, void (*destroyed)(wl_resource*)) {
+        auto* seat = (SeatState*)wl_resource_get_user_data(pointerRes);
+        wl_resource* r = wl_resource_create(client, iface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(r, impl, seat, destroyed);
+        (seat->*list).pushBack(r);
+    }
+
+    void gesturesGetSwipe(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
+        gestureCreate(client, res, id, pointerRes, &zwp_pointer_gesture_swipe_v1_interface, &gestureSwipeImpl, &SeatState::swipes, swipeResourceDestroyed);
+    }
+
+    void gesturesGetPinch(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
+        gestureCreate(client, res, id, pointerRes, &zwp_pointer_gesture_pinch_v1_interface, &gesturePinchImpl, &SeatState::pinches, pinchResourceDestroyed);
+    }
+
+    void gesturesGetHold(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
+        gestureCreate(client, res, id, pointerRes, &zwp_pointer_gesture_hold_v1_interface, &gestureHoldImpl, &SeatState::holds, holdResourceDestroyed);
+    }
+
+    const struct zwp_pointer_gestures_v1_interface pointerGesturesImpl = {
+        .get_swipe_gesture = gesturesGetSwipe,
+        .get_pinch_gesture = gesturesGetPinch,
+        .release = relPointerDestroy,
+        .get_hold_gesture = gesturesGetHold,
+    };
+
+    void pointerGesturesBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_pointer_gestures_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &pointerGesturesImpl, data, nullptr);
+    }
+
+    // ---- pointer-constraints ----
+    RectI regionBounds(wl_resource* regionRes) {
+        RectI box;
+
+        if (auto* rb = (RegionBox*)wl_resource_get_user_data(regionRes)) {
+            for (const RectI& r : rb->rects) {
+                unionRect(box, r);
+            }
+        }
+
+        return box;
+    }
+
+    void constraintResourceDestroyed(wl_resource* res) {
+        auto* c = (ConstraintBox*)wl_resource_get_user_data(res);
+
+        if (!c) {
+            return;
+        }
+
+        SeatState& seat = c->srv->seat;
+
+        if (seat.activeConstraint == c) {
+            seat.activeConstraint = nullptr;
+            c->srv->scene->pointerLocked = false;
+            c->srv->scene->pointerConfined = false;
+        }
+
+        if (c->surface) {
+            c->surface->constraint = nullptr;
+        }
+
+        c->srv->constraintAlloc->release(c);
+    }
+
+    void constraintSetRegion(wl_client*, wl_resource* res, wl_resource* regionRes) {
+        auto* c = (ConstraintBox*)wl_resource_get_user_data(res);
+
+        if (!c) {
+            return;
+        }
+
+        c->hasRegion = regionRes != nullptr;
+
+        if (c->hasRegion) {
+            c->regionBox = regionBounds(regionRes);
+        }
+
+        c->srv->seat.updateConfineRect();
+    }
+
+    void lockedSetCursorPositionHint(wl_client*, wl_resource*, wl_fixed_t, wl_fixed_t) {
+        // accepted but ignored: the cursor simply stays where it was locked
+    }
+
+    const struct zwp_locked_pointer_v1_interface lockedPointerImpl = {
+        .destroy = relPointerDestroy,
+        .set_cursor_position_hint = lockedSetCursorPositionHint,
+        .set_region = constraintSetRegion,
+    };
+
+    const struct zwp_confined_pointer_v1_interface confinedPointerImpl = {
+        .destroy = relPointerDestroy,
+        .set_region = constraintSetRegion,
+    };
+
+    void constraintCreate(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes, wl_resource* regionRes, u32 lifetime, bool isLock) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->constraint) {
+            wl_resource_post_error(res, ZWP_POINTER_CONSTRAINTS_V1_ERROR_ALREADY_CONSTRAINED, "surface is already constrained");
+
+            return;
+        }
+
+        const wl_interface* iface = isLock ? &zwp_locked_pointer_v1_interface : &zwp_confined_pointer_v1_interface;
+        wl_resource* r = wl_resource_create(client, iface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ConstraintBox* c = srv->constraintAlloc->make();
+
+        c->srv = srv;
+        c->surface = s;
+        c->res = r;
+        c->isLock = isLock;
+        c->oneshot = lifetime == ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT;
+        c->hasRegion = regionRes != nullptr;
+
+        if (c->hasRegion) {
+            c->regionBox = regionBounds(regionRes);
+        }
+
+        s->constraint = c;
+
+        if (isLock) {
+            wl_resource_set_implementation(r, &lockedPointerImpl, c, constraintResourceDestroyed);
+        } else {
+            wl_resource_set_implementation(r, &confinedPointerImpl, c, constraintResourceDestroyed);
+        }
+
+        if (srv->seat.ptrFocus == s) {
+            srv->seat.constraintActivate();
+        }
+    }
+
+    void constraintsLockPointer(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes, wl_resource*, wl_resource* regionRes, u32 lifetime) {
+        constraintCreate(client, res, id, surfaceRes, regionRes, lifetime, true);
+    }
+
+    void constraintsConfinePointer(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes, wl_resource*, wl_resource* regionRes, u32 lifetime) {
+        constraintCreate(client, res, id, surfaceRes, regionRes, lifetime, false);
+    }
+
+    const struct zwp_pointer_constraints_v1_interface pointerConstraintsImpl = {
+        .destroy = relPointerDestroy,
+        .lock_pointer = constraintsLockPointer,
+        .confine_pointer = constraintsConfinePointer,
+    };
+
+    void pointerConstraintsBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_pointer_constraints_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &pointerConstraintsImpl, data, nullptr);
+    }
+
+    void constraintSurfaceGone(SurfaceImpl& s) {
+        if (ConstraintBox* c = s.constraint) {
+            SeatState& seat = c->srv->seat;
+
+            if (seat.activeConstraint == c) {
+                seat.activeConstraint = nullptr;
+                c->srv->scene->pointerLocked = false;
+                c->srv->scene->pointerConfined = false;
+            }
+
+            c->surface = nullptr;
+            s.constraint = nullptr;
+        }
+    }
+
+    // ---- keyboard-shortcuts-inhibit ----
+    void kbInhibitorResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->kbInhibitRes = nullptr;
+        }
+    }
+
+    const struct zwp_keyboard_shortcuts_inhibitor_v1_interface kbInhibitorImpl = {.destroy = relPointerDestroy};
+
+    void kbInhibitManagerInhibitShortcuts(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes, wl_resource*) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->kbInhibitRes) {
+            wl_resource_post_error(res, ZWP_KEYBOARD_SHORTCUTS_INHIBIT_MANAGER_V1_ERROR_ALREADY_INHIBITED, "surface already has a shortcuts inhibitor");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &zwp_keyboard_shortcuts_inhibitor_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->kbInhibitRes = r;
+        wl_resource_set_implementation(r, &kbInhibitorImpl, s, kbInhibitorResourceDestroyed);
+
+        // imway has no compositor shortcuts to suspend, so this is always on
+        zwp_keyboard_shortcuts_inhibitor_v1_send_active(r);
+    }
+
+    const struct zwp_keyboard_shortcuts_inhibit_manager_v1_interface kbInhibitManagerImpl = {
+        .destroy = relPointerDestroy,
+        .inhibit_shortcuts = kbInhibitManagerInhibitShortcuts,
+    };
+
+    void kbInhibitManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &kbInhibitManagerImpl, data, nullptr);
+    }
+
+    void kbInhibitSurfaceGone(SurfaceImpl& s) {
+        if (s.kbInhibitRes) {
+            wl_resource_set_user_data(s.kbInhibitRes, nullptr);
+        }
+    }
+
+    // ---- idle-inhibit ----
+    void idleInhibitorResourceDestroyed(wl_resource* res) {
+        ((WaylandImpl*)wl_resource_get_user_data(res))->idleInhibitors--;
+    }
+
+    const struct zwp_idle_inhibitor_v1_interface idleInhibitorImpl = {.destroy = relPointerDestroy};
+
+    void idleInhibitManagerCreateInhibitor(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_idle_inhibitor_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(r, &idleInhibitorImpl, srv, idleInhibitorResourceDestroyed);
+        srv->idleInhibitors++;
+    }
+
+    const struct zwp_idle_inhibit_manager_v1_interface idleInhibitManagerImpl = {
+        .destroy = relPointerDestroy,
+        .create_inhibitor = idleInhibitManagerCreateInhibitor,
+    };
+
+    void idleInhibitManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_idle_inhibit_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &idleInhibitManagerImpl, data, nullptr);
+    }
+
+    // ---- ext-idle-notify ----
+    void idleNotifCb(struct ev_loop* l, ev_timer* w, int) {
+        auto* n = (WaylandImpl::IdleNotif*)w->data;
+
+        if (n->srv->idleInhibitors > 0) {
+            ev_timer_again(l, w);
+
+            return;
+        }
+
+        if (!n->idled) {
+            n->idled = true;
+            ext_idle_notification_v1_send_idled(n->res);
+        }
+
+        ev_timer_stop(l, w);
+    }
+
+    void idleNotificationResourceDestroyed(wl_resource* res) {
+        auto* n = (WaylandImpl::IdleNotif*)wl_resource_get_user_data(res);
+
+        ev_timer_stop(n->srv->loop, &n->timer);
+        removeOne(n->srv->idleNotifs, n);
+        n->srv->idleAlloc->release(n);
+    }
+
+    const struct ext_idle_notification_v1_interface idleNotificationImpl = {.destroy = relPointerDestroy};
+
+    void idleNotifierGetNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &ext_idle_notification_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        WaylandImpl::IdleNotif* n = srv->idleAlloc->make();
+
+        n->srv = srv;
+        n->res = r;
+
+        double t = timeoutMs > 0 ? timeoutMs / 1000.0 : 0.001;
+
+        ev_timer_init(&n->timer, idleNotifCb, t, t);
+        n->timer.data = n;
+        ev_timer_again(srv->loop, &n->timer);
+
+        srv->idleNotifs.pushBack(n);
+        wl_resource_set_implementation(r, &idleNotificationImpl, n, idleNotificationResourceDestroyed);
+    }
+
+    const struct ext_idle_notifier_v1_interface idleNotifierImpl = {
+        .destroy = relPointerDestroy,
+        .get_idle_notification = idleNotifierGetNotification,
+    };
+
+    void idleNotifierBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &ext_idle_notifier_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &idleNotifierImpl, data, nullptr);
+    }
+
+    void dpmsTimerCb(struct ev_loop* l, ev_timer* w, int) {
+        auto* srv = (WaylandImpl*)w->data;
+
+        if (srv->idleInhibitors > 0) {
+            ev_timer_again(l, w);
+
+            return;
+        }
+
+        if (!srv->dpmsOff && srv->output) {
+            srv->dpmsOff = true;
+            srv->output->setPowerSave(false);
+        }
+
+        ev_timer_stop(l, w);
+    }
+
     const struct wl_buffer_interface dmabufWlBufferImpl = {.destroy = resDestroy};
     const struct wl_buffer_interface spbWlBufferImpl = {.destroy = resDestroy};
 
@@ -3078,6 +3751,8 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
         return;
     }
 
+    constraintDeactivate();
+
     if (ptrFocus) {
         u32 serial = wl_display_next_serial(srv->display);
 
@@ -3109,6 +3784,243 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
             }
         }
     }
+
+    constraintActivate();
+}
+
+void SeatState::constraintActivate() {
+    activeConstraint = nullptr;
+
+    if (!ptrFocus) {
+        return;
+    }
+
+    ConstraintBox* c = ((SurfaceImpl*)ptrFocus)->constraint;
+
+    if (!c || c->dead) {
+        return;
+    }
+
+    activeConstraint = c;
+
+    if (c->isLock) {
+        srv->scene->pointerLocked = true;
+        zwp_locked_pointer_v1_send_locked(c->res);
+    } else {
+        srv->scene->pointerConfined = true;
+        updateConfineRect();
+        zwp_confined_pointer_v1_send_confined(c->res);
+    }
+}
+
+void SeatState::constraintDeactivate() {
+    ConstraintBox* c = activeConstraint;
+
+    if (!c) {
+        return;
+    }
+
+    activeConstraint = nullptr;
+    srv->scene->pointerLocked = false;
+    srv->scene->pointerConfined = false;
+
+    if (c->isLock) {
+        zwp_locked_pointer_v1_send_unlocked(c->res);
+    } else {
+        zwp_confined_pointer_v1_send_unconfined(c->res);
+    }
+
+    if (c->oneshot) {
+        c->dead = true;
+    }
+}
+
+void SeatState::updateConfineRect() {
+    ConstraintBox* c = activeConstraint;
+
+    if (!c || c->isLock || !ptrFocus) {
+        return;
+    }
+
+    Scene* scn = srv->scene;
+    double x0 = ptrFocus->imgX, y0 = ptrFocus->imgY;
+    double x1 = x0 + ptrFocus->viewW() - 1, y1 = y0 + ptrFocus->viewH() - 1;
+
+    if (c->hasRegion && !c->regionBox.empty()) {
+        double rx0 = ptrFocus->imgX + c->regionBox.x;
+        double ry0 = ptrFocus->imgY + c->regionBox.y;
+        double rx1 = rx0 + c->regionBox.w - 1;
+        double ry1 = ry0 + c->regionBox.h - 1;
+
+        x0 = rx0 > x0 ? rx0 : x0;
+        y0 = ry0 > y0 ? ry0 : y0;
+        x1 = rx1 < x1 ? rx1 : x1;
+        y1 = ry1 < y1 ? ry1 : y1;
+    }
+
+    scn->confineX0 = x0;
+    scn->confineY0 = y0;
+    scn->confineX1 = x1;
+    scn->confineY1 = y1;
+}
+
+void SeatState::handleRelMotion(double dx, double dy, double dxRaw, double dyRaw) {
+    if (!ptrFocus || relPointers.empty()) {
+        return;
+    }
+
+    u64 ut = (u64)nowMsec() * 1000;
+    bool sent = false;
+
+    for (wl_resource* r : relPointers) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_relative_pointer_v1_send_relative_motion(r, (u32)(ut >> 32), (u32)ut, wl_fixed_from_double(dx), wl_fixed_from_double(dy), wl_fixed_from_double(dxRaw), wl_fixed_from_double(dyRaw));
+            sent = true;
+        }
+    }
+
+    if (!sent) {
+        return;
+    }
+
+    for (wl_resource* p : pointers) {
+        if (sameClientS(p, ptrFocus) && wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+            wl_pointer_send_frame(p);
+        }
+    }
+}
+
+void SeatState::handleSwipeBegin(u32 fingers) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : swipes) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_swipe_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+        }
+    }
+}
+
+void SeatState::handleSwipeUpdate(double dx, double dy) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 t = nowMsec();
+
+    for (wl_resource* r : swipes) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_swipe_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy));
+        }
+    }
+}
+
+void SeatState::handleSwipeEnd(bool cancelled) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : swipes) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_swipe_v1_send_end(r, serial, t, cancelled);
+        }
+    }
+}
+
+void SeatState::handlePinchBegin(u32 fingers) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : pinches) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_pinch_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+        }
+    }
+}
+
+void SeatState::handlePinchUpdate(double dx, double dy, double scale, double rotation) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 t = nowMsec();
+
+    for (wl_resource* r : pinches) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_pinch_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy), wl_fixed_from_double(scale), wl_fixed_from_double(rotation));
+        }
+    }
+}
+
+void SeatState::handlePinchEnd(bool cancelled) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : pinches) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_pinch_v1_send_end(r, serial, t, cancelled);
+        }
+    }
+}
+
+void SeatState::handleHoldBegin(u32 fingers) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : holds) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_hold_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+        }
+    }
+}
+
+void SeatState::handleHoldEnd(bool cancelled) {
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
+
+    for (wl_resource* r : holds) {
+        if (sameClientS(r, ptrFocus)) {
+            zwp_pointer_gesture_hold_v1_send_end(r, serial, t, cancelled);
+        }
+    }
+}
+
+void WaylandImpl::activity() {
+    for (IdleNotif* n : idleNotifs) {
+        if (n->idled) {
+            n->idled = false;
+            ext_idle_notification_v1_send_resumed(n->res);
+        }
+
+        ev_timer_again(loop, &n->timer);
+    }
+
+    if (dpmsSec > 0 && output) {
+        ev_timer_again(loop, &dpmsTimer);
+
+        if (dpmsOff) {
+            dpmsOff = false;
+            output->setPowerSave(true);
+            scene->needsFrame = true;
+        }
+    }
 }
 
 void SeatState::handleMotion(double x, double y) {
@@ -3135,6 +4047,8 @@ void SeatState::handleMotion(double x, double y) {
     if (!ptrFocus) {
         return;
     }
+
+    updateConfineRect();
 
     double sx = x - ptrFocus->imgX;
     double sy = y - ptrFocus->imgY;
@@ -3659,6 +4573,17 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     dataSourceAlloc = pool->make<ObjList<DataSource>>(pool);
     spbAlloc = pool->make<ObjList<SpbBox>>(pool);
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
+    constraintAlloc = pool->make<ObjList<ConstraintBox>>(pool);
+    idleAlloc = pool->make<ObjList<IdleNotif>>(pool);
+
+    output = cfg.output;
+    dpmsSec = cfg.dpmsSec;
+
+    if (output && dpmsSec > 0) {
+        ev_timer_init(&dpmsTimer, dpmsTimerCb, dpmsSec, dpmsSec);
+        dpmsTimer.data = this;
+        ev_timer_again(loop, &dpmsTimer);
+    }
 
     if (wl_display_add_socket(display, socketName) != 0) {
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
@@ -3718,6 +4643,14 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &xdg_activation_v1_interface, 1, this, activationBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
+    wl_global_create(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
+    wl_global_create(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
+    wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
+    wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
+    wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
+    wl_global_create(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
+    wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
+    wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
 
     if (!formats.empty()) {
         int dmabufVersion = 3;

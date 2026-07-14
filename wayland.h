@@ -9,6 +9,7 @@ namespace stl {
 struct ev_loop;
 
 struct Scene;
+struct Output;
 struct InputSink;
 struct DmabufFormat;
 struct FrameListener;
@@ -21,6 +22,8 @@ struct WaylandConfig {
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;
     unsigned long long mainDevice = 0;
+    Output* output = nullptr;
+    double dpmsSec = 0;
 };
 
 struct Wayland {

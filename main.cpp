@@ -25,7 +25,7 @@ using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list] [-- CMD ARG...]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
     void childCb(struct ev_loop* loop, ev_child* w, int) {
@@ -46,6 +46,7 @@ int main(int argc, char** argv) {
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
     int framesLimit = 0;
+    double dpmsSec = 0;
     char** cmdArgv = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -84,6 +85,8 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--frames"_sv) {
             framesLimit = (int)StringView(next()).stou();
+        } else if (arg == "--dpms"_sv) {
+            dpmsSec = parseFloat(StringView(next()));
         } else if (arg == "--screenshot"_sv) {
             screenshotPath = next();
         } else if (arg == "--control"_sv) {
@@ -160,6 +163,8 @@ int main(int argc, char** argv) {
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
         wcfg.mainDevice = device->renderDevice();
+        wcfg.output = output;
+        wcfg.dpmsSec = kms ? dpmsSec : 0;
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 
@@ -173,7 +178,7 @@ int main(int argc, char** argv) {
 
         if (kms) {
             try {
-                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink, scene->outW, scene->outH);
+                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink, *scene);
             } catch (...) {
                 sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }

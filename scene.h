@@ -138,6 +138,11 @@ struct Scene {
     bool needsFrame = true;
     bool drawCursor = false;
 
+    // pointer-constraints state: written by wayland, honored by the input source
+    bool pointerLocked = false;
+    bool pointerConfined = false;
+    double confineX0 = 0, confineY0 = 0, confineX1 = 0, confineY1 = 0;
+
     Surface* dragIcon = nullptr;
 
     CursorKind cursorShape = CursorKind::unset;

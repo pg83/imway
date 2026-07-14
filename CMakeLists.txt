@@ -142,7 +142,30 @@ add_custom_command(OUTPUT "${PROTO_DIR}/xdg-activation-v1-protocol.c"
     COMMAND ${WAYLAND_SCANNER} private-code "${ACTIVATION_XML}" "${PROTO_DIR}/xdg-activation-v1-protocol.c"
     DEPENDS "${ACTIVATION_XML}")
 
+foreach(PROTO
+        "unstable/xdg-output/xdg-output-unstable-v1"
+        "staging/fractional-scale/fractional-scale-v1"
+        "unstable/pointer-gestures/pointer-gestures-unstable-v1"
+        "unstable/relative-pointer/relative-pointer-unstable-v1"
+        "unstable/pointer-constraints/pointer-constraints-unstable-v1"
+        "unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1"
+        "unstable/idle-inhibit/idle-inhibit-unstable-v1"
+        "staging/ext-idle-notify/ext-idle-notify-v1")
+    get_filename_component(PROTO_NAME "${PROTO}" NAME)
+    set(PROTO_XML "${WAYLAND_PROTOCOLS_DIR}/${PROTO}.xml")
+    add_custom_command(OUTPUT "${PROTO_DIR}/${PROTO_NAME}-server-protocol.h"
+        COMMAND ${WAYLAND_SCANNER} server-header "${PROTO_XML}" "${PROTO_DIR}/${PROTO_NAME}-server-protocol.h"
+        DEPENDS "${PROTO_XML}")
+    add_custom_command(OUTPUT "${PROTO_DIR}/${PROTO_NAME}-protocol.c"
+        COMMAND ${WAYLAND_SCANNER} private-code "${PROTO_XML}" "${PROTO_DIR}/${PROTO_NAME}-protocol.c"
+        DEPENDS "${PROTO_XML}")
+    list(APPEND EXTRA_PROTO_SRC
+        "${PROTO_DIR}/${PROTO_NAME}-server-protocol.h"
+        "${PROTO_DIR}/${PROTO_NAME}-protocol.c")
+endforeach()
+
 add_library(protocols STATIC
+    ${EXTRA_PROTO_SRC}
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
     "${PROTO_DIR}/xdg-shell-client-protocol.h"

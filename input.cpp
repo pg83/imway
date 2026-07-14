@@ -1,5 +1,6 @@
 #include "input.h"
 #include "input_sink.h"
+#include "scene.h"
 #include "session.h"
 #include "util.h"
 
@@ -32,13 +33,13 @@ namespace {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         InputSink* sink = nullptr;
-        int outW = 0, outH = 0;
+        Scene* scene = nullptr;
         udev* ud = nullptr;
         libinput* li = nullptr;
         ev_io io{};
         double relX = 0, relY = 0;
 
-        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, int w, int h);
+        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn);
         ~LibinputSource() noexcept;
 
         void sessionEnabled() override {
@@ -47,6 +48,20 @@ namespace {
 
         void sessionDisabled() override {
             libinput_suspend(li);
+        }
+
+        void clampCursor() {
+            double x0 = 0, y0 = 0, x1 = scene->outW - 1, y1 = scene->outH - 1;
+
+            if (scene->pointerConfined) {
+                x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
+                y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
+                x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
+                y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
+            }
+
+            relX = relX < x0 ? x0 : relX > x1 ? x1 : relX;
+            relY = relY < y0 ? y0 : relY > y1 ? y1 : relY;
         }
 
         void dispatch();
@@ -81,7 +96,7 @@ namespace {
     }
 }
 
-LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, int w, int h) : loop(evLoop), session(&ses), sink(&s), outW(w), outH(h), relX(w / 2.0), relY(h / 2.0) {
+LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn) : loop(evLoop), session(&ses), sink(&s), scene(&scn), relX(scn.outW / 2.0), relY(scn.outH / 2.0) {
     ud = udev_new();
     li = libinput_udev_create_context(&liIface, this, ud);
     STD_VERIFY(li);
@@ -137,26 +152,20 @@ void LibinputSource::dispatch() {
         switch (libinput_event_get_type(ev)) {
             case LIBINPUT_EVENT_POINTER_MOTION: {
                 auto* p = libinput_event_get_pointer_event(ev);
+                double dx = libinput_event_pointer_get_dx(p);
+                double dy = libinput_event_pointer_get_dy(p);
 
-                relX += libinput_event_pointer_get_dx(p);
-                relY += libinput_event_pointer_get_dy(p);
+                sink->relMotion(dx, dy, libinput_event_pointer_get_dx_unaccelerated(p), libinput_event_pointer_get_dy_unaccelerated(p));
 
-                if (relX < 0) {
-                    relX = 0;
+                // while a lock is active the visible cursor stays put,
+                // the client works off the relative stream above
+                if (scene->pointerLocked) {
+                    break;
                 }
 
-                if (relY < 0) {
-                    relY = 0;
-                }
-
-                if (relX > outW - 1) {
-                    relX = outW - 1;
-                }
-
-                if (relY > outH - 1) {
-                    relY = outH - 1;
-                }
-
+                relX += dx;
+                relY += dy;
+                clampCursor();
                 sink->motion(relX, relY);
 
                 break;
@@ -164,12 +173,49 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                relX = libinput_event_pointer_get_absolute_x_transformed(p, outW);
-                relY = libinput_event_pointer_get_absolute_y_transformed(p, outH);
+                if (scene->pointerLocked) {
+                    break;
+                }
+
+                relX = libinput_event_pointer_get_absolute_x_transformed(p, scene->outW);
+                relY = libinput_event_pointer_get_absolute_y_transformed(p, scene->outH);
+                clampCursor();
                 sink->motion(relX, relY);
 
                 break;
             }
+            case LIBINPUT_EVENT_GESTURE_SWIPE_BEGIN:
+                sink->swipeBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                break;
+            case LIBINPUT_EVENT_GESTURE_SWIPE_UPDATE: {
+                auto* g = libinput_event_get_gesture_event(ev);
+
+                sink->swipeUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g));
+
+                break;
+            }
+            case LIBINPUT_EVENT_GESTURE_SWIPE_END:
+                sink->swipeEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                break;
+            case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:
+                sink->pinchBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                break;
+            case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE: {
+                auto* g = libinput_event_get_gesture_event(ev);
+
+                sink->pinchUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g), libinput_event_gesture_get_scale(g), libinput_event_gesture_get_angle_delta(g));
+
+                break;
+            }
+            case LIBINPUT_EVENT_GESTURE_PINCH_END:
+                sink->pinchEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                break;
+            case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
+                sink->holdBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                break;
+            case LIBINPUT_EVENT_GESTURE_HOLD_END:
+                sink->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                break;
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
@@ -213,6 +259,6 @@ void LibinputSource::dispatch() {
     }
 }
 
-InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink, int outW, int outH) {
-    return pool->make<LibinputSource>(loop, session, sink, outW, outH);
+InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink, Scene& scene) {
+    return pool->make<LibinputSource>(loop, session, sink, scene);
 }

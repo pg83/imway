@@ -31,6 +31,14 @@ unstable/tablet/tablet-unstable-v2.xml
 staging/cursor-shape/cursor-shape-v1.xml
 staging/single-pixel-buffer/single-pixel-buffer-v1.xml
 staging/xdg-activation/xdg-activation-v1.xml
+unstable/xdg-output/xdg-output-unstable-v1.xml
+staging/fractional-scale/fractional-scale-v1.xml
+unstable/pointer-gestures/pointer-gestures-unstable-v1.xml
+unstable/relative-pointer/relative-pointer-unstable-v1.xml
+unstable/pointer-constraints/pointer-constraints-unstable-v1.xml
+unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
+staging/ext-idle-notify/ext-idle-notify-v1.xml
 "
 
 for xml in $PROTOCOLS; do
