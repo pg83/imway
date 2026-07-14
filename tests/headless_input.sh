@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# M2-тест: печать в foot через control-канал создаёт файл.
-# Цепочка: FIFO → seat → wl_keyboard → foot → pty → shell → touch.
+# M2 test: typing into foot via the control channel creates a file.
+# Chain: FIFO → seat → wl_keyboard → foot → pty → shell → touch.
 set -euo pipefail
 
 IMWAY="$1"
 
-command -v foot >/dev/null || { echo "SKIP: нет foot"; exit 127; }
+command -v foot >/dev/null || { echo "SKIP: foot not found"; exit 127; }
 
 RT="$(mktemp -d)"
 trap 'rm -rf "$RT"' EXIT
@@ -25,13 +25,13 @@ done
 WAYLAND_DISPLAY=imway-input foot >"$RT/foot.log" 2>&1 &
 FOOT_PID=$!
 
-# ждём map
+# wait for map
 for _ in $(seq 1 100); do
     grep -q "mapped" "$RT/imway.log" && break
     sleep 0.1
 done
-grep -q "mapped" "$RT/imway.log" || { echo "foot не замапился"; cat "$RT/foot.log"; exit 1; }
-sleep 1 # дать шеллу внутри foot прогрузиться
+grep -q "mapped" "$RT/imway.log" || { echo "foot did not map"; cat "$RT/foot.log"; exit 1; }
+sleep 1 # let the shell inside foot finish starting up
 
 {
     echo "type touch $MARKER"
@@ -50,8 +50,8 @@ wait "$IMWAY_PID" || true
 kill "$FOOT_PID" 2>/dev/null || true
 
 [[ -e "$MARKER" ]] || {
-    echo "FAIL: набранная команда не исполнилась (нет $MARKER)"
+    echo "FAIL: typed command did not run (no $MARKER)"
     tail -5 "$RT/imway.log" "$RT/foot.log"
     exit 1
 }
-echo "OK: клавиатурный ввод дошёл до шелла внутри foot"
+echo "OK: keyboard input reached the shell inside foot"

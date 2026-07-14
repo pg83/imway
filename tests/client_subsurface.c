@@ -1,7 +1,7 @@
-// Тестовый клиент: красный toplevel 300x200 + две субповерхности —
-// зелёная sync 80x80 в (40,40) и синяя desync 60x60 в (180,100), ниже родителя
-// быть не должно: обе выше. Проверяет sync-семантику: зелёная коммитится ДО
-// commit родителя и должна появиться вместе с ним.
+// Test client: red 300x200 toplevel + two subsurfaces — a green sync 80x80
+// at (40,40) and a blue desync 60x60 at (180,100); neither may end up below
+// the parent: both are above. Checks sync semantics: the green one is
+// committed BEFORE the parent's commit and must appear together with it.
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -71,21 +71,21 @@ static struct wl_buffer* solid_buffer(int w, int h, uint32_t argb) {
 }
 
 static void draw(void) {
-    // зелёная субповерхность (sync по умолчанию): коммит до родителя,
-    // на экране появится только с commit родителя
+    // green subsurface (sync by default): committed before the parent,
+    // appears on screen only with the parent's commit
     wl_surface_attach(sub_green, solid_buffer(80, 80, 0xFF00FF00), 0, 0);
     wl_surface_commit(sub_green);
 
     wl_surface_attach(surface, solid_buffer(300, 200, 0xFFFF0000), 0, 0);
     wl_surface_damage(surface, 0, 0, 300, 200);
-    wl_surface_commit(surface); // применяет и кэш зелёной
+    wl_surface_commit(surface); // also applies the green one's cached state
 
-    // синяя — desync: коммит после родителя, виден сразу
+    // blue — desync: committed after the parent, visible immediately
     wl_surface_attach(sub_blue, solid_buffer(60, 60, 0xFF0000FF), 0, 0);
     wl_surface_commit(sub_blue);
 
     drawn = 1;
-    printf("client_subsurface: закоммитил toplevel + 2 субповерхности\n");
+    printf("client_subsurface: committed toplevel + 2 subsurfaces\n");
 }
 
 static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
@@ -117,14 +117,14 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 int main(void) {
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_subsurface: нет соединения с композитором\n");
+        fprintf(stderr, "client_subsurface: cannot connect to compositor\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !subcompositor || !shm || !wm_base) {
-        fprintf(stderr, "client_subsurface: нет нужных глобалов\n");
+        fprintf(stderr, "client_subsurface: missing required globals\n");
         return 1;
     }
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
@@ -139,7 +139,7 @@ int main(void) {
     sub_green = wl_compositor_create_surface(compositor);
     struct wl_subsurface* ss_green =
         wl_subcompositor_get_subsurface(subcompositor, sub_green, surface);
-    wl_subsurface_set_position(ss_green, 40, 40); // sync (дефолт)
+    wl_subsurface_set_position(ss_green, 40, 40); // sync (default)
 
     sub_blue = wl_compositor_create_surface(compositor);
     struct wl_subsurface* ss_blue =
@@ -147,7 +147,7 @@ int main(void) {
     wl_subsurface_set_position(ss_blue, 180, 100);
     wl_subsurface_set_desync(ss_blue);
 
-    wl_surface_commit(surface); // initial commit без буфера → ждём configure
+    wl_surface_commit(surface); // initial commit without a buffer → wait for configure
 
     while (wl_display_dispatch(display) != -1) {
     }

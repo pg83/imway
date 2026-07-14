@@ -1,4 +1,4 @@
-// Смоук libev: таймер срабатывает, цикл завершается.
+// libev smoke test: timer fires, loop exits.
 
 #include <cstdio>
 

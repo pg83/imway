@@ -1,5 +1,5 @@
-// Тестовый wayland-клиент: зелёный прямоугольник 400x300 через wl_shm + xdg-shell.
-// Живёт до SIGTERM; это зародыш нашего protocol-test-клиента.
+// Test wayland client: green 400x300 rectangle via wl_shm + xdg-shell.
+// Lives until SIGTERM; this is the seed of our protocol-test client.
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -71,10 +71,10 @@ static void draw(void) {
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     drawn = 1;
-    printf("client_sigbus: закоммитил %dx%d\n", W, H);
+    printf("client_sigbus: committed %dx%d\n", W, H);
 }
 
-// после первого показа: обрезать пул под ногами композитора и закоммитить снова
+// after the first show: truncate the pool out from under the compositor and commit again
 static void attack(struct wl_display* display) {
     wl_display_roundtrip(display);
     if (ftruncate(pool_fd, 0) < 0) {
@@ -85,11 +85,11 @@ static void attack(struct wl_display* display) {
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     wl_display_flush(display);
-    printf("client_sigbus: пул обрезан, коммит послан\n");
-    // композитор должен пережить SIGBUS и убить нас protocol error'ом
+    printf("client_sigbus: pool truncated, commit sent\n");
+    // the compositor must survive SIGBUS and kill us with a protocol error
     while (wl_display_dispatch(display) != -1) {
     }
-    printf("client_sigbus: соединение закрыто композитором\n");
+    printf("client_sigbus: connection closed by compositor\n");
     exit(0);
 }
 
@@ -122,14 +122,14 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 int main(void) {
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_sigbus: нет соединения с композитором\n");
+        fprintf(stderr, "client_sigbus: cannot connect to compositor\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !shm || !wm_base) {
-        fprintf(stderr, "client_sigbus: нет нужных глобалов (compositor=%p shm=%p wm_base=%p)\n",
+        fprintf(stderr, "client_sigbus: missing required globals (compositor=%p shm=%p wm_base=%p)\n",
                 (void*)compositor, (void*)shm, (void*)wm_base);
         return 1;
     }
@@ -142,7 +142,7 @@ int main(void) {
     xdg_toplevel_add_listener(tl, &toplevel_listener, NULL);
     xdg_toplevel_set_title(tl, "client_shm");
     xdg_toplevel_set_app_id(tl, "imway.client-sigbus");
-    wl_surface_commit(surface); // initial commit без буфера → ждём configure
+    wl_surface_commit(surface); // initial commit without a buffer → wait for configure
 
     while (!drawn && wl_display_dispatch(display) != -1) {
     }

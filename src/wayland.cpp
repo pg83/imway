@@ -1148,7 +1148,7 @@ namespace {
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
         if (surface->xdg || surface->sub) {
-            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "у поверхности уже есть роль");
+            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "surface already has a role");
 
             return;
         }
@@ -1513,7 +1513,7 @@ namespace {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
         if (!parentRes) {
-            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "попап без родителя не поддержан");
+            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "popup without a parent is not supported");
 
             return;
         }
@@ -2114,7 +2114,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
-            wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "поверхность уничтожена");
+            wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "surface is gone");
 
             return;
         }
@@ -2129,7 +2129,7 @@ namespace {
         }
 
         if (dx < 0 || dy < 0 || dw <= 0 || dh <= 0) {
-            wl_resource_post_error(res, WP_VIEWPORT_ERROR_BAD_VALUE, "некорректный source rect");
+            wl_resource_post_error(res, WP_VIEWPORT_ERROR_BAD_VALUE, "invalid source rect");
 
             return;
         }
@@ -2144,7 +2144,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
-            wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "поверхность уничтожена");
+            wl_resource_post_error(res, WP_VIEWPORT_ERROR_NO_SURFACE, "surface is gone");
 
             return;
         }
@@ -2156,7 +2156,7 @@ namespace {
         }
 
         if (w <= 0 || h <= 0) {
-            wl_resource_post_error(res, WP_VIEWPORT_ERROR_BAD_VALUE, "некорректный destination");
+            wl_resource_post_error(res, WP_VIEWPORT_ERROR_BAD_VALUE, "invalid destination");
 
             return;
         }
@@ -2191,7 +2191,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         if (s->vpRes) {
-            wl_resource_post_error(res, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS, "у поверхности уже есть вьюпорт");
+            wl_resource_post_error(res, WP_VIEWPORTER_ERROR_VIEWPORT_EXISTS, "surface already has a viewport");
 
             return;
         }
@@ -2458,14 +2458,14 @@ namespace {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params уже использованы");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params already used");
             close(fd);
 
             return;
         }
 
         if (planeIdx >= (u32)kDmabufMaxPlanes) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_IDX, "plane_idx %u вне диапазона", planeIdx);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_IDX, "plane_idx %u out of range", planeIdx);
             close(fd);
 
             return;
@@ -2474,7 +2474,7 @@ namespace {
         DmabufBuffer& b = p->pending->buf;
 
         if (b.fds[planeIdx] >= 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET, "plane %u уже задан", planeIdx);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET, "plane %u already set", planeIdx);
             close(fd);
 
             return;
@@ -2494,13 +2494,13 @@ namespace {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params уже использованы");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_ALREADY_USED, "params already used");
 
             return nullptr;
         }
 
         if (width <= 0 || height <= 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS, "размер %dx%d", width, height);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS, "invalid dimensions %dx%d", width, height);
 
             return nullptr;
         }
@@ -2508,13 +2508,13 @@ namespace {
         DmabufBuffer& b = p->pending->buf;
 
         if (b.nplanes == 0 || b.fds[0] < 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "нет plane 0");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "plane 0 missing");
 
             return nullptr;
         }
 
         if (!p->srv->formatSupported(format, b.modifier)) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "формат 0x%x не поддержан", format);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "format 0x%x not supported", format);
 
             return nullptr;
         }

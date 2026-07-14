@@ -1,6 +1,6 @@
-// Тестовый клиент viewporter: буфер 200x200 (левая половина зелёная, правая
-// маджента), source = правая половина, destination = 150x150. В кадре должна
-// быть только маджента, растянутая до 150x150.
+// Viewporter test client: 200x200 buffer (left half green, right half
+// magenta), source = right half, destination = 150x150. Only magenta,
+// scaled to 150x150, should appear in the frame.
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -62,7 +62,7 @@ static void draw(void) {
     uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     for (int y = 0; y < H; y++)
         for (int x = 0; x < W; x++)
-            px[y * W + x] = x < W / 2 ? 0xFF00FF00 : 0xFFFF00FF; // зелёный | маджента
+            px[y * W + x] = x < W / 2 ? 0xFF00FF00 : 0xFFFF00FF; // green | magenta
     munmap(px, size);
     struct wl_shm_pool* pool = wl_shm_create_pool(shm, fd, size);
     struct wl_buffer* buf =
@@ -78,7 +78,7 @@ static void draw(void) {
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     drawn = 1;
-    printf("client_viewport: закоммитил 200x200 с кропом → 150x150\n");
+    printf("client_viewport: committed 200x200 cropped → 150x150\n");
 }
 
 static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
@@ -109,14 +109,14 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 int main(void) {
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_viewport: нет соединения с композитором\n");
+        fprintf(stderr, "client_viewport: cannot connect to compositor\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !shm || !wm_base || !viewporter) {
-        fprintf(stderr, "client_viewport: нет нужных глобалов (viewporter=%p)\n",
+        fprintf(stderr, "client_viewport: missing required globals (viewporter=%p)\n",
                 (void*)viewporter);
         return 1;
     }

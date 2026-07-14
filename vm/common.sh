@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Общие переменные/функции dev-VM. Подключается через `source`.
+# Shared dev VM variables/functions. Included via `source`.
 
 set -euo pipefail
 
@@ -37,7 +37,7 @@ fw_code() {
     local prefix
     prefix="$(dirname "$(dirname "$(command -v "$QEMU_BIN")")")"
     local fd="$prefix/share/qemu/edk2-aarch64-code.fd"
-    [[ -f "$fd" ]] || { echo "edk2-aarch64-code.fd не найден рядом с qemu ($fd)" >&2; return 1; }
+    [[ -f "$fd" ]] || { echo "edk2-aarch64-code.fd not found next to qemu ($fd)" >&2; return 1; }
     echo "$fd"
 }
 
@@ -50,15 +50,15 @@ vm_running() {
 }
 
 wait_ssh() {
-    local tries="${1:-120}" # ~10 мин
-    echo "жду ssh на 127.0.0.1:$SSH_PORT ..."
+    local tries="${1:-120}" # ~10 min
+    echo "waiting for ssh on 127.0.0.1:$SSH_PORT ..."
     for ((i = 0; i < tries; i++)); do
         if vm_ssh -o BatchMode=yes true 2>/dev/null; then
-            echo "ssh готов"
+            echo "ssh is up"
             return 0
         fi
         sleep 5
     done
-    echo "ssh так и не поднялся; смотри $SERIAL_LOG" >&2
+    echo "ssh never came up; check $SERIAL_LOG" >&2
     return 1
 }

@@ -1,5 +1,5 @@
-// Тестовый wayland-клиент: зелёный прямоугольник 400x300 через wl_shm + xdg-shell.
-// Живёт до SIGTERM; это зародыш нашего protocol-test-клиента.
+// Test wayland client: green 400x300 rectangle via wl_shm + xdg-shell.
+// Lives until SIGTERM; this is the seed of our protocol-test client.
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -57,7 +57,7 @@ static void draw(void) {
         exit(1);
     }
     uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    for (int i = 0; i < W * H; i++) px[i] = 0xFF00FF00; // ARGB: непрозрачный зелёный
+    for (int i = 0; i < W * H; i++) px[i] = 0xFF00FF00; // ARGB: opaque green
     munmap(px, size);
 
     struct wl_shm_pool* pool = wl_shm_create_pool(shm, fd, size);
@@ -70,7 +70,7 @@ static void draw(void) {
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     drawn = 1;
-    printf("client_shm: закоммитил %dx%d\n", W, H);
+    printf("client_shm: committed %dx%d\n", W, H);
 }
 
 static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
@@ -102,14 +102,14 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 int main(void) {
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_shm: нет соединения с композитором\n");
+        fprintf(stderr, "client_shm: cannot connect to compositor\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !shm || !wm_base) {
-        fprintf(stderr, "client_shm: нет нужных глобалов (compositor=%p shm=%p wm_base=%p)\n",
+        fprintf(stderr, "client_shm: missing required globals (compositor=%p shm=%p wm_base=%p)\n",
                 (void*)compositor, (void*)shm, (void*)wm_base);
         return 1;
     }
@@ -122,7 +122,7 @@ int main(void) {
     xdg_toplevel_add_listener(tl, &toplevel_listener, NULL);
     xdg_toplevel_set_title(tl, "client_shm");
     xdg_toplevel_set_app_id(tl, "imway.client-shm");
-    wl_surface_commit(surface); // initial commit без буфера → ждём configure
+    wl_surface_commit(surface); // initial commit without a buffer → wait for configure
 
     while (wl_display_dispatch(display) != -1) {
     }

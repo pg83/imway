@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Субповерхности: красный toplevel + зелёная sync-суб + синяя desync-суб.
+# Subsurfaces: red toplevel + green sync sub + blue desync sub.
 set -euo pipefail
 
 IMWAY="$1"
@@ -17,7 +17,7 @@ for _ in $(seq 1 50); do
     [[ -S "$RT/imway-test" ]] && break
     sleep 0.1
 done
-[[ -S "$RT/imway-test" ]] || { echo "сокет не появился"; exit 1; }
+[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; exit 1; }
 
 WAYLAND_DISPLAY=imway-test "$CLIENT" &
 CLIENT_PID=$!
@@ -25,7 +25,7 @@ CLIENT_PID=$!
 wait "$IMWAY_PID"
 kill "$CLIENT_PID" 2>/dev/null || true
 
-[[ -f "$SHOT" ]] || { echo "нет скриншота"; exit 1; }
+[[ -f "$SHOT" ]] || { echo "no screenshot"; exit 1; }
 
 python3 - "$SHOT" <<'PY'
 import sys
@@ -40,9 +40,9 @@ red   = count(lambda r, g, b: r > 200 and g < 80 and b < 80)
 green = count(lambda r, g, b: r < 80 and g > 200 and b < 80)
 blue  = count(lambda r, g, b: r < 80 and g < 80 and b > 200)
 print(f"{w}x{h}: red={red} green={green} blue={blue}")
-# toplevel 300x200=60000 минус перекрытия (80x80 + 60x60 = 10000)
-assert red > 40000, "toplevel не виден"
-assert green > 5000, "sync-субповерхность не видна"
-assert blue > 3000, "desync-субповерхность не видна"
+# toplevel 300x200=60000 minus overlaps (80x80 + 60x60 = 10000)
+assert red > 40000, "toplevel not visible"
+assert green > 5000, "sync subsurface not visible"
+assert blue > 3000, "desync subsurface not visible"
 PY
-echo "OK: обе субповерхности видны поверх toplevel"
+echo "OK: both subsurfaces visible above the toplevel"

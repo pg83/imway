@@ -1,6 +1,7 @@
-// Проба Vulkan-окружения: перечисляет устройства и печатает, какие из нужных
-// imway расширений/фич доступны. Это ответ на M0-вопросы про lavapipe в VM.
-// Падает только если нет ни одного устройства; отсутствие расширений — репорт.
+// Vulkan environment probe: enumerates devices and prints which of the
+// extensions/features imway needs are available. Answers the M0 questions
+// about lavapipe in a VM. Fails only if there are no devices at all;
+// missing extensions are just reported.
 
 #include <cstdio>
 #include <cstring>

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Устойчивость: клиент обрезает shm-пул под ногами композитора; композитор обязан выжить.
+# Robustness: client truncates the shm pool out from under the compositor; the compositor must survive.
 set -euo pipefail
 
 IMWAY="$1"
@@ -16,11 +16,11 @@ for _ in $(seq 1 50); do
     [[ -S "$RT/imway-test" ]] && break
     sleep 0.1
 done
-[[ -S "$RT/imway-test" ]] || { echo "сокет не появился"; exit 1; }
+[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; exit 1; }
 
 WAYLAND_DISPLAY=imway-test "$CLIENT" || true
 
 wait "$IMWAY_PID"
 RC=$?
-[[ $RC -eq 0 ]] || { echo "композитор умер (rc=$RC)"; exit 1; }
+[[ $RC -eq 0 ]] || { echo "compositor died (rc=$RC)"; exit 1; }
 echo ok

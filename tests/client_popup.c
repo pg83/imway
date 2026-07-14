@@ -1,6 +1,7 @@
-// Тестовый клиент попапов: красный toplevel 300x200; после его map — жёлтый
-// grab-попап 120x90 у нижней-левой кромки якоря (20,20,60,20). При popup_done
-// печатает "popup done" и гасит попап (для теста dismiss по клику мимо).
+// Popup test client: red 300x200 toplevel; after it maps — a yellow 120x90
+// grab popup at the bottom-left edge of the anchor rect (20,20,60,20). On
+// popup_done prints "popup done" and tears the popup down (for the
+// dismiss-on-click-outside test).
 
 #define _GNU_SOURCE
 #include <stdint.h>
@@ -70,7 +71,7 @@ static struct wl_buffer* solid_buffer(int w, int h, uint32_t argb) {
     return buf;
 }
 
-// --- попап ---
+// --- popup ---
 
 static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, int32_t w,
                             int32_t h) {
@@ -104,10 +105,10 @@ static void popup_xdg_configure(void* d, struct xdg_surface* xs, uint32_t serial
     (void)d;
     xdg_surface_ack_configure(xs, serial);
     if (!popup_drawn) {
-        wl_surface_attach(popup_surface, solid_buffer(120, 90, 0xFFFFFF00), 0, 0); // жёлтый
+        wl_surface_attach(popup_surface, solid_buffer(120, 90, 0xFFFFFF00), 0, 0); // yellow
         wl_surface_commit(popup_surface);
         popup_drawn = 1;
-        printf("client_popup: попап закоммичен\n");
+        printf("client_popup: popup committed\n");
     }
 }
 static const struct xdg_surface_listener popup_xdg_listener = {popup_xdg_configure};
@@ -127,7 +128,7 @@ static void open_popup(struct xdg_surface* parent_xs) {
     xdg_popup_add_listener(popup, &popup_listener, NULL);
     if (seat) xdg_popup_grab(popup, seat, 0);
     xdg_positioner_destroy(pos);
-    wl_surface_commit(popup_surface); // без буфера → ждём configure
+    wl_surface_commit(popup_surface); // no buffer → wait for configure
 }
 
 // --- toplevel ---
@@ -141,7 +142,7 @@ static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t seri
         wl_surface_attach(surface, solid_buffer(300, 200, 0xFFFF0000), 0, 0);
         wl_surface_commit(surface);
         drawn = 1;
-        printf("client_popup: toplevel закоммичен\n");
+        printf("client_popup: toplevel committed\n");
         open_popup(toplevel_xs);
     }
 }
@@ -169,14 +170,14 @@ int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_popup: нет соединения\n");
+        fprintf(stderr, "client_popup: cannot connect\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !shm || !wm_base) {
-        fprintf(stderr, "client_popup: нет глобалов\n");
+        fprintf(stderr, "client_popup: missing globals\n");
         return 1;
     }
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);

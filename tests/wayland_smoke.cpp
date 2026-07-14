@@ -1,4 +1,4 @@
-// Смоук libwayland-server: display + сокет + один проход event loop.
+// libwayland-server smoke test: display + socket + one event loop pass.
 
 #include <cstdio>
 #include <cstdlib>
@@ -6,7 +6,7 @@
 #include <wayland-server-core.h>
 
 int main() {
-    // add_socket_auto требует XDG_RUNTIME_DIR
+    // add_socket_auto requires XDG_RUNTIME_DIR
     if (!getenv("XDG_RUNTIME_DIR")) {
         char tmpl[] = "/tmp/imway-smoke-XXXXXX";
         if (char* dir = mkdtemp(tmpl)) setenv("XDG_RUNTIME_DIR", dir, 1);

@@ -14,9 +14,9 @@ package_update: true
 package_upgrade: false
 
 packages:
-  # cloud-ядро без virtio_gpu — ставим полное (даёт /dev/dri)
+  # the cloud kernel lacks virtio_gpu — install the full one (provides /dev/dri)
   - linux-image-arm64
-  # тулчейн
+  # toolchain
   - build-essential
   - cmake
   - ninja-build
@@ -25,7 +25,7 @@ packages:
   - rsync
   - gdb
   - ccache
-  # зависимости imway
+  # imway dependencies
   - libwayland-dev
   - wayland-protocols
   - libdrm-dev
@@ -39,13 +39,13 @@ packages:
   - fonts-dejavu-core
   - libseat-dev
   - libvulkan-dev
-  # vulkan runtime (lavapipe в mesa-vulkan-drivers) и инструменты
+  # vulkan runtime (lavapipe in mesa-vulkan-drivers) and tools
   - mesa-vulkan-drivers
   - vulkan-tools
   - vulkan-validationlayers
   - glslang-tools
   - spirv-tools
-  # обвязка для ручного тестирования
+  # tooling for manual testing
   - seatd
   - wl-clipboard
   - fonts-dejavu-core
@@ -58,7 +58,7 @@ packages:
   - drm-info
 
 write_files:
-  # udmabuf — экспорт dmabuf у lavapipe; uinput — инъекция input в тестах
+  # udmabuf — dmabuf export for lavapipe; uinput — input injection in tests
   - path: /etc/modules-load.d/imway.conf
     content: |
       udmabuf

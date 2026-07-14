@@ -1,5 +1,5 @@
-// Тестовый клиент dmabuf: memfd → udmabuf → zwp_linux_dmabuf_v1 (LINEAR) →
-// оранжевый toplevel 320x240. Выход 77, если /dev/udmabuf недоступен (skip).
+// dmabuf test client: memfd → udmabuf → zwp_linux_dmabuf_v1 (LINEAR) →
+// orange 320x240 toplevel. Exits 77 if /dev/udmabuf is unavailable (skip).
 
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -72,17 +72,17 @@ static const struct xdg_wm_base_listener wm_base_listener = {wm_base_ping};
 static int make_dmabuf_fd(size_t size) {
     int dev = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
     if (dev < 0) {
-        fprintf(stderr, "client_dmabuf: нет /dev/udmabuf: %m\n");
+        fprintf(stderr, "client_dmabuf: no /dev/udmabuf: %m\n");
         exit(77);
     }
     int mem = memfd_create("dmabuf-src", MFD_ALLOW_SEALING);
     if (mem < 0 || ftruncate(mem, size) < 0 ||
-        fcntl(mem, F_ADD_SEALS, F_SEAL_SHRINK) < 0) { // udmabuf требует seal
+        fcntl(mem, F_ADD_SEALS, F_SEAL_SHRINK) < 0) { // udmabuf requires the seal
         perror("memfd");
         exit(1);
     }
     uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, mem, 0);
-    for (size_t i = 0; i < size / 4; i++) px[i] = 0xFFFF8000; // оранжевый ARGB
+    for (size_t i = 0; i < size / 4; i++) px[i] = 0xFFFF8000; // orange ARGB
     munmap(px, size);
 
     struct udmabuf_create create = {0};
@@ -102,7 +102,7 @@ static int make_dmabuf_fd(size_t size) {
 
 static void draw(void) {
     long page = sysconf(_SC_PAGESIZE);
-    size_t size = ((size_t)W * H * 4 + page - 1) / page * page; // udmabuf: кратно странице
+    size_t size = ((size_t)W * H * 4 + page - 1) / page * page; // udmabuf: page-aligned
     int fd = make_dmabuf_fd(size);
 
     struct zwp_linux_buffer_params_v1* params = zwp_linux_dmabuf_v1_create_params(dmabuf);
@@ -115,7 +115,7 @@ static void draw(void) {
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     drawn = 1;
-    printf("client_dmabuf: закоммитил dmabuf %dx%d\n", W, H);
+    printf("client_dmabuf: committed dmabuf %dx%d\n", W, H);
 }
 
 static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
@@ -146,21 +146,21 @@ static const struct xdg_toplevel_listener toplevel_listener = {
 int main(void) {
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) {
-        fprintf(stderr, "client_dmabuf: нет соединения с композитором\n");
+        fprintf(stderr, "client_dmabuf: cannot connect to compositor\n");
         return 1;
     }
     struct wl_registry* reg = wl_display_get_registry(display);
     wl_registry_add_listener(reg, &registry_listener, NULL);
     wl_display_roundtrip(display);
     if (!compositor || !wm_base || !dmabuf) {
-        fprintf(stderr, "client_dmabuf: нет глобалов (dmabuf=%p)\n", (void*)dmabuf);
+        fprintf(stderr, "client_dmabuf: missing globals (dmabuf=%p)\n", (void*)dmabuf);
         return 1;
     }
     zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
-    wl_display_roundtrip(display); // получить modifier-события
+    wl_display_roundtrip(display); // receive modifier events
     if (!linear_ok) {
-        fprintf(stderr, "client_dmabuf: композитор не рекламирует ARGB8888+LINEAR\n");
+        fprintf(stderr, "client_dmabuf: compositor does not advertise ARGB8888+LINEAR\n");
         return 77;
     }
 

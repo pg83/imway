@@ -1,45 +1,51 @@
 # imway
 
-Wayland-композитор поверх Dear ImGui: окна клиентов живут внутри ImGui-окон
-(текстуры через `ImGui::Image`), весь хром — меню, панели, декорации — рисует
-ImGui.
+A Wayland compositor built on Dear ImGui: client windows live inside ImGui
+windows (textures via `ImGui::Image`), and all the chrome — menus, panels,
+decorations — is drawn by ImGui.
 
-## Стек
+## Stack
 
-Сырой, без фреймворков (никаких wlroots/Smithay):
+Raw, no frameworks (no wlroots/Smithay):
 
-- **libwayland-server** — протоколы реализованы вручную
-- **Vulkan** — единственный рендер-путь, ни одного вызова GL/EGL
-  (headless offscreen + readback; ImGui через `imgui_impl_vulkan`)
-- **libdrm** — atomic KMS + dumb buffers для вывода на экран
-- **libinput + xkbcommon** — ввод
+- **libwayland-server** — protocols implemented by hand
+- **Vulkan** — the only render path, not a single GL/EGL call
+  (headless offscreen + readback; ImGui via `imgui_impl_vulkan`)
+- **libdrm** — atomic KMS + dumb buffers for scanout
+- **libinput + xkbcommon** — input
 - **libev** — event loop
 
-## Что уже работает
+## What already works
 
-- wl_compositor, wl_shm, wl_subcompositor (sync/desync, z-порядок),
-  wl_seat v5 (клавиатура + мышь), wl_output, xdg-shell (toplevel),
-  xdg-decoration (server-side), wp_viewporter,
-  zwp_linux_dmabuf_v1 v3 (импорт dmabuf в VkImage без копий)
-- Бэкенды: `headless` (скриншоты, инъекция ввода через FIFO `--control`)
-  и `kms` (atomic modeset, page flip, libinput)
-- foot + mc внутри ImGui-окон, интерактив мышью/клавиатурой
+- wl_compositor, wl_shm, wl_subcompositor (sync/desync, z-order),
+  wl_seat v5 (keyboard + mouse, xkb layouts), wl_output,
+  xdg-shell (toplevels with interactive move/resize/fullscreen, popups
+  with grabs), xdg-decoration (server-side), wp_viewporter,
+  zwp_linux_dmabuf_v1 v3/v4 with feedback (multi-plane dmabuf import into
+  VkImage, zero-copy), clipboard + drag-and-drop + primary selection,
+  cursor-shape + client cursor surfaces, wp_presentation,
+  xdg-activation, single-pixel-buffer
+- Backends: `headless` (screenshots, input injection via a `--control` FIFO)
+  and `kms` (atomic modeset, scanout swapchain with a dumb-buffer fallback,
+  page-flip driven frame clock, libinput, libseat session with VT switching,
+  connector hotplug)
+- foot, mc and Firefox inside ImGui windows, interactive with mouse/keyboard
 
-## Разработка
+## Development
 
-Код собирается и тестируется в QEMU-VM (Debian, aarch64+hvf на macOS):
+The code is built and tested in a QEMU VM (Debian, aarch64+hvf on macOS):
 
 ```sh
-vm/create.sh   # одноразово: скачать образ, cloud-init с тулчейном
-./build.sh     # rsync исходников в VM + сборка + ctest
-vm/gui.sh      # окно QEMU с imway на KMS + foot (мышь/клава работают)
+vm/create.sh   # one-time: download the image, cloud-init with the toolchain
+./build.sh     # rsync sources into the VM + build + ctest
+vm/gui.sh      # QEMU window with imway on KMS + foot (mouse/keyboard work)
 ```
 
-На Linux `./build.sh` собирает нативно. Тесты — headless-скриншоты с
-проверкой пикселей: shm, субповерхности, viewporter, dmabuf (через
-udmabuf), клавиатурный e2e (набор команды в foot).
+On Linux `./build.sh` builds natively. Tests are headless screenshots with
+pixel checks: shm, subsurfaces, viewporter, dmabuf (via udmabuf), and a
+keyboard e2e test (typing a command into foot).
 
-Дизайн и роадмап: [docs/DESIGN.md](docs/DESIGN.md).
+Design and roadmap: [docs/DESIGN.md](docs/DESIGN.md).
 
-Целевая платформа — [stal/ix](https://stal-ix.github.io/): полностью
-статическая линковка, Vulkan-драйвер влинкован в бинарь.
+The target platform is [stal/ix](https://stal-ix.github.io/): fully static
+linking, with the Vulkan driver linked into the binary.

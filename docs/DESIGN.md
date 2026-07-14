@@ -1,613 +1,616 @@
-# imway — Wayland-композитор поверх Dear ImGui
+# imway — a Wayland compositor on top of Dear ImGui
 
-Проектный документ. Состояние экосистемы — середина 2026.
-§0–13 писались до кода; §14 описывает, что и как реализовано на самом деле.
-При расхождении верить §14 — старые разделы остаются планом на будущие кольца.
+Design document. Ecosystem state — mid-2026.
+§0–13 were written before any code; §14 describes what was actually implemented and how.
+On any discrepancy, trust §14 — the older sections remain the plan for future rings.
 
-## 0. База (зафиксировано)
+## 0. Foundation (fixed)
 
-- Окна wayland-клиентов встроены в ImGui-окна (текстура клиента = `ImGui::Image()`),
-  весь хром (меню, панели, декорации) — ImGui. Docking даёт тайлинг бесплатно.
-- **Стек: libwayland-server + libdrm (atomic KMS) + libinput + libev + xkbcommon.**
-  Никаких wlroots/Louvre/Smithay — все протоколы реализуем сами.
-  SDL3 — только для nested dev-режима, если вообще будет нужен.
-- **Vulkan-only.** В нашем коде нет ни одного вызова OpenGL/EGL/GLES. ImGui через
-  `imgui_impl_vulkan` (`ImTextureID` = `VkDescriptorSet`). Бонус Vulkan-пути: вся
-  синхронизация явная — semaphore/sync_file/syncobj, никакой магии implicit sync
-  драйвера, которая на GL «просто работает, кроме NVIDIA».
-- Прямого прецедента «wayland-окна внутри ImGui» не существует — идея новая, но
-  каждый блок проверен: QtWayland `QWaylandQuickItem` (окна как виджеты тулкита,
-  наша модель — калька), gamescope (Vulkan-композитор с ImGui-оверлеями, сырой
-  atomic KMS), kms-vulkan (минимальный «Vulkan рендерит, KMS сканирует» пример).
+- Wayland client windows are embedded into ImGui windows (client texture = `ImGui::Image()`),
+  all chrome (menus, panels, decorations) is ImGui. Docking gives us tiling for free.
+- **Stack: libwayland-server + libdrm (atomic KMS) + libinput + libev + xkbcommon.**
+  No wlroots/Louvre/Smithay — we implement all protocols ourselves.
+  SDL3 — only for the nested dev mode, if it is ever needed at all.
+- **Vulkan-only.** Not a single OpenGL/EGL/GLES call in our code. ImGui via
+  `imgui_impl_vulkan` (`ImTextureID` = `VkDescriptorSet`). Bonus of the Vulkan path: all
+  synchronization is explicit — semaphore/sync_file/syncobj, none of the driver's
+  implicit-sync magic that on GL "just works, except on NVIDIA".
+- There is no direct precedent for "wayland windows inside ImGui" — the idea is new, but
+  every building block is proven: QtWayland `QWaylandQuickItem` (windows as toolkit
+  widgets, our model is a direct copy), gamescope (Vulkan compositor with ImGui overlays,
+  raw atomic KMS), kms-vulkan (a minimal "Vulkan renders, KMS scans out" example).
 
-## 1. Vulkan → KMS: инициализация (главный открытый вопрос — решён)
+## 1. Vulkan → KMS: initialization (the main open question — resolved)
 
-Ключевой факт: **GBM не обязателен**. Есть две архитектуры; обе сводятся к
-«рендерим в VkImage, известный KMS как dmabuf-FB, показываем atomic-коммитом».
+Key fact: **GBM is not required**. There are two architectures; both boil down to
+"render into a VkImage known to KMS as a dmabuf FB, present with an atomic commit".
 
-### 1.1 Архитектура (a): Vulkan аллоцирует, KMS сканирует — путь gamescope. НАШ ВЫБОР
+### 1.1 Architecture (a): Vulkan allocates, KMS scans out — the gamescope path. OUR CHOICE
 
-1. **Согласование модификаторов**: пересечение двух множеств —
-   - KMS: parse блоба `IN_FORMATS` primary plane (гейт: `DRM_CAP_ADDFB2_MODIFIERS`);
+1. **Modifier negotiation**: intersection of two sets —
+   - KMS: parse the `IN_FORMATS` blob of the primary plane (gate: `DRM_CAP_ADDFB2_MODIFIERS`);
    - Vulkan: `vkGetPhysicalDeviceFormatProperties2` + `VkDrmFormatModifierPropertiesListEXT`
-     (напр. `DRM_FORMAT_XRGB8888` ↔ `VK_FORMAT_B8G8R8A8_UNORM`), каждый кандидат
-     подтверждаем `vkGetPhysicalDeviceImageFormatProperties2` c
-     `VkPhysicalDeviceImageDrmFormatModifierInfoEXT` + требуем
+     (e.g. `DRM_FORMAT_XRGB8888` ↔ `VK_FORMAT_B8G8R8A8_UNORM`), confirm each candidate
+     with `vkGetPhysicalDeviceImageFormatProperties2` with
+     `VkPhysicalDeviceImageDrmFormatModifierInfoEXT` + require
      `VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT`.
-2. **Создание**: `vkCreateImage`, `tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`,
-   pNext: `VkImageDrmFormatModifierListCreateInfoEXT{пересечение}` +
-   `VkExternalMemoryImageCreateInfo{DMA_BUF_BIT_EXT}`. Флага «scanout» в Vulkan нет —
-   scanout-пригодность выражается только модификатором (на десктопных драйверах
-   этого достаточно; ARM SoC с contiguity-требованиями — см. 1.2).
-3. **Аллокация**: dedicated (`VkMemoryDedicatedAllocateInfo`) +
+2. **Creation**: `vkCreateImage`, `tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT`,
+   pNext: `VkImageDrmFormatModifierListCreateInfoEXT{intersection}` +
+   `VkExternalMemoryImageCreateInfo{DMA_BUF_BIT_EXT}`. Vulkan has no "scanout" flag —
+   scanout suitability is expressed solely by the modifier (sufficient on desktop
+   drivers; ARM SoCs with contiguity requirements — see 1.2).
+3. **Allocation**: dedicated (`VkMemoryDedicatedAllocateInfo`) +
    `VkExportMemoryAllocateInfo{DMA_BUF_BIT_EXT}`.
-4. **Экспорт**: `vkGetMemoryFdKHR` → dmabuf fd;
-   `vkGetImageDrmFormatModifierPropertiesEXT` → какой модификатор выбрал драйвер;
+4. **Export**: `vkGetMemoryFdKHR` → dmabuf fd;
+   `vkGetImageDrmFormatModifierPropertiesEXT` → which modifier the driver picked;
    per-plane layout: `vkGetImageSubresourceLayout(VK_IMAGE_ASPECT_MEMORY_PLANE_i_BIT_EXT)`
-   → offset/rowPitch (питчи руками не считать никогда).
-5. **KMS**: на primary node `drmPrimeFDToHandle` → GEM handles →
+   → offset/rowPitch (never compute pitches by hand).
+5. **KMS**: on the primary node `drmPrimeFDToHandle` → GEM handles →
    `drmModeAddFB2WithModifiers(…, DRM_MODE_FB_MODIFIERS)` → atomic commit `FB_ID`.
-   Осторожно: GEM handles не рефкаунтятся ядром (повторный импорт того же буфера
-   даёт тот же handle) — классический источник тихих багов.
+   Careful: GEM handles are not refcounted by the kernel (re-importing the same buffer
+   yields the same handle) — a classic source of silent bugs.
 
-2–3 таких flippable-образа на output. LINEAR-fallback держать (планы без
-модификаторов, cursor plane, cross-GPU).
+2–3 such flippable images per output. Keep a LINEAR fallback (planes without
+modifiers, the cursor plane, cross-GPU).
 
-### 1.2 Архитектура (b): GBM аллоцирует, Vulkan импортирует — путь wlroots/kms-vulkan
+### 1.2 Architecture (b): GBM allocates, Vulkan imports — the wlroots/kms-vulkan path
 
 `gbm_bo_create_with_modifiers2(SCANOUT|RENDERING)` → fd/offset/stride/modifier →
-импорт в Vulkan (`VkImageDrmFormatModifierExplicitCreateInfoEXT` +
-`VkImportMemoryFdInfoKHR`). Зачем: `GBM_BO_USE_SCANOUT` знает вендорные ограничения
-размещения (contiguity на SoC), которые Vulkan выразить не может — именно поэтому
-wlroots оставил GBM аллокатором по умолчанию.
+import into Vulkan (`VkImageDrmFormatModifierExplicitCreateInfoEXT` +
+`VkImportMemoryFdInfoKHR`). Why: `GBM_BO_USE_SCANOUT` knows vendor placement
+constraints (contiguity on SoCs) that Vulkan cannot express — this is exactly why
+wlroots kept GBM as the default allocator.
 
-**Решение**: (a) за тонким интерфейсом аллокатора (~4 функции), чтобы (b) можно было
-подставить за ~150 строк, если упрёмся в железо. GBM выпадает из зависимостей.
+**Decision**: (a) behind a thin allocator interface (~4 functions), so that (b) can be
+swapped in with ~150 lines if we hit a hardware wall. GBM drops out of the dependencies.
 
-### 1.3 Выбор устройства
+### 1.3 Device selection
 `VK_EXT_physical_device_drm`: `VkPhysicalDeviceDrmPropertiesEXT{primary/renderMajor/Minor}`
-сверяем с `fstat(kms_fd)` → major/minor. Требовать это расширение жёстко (как
-gamescope). Кейс «render device ≠ display device» (Asahi и пр.) — помнить, не решать в v1.
+checked against `fstat(kms_fd)` → major/minor. Require this extension unconditionally (like
+gamescope). The "render device ≠ display device" case (Asahi et al.) — keep in mind, don't solve in v1.
 
-### 1.4 Что НЕ использовать
-`VK_KHR_display` / `vkAcquireDrmDisplayEXT` — прячет CRTC/планы/свойства за опаковым
-свопчейном: без atomic-пропертей, курсорного плана, фенсов, VRR. Для VR/kiosk, не
-для композитора. Все изученные проекты сходятся.
+### 1.4 What NOT to use
+`VK_KHR_display` / `vkAcquireDrmDisplayEXT` — hides CRTC/planes/properties behind an opaque
+swapchain: no atomic properties, no cursor plane, no fences, no VRR. For VR/kiosk, not
+for a compositor. Every project we studied agrees.
 
-## 2. Синхронизация (вся явная)
+## 2. Synchronization (all explicit)
 
-- **Кадр → KMS**: submit сигналит (i) внутренний timeline semaphore (точка на кадр —
-  им же трекаем лайфтаймы буферов/текстур вместо VkFence) и (ii) binary semaphore c
-  `VkExportSemaphoreCreateInfo{SYNC_FD}` → `vkGetSemaphoreFdKHR` → sync_file →
-  **`IN_FENCE_FD`** плана в atomic commit (`NONBLOCK`). Внимание: экспорт SYNC_FD
-  сбрасывает binary semaphore — это фича, wlroots на неё опирается.
-- **Реюз output-буфера**: по page-flip event (просто) или `OUT_FENCE_PTR` →
-  `vkImportSemaphoreFdKHR(TEMPORARY)` (чисто; так делает kms-vulkan).
-- **Implicit sync клиентов** (дефолт для wayland): мост через dma-buf ioctls (ядро ≥6.0):
-  перед семплингом `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` → временный импорт в binary
-  semaphore → wait; после композита свой render-finished sync_file →
-  `DMA_BUF_IOCTL_IMPORT_SYNC_FILE` в буфер клиента (его следующая запись подождёт наш
-  рид) — и это же событие = момент `wl_buffer.release`. Рецепт дословно =
-  `vulkan_sync_foreign_texture()` / `vulkan_sync_render_buffer()` из wlroots.
-- **`wp_linux_drm_syncobj_v1`** (explicit-sync клиенты; NVIDIA без него — боль):
-  гейт `DRM_CAP_SYNCOBJ_TIMELINE`; acquire point может не материализоваться на момент
-  коммита — не блокироваться, ждать через `DRM_IOCTL_SYNCOBJ_EVENTFD` в event loop;
-  GPU-wait портируемо: `drmSyncobjTransfer` → `drmSyncobjExportSyncFile` → импорт
-  SYNC_FD; release: свой sync_file → `drmSyncobjImportSyncFile` → transfer в timeline
-  клиента на release point.
+- **Frame → KMS**: the submit signals (i) an internal timeline semaphore (one point per
+  frame — it also tracks buffer/texture lifetimes instead of VkFence) and (ii) a binary
+  semaphore with `VkExportSemaphoreCreateInfo{SYNC_FD}` → `vkGetSemaphoreFdKHR` → sync_file →
+  the plane's **`IN_FENCE_FD`** in the atomic commit (`NONBLOCK`). Caution: exporting SYNC_FD
+  resets the binary semaphore — this is a feature, wlroots relies on it.
+- **Output-buffer reuse**: via the page-flip event (simple) or `OUT_FENCE_PTR` →
+  `vkImportSemaphoreFdKHR(TEMPORARY)` (clean; this is what kms-vulkan does).
+- **Client implicit sync** (the default for wayland): bridge via dma-buf ioctls (kernel ≥6.0):
+  before sampling `DMA_BUF_IOCTL_EXPORT_SYNC_FILE` → temporary import into a binary
+  semaphore → wait; after compositing, our render-finished sync_file →
+  `DMA_BUF_IOCTL_IMPORT_SYNC_FILE` into the client's buffer (its next write will wait for our
+  read) — and this same event = the moment of `wl_buffer.release`. The recipe is verbatim =
+  `vulkan_sync_foreign_texture()` / `vulkan_sync_render_buffer()` from wlroots.
+- **`wp_linux_drm_syncobj_v1`** (explicit-sync clients; NVIDIA is painful without it):
+  gate on `DRM_CAP_SYNCOBJ_TIMELINE`; the acquire point may not be materialized at commit
+  time — don't block, wait via `DRM_IOCTL_SYNCOBJ_EVENTFD` in the event loop;
+  GPU-wait portably: `drmSyncobjTransfer` → `drmSyncobjExportSyncFile` → import
+  the SYNC_FD; release: our sync_file → `drmSyncobjImportSyncFile` → transfer into the
+  client's timeline at the release point.
 
-## 3. Буферы клиентов → ImGui
+## 3. Client buffers → ImGui
 
-- **wl_shm** (обязательный, первый): mmap пула; staging `VkBuffer` (host-visible) →
-  `vkCmdCopyBufferToImage` по damage-прямоугольникам (`wl_surface.damage_buffer`) →
-  барьеры `TRANSFER_DST → SHADER_READ_ONLY`. `wl_buffer.release` сразу после записи
-  копии в командный буфер и его завершения (важно для single-buffered клиентов).
-  SIGBUS-защита от клиента, обрезавшего fd. `nonCoherentAtomSize` при flush.
-- **linux-dmabuf-v1 v4+** (GPU-клиенты; Mesa 25.2 удалила wl_drm — без dmabuf
-  GPU-клиенты не работают вообще): feedback (format table в sealed memfd,
-  `main_device` = **render node**, транши); импорт: `VkImageDrmFormatModifierExplicitCreateInfoEXT`
-  + `VkImportMemoryFdInfoKHR` → `VkImageView`. Кэшировать VkImage per `wl_buffer`
-  (клиенты гоняют 2–4 буфера по кругу). Релиз dmabuf-буфера — только когда timeline
-  point последнего кадра, семплившего его, пройден.
+- **wl_shm** (mandatory, first): mmap the pool; staging `VkBuffer` (host-visible) →
+  `vkCmdCopyBufferToImage` over the damage rectangles (`wl_surface.damage_buffer`) →
+  barriers `TRANSFER_DST → SHADER_READ_ONLY`. `wl_buffer.release` right after the copy is
+  recorded into the command buffer and it completes (important for single-buffered clients).
+  SIGBUS protection against a client that truncated the fd. `nonCoherentAtomSize` on flush.
+- **linux-dmabuf-v1 v4+** (GPU clients; Mesa 25.2 removed wl_drm — without dmabuf
+  GPU clients don't work at all): feedback (format table in a sealed memfd,
+  `main_device` = the **render node**, tranches); import: `VkImageDrmFormatModifierExplicitCreateInfoEXT`
+  + `VkImportMemoryFdInfoKHR` → `VkImageView`. Cache the VkImage per `wl_buffer`
+  (clients cycle through 2–4 buffers). Release a dmabuf buffer only once the timeline
+  point of the last frame that sampled it has passed.
 - **ImGui**: `ImGui_ImplVulkan_AddTexture(view, layout)` → `VkDescriptorSet` =
-  `ImTextureID`. Пул с `FREE_DESCRIPTOR_SET_BIT`, размер щедрый (~4096) — недобор
-  пула фейлится недетерминированно по драйверам. `RemoveTexture`/destroy view —
-  только после retire кадра (timeline point). Редизайн бэкенда 2026-04: раздельные
-  SAMPLED_IMAGE + SAMPLER дескрипторы, `AddTexture` без параметра sampler —
-  пин версии ImGui и чтение changelog при апгрейдах.
-- **YUV (NV12 от видеоплееров)**: `VkSamplerYcbcrConversion` требует immutable
-  sampler в layout — стоковый imgui_impl_vulkan это не умеет (а с раздельными
-  дескрипторами — не умеет принципиально). Решение: свой маленький blit-pass
-  YUV→RGBA (immutable-ycbcr-sampler pipeline) до ImGui; ImGui видит обычную RGBA.
-  Так делают все. RGB-dmabuf (подавляющее большинство) работают напрямую.
-- Layout-переходы импортированных образов — на нас, включая ручные барьеры
-  `VK_QUEUE_FAMILY_FOREIGN_EXT` (нужен `VK_EXT_queue_family_foreign`).
+  `ImTextureID`. Pool with `FREE_DESCRIPTOR_SET_BIT`, sized generously (~4096) — pool
+  exhaustion fails non-deterministically across drivers. `RemoveTexture`/destroy view —
+  only after the frame retires (timeline point). Backend redesign of 2026-04: separate
+  SAMPLED_IMAGE + SAMPLER descriptors, `AddTexture` without a sampler parameter —
+  pin the ImGui version and read the changelog on upgrades.
+- **YUV (NV12 from video players)**: `VkSamplerYcbcrConversion` requires an immutable
+  sampler in the layout — stock imgui_impl_vulkan can't do this (and with separate
+  descriptors it fundamentally can't). Solution: our own small blit pass
+  YUV→RGBA (immutable-ycbcr-sampler pipeline) before ImGui; ImGui sees plain RGBA.
+  Everyone does it this way. RGB dmabufs (the overwhelming majority) work directly.
+- Layout transitions of imported images are on us, including manual
+  `VK_QUEUE_FAMILY_FOREIGN_EXT` barriers (requires `VK_EXT_queue_family_foreign`).
 
-Расширения (device): `VK_EXT_image_drm_format_modifier`, `VK_KHR_external_memory_fd`,
+Extensions (device): `VK_EXT_image_drm_format_modifier`, `VK_KHR_external_memory_fd`,
 `VK_EXT_external_memory_dma_buf`, `VK_EXT_queue_family_foreign`,
 `VK_KHR_external_semaphore_fd`, `VK_EXT_physical_device_drm`, timeline semaphores (1.2).
 
 ## 4. Event loop (libev)
 
-Один поток. `wl_event_loop_get_fd()` — это epoll fd libwayland (единая точка):
+One thread. `wl_event_loop_get_fd()` is libwayland's epoll fd (a single point):
 
-- `ev_io` на wayland fd → `wl_event_loop_dispatch(loop, 0)`;
-- `ev_io` на libinput fd → `libinput_dispatch` + раздача событий;
-- `ev_io` на DRM fd → `drmHandleEvent` (page_flip_handler2, v3 — per-CRTC) —
-  это frame clock каждого output;
-- `ev_prepare` (перед сном): **`wl_display_flush_clients()`** — инвариант libwayland:
-  не засыпать с несброшенными буферами клиентов (иначе классический дедлок);
-- `ev_timer` — кадровый дедлайн / анимации / ping-таймауты;
-- syncobj eventfd'ы (acquire points) — тоже `ev_io`.
+- `ev_io` on the wayland fd → `wl_event_loop_dispatch(loop, 0)`;
+- `ev_io` on the libinput fd → `libinput_dispatch` + event fan-out;
+- `ev_io` on the DRM fd → `drmHandleEvent` (page_flip_handler2, v3 — per-CRTC) —
+  this is the frame clock of each output;
+- `ev_prepare` (before sleeping): **`wl_display_flush_clients()`** — a libwayland
+  invariant: never go to sleep with unflushed client buffers (otherwise the classic deadlock);
+- `ev_timer` — frame deadline / animations / ping timeouts;
+- syncobj eventfds (acquire points) — also `ev_io`.
 
-Рендер — по требованию: кадр рисуем, если (commit с damage) ∨ (input) ∨ (анимация
-ImGui) ∨ (должны frame callbacks). Идеальный idle = 0 fps. ImGui перегенерирует всю
-геометрию каждый кадр — по-пиксельный damage output'а не для нас
-(`LOAD_OP_DONT_CARE`, полный redraw), но client-side damage обязателен: для
-shm-загрузок и для решения «рисовать ли кадр вообще».
+Rendering is on demand: draw a frame if (commit with damage) ∨ (input) ∨ (ImGui
+animation) ∨ (frame callbacks are owed). Perfect idle = 0 fps. ImGui regenerates all
+geometry every frame — per-pixel output damage is not for us
+(`LOAD_OP_DONT_CARE`, full redraw), but client-side damage is mandatory: for
+shm uploads and for deciding "should we draw a frame at all".
 
-**Frame callbacks — контракт**: `wl_surface.frame done()` шлём по page-flip только
-поверхностям, реально показанным в кадре. Невидимым — не шлём (это троттлинг),
-видимым — обязательно (иначе клиент замерзает). Слишком рано (сразу на commit) —
-клиенты крутятся на 1000+ fps.
+**Frame callbacks — the contract**: send `wl_surface.frame done()` on page-flip only
+to surfaces actually shown in the frame. Invisible ones get nothing (that's throttling),
+visible ones must get it (otherwise the client freezes). Too early (right on commit) —
+clients spin at 1000+ fps.
 
 ## 5. Input
 
-### 5.1 Два потребителя
-Каждое событие форкается: ImGui (переведённые ImGuiKey, позиция курсора) и клиенты
-(**сырые evdev-коды** + surface-local координаты). libinput отдаёт evdev-коды и
-ускорение из коробки. xkbcommon у нас — для ImGui-текста (`xkb_state_key_get_utf8`)
-и хоткеев; клиентам шлём keymap fd (memfd, sealed) + `wl_keyboard.modifiers` после
-каждого enter и при изменении сериализации. Автоповтор: для ImGui делаем сами
-(на железе его нет), клиенты повторяют сами по `repeat_info(25, 600)` — сами НЕ
-повторяем. LED'ы клавиатуры (`libinput_device_led_update`) не забыть.
+### 5.1 Two consumers
+Every event is forked: ImGui (translated ImGuiKey, cursor position) and clients
+(**raw evdev codes** + surface-local coordinates). libinput provides evdev codes and
+acceleration out of the box. xkbcommon on our side is for ImGui text (`xkb_state_key_get_utf8`)
+and hotkeys; clients get a keymap fd (memfd, sealed) + `wl_keyboard.modifiers` after
+every enter and on serialization changes. Key repeat: for ImGui we do it ourselves
+(hardware has none), clients repeat on their own per `repeat_info(25, 600)` — we do NOT
+repeat for them. Don't forget keyboard LEDs (`libinput_device_led_update`).
 
-Nested/SDL3: `SDL_KeyboardEvent.raw` (3.2+) — evdev-код на wayland-бэкенде (на X11
-это X keycode = evdev+8, нормализовать); фильтровать `event.key.repeat`; keymap
-родителя забрать своим bind'ом wl_seat через `SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER`.
+Nested/SDL3: `SDL_KeyboardEvent.raw` (3.2+) — the evdev code on the wayland backend (on X11
+it's an X keycode = evdev+8, normalize); filter `event.key.repeat`; grab the parent's
+keymap with our own bind of wl_seat via `SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER`.
 
-### 5.2 Маршрутизация фокуса (здесь живут все «input сломан»)
-Единая функция с приоритетами:
-1. активный grab клиента (popup grab; кнопка зажата внутри окна — latch до button-up);
-2. попапы/модалки ImGui;
-3. hovered встроенная поверхность — **`ImGui::IsItemHovered()` на image-итеме**
-   (не `io.WantCaptureMouse` — тот не отличает «над клиентом» от «над тайтлбаром»);
-4. виджеты ImGui.
+### 5.2 Focus routing (this is where every "input is broken" lives)
+A single function with priorities:
+1. an active client grab (popup grab; button held inside a window — latch until button-up);
+2. ImGui popups/modals;
+3. the hovered embedded surface — **`ImGui::IsItemHovered()` on the image item**
+   (not `io.WantCaptureMouse` — that can't tell "over the client" from "over the title bar");
+4. ImGui widgets.
 
-Клавиатурный фокус: `wl_keyboard.enter` (с массивом зажатых клавиш!) когда ImGui-окно
-поверхности в фокусе и `io.WantTextInput == false`; синхронизировать со state
-`activated`. Хоткеи композитора — до всего.
+Keyboard focus: `wl_keyboard.enter` (with the array of held keys!) when the surface's
+ImGui window is focused and `io.WantTextInput == false`; keep in sync with the
+`activated` state. Compositor hotkeys — before everything else.
 
-### 5.3 Координаты (три поправки, иначе клики мимо на ~30px в GTK)
-item rect → масштаб текстуры; + offset `xdg_surface.set_window_geometry` (CSD-тени
-вне geometry); + `buffer_scale` / viewport. `wl_pointer.frame` после каждой логической
-группы (seat v5+). Кнопки — evdev (`BTN_LEFT=0x110`). Скролл: `axis` (15/деление) +
+### 5.3 Coordinates (three corrections, or clicks miss by ~30px in GTK)
+item rect → texture scale; + offset of `xdg_surface.set_window_geometry` (CSD shadows
+outside the geometry); + `buffer_scale` / viewport. `wl_pointer.frame` after every logical
+group (seat v5+). Buttons — evdev (`BTN_LEFT=0x110`). Scroll: `axis` (15/detent) +
 `axis_value120`.
 
-### 5.4 Курсоры
-- `cursor-shape-v1` рано (enum → наш курсор, без рендера серфейсов);
-- легаси `wl_pointer.set_cursor(surface)`: над встроенным окном рисуем поверхность
-  курсора на `ImGui::GetForegroundDrawList()` в `mouse_pos - hotspot` (это обычная
-  поверхность: commits, frame callbacks, анимация); свой курсор прячем.
-- Курсор на KMS: сначала композитный (последний draw ImGui), потом cursor plane —
-  cursor-only atomic commit на каждый motion = латентность уровня X11 независимо
-  от fps композитора.
+### 5.4 Cursors
+- `cursor-shape-v1` early (enum → our cursor, no surface rendering);
+- legacy `wl_pointer.set_cursor(surface)`: over an embedded window, draw the cursor
+  surface on `ImGui::GetForegroundDrawList()` at `mouse_pos - hotspot` (it's an ordinary
+  surface: commits, frame callbacks, animation); hide our own cursor.
+- Cursor on KMS: composited first (last ImGui draw), then the cursor plane —
+  a cursor-only atomic commit on every motion = X11-level latency independent
+  of the compositor's fps.
 
-## 6. xdg-shell (реализуем сами) — критические места
+## 6. xdg-shell (we implement it ourselves) — the critical spots
 
-- **Configure dance**: первый configure `0×0` («сам выбери размер»), дальше размер
-  диктует content region ImGui-окна; буфер до первого configure — protocol error
-  (`unconfigured_buffer`); ресайз — state `resizing`, не чаще кадра, старую текстуру
-  масштабируем пока клиент не ack'нул; `ack_configure` — точка синхронизации сериалов.
-- **window geometry ≠ размер буфера**: кроп UV по geometry; размеры в configure —
-  geometry; анкоры попапов — geometry-relative.
-- **Декорации**: `zxdg_decoration_manager_v1` → `server_side`. Qt6 уберёт CSD,
-  GTK4 протокол не реализует — хедербар останется (принять).
-- **Попапы**: позиционер (anchor/gravity/constraint_adjustment: flip→slide→resize),
-  configure с координатами **относительно geometry родителя** — поэтому при
-  перетаскивании ImGui-окна попапы едут следом бесплатно (клиент не знает, где его
-  toplevel). Рисовать на `GetForegroundDrawList()` (не внутри родительского окна —
-  клиппинг, z-order); constraints решать против всего экрана; reactive (v3+)
-  переconfigure'ивать. Grab: клик вне поверхностей клиента (включая ImGui-хром) ⇒
-  `popup_done`, и этот клик не должен сработать в ImGui.
-- **Субповерхности — не опция** (mpv, Firefox, GL/Vulkan-области тулкитов): toplevel —
-  дерево поверхностей. Композитим дерево в offscreen VkImage на commit → ImGui
-  получает одну текстуру; hit-test по дереву; sync/desync коммиты по спеке.
-- `ping/pong` с таймером; `set_title/app_id` → заголовок (`"%s###%p"` — стабильный
-  ID); `set_min/max_size` → `SetNextWindowSizeConstraints`; `close()` — по крестику.
+- **Configure dance**: the first configure is `0×0` ("pick your own size"), afterwards the
+  size is dictated by the ImGui window's content region; a buffer before the first configure is a
+  protocol error (`unconfigured_buffer`); resize — the `resizing` state, no more than once
+  per frame, scale the old texture until the client acks; `ack_configure` is the serial
+  synchronization point.
+- **window geometry ≠ buffer size**: crop UVs by the geometry; sizes in configure —
+  geometry; popup anchors are geometry-relative.
+- **Decorations**: `zxdg_decoration_manager_v1` → `server_side`. Qt6 will drop CSD,
+  GTK4 doesn't implement the protocol — the headerbar stays (accept it).
+- **Popups**: the positioner (anchor/gravity/constraint_adjustment: flip→slide→resize),
+  configure with coordinates **relative to the parent's geometry** — which is why popups
+  follow along for free when the ImGui window is dragged (the client doesn't know where its
+  toplevel is). Draw on `GetForegroundDrawList()` (not inside the parent window —
+  clipping, z-order); solve constraints against the whole screen; reconfigure on
+  reactive (v3+). Grab: a click outside the client's surfaces (including ImGui chrome) ⇒
+  `popup_done`, and that click must not fire in ImGui.
+- **Subsurfaces are not optional** (mpv, Firefox, toolkit GL/Vulkan areas): a toplevel is
+  a tree of surfaces. Composite the tree into an offscreen VkImage on commit → ImGui
+  gets a single texture; hit-test over the tree; sync/desync commits per the spec.
+- `ping/pong` with a timer; `set_title/app_id` → the title (`"%s###%p"` — a stable
+  ID); `set_min/max_size` → `SetNextWindowSizeConstraints`; `close()` — on the close button.
 
-## 7. Протоколы по ярусам (всё пишем сами)
+## 7. Protocols by tier (we write all of them ourselves)
 
-- **Tier 0**: `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat` (v≥5, лучше 8–9),
-  `wl_output`, `xdg_wm_base` (Qt6 без него abort), `wl_data_device_manager`
-  (Qt/GTK биндят на старте; клипборд/DnD).
-- **Tier 1**: `linux-dmabuf-v1` v4 (фактически tier 0 для GPU-клиентов),
-  `zxdg_decoration_manager_v1`, `wp_viewporter` (кроп/скейл = UV/размер ImGui::Image),
-  `wp_presentation` (timestamps с page-flip; mpv A/V-sync), `xdg-output`,
+- **Tier 0**: `wl_compositor`, `wl_subcompositor`, `wl_shm`, `wl_seat` (v≥5, preferably 8–9),
+  `wl_output`, `xdg_wm_base` (Qt6 aborts without it), `wl_data_device_manager`
+  (Qt/GTK bind it at startup; clipboard/DnD).
+- **Tier 1**: `linux-dmabuf-v1` v4 (effectively tier 0 for GPU clients),
+  `zxdg_decoration_manager_v1`, `wp_viewporter` (crop/scale = UV/size of ImGui::Image),
+  `wp_presentation` (timestamps from page-flip; mpv A/V sync), `xdg-output`,
   `primary_selection`, `xdg_activation_v1`, `fractional-scale-v1`,
-  `single-pixel-buffer-v1` (тривиален), `wp_linux_drm_syncobj_v1`.
-- **Tier 2**: relative-pointer + pointer-constraints (игры), idle-inhibit,
+  `single-pixel-buffer-v1` (trivial), `wp_linux_drm_syncobj_v1`.
+- **Tier 2**: relative-pointer + pointer-constraints (games), idle-inhibit,
   text-input-v3 (IME), pointer-gestures.
-- **XWayland: делегировать** — xwayland-satellite (нужны лишь xdg_wm_base +
-  viewporter + xdg-output): X11-приложения приходят обычными wayland-toplevel'ами.
-  Нативная интеграция (быть X11 WM поверх xcb) — многомесячный подпроект, не наш.
+- **XWayland: delegate** — xwayland-satellite (needs only xdg_wm_base +
+  viewporter + xdg-output): X11 apps arrive as ordinary wayland toplevels.
+  Native integration (being an X11 WM over xcb) is a multi-month subproject, not ours.
 
-## 8. Сессия и bare metal
+## 8. Session and bare metal
 
-- **libseat** (seatd/logind): fd'ы устройств без root, DRM master drop/regain на
-  VT-switch. Это не фреймворк — брокер fd. Альтернатива на первое время: запуск
-  с своей TTY/root'ом и прямой `drmSetMaster`.
-- **VT-switch**: на disable — стоп frame clocks, `libinput_suspend()`, отпустить
-  зажатые клавиши клиентам, `libseat_disable_seat()` (обязательный ack). На enable —
-  всё KMS-состояние считать потерянным: полный remodeset `ALLOW_MODESET`.
-  Тестировать сотнями переключений.
+- **libseat** (seatd/logind): device fds without root, DRM master drop/regain on
+  VT switch. It's not a framework — it's an fd broker. An early alternative: run
+  on our own TTY as root with a direct `drmSetMaster`.
+- **VT switch**: on disable — stop the frame clocks, `libinput_suspend()`, release
+  held keys to clients, `libseat_disable_seat()` (mandatory ack). On enable —
+  treat all KMS state as lost: full remodeset with `ALLOW_MODESET`.
+  Test with hundreds of switches.
 - **Atomic-only**: `DRM_CLIENT_CAP_ATOMIC` (+`UNIVERSAL_PLANES`), property-based,
-  `TEST_ONLY` для валидации, один in-flight commit на CRTC (`EBUSY`).
-- **udev**: монитор `drm` subsystem (change/HOTPLUG → рескан коннекторов);
-  input-hotplug делает libinput сам.
-- **Мульти-монитор**: один DRM fd / VkDevice; per-output: свой swapchain из 2–3
-  flippable-образов + свой repaint loop от своих flip-событий (частоты разные).
-  ImGui: один контекст на output (общий `ImFontAtlas`), multi-viewport не использовать.
-- **Overlay planes / direct scanout**: пропустить — у нас всегда полный composite.
-  Вернуться только для fullscreen-кейса.
-- **NVIDIA quirks file** заранее: dmabuf c `MOD_INVALID` не импортируется, LINEAR
-  sampled-only (не renderable), `IN_FENCE_FD` может дать `-EPERM` (gamescope
-  ретраит без него), syncobj-протокол обязателен.
+  `TEST_ONLY` for validation, one in-flight commit per CRTC (`EBUSY`).
+- **udev**: monitor the `drm` subsystem (change/HOTPLUG → rescan connectors);
+  input hotplug is handled by libinput itself.
+- **Multi-monitor**: one DRM fd / VkDevice; per output: its own swapchain of 2–3
+  flippable images + its own repaint loop driven by its own flip events (refresh rates differ).
+  ImGui: one context per output (shared `ImFontAtlas`), do not use multi-viewport.
+- **Overlay planes / direct scanout**: skip — we always do a full composite.
+  Revisit only for the fullscreen case.
+- **NVIDIA quirks file** upfront: dmabuf with `MOD_INVALID` won't import, LINEAR is
+  sampled-only (not renderable), `IN_FENCE_FD` may return `-EPERM` (gamescope
+  retries without it), the syncobj protocol is mandatory.
 
-## 9. Nested dev-режим
+## 9. Nested dev mode
 
-Абстракция, проверенная gamescope: **рендерер рисует в VkImage, чью презентацию не
-владеет**; два бэкенда Output:
-- bare metal: dmabuf-экспортированные образы + atomic KMS (flip events = frame clock);
+The abstraction proven by gamescope: **the renderer draws into a VkImage whose
+presentation it does not own**; two Output backends:
+- bare metal: dmabuf-exported images + atomic KMS (flip events = frame clock);
 - nested: SDL3 → `SDL_Vulkan_CreateSurface` → `VkSwapchainKHR`
-  (acquire semaphore → render → present). Ничего экзотического.
+  (acquire semaphore → render → present). Nothing exotic.
 
-Код render-pass'а таргетит «VkImageView + extent», не «свопчейн».
+The render-pass code targets "VkImageView + extent", not "a swapchain".
 
-## 10. Роадмап
+## 10. Roadmap
 
-1. **M0 — Vulkan/KMS спайк** (отдельно от композитора, по образцу kms-vulkan):
-   libseat/root → atomic modeset → VkImage-аллокация с модификаторами → dmabuf →
-   AddFB2 → flip loop c семафорами в обе стороны → чистый VT-switch. Треугольник/
-   ImGui-демо на голом железе. Это де-рискует самое мутное место сразу.
-2. **M1 — скелет композитора** (nested SDL3+Vulkan или сразу поверх M0): libev-цикл,
-   wl_display, `wl_shm` + `xdg_toplevel` (configure dance) → текстура в ImGui-окне.
-   Критерий: **foot запускается и виден**.
-3. **M2 — input**: seat, единая маршрутизация (§5.2), keymap, курсоры.
-   Критерий: foot юзабелен (набор, выделение, скролл).
-4. **M3 — настоящие клиенты**: `linux-dmabuf-v1` v4 + implicit-sync мост,
-   субповерхности (композиция дерева в VkImage), decoration, viewporter.
-   Критерий: mpv, GTK4/Qt6 с GPU-рендером.
-5. **M4 — попапы/grab'ы, clipboard/DnD, presentation-time, fractional-scale.**
-   Критерий: меню/комбобоксы везде, копипаст между клиентами.
-6. **M5 — бытовое**: syncobj (NVIDIA), YUV blit-pass, cursor plane, hotplug,
-   мульти-монитор, xwayland-satellite, render-on-demand экономия.
+1. **M0 — Vulkan/KMS spike** (separate from the compositor, modeled on kms-vulkan):
+   libseat/root → atomic modeset → VkImage allocation with modifiers → dmabuf →
+   AddFB2 → flip loop with semaphores in both directions → clean VT switch. Triangle/
+   ImGui demo on bare metal. This de-risks the murkiest spot right away.
+2. **M1 — compositor skeleton** (nested SDL3+Vulkan or directly on top of M0): libev loop,
+   wl_display, `wl_shm` + `xdg_toplevel` (configure dance) → a texture in an ImGui window.
+   Criterion: **foot launches and is visible**.
+3. **M2 — input**: seat, unified routing (§5.2), keymap, cursors.
+   Criterion: foot is usable (typing, selection, scrolling).
+4. **M3 — real clients**: `linux-dmabuf-v1` v4 + the implicit-sync bridge,
+   subsurfaces (tree composition into a VkImage), decoration, viewporter.
+   Criterion: mpv, GTK4/Qt6 with GPU rendering.
+5. **M4 — popups/grabs, clipboard/DnD, presentation-time, fractional-scale.**
+   Criterion: menus/comboboxes everywhere, copy-paste between clients.
+6. **M5 — housekeeping**: syncobj (NVIDIA), the YUV blit pass, cursor plane, hotplug,
+   multi-monitor, xwayland-satellite, render-on-demand savings.
 
-## 11. Топ рисков
+## 11. Top risks
 
-1. **Vulkan-аллокация scanout на нестандартном железе** — модификатор задаёт layout,
-   но не placement (contiguity на SoC); страховка — интерфейс аллокатора с
-   GBM-запасным путём (~150 строк).
-2. **Объём протокольной работы** — всё, что wlroots давал бесплатно (xdg-shell
-   state machine, dmabuf feedback, data-device), теперь наше. Compensating: полный
-   контроль и Vulkan-нативность.
-3. **Арбитраж фокуса ImGui ↔ клиенты** — одна функция маршрутизации, item-level hit-test.
-4. **Configure/ack/geometry машина состояний** — ошибки = misclick'и и protocol kill.
-5. **Дисциплина event loop** — dispatch → render → callbacks → flush → sleep; не
-   засыпать без flush; не забывать callbacks видимым.
-6. **imgui_impl_vulkan движется** (редизайн дескрипторов 2026-04) — пин версии.
-7. **NVIDIA** — quirks, syncobj рано.
-8. **GEM handle lifetime** и **сброс semaphore при экспорте SYNC_FD** — два
-   классических источника тихих багов.
+1. **Vulkan scanout allocation on non-standard hardware** — the modifier defines the layout,
+   but not the placement (contiguity on SoCs); the insurance is the allocator interface with
+   the GBM fallback path (~150 lines).
+2. **The volume of protocol work** — everything wlroots gave for free (the xdg-shell
+   state machine, dmabuf feedback, data-device) is now ours. Compensating: full
+   control and Vulkan nativeness.
+3. **Focus arbitration ImGui ↔ clients** — one routing function, item-level hit-testing.
+4. **The configure/ack/geometry state machine** — mistakes = misclicks and protocol kills.
+5. **Event loop discipline** — dispatch → render → callbacks → flush → sleep; never
+   sleep without a flush; never forget callbacks for visible surfaces.
+6. **imgui_impl_vulkan keeps moving** (the 2026-04 descriptor redesign) — pin the version.
+7. **NVIDIA** — quirks, syncobj early.
+8. **GEM handle lifetime** and **semaphore reset on SYNC_FD export** — two
+   classic sources of silent bugs.
 
-## 12. Дев-харнесс (4 кольца)
+## 12. Dev harness (4 rings)
 
-Хост разработки — macOS; target — stal/ix (полностью статическая линковка, dlopen
-заменён статической dlfcn-фабрикой ⇒ любой Mesa/Vulkan-драйвер, включая lavapipe,
-линкуется в бинарь напрямую; ОС-монорепо: /Users/pg/monorepo/ix). Всё нужное в ix
-уже есть: lib/{drm,ev,evdev,input,mesa,seat,udev,vulkan,wayland,xkb},
+The development host is macOS; the target is stal/ix (fully static linking, dlopen
+replaced by a static dlfcn factory ⇒ any Mesa/Vulkan driver, including lavapipe,
+links into the binary directly; OS monorepo: /Users/pg/monorepo/ix). Everything needed is
+already in ix: lib/{drm,ev,evdev,input,mesa,seat,udev,vulkan,wayland,xkb},
 bin/{sway,labwc,weston,foot,dwl,qemu}; `lib/mesa/soft` = lavapipe.
 
-- **Кольцо 0 — macOS нативно (секунды)**: ядро логики платформонезависимо и
-  тестируется юнитами без libwayland (configure state machine, positioner solver,
-  focus router, damage). Shell/рендер: ImGui+Vulkan работает на маке через MoltenVK
-  (SDL3) — весь хром (окна/меню/докинг/фокус) разрабатывается на fake-клиентах
-  (текстуры-заглушки, синтетический input) без Linux. Здесь же гоняются
-  автономные тесты при разработке.
-- **Кольцо 1 — Linux VM на маке (QEMU aarch64 + hvf), основной integration loop**:
-  Debian trixie cloud-образ + cloud-init (vm/create.sh — полностью скриптованный
-  provision), rsync исходников + сборка/тесты внутри (./build.sh). ssh внутрь;
-  крашится процесс, не машина. Наш композитор nested под sway в окне QEMU
-  (vm/run.sh --gui). Vulkan = lavapipe (mesa-vulkan-drivers).
-  Порт на stal/ix — после схождения этого кольца (aarch64/lavapipe в ix пока
-  бедные, реальные ix-машины — x86_64/radv).
-- **Кольцо 2 — KMS в VM**: композитор на VT той же VM: virtio-gpu KMS (atomic) +
-  virtio-input + seatd. Окно QEMU показывает наш вывод напрямую; VT-switch и
-  hotplug output'ов тестируются тут. Headless CI: vkms(+writeback) или проще —
-  свой readback (`vkCmdCopyImageToBuffer` → PNG → golden-assert).
-  Проверить в M0: lavapipe экспортирует dmabuf через udmabuf (нужен /dev/udmabuf
-  в госте; модификаторы — LINEAR); примет ли virtio-gpu AddFB2 на такой буфер —
-  если нет, VM-fallback: dumb buffer + копия (VM-кольцо не про скорость).
-  GPU-passthrough (venus) на macOS-хосте не работает — и не нужен.
-- **Кольцо 3 — реальное железо (stal/ix, ssh), редко**: только драйверная
-  специфика (radv/anv/nvk, реальные модификаторы, латентность, NVIDIA quirks).
-  Правила «никогда не ребутать»: запуск только из ssh под супервизором (runit);
-  краш процесса сам освобождает DRM master (закрытие fd) — VT возвращается;
-  залипший VT — `chvt`/SysRq по ssh; ssh-путь (ethernet) независим от графики.
-  Физический ребут — только GPU hang.
+- **Ring 0 — macOS native (seconds)**: the logic core is platform-independent and
+  unit-tested without libwayland (configure state machine, positioner solver,
+  focus router, damage). Shell/rendering: ImGui+Vulkan works on the Mac via MoltenVK
+  (SDL3) — all chrome (windows/menus/docking/focus) is developed against fake clients
+  (stub textures, synthetic input) without Linux. Standalone tests during development
+  also run here.
+- **Ring 1 — Linux VM on the Mac (QEMU aarch64 + hvf), the main integration loop**:
+  a Debian trixie cloud image + cloud-init (vm/create.sh — fully scripted
+  provisioning), rsync the sources + build/test inside (./build.sh). ssh in;
+  the process crashes, not the machine. Our compositor runs nested under sway in a QEMU
+  window (vm/run.sh --gui). Vulkan = lavapipe (mesa-vulkan-drivers).
+  The port to stal/ix comes after this ring converges (aarch64/lavapipe in ix is still
+  sparse; the real ix machines are x86_64/radv).
+- **Ring 2 — KMS in the VM**: the compositor on a VT of the same VM: virtio-gpu KMS (atomic) +
+  virtio-input + seatd. The QEMU window shows our output directly; VT switching and
+  output hotplug are tested here. Headless CI: vkms(+writeback) or simpler —
+  our own readback (`vkCmdCopyImageToBuffer` → PNG → golden-assert).
+  Check in M0: lavapipe exports dmabuf via udmabuf (needs /dev/udmabuf
+  in the guest; modifiers — LINEAR); whether virtio-gpu will accept AddFB2 on such a buffer —
+  if not, the VM fallback: dumb buffer + a copy (the VM ring is not about speed).
+  GPU passthrough (venus) doesn't work on a macOS host — and isn't needed.
+- **Ring 3 — real hardware (stal/ix, ssh), rarely**: only driver
+  specifics (radv/anv/nvk, real modifiers, latency, NVIDIA quirks).
+  The "never reboot" rules: launch only from ssh under a supervisor (runit);
+  a process crash releases DRM master by itself (fd close) — the VT comes back;
+  a stuck VT — `chvt`/SysRq over ssh; the ssh path (ethernet) is independent of graphics.
+  A physical reboot — only for a GPU hang.
 
-Сквозная обвязка: **headless-реализация интерфейса Output** в самом композиторе
-(рендер в память + виртуальный seat) — для CI и автономного агентного тестирования;
-клиентская матрица: weston-simple-shm / weston-simple-dmabuf-feedback / foot / mpv /
-GTK4/Qt6-демо; свой protocol-test-клиент на libwayland-client (сценарии configure
-dance / popup grab / clipboard с ассертами); input-инъекция: headless — напрямую
-в seat, VM — uinput. wlcs (conformance suite) — опционально позже.
+Cross-cutting plumbing: a **headless implementation of the Output interface** inside the
+compositor itself (render to memory + a virtual seat) — for CI and autonomous agent testing;
+the client matrix: weston-simple-shm / weston-simple-dmabuf-feedback / foot / mpv /
+GTK4/Qt6 demos; our own protocol-test client on libwayland-client (configure dance /
+popup grab / clipboard scenarios with asserts); input injection: headless — directly
+into the seat, VM — uinput. wlcs (the conformance suite) — optional, later.
 
-## 13. Референс-код (держать открытым при реализации)
+## 13. Reference code (keep open while implementing)
 
-- **kms-vulkan** (nyorain) — минимальный end-to-end «Vulkan рендерит, atomic KMS
-  сканирует, семафоры в обе стороны»: https://github.com/nyorain/kms-vulkan (vulkan.c)
-- **gamescope** — `src/rendervulkan.cpp` (`CVulkanTexture::BInit` — оба пути:
-  allocate-export и import), `src/Backends/DRMBackend.cpp` (`drm_fbid_from_dmabuf`,
-  парсинг IN_FORMATS, atomic): https://github.com/ValveSoftware/gamescope
-- **wlroots render/vulkan** — только как справочник (не зависимость):
-  `vulkan_sync_foreign_texture` / `vulkan_sync_render_buffer` — эталон
-  implicit-sync моста; texture.c — импорт dmabuf.
-- **kms-quads** (Daniel Stone) — учебный atomic KMS с комментариями:
+- **kms-vulkan** (nyorain) — a minimal end-to-end "Vulkan renders, atomic KMS
+  scans out, semaphores in both directions": https://github.com/nyorain/kms-vulkan (vulkan.c)
+- **gamescope** — `src/rendervulkan.cpp` (`CVulkanTexture::BInit` — both paths:
+  allocate-export and import), `src/Backends/DRMBackend.cpp` (`drm_fbid_from_dmabuf`,
+  IN_FORMATS parsing, atomic): https://github.com/ValveSoftware/gamescope
+- **wlroots render/vulkan** — as a reference only (not a dependency):
+  `vulkan_sync_foreign_texture` / `vulkan_sync_render_buffer` — the canonical
+  implicit-sync bridge; texture.c — dmabuf import.
+- **kms-quads** (Daniel Stone) — instructional atomic KMS with comments:
   https://gitlab.freedesktop.org/daniels/kms-quads
-- **QWaylandQuickItem** — модель «окно как виджет» (лок буфера, координаты,
-  субповерхности): https://doc.qt.io/qt-6/qwaylandquickitem.html
-- Протоколы: https://wayland.app/protocols/ (xdg-shell, linux-dmabuf-v1,
+- **QWaylandQuickItem** — the "window as a widget" model (buffer locking, coordinates,
+  subsurfaces): https://doc.qt.io/qt-6/qwaylandquickitem.html
+- Protocols: https://wayland.app/protocols/ (xdg-shell, linux-dmabuf-v1,
   linux-drm-syncobj-v1, cursor-shape-v1, presentation-time, viewporter)
 - Wayland Book: https://wayland-book.com/ (frame callbacks, positioners, subsurfaces)
-- dma-buf sync ioctls (ядро ≥6.0): https://www.collabora.com/news-and-blog/blog/2022/06/09/bridging-the-synchronization-gap-on-linux/
+- dma-buf sync ioctls (kernel ≥6.0): https://www.collabora.com/news-and-blog/blog/2022/06/09/bridging-the-synchronization-gap-on-linux/
 - xwayland-satellite: https://github.com/Supreeeme/xwayland-satellite
-- Инструмент: drm_info (+ https://drmdb.emersion.fr/ — база поддержки пропертей
-  по драйверам)
+- Tooling: drm_info (+ https://drmdb.emersion.fr/ — a database of property support
+  by driver)
 
-## 14. Как реализовано (as built, 2026-07)
+## 14. As built (2026-07)
 
-Статус роадмапа: M1–M3 закрыты, M4 наполовину (попапы/grab'ы, ресайз, рендер по
-damage-флагу — есть; clipboard — нет). Firefox-esr работает (рендер, клики, меню).
-Код переведён на библиотеку [pg83/std](https://github.com/pg83/std) (namespace
-`stl`): ноль зависимостей на C++ STL, владение через `ObjPool` (создание в пуле,
-LIFO-смерть), интерфейсы в заголовках / реализации целиком в .cpp, сборка только
-clang++ (библиотека использует клэнговые builtins). Кольца 0 и 3 (§12) не
-понадобились: весь цикл — кольца 1–2 (QEMU aarch64 + lavapipe, headless и KMS).
+Roadmap status: M1–M4 done (clipboard/DnD included; see the production batch
+at the end of §14.3). Firefox-esr works (rendering, clicks, menus). Next: M5 —
+the stal/ix port.
+The code was moved onto the [pg83/std](https://github.com/pg83/std) library (namespace
+`stl`): zero dependencies on the C++ STL, ownership via `ObjPool` (creation in a pool,
+LIFO death), interfaces in headers / implementations entirely in .cpp, builds only with
+clang++ (the library uses clang builtins). Rings 0 and 3 (§12) were never
+needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and KMS).
 
-### 14.1 Слои и файлы
+### 14.1 Layers and files
 
-Зависимости строго вниз: `main` → `control` → {`wayland`, `renderer`} →
-{`scene`, `device`, `output`, `input`, `session`} → `util`. Один .cpp — один .h
-(кроме main; чистые интерфейсы `output.h`/`input_sink.h`/`frame_listener.h`
-живут без .cpp).
+Dependencies point strictly downward: `main` → `control` → {`wayland`, `renderer`} →
+{`scene`, `device`, `output`, `input`, `session`} → `util`. One .cpp — one .h
+(except main; the pure interfaces `output.h`/`input_sink.h`/`frame_listener.h`
+live without a .cpp).
 
-- **Слой 0 — врапперы над ядерными механизмами.**
-  - `session.h` — `Session`: брокер fd устройств + события активности сиденья.
-    `openDevice/closeDevice` (возвращает fd или -errno — без исключений, зовётся
-    из C-колбэков libinput), `seatName()`, `addListener` (`SessionListener`:
-    `sessionEnabled/sessionDisabled` = VT-switch). Реализации: libseat
-    (seatd → logind → builtin: под root без демона libseat сам поднимает
-    встроенный seatd) и Direct (plain open/close, всегда активна). main пробует
-    libseat, при неудаче падает на Direct с логом. Через Session открываются
-    DRM-узел (Device) и /dev/input (libinput open_restricted); headless живёт
-    без сессии. На disable KmsOutput перестаёт презентить (мастер отозван),
-    libinput suspend; на enable — remodeset последним показанным буфером
-    (ALLOW_MODESET) и libinput resume. Ack (`libseat_disable_seat`) шлётся после
-    оповещения слушателей.
-  - `device.h` — `Device`: один графический адаптер = Vulkan-девайс + (опционально)
-    KMS-узел. Владеет DRM fd, VkInstance/VkDevice/очередью и таблицей
-    dmabuf-форматов; ev_io на DRM fd (page-flip события) — тоже его. Фабрика
-    своего: `createOutput(connector, mode)` и `createRenderer(scene, output,
-    frameListener, framesLimit)`. Реализации: `createKms` (путь или nullptr =
-    первый узел с atomic) и `createHeadless` (lavapipe, KMS-половины нет).
-    Соответствие Vulkan ↔ DRM ищется через `VK_EXT_physical_device_drm`
-    (major:minor против fstat); нет совпадения — первый Vulkan-девайс и
-    readback-мост (реальность VM: рендер lavapipe, сканаут virtio-gpu — честный
-    cross-device). Хендлы уезжают в Renderer внутренним контрактом `DeviceVk`
-    (device_vk.h, только между device.cpp и renderer.cpp). `Device::list()` —
-    enumeration для `imway --list`: DRM-узлы, коннекторы с режимами (preferred
-    помечен `*`), Vulkan-девайсы с их drm-узлами.
-  - `output.h` — `Output`: `width/height/refresh()` (режим дисплея; вызывающий
-    подгоняет сцену под него), `start()` (modeset + первый чёрный кадр; headless —
-    no-op), `present(pixels)`. KmsOutput = коннектор+CRTC+plane+режим
-    (2 dumb-буфера; если предыдущий flip ещё в полёте — кадр дропается; VT в
-    K_OFF/KD_GRAPHICS), HeadlessOutput = WxH@hz из конфига. Выбор: коннектор по
-    имени («HDMI-A-1», nullptr = первый подключённый), режим по «WxH@Hz»
-    (nullptr = preferred из EDID).
-  - `input.h` — `InputSink`: `motion` (абсолютные координаты output), `button/key`
-    (сырые evdev-коды), `scroll` (деления колеса). `InputSource::createLibinput`
-    (libinput/udev; outW/outH — границы относительного курсора и масштаб
-    абсолютного). `InputSink::tee` размножает поток на два синка. Источники не
-    знают, кто потребляет. Input-устройства — отдельная от Device ось: их
-    перечисляет udev seat, хотплаг у libinput свой.
-- **Слой 1 — `scene.h`: чистые данные, ни одного wayland/vulkan-типа в API.**
-  Деревья поверхностей (`Surface` + роли `Subsurface`/`Toplevel`/`Popup`),
-  контент (pixels BGRA либо `DmabufBuffer`), применённый viewport, input region,
-  view-фидбек. `SurfaceTexture` — непрозрачный указатель, содержимое знает только
-  renderer.cpp. Стек субповерхностей: `stackBelow` рисуются до поверхности,
-  `stackAbove` — после, оба списка низ→верх. `Toplevel::title/appId` — фиксированные
-  буферы: клиенты меняют title постоянно, интернить строки = растить пул.
-  `Scene::popups` — порядок создания = порядок стека (последний — самый верхний).
-- **Слой 2 — `wayland.{h,cpp}`: вся state machine, единственный владелец
-  libwayland и xkbcommon.** Все глобалы и протоколы, commit-семантика, роли.
-  Seat — не подсистема, а протокольное состояние ввода внутри SM (`SeatState`:
-  фокус/грабы/клавиатура — это реакции протокола на вход). Протокольные части
-  модели (pending, sync-кэши, xdg-ресурсы) — приватные impl-наследники структур
-  сцены; сцене и рендеру не видны. Наружу: `run()` (цикл до quit; эпилог гасит
-  клиентов и display), `sink()` и `frameListener()` — виртуальные аксессоры,
-  реализация возвращает `this`; так wayland.h не тянет input.h/renderer.h.
-- **Слой 3 — `renderer.{h,cpp}`: view сцены, ImGui+Vulkan, ноль знаний о
-  Wayland.** Сам владеет кадровым клоком, сам тянет контент нод по `dirty`,
-  сам владеет текстурами. Реализует `InputSink`: ImGui и есть оконный менеджер,
-  ему нужен сырой ввод (двигает/ресайзит окна).
-- `control.{h,cpp}` — отладочный харнесс поверх публичных API других слоёв:
-  FIFO с текстовыми командами `motion X Y | button left|right|middle
+- **Layer 0 — wrappers over kernel mechanisms.**
+  - `session.h` — `Session`: a broker of device fds + seat activity events.
+    `openDevice/closeDevice` (returns an fd or -errno — no exceptions, called
+    from libinput's C callbacks), `seatName()`, `addListener` (`SessionListener`:
+    `sessionEnabled/sessionDisabled` = VT switch). Implementations: libseat
+    (seatd → logind → builtin: under root without a daemon, libseat spins up its
+    embedded seatd itself) and Direct (plain open/close, always active). main tries
+    libseat, on failure falls back to Direct with a log line. The DRM node (Device)
+    and /dev/input (libinput open_restricted) are opened through Session; headless lives
+    without a session. On disable, KmsOutput stops presenting (master revoked),
+    libinput suspends; on enable — remodeset with the last shown buffer
+    (ALLOW_MODESET) and libinput resume. The ack (`libseat_disable_seat`) is sent after
+    the listeners are notified.
+  - `device.h` — `Device`: one graphics adapter = a Vulkan device + (optionally)
+    a KMS node. Owns the DRM fd, the VkInstance/VkDevice/queue and the
+    dmabuf format table; the ev_io on the DRM fd (page-flip events) is its too. Factory
+    of its own kind: `createOutput(connector, mode)` and `createRenderer(scene, output,
+    frameListener, framesLimit)`. Implementations: `createKms` (a path or nullptr =
+    the first node with atomic) and `createHeadless` (lavapipe, no KMS half).
+    The Vulkan ↔ DRM correspondence is found via `VK_EXT_physical_device_drm`
+    (major:minor against fstat); no match — the first Vulkan device and a
+    readback bridge (the VM reality: lavapipe renders, virtio-gpu scans out — an honest
+    cross-device case). Handles travel into the Renderer via the internal `DeviceVk`
+    contract (device_vk.h, shared only between device.cpp and renderer.cpp).
+    `Device::list()` — enumeration for `imway --list`: DRM nodes, connectors with modes
+    (preferred marked with `*`), Vulkan devices with their drm nodes.
+  - `output.h` — `Output`: `width/height/refresh()` (the display mode; the caller
+    fits the scene to it), `start()` (modeset + the first black frame; headless —
+    a no-op), `present(pixels)`. KmsOutput = connector+CRTC+plane+mode
+    (2 dumb buffers; if the previous flip is still in flight the frame is dropped; the VT is
+    put into K_OFF/KD_GRAPHICS), HeadlessOutput = WxH@hz from the config. Selection: connector by
+    name ("HDMI-A-1", nullptr = the first connected one), the mode by "WxH@Hz"
+    (nullptr = preferred from the EDID).
+  - `input.h` — `InputSink`: `motion` (absolute output coordinates), `button/key`
+    (raw evdev codes), `scroll` (wheel detents). `InputSource::createLibinput`
+    (libinput/udev; outW/outH — the bounds for the relative cursor and the scale of the
+    absolute one). `InputSink::tee` fans the stream out to two sinks. Sources don't
+    know who consumes. Input devices are an axis separate from Device: the udev seat
+    enumerates them, libinput has its own hotplug.
+- **Layer 1 — `scene.h`: pure data, not a single wayland/vulkan type in the API.**
+  Surface trees (`Surface` + the roles `Subsurface`/`Toplevel`/`Popup`),
+  content (BGRA pixels or a `DmabufBuffer`), the applied viewport, the input region,
+  view feedback. `SurfaceTexture` is an opaque pointer; only renderer.cpp knows its
+  contents. The subsurface stack: `stackBelow` are drawn before the surface,
+  `stackAbove` — after, both lists bottom→top. `Toplevel::title/appId` — fixed-size
+  buffers: clients change the title constantly, interning strings = growing the pool.
+  `Scene::popups` — creation order = stacking order (the last one is topmost).
+- **Layer 2 — `wayland.{h,cpp}`: the entire state machine, the sole owner of
+  libwayland and xkbcommon.** All globals and protocols, commit semantics, roles.
+  Seat is not a subsystem but the protocol input state inside the SM (`SeatState`:
+  focus/grabs/keyboard are the protocol's reactions to input). The protocol parts of the
+  model (pending, sync caches, xdg resources) are private impl subclasses of the scene
+  structures; invisible to the scene and the renderer. Externally: `run()` (loop until quit;
+  the epilogue shuts down clients and the display), `sink()` and `frameListener()` — virtual
+  accessors, the implementation returns `this`; this way wayland.h doesn't pull in
+  input.h/renderer.h.
+- **Layer 3 — `renderer.{h,cpp}`: a view of the scene, ImGui+Vulkan, zero knowledge of
+  Wayland.** It owns the frame clock itself, pulls node content by `dirty` itself,
+  owns the textures itself. Implements `InputSink`: ImGui *is* the window manager,
+  it needs raw input (it moves/resizes windows).
+- `control.{h,cpp}` — a debug harness over the public APIs of the other layers:
+  a FIFO with text commands `motion X Y | button left|right|middle
   press|release | key CODE press|release | type TEXT | scroll N |
-  screenshot PATH | quit`; инъекция ввода через InputSink, скриншот через
-  Renderer, quit через ev_break. Внутри — таблица ascii→evdev (us-раскладка).
-- `main.cpp` — сборка графа в один `ObjPool`: порядок создания = обратный
-  порядок смерти, сцена умирает последней. Клиенты гибнут первыми (в эпилоге
-  `run()`), их текстуры уезжают в `orphanedTextures`; подсистемы умирают вместе
-  с пулом. Ошибки — исключения `stl::Exception` (`STD_VERIFY`/`Errno().raise`),
-  ловятся на границе main.
+  screenshot PATH | quit`; input injection via InputSink, screenshots via
+  Renderer, quit via ev_break. Inside — an ascii→evdev table (us layout).
+- `main.cpp` — assembles the graph into a single `ObjPool`: creation order = reverse
+  death order, the scene dies last. Clients die first (in the epilogue of
+  `run()`), their textures go into `orphanedTextures`; subsystems die together
+  with the pool. Errors — `stl::Exception` exceptions (`STD_VERIFY`/`Errno().raise`),
+  caught at the main boundary.
 
-### 14.2 Контракты между слоями
+### 14.2 Contracts between layers
 
-- **`Surface::dirty`** — SM ставит на commit, renderer снимает и заливает контент
-  в текстуру. `dmabuf != nullptr` ⇒ контент в dmabuf (pixels пусты), иначе pixels —
-  BGRA, плотные строки w*4.
-- **`Scene::orphanedTextures`** — SM складывает текстуры уничтоженных нод,
-  renderer освобождает на своём тике (через `vkQueueWaitIdle` — грубо, но
-  корректно). Это единственная развязка лайфтаймов SM ↔ renderer.
-- **view-фидбек** — renderer пишет в сцену из ImGui-кадра: `imgX/imgY` (экранная
-  позиция Image-итема), `hovered`, `desiredW/desiredH` (контент-регион окна).
-  SM читает: пик указателя — по hovered, ресайз — configure по desiredW/H
-  (с дедупом по последнему отправленному размеру).
-- **Кадровый клок — у renderer'а** (ev_timer с периодом 1/hz): тик без
-  `needsFrame` — пустой (идеальный idle = 0 кадров; lavapipe — это CPU), после
-  активности дорисовываются 3 settle-кадра (hover/анимации ImGui). Полный кадр:
-  освободить orphaned → залить dirty-текстуры → ImGui-кадр → `Output::present`
-  → `FrameListener::frameShown(msec)`. По нему SM шлёт frame callbacks — всем
-  деревьям, показанным в кадре, включая попапы (GTK не рисует контент меню, пока
-  не получит frame done) — и configure по view-фидбеку.
-- **dmabuf-форматы GPU** — знание Device (`dmabufFormatCount/dmabufFormat`),
-  передаются в `WaylandConfig` как данные: SM не зависит ни от девайса, ни от
-  рендера. Пустой список = dmabuf-глобал не поднимается. Поскольку форматы
-  известны до рождения рендера, граф создаётся за один проход: Scene → Device →
-  Output → Wayland → Renderer (FrameListener приходит конструктором,
-  сеттеров-дособирателей нет).
-- Любой ввод и key press будят кадр (`needsFrame`), даже если ImGui клавиши не
-  потребляет.
+- **`Surface::dirty`** — the SM sets it on commit, the renderer clears it and uploads the
+  content into the texture. `dmabuf != nullptr` ⇒ the content is in the dmabuf (pixels are
+  empty), otherwise pixels are BGRA, tightly packed rows of w*4.
+- **`Scene::orphanedTextures`** — the SM deposits textures of destroyed nodes,
+  the renderer frees them on its tick (via `vkQueueWaitIdle` — crude but
+  correct). This is the only lifetime decoupling between the SM and the renderer.
+- **view feedback** — the renderer writes into the scene from the ImGui frame: `imgX/imgY`
+  (the screen position of the Image item), `hovered`, `desiredW/desiredH` (the window's
+  content region). The SM reads: pointer picking — by hovered, resize — a configure by
+  desiredW/H (deduped against the last sent size).
+- **The frame clock belongs to the renderer** (an ev_timer with period 1/hz): a tick without
+  `needsFrame` is empty (perfect idle = 0 frames; lavapipe is a CPU), after
+  activity 3 settle frames are drawn (hover/ImGui animations). A full frame:
+  free orphaned → upload dirty textures → the ImGui frame → `Output::present`
+  → `FrameListener::frameShown(msec)`. On it, the SM sends frame callbacks — to all
+  trees shown in the frame, including popups (GTK doesn't draw menu content until it
+  gets frame done) — and configures per the view feedback.
+- **GPU dmabuf formats** — knowledge belonging to Device (`dmabufFormatCount/dmabufFormat`),
+  passed into `WaylandConfig` as data: the SM depends on neither the device nor the
+  renderer. An empty list = the dmabuf global isn't brought up. Since the formats are
+  known before the renderer is born, the graph is built in a single pass: Scene → Device →
+  Output → Wayland → Renderer (the FrameListener arrives via the constructor,
+  no assemble-later setters).
+- Any input and any key press wakes a frame (`needsFrame`), even if ImGui doesn't
+  consume the keys.
 
-### 14.3 Осознанные упрощения (расхождения с §1–§8)
+### 14.3 Deliberate simplifications (divergences from §1–§8)
 
-- **Scanout — свопчейн §1.1 реализован, с dumb-фолбэком**: KmsOutput пробует
-  2 VkImage c DRM-модификаторами (пересечение Vulkan ∩ IN_FORMATS плана,
-  подтверждение через ImageFormatProperties2 + EXPORTABLE) → export dmabuf →
-  `drmPrimeFDToHandle` → `AddFB2WithModifiers`; рендер прямо в scanout-образ
-  (finalLayout GENERAL), present = flip его FB, копий нет. Любой сбой стадии —
-  лог с именем стадии и откат на dumb-путь (readback → memcpy). **В VM работает
-  только фолбэк**: lavapipe экспортирует через udmabuf успешно, но virtio-gpu
-  отвергает prime-импорт чужого dmabuf (ENODEV) — предсказано в §12; боевая
-  проверка zero-copy — на stal/ix (radv, render == display). Синхронизация §2
-  пока не нужна: submit ждётся фенсом до commit (кадр готов до flip); фенсы
-  IN/OUT_FENCE_FD — вместе с пайплайнингом. Readback-копия в кадре осталась
-  только у dumb-пути; скриншот делается ленивым one-shot копированием.
-- **Кадровый клок**: на KMS таймера нет вовсе — ev_prepare рендерит, когда
-  (needsFrame ∨ settle) ∧ ready(), где ready = модесет прошёл ∧ flip не в полёте
-  ∧ сессия активна; page-flip будит loop и даёт естественный vsync-пейсинг,
-  готовые кадры не дропаются, в простое 0 пробуждений. Headless оставлен на
-  ev_timer: он же тестовый клок (`--frames` на headless считает тики, на kms —
-  реально отрисованные кадры).
-- **linux-dmabuf v3, не v4** (без feedback): v1 — format-события, v3 —
-  modifier-события. **VkImage кэшируется per wl_buffer** (ключ — DmabufBuffer;
-  клиенты гоняют 2–4 буфера по кругу — импорт один раз на буфер, дальше только
-  смена дескриптора); смерть wl_buffer едет в renderer данными
-  (`scene.deadDmabufs`), кэш-текстура живёт, пока показана. Импорт только
-  одноплоскостных буферов;
-  ARGB8888/XRGB8888 ↔ `VK_FORMAT_B8G8R8A8_UNORM`, X-вариант получает alpha=1
-  свизлом VkImageView. Буфер держится до замены следующим (рендер читает память
-  напрямую, копий нет); если клиент уничтожил wl_buffer, пока тот показан, —
-  память живёт на нашем fd (импорт дублирует fd, `vkAllocateMemory` забирает
-  дубликат себе). Сбой импорта шлёт клиенту failed, но не роняет композитор.
-- **Damage** — union-прямоугольник (не список): SM копит
-  damage/damage_buffer в pending, на commit клипует и кладёт в
-  `Surface.damage/damageAll`; все три копии shm-пути (клиент→pixels,
-  pixels→staging, staging→VkImage) ограничены этим ректом. Пустой damage при
-  новом буфере = полная заливка (совместимость). damage() при активном
-  viewport = full (surface-координаты неоднозначны). Рендер кадра всё равно
-  полный (LOAD_OP_CLEAR — ImGui пересобирает всё, §4).
-- **Commit-семантика**: sync-кэши субповерхностей по спеке (commit родителя
-  применяет всё sync-поддерево; переход sync→desync применяет накопленный кэш;
-  позиция любых детей — в т.ч. desync — двойнобуферизована коммитом родителя).
-  Два упрощения: dmabuf-контент применяется сразу даже у sync-детей (буфер один,
-  кэшировать нечего), input region применяется сразу (хит-тест не должен ждать
-  commit родителя; GTK-оверлеям достаточно). shm-путь снимает копию пикселей
-  прямо на commit — wl_buffer сразу возвращается клиенту (важно для
-  single-buffered).
-- **Input region** — без честной булевой геометрии: subtract выкидывает только
-  целиком совпавшие прямоугольники, частичные пересечения игнорируются
-  (реальным клиентам хватает).
-- **Позиционер**: anchor/gravity полностью, constraint_adjustment
-  (флипы/слайды у краёв) — нет: в ImGui-окне попап и так виден. Кроп попапа по
-  geometry не делается. `place_above/below` с ref не-sibling'ом — по спеке
-  protocol error; прощаем и кладём наверх (ref == сам родитель — валиден).
-- **xdg**: первый configure — в ответ на commit без буфера (спека, GTK на этом
-  ломается в обе стороны); focus-on-map; начальный размер ImGui-окна — под
-  первый буфер, дальше размером владеет пользователь.
-- **Прод-добор (2026-07-14, после «пили одно за другим»)**:
-  - clipboard: `wl_data_device_manager` v3 целиком (selection + DnD с иконкой у
-    курсора и каскадом enter/leave/motion/drop; действия — copy>move) +
-    `zwp_primary_selection_v1`; офферы рассылаются при每 keyboard enter; e2e-тест
-    wl-copy/wl-paste (оба буфера) в ctest.
-  - `xdg_toplevel.move/resize` — драг ImGui-окна до отпускания кнопки (resize по
-    битам edges, минимум 120×80); `set_fullscreen` (окно без декораций на весь
-    вывод, prev-размер восстанавливается) и state `activated` по фокусу.
-  - курсоры: `wp_cursor_shape_v1` (enum → нейтральный `CursorKind` в сцене →
-    курсоры ImGui) и легаси `set_cursor` (поверхность в foreground draw list у
-    hotspot, с frame callbacks — анимированные курсоры живут). Применяется
-    только когда указатель над клиентом; над хромом курсором владеет ImGui.
-  - раскладки: `--xkb-layout us,ru --xkb-options grp:alt_shift_toggle` —
-    переключение делает сам xkbcommon (группа уезжает клиентам в modifiers);
-    шрифт с кириллицей: `--font PATH`, дефолт — DejaVuSans из системы.
-  - SIGBUS: защита libwayland через begin/end_access подтверждена злым тестом
-    (клиент ftruncate'ит пул под ногами — композитор выживает, клиент получает
+- **Scanout — the §1.1 swapchain is implemented, with a dumb fallback**: KmsOutput tries
+  2 VkImages with DRM modifiers (the intersection Vulkan ∩ the plane's IN_FORMATS,
+  confirmed via ImageFormatProperties2 + EXPORTABLE) → export dmabuf →
+  `drmPrimeFDToHandle` → `AddFB2WithModifiers`; rendering goes straight into the scanout
+  image (finalLayout GENERAL), present = flip its FB, no copies. Any stage failure —
+  a log with the stage name and a rollback to the dumb path (readback → memcpy). **In the VM
+  only the fallback works**: lavapipe exports via udmabuf successfully, but virtio-gpu
+  rejects prime import of a foreign dmabuf (ENODEV) — predicted in §12; the real
+  zero-copy test is on stal/ix (radv, render == display). The §2 synchronization isn't
+  needed yet: the submit is waited on with a fence before the commit (the frame is ready
+  before the flip); the IN/OUT_FENCE_FD fences come together with pipelining. The in-frame
+  readback copy remains only on the dumb path; screenshots are done with a lazy one-shot copy.
+- **The frame clock**: on KMS there is no timer at all — ev_prepare renders when
+  (needsFrame ∨ settle) ∧ ready(), where ready = the modeset happened ∧ no flip in flight
+  ∧ the session is active; the page-flip wakes the loop and provides natural vsync pacing,
+  ready frames aren't dropped, zero wakeups at idle. Headless stays on the
+  ev_timer: it doubles as the test clock (`--frames` on headless counts ticks, on kms —
+  actually rendered frames).
+- **linux-dmabuf v3, not v4** (no feedback): v1 — format events, v3 —
+  modifier events. **The VkImage is cached per wl_buffer** (key — the DmabufBuffer;
+  clients cycle 2–4 buffers — one import per buffer, after that only a
+  descriptor swap); the death of a wl_buffer travels to the renderer as data
+  (`scene.deadDmabufs`), the cached texture lives as long as it is shown. Only
+  single-plane buffers are imported;
+  ARGB8888/XRGB8888 ↔ `VK_FORMAT_B8G8R8A8_UNORM`, the X variant gets alpha=1
+  via a VkImageView swizzle. The buffer is held until replaced by the next one (the renderer
+  reads the memory directly, no copies); if the client destroys the wl_buffer while it is
+  shown — the memory lives on our fd (the import dups the fd, `vkAllocateMemory` takes the
+  duplicate for itself). An import failure sends failed to the client but doesn't bring down
+  the compositor.
+- **Damage** — a union rectangle (not a list): the SM accumulates
+  damage/damage_buffer in pending, on commit clips it and puts it into
+  `Surface.damage/damageAll`; all three copies of the shm path (client→pixels,
+  pixels→staging, staging→VkImage) are bounded by this rect. Empty damage with a
+  new buffer = a full upload (compatibility). damage() with an active
+  viewport = full (surface coordinates are ambiguous). The frame render is still
+  full (LOAD_OP_CLEAR — ImGui rebuilds everything, §4).
+- **Commit semantics**: subsurface sync caches per the spec (the parent's commit
+  applies the entire sync subtree; the sync→desync transition applies the accumulated cache;
+  the position of any children — including desync — is double-buffered by the parent's
+  commit). Two simplifications: dmabuf content is applied immediately even for sync
+  children (there's one buffer, nothing to cache), the input region is applied immediately
+  (hit-testing must not wait for the parent's commit; good enough for GTK overlays). The
+  shm path snapshots the pixels right on commit — the wl_buffer returns to the client
+  immediately (important for single-buffered).
+- **Input region** — no honest boolean geometry: subtract removes only
+  exactly-matching rectangles, partial intersections are ignored
+  (sufficient for real clients).
+- **The positioner**: anchor/gravity in full, constraint_adjustment
+  (flips/slides at the edges) — no: inside an ImGui window the popup is visible anyway.
+  Popup cropping by geometry isn't done. `place_above/below` with a non-sibling ref — per
+  the spec a protocol error; we forgive it and put it on top (ref == the parent itself — valid).
+- **xdg**: the first configure — in response to a commit without a buffer (the spec; GTK
+  breaks both ways on this); focus-on-map; the initial ImGui window size — to fit the
+  first buffer, after that the user owns the size.
+- **Production catch-up (2026-07-14, after "grind through them one by one")**:
+  - clipboard: `wl_data_device_manager` v3 in full (selection + DnD with an icon at
+    the cursor and the enter/leave/motion/drop cascade; actions — copy>move) +
+    `zwp_primary_selection_v1`; offers are re-sent on every keyboard enter; an e2e test
+    with wl-copy/wl-paste (both buffers) in ctest.
+  - `xdg_toplevel.move/resize` — dragging the ImGui window until button release (resize by
+    the edges bits, minimum 120×80); `set_fullscreen` (a window without decorations over the
+    whole output, the prev size is restored) and the `activated` state on focus.
+  - cursors: `wp_cursor_shape_v1` (enum → a neutral `CursorKind` in the scene →
+    ImGui cursors) and the legacy `set_cursor` (the surface in the foreground draw list at
+    the hotspot, with frame callbacks — animated cursors live). Applied
+    only when the pointer is over a client; over the chrome ImGui owns the cursor.
+  - layouts: `--xkb-layout us,ru --xkb-options grp:alt_shift_toggle` —
+    the switching is done by xkbcommon itself (the group travels to clients in modifiers);
+    a font with Cyrillic: `--font PATH`, the default is DejaVuSans from the system.
+  - SIGBUS: libwayland's protection via begin/end_access confirmed by an evil test
+    (a client ftruncates the pool out from under us — the compositor survives, the client gets a
     protocol error).
-  - radv-блок: multi-plane dmabuf-импорт (один fd = single-memory bind, разные
-    fd = DISJOINT + BindImageMemory2 по MEMORY_PLANE_i); linux-dmabuf **v4
-    feedback** (format table в sealed memfd, main_device = render node из
-    `VK_EXT_physical_device_drm`; без drm-узла — v3, как на lavapipe);
-    **implicit-sync мост** — перед submit'ом wait клиентских WRITE-фенсов
-    (EXPORT_SYNC_FILE → временный импорт в семафор), после кадра наш
-    READ-фенс в буферы (экспорт SYNC_FD-семафора → IMPORT_SYNC_FILE); гейт —
-    SYNC_FD-семафоры девайса (lavapipe их не имеет — мост выключен, лог).
-  - мелочь: скролл по двум осям + `axis_discrete` (value120 — при переходе
-    seat v8+), `set_buffer_scale` (viewW/H = буфер/скейл, damage
-    масштабируется), `wp_single_pixel_buffer_v1`, `wp_presentation`
-    (presented по показу кадра, CLOCK_MONOTONIC), `xdg_activation_v1`
-    (токены + фокус + raise окна), отпускание зажатых клавиш при VT-switch
-    (SM подписан на Session), ping/pong-вотчдог 5с (лог о зависших),
-    hotplug коннектора (udev monitor: disconnect глушит present'ы,
-    reconnect — remodeset последним FB).
-  - decoration — всегда `server_side` без переговоров. XWayland — не нужен.
-  - **Не сделано**: второй монитор (нужен ресайзабельный рендер-пайплайн и
-    per-output ImGui-контексты — отдельный проект), fractional-scale,
-    value120, смена режима по hotplug (только та же мода).
+  - the radv block: multi-plane dmabuf import (one fd = a single-memory bind, different
+    fds = DISJOINT + BindImageMemory2 per MEMORY_PLANE_i); linux-dmabuf **v4
+    feedback** (the format table in a sealed memfd, main_device = the render node from
+    `VK_EXT_physical_device_drm`; without a drm node — v3, as on lavapipe);
+    **the implicit-sync bridge** — before the submit, wait on the clients' WRITE fences
+    (EXPORT_SYNC_FILE → a temporary import into a semaphore), after the frame our
+    READ fence into the buffers (export the SYNC_FD semaphore → IMPORT_SYNC_FILE); the gate —
+    the device's SYNC_FD semaphores (lavapipe doesn't have them — the bridge is off, logged).
+  - small stuff: scrolling on both axes + `axis_discrete` (value120 — when moving to
+    seat v8+), `set_buffer_scale` (viewW/H = buffer/scale, damage is
+    scaled), `wp_single_pixel_buffer_v1`, `wp_presentation`
+    (presented on frame display, CLOCK_MONOTONIC), `xdg_activation_v1`
+    (tokens + focus + raising the window), releasing held keys on VT switch
+    (the SM subscribes to Session), a 5s ping/pong watchdog (logs hung clients),
+    connector hotplug (a udev monitor: disconnect mutes presents,
+    reconnect — a remodeset with the last FB).
+  - decoration — always `server_side` without negotiation. XWayland — not needed.
+  - **Not done**: a second monitor (needs a resizable render pipeline and
+    per-output ImGui contexts — a separate project), fractional-scale,
+    value120, mode change on hotplug (same mode only).
 
-### 14.4 Грабли (найдены отладкой — не наступать повторно)
+### 14.4 Pitfalls (found by debugging — do not step on them again)
 
-- **KMS/VT**: обязательно `KDSKBMODE K_OFF` + `KDSETMODE KD_GRAPHICS`, иначе
-  ввод дублируется в getty под композитором, а курсор консоли мигает поверх кадра.
-- **libseat.h без extern "C"-гардов** — включать обёрнутым. Зажатые клавиши при
-  VT-switch клиентам пока не отпускаются (§8) — долг.
-- **Попапы рисуются в ImGui foreground draw list**, не отдельными ImGui-окнами:
-  z-order отдельных окон управляется фокусом и проигрывает toplevel'у. hovered
-  для них считается вручную (попапы всегда сверху, перекрыть их некому). Позиция —
-  от `imgX/imgY` родителя, записанных этим же кадром, поэтому попапы едут за
-  окном бесплатно.
-- **press обязан перепикивать цель**: hovered-флаги обновляются кадром позже
-  motion; без re-pick клик после одиночного movement уходит мимо клиента.
-- **Пик внутри дерева** — последний hovered в порядке отрисовки (поздний Image
-  перекрывает ранние; между окнами z-order уже учтён ImGui). Поверхности, чей
-  input region мимо точки, прозрачны для ввода.
-- **Grab-попапы**: клавиатура уходит попапу (override поверх фокуса toplevel'а),
-  клик мимо всех поверхностей клиента закрывает грабы каскадно сверху вниз до
-  попавшего; после dismiss клавиатура возвращается toplevel'у. Implicit grab
-  указателя — пока зажата хоть одна кнопка, цель залочена. На unmap toplevel'а
-  фокус отдаётся последнему замапленному.
-- **frame callbacks**: деструктор wl_resource выпиливает callback из списка
-  поверхности — список забирается целиком до итерации, иначе итерация по
-  мутирующему вектору.
-- **Impl-наследники структур сцены не должны шедоуить её поля**: поле `dirty`,
-  продублированное в наследнике, молча развело SM (писал в тень) и renderer
-  (читал базу) — контент переставал доезжать до экрана.
-- Колесо над клиентской поверхностью — клиенту, и не должно скроллить само
-  ImGui-окно.
-- ImGui: descriptor pool с запасом (512, fonts + AddTexture), `IniFilename =
-  nullptr` (не гадить imgui.ini), `HasMouseCursors` — ради курсоров ресайза за
-  края окна.
-- `stl`-специфика: `struct Output` конфликтует с `stl::Output` при
-  `using namespace stl` — в .cpp писать `::Output`; сырые строковые литералы не
-  стримятся в sysO/sysE — суффикс `_sv` (util.h), поля-массивы char — через
-  каст `(const char*)`.
+- **KMS/VT**: `KDSKBMODE K_OFF` + `KDSETMODE KD_GRAPHICS` are mandatory, otherwise
+  input is duplicated into the getty beneath the compositor, and the console cursor blinks over the frame.
+- **libseat.h has no extern "C" guards** — include it wrapped. Held keys are not yet
+  released to clients on VT switch (§8) — debt.
+- **Popups are drawn in the ImGui foreground draw list**, not as separate ImGui windows:
+  the z-order of separate windows is driven by focus and loses to the toplevel. Their
+  hovered state is computed by hand (popups are always on top, nothing can occlude them). The
+  position comes from the parent's `imgX/imgY` recorded in the same frame, so popups follow
+  the window for free.
+- **A press must re-pick its target**: hovered flags update one frame after
+  motion; without a re-pick, a click after a single movement misses the client.
+- **Picking inside a tree** — the last hovered in draw order (a later Image
+  occludes earlier ones; between windows the z-order is already handled by ImGui). Surfaces
+  whose input region misses the point are transparent to input.
+- **Grab popups**: the keyboard goes to the popup (an override on top of the toplevel's focus),
+  a click missing all of the client's surfaces closes grabs in a cascade top-down until
+  the one that was hit; after dismiss the keyboard returns to the toplevel. The pointer's
+  implicit grab — while at least one button is held, the target is locked. On a toplevel's
+  unmap, focus is handed to the last mapped one.
+- **frame callbacks**: the wl_resource destructor unlinks the callback from the surface's
+  list — take the whole list before iterating, otherwise you iterate a mutating vector.
+- **Impl subclasses of scene structures must not shadow its fields**: a `dirty` field
+  duplicated in a subclass silently split the SM (writing the shadow) and the renderer
+  (reading the base) — content stopped reaching the screen.
+- The wheel over a client surface goes to the client, and must not scroll the
+  ImGui window itself.
+- ImGui: a descriptor pool with headroom (512, fonts + AddTexture), `IniFilename =
+  nullptr` (don't litter imgui.ini), `HasMouseCursors` — for the resize cursors at the
+  window edges.
+- `stl` specifics: `struct Output` conflicts with `stl::Output` under
+  `using namespace stl` — write `::Output` in .cpp files; raw string literals don't
+  stream into sysO/sysE — use the `_sv` suffix (util.h), char array fields — via a
+  `(const char*)` cast.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Создать и запровижнить dev-VM с нуля: скачать образ, cloud-init, первый бут.
-# Идемпотентен: уже готовую VM не трогает, --fresh пересоздаёт диск.
+# Create and provision the dev VM from scratch: download the image, cloud-init, first boot.
+# Idempotent: leaves an already-provisioned VM alone, --fresh recreates the disk.
 
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -11,24 +11,24 @@ fi
 
 mkdir -p "$STATE_DIR"
 
-command -v "$QEMU_BIN" >/dev/null || { echo "нет $QEMU_BIN: brew install qemu" >&2; exit 1; }
+command -v "$QEMU_BIN" >/dev/null || { echo "$QEMU_BIN not found: brew install qemu" >&2; exit 1; }
 
-# 1. Базовый образ
+# 1. Base image
 if [[ ! -f "$BASE_IMG" ]]; then
-    echo "качаю $IMAGE_URL"
+    echo "downloading $IMAGE_URL"
     curl -fL -C - -o "$BASE_IMG.part" "$IMAGE_URL"
     mv "$BASE_IMG.part" "$BASE_IMG"
 fi
 
-# 2. Рабочий диск (overlay поверх базового)
+# 2. Working disk (overlay on top of the base image)
 if [[ ! -f "$DISK_IMG" ]]; then
     qemu-img create -f qcow2 -b "$BASE_IMG" -F qcow2 "$DISK_IMG" "$DISK_SIZE"
 fi
 
-# 3. ssh-ключ
+# 3. ssh key
 [[ -f "$SSH_KEY" ]] || ssh-keygen -t ed25519 -N '' -C imway-dev-vm -f "$SSH_KEY"
 
-# 4. cloud-init seed (NoCloud: iso с меткой cidata)
+# 4. cloud-init seed (NoCloud: iso labeled cidata)
 if [[ ! -f "$SEED_ISO" ]]; then
     seed_dir="$(mktemp -d)"
     trap 'rm -rf "$seed_dir"' EXIT
@@ -45,18 +45,18 @@ fi
 # 5. EFI vars
 [[ -f "$FW_VARS" ]] || dd if=/dev/zero of="$FW_VARS" bs=1m count=64 2>/dev/null
 
-# 6. Первый запуск + ожидание провижена
+# 6. First boot + wait for provisioning
 vm_running || "$VM_DIR/run.sh"
 wait_ssh
-echo "жду cloud-init (установка пакетов, первый раз — минуты)..."
+echo "waiting for cloud-init (package installation, takes minutes on first run)..."
 vm_ssh "cloud-init status --wait" || {
-    echo "cloud-init завершился с ошибкой; лог:" >&2
+    echo "cloud-init failed; log:" >&2
     vm_ssh "sudo tail -50 /var/log/cloud-init-output.log" >&2 || true
     exit 1
 }
 
 echo
-echo "VM готова. Дальше:"
-echo "  ./build.sh      — собрать и прогнать тесты в VM"
-echo "  vm/ssh.sh       — зайти внутрь"
-echo "  vm/stop.sh      — погасить"
+echo "VM is ready. Next steps:"
+echo "  ./build.sh      — build and run the tests in the VM"
+echo "  vm/ssh.sh       — get a shell inside"
+echo "  vm/stop.sh      — shut it down"

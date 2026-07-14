@@ -84,7 +84,7 @@ struct Subsurface {
 struct Toplevel {
     Surface* surface = nullptr;
     u64 id = 0;
-    char title[256] = "(без имени)";
+    char title[256] = "(untitled)";
     char appId[128] = "";
     bool mapped = false;
 

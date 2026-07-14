@@ -16,23 +16,23 @@ pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(SEAT           REQUIRED IMPORTED_TARGET libseat)
 
-# велосипедная стандартная библиотека (github.com/pg83/std), собирается make'ом
-set(STD_ROOT "" CACHE PATH "корень репозитория std (libstd.a должен быть собран)")
+# homegrown standard library (github.com/pg83/std), built with make
+set(STD_ROOT "" CACHE PATH "root of the std repository (libstd.a must be built)")
 if(NOT STD_ROOT)
-    message(FATAL_ERROR "нужен -DSTD_ROOT=/path/to/std")
+    message(FATAL_ERROR "-DSTD_ROOT=/path/to/std is required")
 endif()
 add_library(pgstd STATIC IMPORTED)
 set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_ROOT}/std/libstd.a")
 target_include_directories(pgstd INTERFACE "${STD_ROOT}")
 
-# libev не ставит pkg-config файл
+# libev does not install a pkg-config file
 find_library(EV_LIBRARY ev REQUIRED)
 find_path(EV_INCLUDE_DIR ev.h REQUIRED)
 add_library(ev::ev INTERFACE IMPORTED)
 target_link_libraries(ev::ev INTERFACE ${EV_LIBRARY})
 target_include_directories(ev::ev INTERFACE ${EV_INCLUDE_DIR})
 
-# ---- генерация кода протоколов (xdg-shell) ----
+# ---- protocol code generation (xdg-shell) ----
 find_program(WAYLAND_SCANNER wayland-scanner REQUIRED)
 pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 set(XDG_SHELL_XML "${WAYLAND_PROTOCOLS_DIR}/stable/xdg-shell/xdg-shell.xml")
@@ -159,7 +159,7 @@ add_library(imgui STATIC
 target_include_directories(imgui PUBLIC third_party/imgui)
 target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 
-# ---- композитор ----
+# ---- compositor ----
 add_executable(imway
     src/main.cpp
     src/scene.cpp

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Единая точка сборки. На Linux — собирает нативно.
-# На macOS — синхронизирует исходники в dev-VM, собирает и гоняет тесты там.
+# Single entry point for builds. On Linux — builds natively.
+# On macOS — syncs sources into the dev VM, builds and runs the tests there.
 
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -21,7 +21,7 @@ source vm/common.sh
 vm_running || vm/run.sh
 wait_ssh
 
-echo "== rsync исходников =="
+echo "== rsync sources =="
 vm_ssh "mkdir -p imway/src"
 rsync -az --delete \
     --exclude 'vm/.state' --exclude 'build/' --exclude '.claude/' \
@@ -31,7 +31,7 @@ rsync -az --delete --exclude '.git' \
     -e "ssh $SSH_OPTS_STR" \
     "$STD_DIR/" "$VM_USER@127.0.0.1:std/"
 
-echo "== сборка и тесты в VM =="
+echo "== build and tests in the VM =="
 vm_ssh "set -e
     make -C std -j4 CXX=clang++ std/libstd.a
     cmake -S imway/src -B imway/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
