@@ -6,6 +6,7 @@
 #include "server.h"
 #include "util.h"
 
+#include <ev.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>

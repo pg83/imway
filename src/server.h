@@ -1,13 +1,17 @@
-// Общие структуры композитора: модель поверхностей/окон и Server.
+// Модель композитора (поверхности/окна) и Server — ядро: event loop,
+// все wayland-протоколы. Реализация целиком в server.cpp.
 #pragma once
 
-#include <ev.h>
 #include <wayland-server-core.h>
 
 #include <std/lib/vector.h>
-#include <std/mem/obj_list.h>
-#include <std/mem/obj_pool.h>
 #include <std/sys/types.h>
+
+namespace stl {
+    class ObjPool;
+}
+
+struct ev_loop;
 
 struct Control;
 struct InputLinux;
@@ -24,6 +28,22 @@ struct XdgSurface;
 struct RectI {
     i32 x = 0, y = 0, w = 0, h = 0;
 };
+
+inline constexpr int kDmabufMaxPlanes = 4;
+
+// содержимое wl_buffer, созданного через zwp_linux_buffer_params_v1
+struct DmabufBuffer {
+    i32 width = 0, height = 0;
+    u32 format = 0;   // drm fourcc
+    u64 modifier = 0; // одинаковый для всех плоскостей
+    int nplanes = 0;
+    int fds[kDmabufMaxPlanes] = {-1, -1, -1, -1};
+    u32 offsets[kDmabufMaxPlanes] = {};
+    u32 strides[kDmabufMaxPlanes] = {};
+};
+
+// nullptr, если ресурс — не наш dmabuf wl_buffer
+DmabufBuffer* dmabufFromBufferResource(wl_resource*);
 
 struct Surface {
     Server* server = nullptr;
@@ -136,9 +156,9 @@ struct Toplevel {
     bool mapped = false;
 
     // ресайз: ImGui-окно → configure клиенту
-    bool winSizeSet = false;          // начальный размер ImGui-окна выставлен
-    int desiredW = 0, desiredH = 0;   // контент-регион из последнего кадра
-    int cfgW = 0, cfgH = 0;           // последний отправленный configure
+    bool winSizeSet = false;        // начальный размер ImGui-окна выставлен
+    int desiredW = 0, desiredH = 0; // контент-регион из последнего кадра
+    int cfgW = 0, cfgH = 0;         // последний отправленный configure
 };
 
 struct Popup {
@@ -152,56 +172,46 @@ struct Popup {
     bool grab = false;
 };
 
-struct Server {
-    // пул владеет всеми долгоживущими объектами; динамика (поверхности, окна)
-    // переиспользуется через ObjList'ы. Ref держит main — Server только пользуется.
-    stl::ObjPool* pool = nullptr;
-
-    wl_display* display = nullptr;
-    wl_event_loop* wlLoop = nullptr;
-    struct ev_loop* loop = nullptr;
-
-    ev_io wlIo{};
-    ev_prepare flushPrepare{};
-    ev_timer frameTimer{};
-    ev_signal sigInt{}, sigTerm{};
-
-    stl::Vector<Surface*> surfaces;
-    stl::Vector<Toplevel*> toplevels;
-    stl::Vector<Popup*> popups; // порядок создания = порядок стека
-
-    // переиспользуемые аллокации протокольных объектов (память из пула, O(1) reuse)
-    stl::ObjList<Surface>* surfaceAlloc = nullptr;
-    stl::ObjList<Subsurface>* subsurfaceAlloc = nullptr;
-    stl::ObjList<XdgSurface>* xdgSurfaceAlloc = nullptr;
-    stl::ObjList<Toplevel>* toplevelAlloc = nullptr;
-    stl::ObjList<Popup>* popupAlloc = nullptr;
-    Renderer* renderer = nullptr;
-    Seat* seat = nullptr;
-    Control* control = nullptr;
-    Kms* kms = nullptr;
-    InputLinux* input = nullptr;
-    u64 nextToplevelId = 1;
-
-    // конфигурация (строки указывают в argv)
+struct ServerConfig {
     const char* backend = "headless"; // headless | kms
     const char* drmDevice = "/dev/dri/card0";
     const char* socketName = "imway-0";
     int outW = 1280, outH = 800;
     double hz = 60.0;
     int framesLimit = 0; // 0 = бесконечно
-    int framesDone = 0;
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr; // FIFO для инъекции input/команд
+};
+
+struct Server {
+    // разделяемое состояние: модель и подсистемы, нужные seat/renderer/бэкендам;
+    // всё остальное (аллокаторы, ev-вотчеры, конфиг) — приватно в реализации
+    wl_display* display = nullptr;
+    struct ev_loop* loop = nullptr;
+
+    stl::Vector<Surface*> surfaces;
+    stl::Vector<Toplevel*> toplevels;
+    stl::Vector<Popup*> popups; // порядок создания = порядок стека
+
+    Renderer* renderer = nullptr;
+    Seat* seat = nullptr;
+
+    int outW = 1280, outH = 800; // kms переписывает под режим дисплея
+    double hz = 60.0;
+    int framesDone = 0;
 
     // рендер только по необходимости: тик без изменений — пустой (lavapipe = CPU)
     bool needsFrame = true;
-    int settleFrames = 0; // дорисовать пару кадров после последней активности
 
-    void init(); // бросает stl::Exception при фатальных проблемах
-    void run();
-    void finish();
-    void onFrameTick();
+    virtual ~Server() noexcept;
+
+    // цикл до quit/сигнала; на выходе аккуратно гасит клиентов и display
+    virtual void run() = 0;
+    // закрыть попап (popup_done + unmap); клиент затем уничтожит ресурс
+    virtual void dismissPopup(Popup&) = 0;
+
+    // поднимает все глобалы и бэкенды; бросает stl::Exception при фатальных проблемах
+    static Server* create(stl::ObjPool* pool, const ServerConfig&);
 };
 
 // utils

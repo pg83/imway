@@ -9,6 +9,7 @@
 #include "server.h"
 #include "util.h"
 
+#include <ev.h>
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdio.h>

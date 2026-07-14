@@ -14,8 +14,8 @@ using namespace stl;
 namespace {
     void usage(const char* argv0) {
         sysE << "usage: "_sv << argv0
-             << " [--backend headless|kms] [--drm-device PATH] [--socket NAME]"_sv
-                " [--size WxH] [--hz N] [--frames N] [--screenshot PATH] [--control FIFO]"
+             << " [--backend headless|kms] [--drm-device PATH] [--socket NAME]"
+                " [--size WxH] [--hz N] [--frames N] [--screenshot PATH] [--control FIFO]"_sv
              << endL;
     }
 
@@ -35,7 +35,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    Server server;
+    ServerConfig cfg;
 
     for (int i = 1; i < argc; i++) {
         auto next = [&]() -> const char* {
@@ -48,25 +48,25 @@ int main(int argc, char** argv) {
         };
 
         if (!strcmp(argv[i], "--socket")) {
-            server.socketName = next();
+            cfg.socketName = next();
         } else if (!strcmp(argv[i], "--size")) {
-            if (!parseSize(next(), server.outW, server.outH)) {
+            if (!parseSize(next(), cfg.outW, cfg.outH)) {
                 usage(argv[0]);
 
                 return 2;
             }
         } else if (!strcmp(argv[i], "--hz")) {
-            server.hz = atof(next());
+            cfg.hz = atof(next());
         } else if (!strcmp(argv[i], "--frames")) {
-            server.framesLimit = atoi(next());
+            cfg.framesLimit = atoi(next());
         } else if (!strcmp(argv[i], "--screenshot")) {
-            server.screenshotPath = next();
+            cfg.screenshotPath = next();
         } else if (!strcmp(argv[i], "--control")) {
-            server.controlPath = next();
+            cfg.controlPath = next();
         } else if (!strcmp(argv[i], "--backend")) {
-            server.backend = next();
+            cfg.backend = next();
         } else if (!strcmp(argv[i], "--drm-device")) {
-            server.drmDevice = next();
+            cfg.drmDevice = next();
         } else {
             usage(argv[0]);
 
@@ -83,20 +83,16 @@ int main(int argc, char** argv) {
     // пул — владелец всего графа объектов сервера; умирает при выходе из main
     ObjPool::Ref pool = ObjPool::fromMemory();
 
-    server.pool = pool.mutPtr();
-
     try {
-        server.init();
-        server.run();
+        Server* server = Server::create(pool.mutPtr(), cfg);
+
+        server->run();
+        sysO << "imway: clean exit after "_sv << server->framesDone << " frames"_sv << endL;
     } catch (...) {
         sysE << "imway: fatal: "_sv << Exception::current() << endL;
-        server.finish();
 
         return 1;
     }
-
-    server.finish();
-    sysO << "imway: clean exit after "_sv << server.framesDone << " frames"_sv << endL;
 
     return 0;
 }

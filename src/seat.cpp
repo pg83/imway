@@ -1,7 +1,6 @@
 #include "seat.h"
 #include "server.h"
 #include "util.h"
-#include "xdg_shell.h"
 
 #include <string.h>
 #include <sys/mman.h>
@@ -401,7 +400,7 @@ void SeatImpl::handleButton(u32 button, bool pressed) {
                 break;
             }
 
-            xdgPopupDismiss(*p);
+            server->dismissPopup(*p);
         }
     }
 
