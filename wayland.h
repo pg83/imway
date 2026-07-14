@@ -24,6 +24,7 @@ struct WaylandConfig {
     unsigned long long mainDevice = 0;
     Output* output = nullptr;
     double dpmsSec = 0;
+    int drmFd = -1;
 };
 
 struct Wayland {

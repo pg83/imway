@@ -165,6 +165,7 @@ int main(int argc, char** argv) {
         wcfg.mainDevice = device->renderDevice();
         wcfg.output = output;
         wcfg.dpmsSec = kms ? dpmsSec : 0;
+        wcfg.drmFd = device->drmFd();
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 

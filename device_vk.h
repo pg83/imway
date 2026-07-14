@@ -9,6 +9,7 @@ inline constexpr u32 kFourccArgb = 0x34325241;
 inline constexpr u32 kFourccXrgb = 0x34325258;
 
 struct DeviceVk {
+    int drmFd = -1;
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice phys = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;

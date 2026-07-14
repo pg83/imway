@@ -150,7 +150,8 @@ foreach(PROTO
         "unstable/pointer-constraints/pointer-constraints-unstable-v1"
         "unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1"
         "unstable/idle-inhibit/idle-inhibit-unstable-v1"
-        "staging/ext-idle-notify/ext-idle-notify-v1")
+        "staging/ext-idle-notify/ext-idle-notify-v1"
+        "staging/linux-drm-syncobj/linux-drm-syncobj-v1")
     get_filename_component(PROTO_NAME "${PROTO}" NAME)
     set(PROTO_XML "${WAYLAND_PROTOCOLS_DIR}/${PROTO}.xml")
     add_custom_command(OUTPUT "${PROTO_DIR}/${PROTO_NAME}-server-protocol.h"

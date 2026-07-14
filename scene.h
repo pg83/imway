@@ -49,6 +49,12 @@ struct Surface {
 
     SurfaceTexture* texture = nullptr;
 
+    // explicit sync (linux-drm-syncobj): the renderer must wait this timeline
+    // point before touching the current buffer
+    u32 syncAcquireHandle = 0;
+    u64 syncAcquirePoint = 0;
+    bool syncAcquireWait = false;
+
     struct {
         bool hasSrc = false, hasDst = false;
         double sx = 0, sy = 0, sw = 0, sh = 0;

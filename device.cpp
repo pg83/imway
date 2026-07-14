@@ -746,6 +746,10 @@ namespace {
         KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
         ~KmsDevice() noexcept;
 
+        int drmFd() const override {
+            return fd;
+        }
+
         unsigned long long renderDevice() const override {
             return vk.renderDev;
         }
@@ -845,9 +849,14 @@ namespace {
         struct ev_loop* loop = nullptr;
         DeviceVk vk{};
         Vector<DmabufFormat> formats;
+        int syncFd = -1;
 
         HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
         ~HeadlessDevice() noexcept;
+
+        int drmFd() const override {
+            return syncFd;
+        }
 
         unsigned long long renderDevice() const override {
             return vk.renderDev;
@@ -916,6 +925,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char*
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
     initVulkan(vk, fd);
+    vk.drmFd = fd;
 
     if (vk.hasDmabuf) {
         queryDmabufFormats(vk, formats);
@@ -1530,11 +1540,37 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop) : pool(p), lo
 
     if (vk.hasDmabuf) {
         queryDmabufFormats(vk, formats);
+
+        // a render node is enough for syncobj ioctls (explicit sync)
+        for (int i = 128; i < 136 && syncFd < 0; i++) {
+            CStr<64> pth;
+
+            pth << "/dev/dri/renderD"_sv << i;
+
+            int fd = open(pth.cStr(), O_RDWR | O_CLOEXEC);
+
+            if (fd < 0) {
+                continue;
+            }
+
+            u64 cap = 0;
+
+            if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
+                syncFd = fd;
+                vk.drmFd = fd;
+            } else {
+                close(fd);
+            }
+        }
     }
 }
 
 HeadlessDevice::~HeadlessDevice() noexcept {
     destroyVulkan(vk);
+
+    if (syncFd >= 0) {
+        close(syncFd);
+    }
 }
 
 ::Output* HeadlessDevice::createOutput(const char*, const char* modeStr) {

@@ -10,7 +10,10 @@
 #include <fcntl.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <time.h>
 #include <unistd.h>
+
+#include <xf86drm.h>
 
 #include <linux/dma-buf.h>
 
@@ -133,6 +136,7 @@ namespace {
         VkCommandBuffer curCmd = VK_NULL_HANDLE;
         VkFence curFence = VK_NULL_HANDLE;
 
+        int drmFd = -1;
         bool hasSyncFd = false;
         VkSemaphore syncOut = VK_NULL_HANDLE;
         VkSemaphore syncWaitPool[16] = {};
@@ -152,6 +156,7 @@ namespace {
             fontPath = font;
             uiScale = scale;
             hasSyncFd = vk.hasSyncFd;
+            drmFd = vk.drmFd;
             setup(scn.outW, scn.outH);
 
             if (out.vsynced()) {
@@ -1886,6 +1891,23 @@ void RendererImpl::frameNow() {
     drainDead();
 
     for (Surface* s : scene->surfaces) {
+        if (s->syncAcquireWait && drmFd >= 0) {
+            // explicit sync: the client told us when the buffer is ready
+            timespec ts{};
+
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+
+            i64 deadline = (i64)ts.tv_sec * 1000000000 + ts.tv_nsec + 200000000;
+            u32 h = s->syncAcquireHandle;
+            u64 pt = s->syncAcquirePoint;
+
+            if (drmSyncobjTimelineWait(drmFd, &h, &pt, 1, deadline, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, nullptr) != 0) {
+                sysE << "imway: acquire point wait timed out"_sv << endL;
+            }
+
+            s->syncAcquireWait = false;
+        }
+
         if (s->dirty && s->hasContent) {
             if (s->dmabuf) {
                 importDmabuf(*s);

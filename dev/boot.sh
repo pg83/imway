@@ -39,6 +39,7 @@ unstable/pointer-constraints/pointer-constraints-unstable-v1.xml
 unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
 unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
 staging/ext-idle-notify/ext-idle-notify-v1.xml
+staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml
 "
 
 for xml in $PROTOCOLS; do

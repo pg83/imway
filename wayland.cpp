@@ -29,11 +29,13 @@
 #include <single-pixel-buffer-v1-server-protocol.h>
 #include <xdg-activation-v1-server-protocol.h>
 #include <xdg-output-unstable-v1-server-protocol.h>
+#include <linux-drm-syncobj-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
 #include <xdg-decoration-unstable-v1-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
+#include <xf86drm.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include <std/dbg/verify.h>
@@ -52,6 +54,13 @@ namespace {
     struct ToplevelImpl;
     struct WaylandImpl;
     struct ConstraintBox;
+
+    struct TimelineBox {
+        WaylandImpl* srv = nullptr;
+        u32 handle = 0;
+        int refs = 0;
+        bool resAlive = true;
+    };
 
     struct XdgSurface {
         WaylandImpl* srv = nullptr;
@@ -94,6 +103,13 @@ namespace {
         wl_resource* fracRes = nullptr;
         ConstraintBox* constraint = nullptr;
         wl_resource* kbInhibitRes = nullptr;
+
+        wl_resource* syncRes = nullptr;
+        TimelineBox* pendAcqTl = nullptr;
+        TimelineBox* pendRelTl = nullptr;
+        TimelineBox* heldAcqTl = nullptr;
+        TimelineBox* heldRelTl = nullptr;
+        u64 pendAcqPt = 0, pendRelPt = 0, heldRelPt = 0;
 
         XdgSurface* xdg = nullptr;
     };
@@ -319,6 +335,8 @@ namespace {
         ObjList<SpbBox>* spbAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
         ObjList<ConstraintBox>* constraintAlloc = nullptr;
+        ObjList<TimelineBox>* timelineAlloc = nullptr;
+        int drmFd = -1;
 
         struct IdleNotif {
             WaylandImpl* srv = nullptr;
@@ -553,6 +571,7 @@ namespace {
     void fracSurfaceGone(SurfaceImpl&);
     void constraintSurfaceGone(SurfaceImpl&);
     void kbInhibitSurfaceGone(SurfaceImpl&);
+    void syncSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
     struct SpbBox;
     SpbBox* spbFromRes(wl_resource*);
@@ -578,9 +597,35 @@ namespace {
         wl_list_remove(&s->pending.bufferDestroy.link);
     }
 
+    void tlUnref(TimelineBox* t) {
+        if (!t) {
+            return;
+        }
+
+        if (--t->refs == 0 && !t->resAlive) {
+            drmSyncobjDestroy(t->srv->drmFd, t->handle);
+            t->srv->timelineAlloc->release(t);
+        }
+    }
+
+    // the renderer is synchronous (it waits its own fence every frame), so by
+    // the time a buffer is released all GPU reads are done and the release
+    // point can be signalled right here
+    void syncReleaseHeld(SurfaceImpl& s) {
+        if (s.heldRelTl) {
+            drmSyncobjTimelineSignal(s.srv->drmFd, &s.heldRelTl->handle, &s.heldRelPt, 1);
+        }
+
+        tlUnref(s.heldAcqTl);
+        tlUnref(s.heldRelTl);
+        s.heldAcqTl = s.heldRelTl = nullptr;
+        s.syncAcquireWait = false;
+    }
+
     void heldDmabufDestroyed(wl_listener* l, void*) {
         SurfaceImpl* s = wl_container_of(l, s, dmabufDestroy);
 
+        syncReleaseHeld(*s);
         s->dmabuf = nullptr;
         s->dmabufRes = nullptr;
         s->dmabufDestroyArmed = false;
@@ -592,6 +637,7 @@ namespace {
             return;
         }
 
+        syncReleaseHeld(s);
         wl_buffer_send_release(s.dmabufRes);
 
         if (s.dmabufDestroyArmed) {
@@ -799,6 +845,61 @@ namespace {
         }
     }
 
+    bool syncCommitOk(SurfaceImpl& s) {
+        bool acq = s.pendAcqTl != nullptr, rel = s.pendRelTl != nullptr;
+
+        if (!s.pending.newlyAttached || !s.pending.buffer) {
+            if (acq || rel) {
+                wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_BUFFER, "sync points set but no buffer attached");
+
+                return false;
+            }
+
+            return true;
+        }
+
+        if (!acq) {
+            wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_ACQUIRE_POINT, "buffer committed without an acquire point");
+
+            return false;
+        }
+
+        if (!rel) {
+            wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_RELEASE_POINT, "buffer committed without a release point");
+
+            return false;
+        }
+
+        if (!dmabufFromRes(s.pending.buffer)) {
+            wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_UNSUPPORTED_BUFFER, "explicit sync needs a dmabuf buffer");
+
+            return false;
+        }
+
+        if (s.pendAcqTl == s.pendRelTl && s.pendAcqPt >= s.pendRelPt) {
+            wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_CONFLICTING_POINTS, "release point is not after the acquire point");
+
+            return false;
+        }
+
+        return true;
+    }
+
+    void syncApplyPoints(SurfaceImpl& s) {
+        if (!s.pendAcqTl || !s.pendRelTl) {
+            return;
+        }
+
+        // references move from pending to held; released when the buffer is
+        s.heldAcqTl = s.pendAcqTl;
+        s.heldRelTl = s.pendRelTl;
+        s.heldRelPt = s.pendRelPt;
+        s.syncAcquireHandle = s.heldAcqTl->handle;
+        s.syncAcquirePoint = s.pendAcqPt;
+        s.syncAcquireWait = true;
+        s.pendAcqTl = s.pendRelTl = nullptr;
+    }
+
     void surfaceCommit(wl_client*, wl_resource* res) {
         SurfaceImpl& s = *surfaceFrom(res);
 
@@ -806,6 +907,10 @@ namespace {
 
         SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
         bool toCache = sub && sub->effectiveSync();
+
+        if (s.syncRes && !syncCommitOk(s)) {
+            return;
+        }
 
         if (s.pending.newlyAttached) {
             if (!s.pending.buffer) {
@@ -860,6 +965,7 @@ namespace {
                 releaseHeldDmabuf(s);
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
                 holdDmabuf(s, s.pending.buffer, db);
+                syncApplyPoints(s);
                 s.width = db->width;
                 s.height = db->height;
                 s.pixels.clear();
@@ -1018,6 +1124,7 @@ namespace {
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
+        syncSurfaceGone(*s);
 
         if (s->texture) {
             srv->scene->orphanedTextures.pushBack(s->texture);
@@ -2904,6 +3011,151 @@ namespace {
         wl_resource_set_implementation(res, &idleNotifierImpl, data, nullptr);
     }
 
+    // ---- linux-drm-syncobj ----
+    void syncTimelineResourceDestroyed(wl_resource* res) {
+        auto* t = (TimelineBox*)wl_resource_get_user_data(res);
+
+        t->resAlive = false;
+
+        if (t->refs == 0) {
+            drmSyncobjDestroy(t->srv->drmFd, t->handle);
+            t->srv->timelineAlloc->release(t);
+        }
+    }
+
+    const struct wp_linux_drm_syncobj_timeline_v1_interface syncTimelineImpl = {.destroy = relPointerDestroy};
+
+    void syncSurfaceResourceDestroyed(wl_resource* res) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            return;
+        }
+
+        s->syncRes = nullptr;
+        tlUnref(s->pendAcqTl);
+        tlUnref(s->pendRelTl);
+        s->pendAcqTl = s->pendRelTl = nullptr;
+    }
+
+    void syncSurfaceSetAcquirePoint(wl_client*, wl_resource* res, wl_resource* tlRes, u32 hi, u32 lo) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_SURFACE, "the surface is gone");
+
+            return;
+        }
+
+        auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
+
+        t->refs++;
+        tlUnref(s->pendAcqTl);
+        s->pendAcqTl = t;
+        s->pendAcqPt = ((u64)hi << 32) | lo;
+    }
+
+    void syncSurfaceSetReleasePoint(wl_client*, wl_resource* res, wl_resource* tlRes, u32 hi, u32 lo) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_NO_SURFACE, "the surface is gone");
+
+            return;
+        }
+
+        auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
+
+        t->refs++;
+        tlUnref(s->pendRelTl);
+        s->pendRelTl = t;
+        s->pendRelPt = ((u64)hi << 32) | lo;
+    }
+
+    const struct wp_linux_drm_syncobj_surface_v1_interface syncSurfaceImpl = {
+        .destroy = relPointerDestroy,
+        .set_acquire_point = syncSurfaceSetAcquirePoint,
+        .set_release_point = syncSurfaceSetReleasePoint,
+    };
+
+    void syncManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->syncRes) {
+            wl_resource_post_error(res, WP_LINUX_DRM_SYNCOBJ_MANAGER_V1_ERROR_SURFACE_EXISTS, "surface already has a syncobj object");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_linux_drm_syncobj_surface_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->syncRes = r;
+        wl_resource_set_implementation(r, &syncSurfaceImpl, s, syncSurfaceResourceDestroyed);
+    }
+
+    void syncManagerImportTimeline(wl_client* client, wl_resource* res, u32 id, int fd) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        u32 handle = 0;
+
+        if (drmSyncobjFDToHandle(srv->drmFd, fd, &handle) != 0) {
+            close(fd);
+            wl_resource_post_error(res, WP_LINUX_DRM_SYNCOBJ_MANAGER_V1_ERROR_INVALID_TIMELINE, "could not import the syncobj timeline");
+
+            return;
+        }
+
+        close(fd);
+
+        wl_resource* r = wl_resource_create(client, &wp_linux_drm_syncobj_timeline_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            drmSyncobjDestroy(srv->drmFd, handle);
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        TimelineBox* t = srv->timelineAlloc->make();
+
+        t->srv = srv;
+        t->handle = handle;
+        wl_resource_set_implementation(r, &syncTimelineImpl, t, syncTimelineResourceDestroyed);
+    }
+
+    const struct wp_linux_drm_syncobj_manager_v1_interface syncManagerImpl = {
+        .destroy = relPointerDestroy,
+        .get_surface = syncManagerGetSurface,
+        .import_timeline = syncManagerImportTimeline,
+    };
+
+    void syncManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_linux_drm_syncobj_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &syncManagerImpl, data, nullptr);
+    }
+
+    void syncSurfaceGone(SurfaceImpl& s) {
+        if (s.syncRes) {
+            wl_resource_set_user_data(s.syncRes, nullptr);
+        }
+
+        tlUnref(s.pendAcqTl);
+        tlUnref(s.pendRelTl);
+        s.pendAcqTl = s.pendRelTl = nullptr;
+    }
+
     void dpmsTimerCb(struct ev_loop* l, ev_timer* w, int) {
         auto* srv = (WaylandImpl*)w->data;
 
@@ -4575,9 +4827,11 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
     constraintAlloc = pool->make<ObjList<ConstraintBox>>(pool);
     idleAlloc = pool->make<ObjList<IdleNotif>>(pool);
+    timelineAlloc = pool->make<ObjList<TimelineBox>>(pool);
 
     output = cfg.output;
     dpmsSec = cfg.dpmsSec;
+    drmFd = cfg.drmFd;
 
     if (output && dpmsSec > 0) {
         ev_timer_init(&dpmsTimer, dpmsTimerCb, dpmsSec, dpmsSec);
@@ -4651,6 +4905,12 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
+
+    u64 syncCap = 0;
+
+    if (drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
+        wl_global_create(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
+    }
 
     if (!formats.empty()) {
         int dmabufVersion = 3;
