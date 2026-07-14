@@ -9,8 +9,10 @@
 #include "util.h"
 #include "wayland.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <ev.h>
 
@@ -24,12 +26,17 @@ using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device headless|auto|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH]" " [--frames N] [--screenshot PATH] [--control FIFO] [--list] [-- CMD ARG...]"_sv << endL;
+    }
+
+    void childCb(struct ev_loop* loop, ev_child* w, int) {
+        ev_child_stop(loop, w);
+        ev_break(loop, EVBREAK_ALL);
     }
 }
 
 int main(int argc, char** argv) {
-    const char* devicePath = "headless";
+    const char* devicePath = "auto";
     const char* outputName = nullptr;
     const char* modeStr = nullptr;
     const char* socketName = "imway-0";
@@ -39,6 +46,7 @@ int main(int argc, char** argv) {
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
     int framesLimit = 0;
+    char** cmdArgv = nullptr;
 
     for (int i = 1; i < argc; i++) {
         auto next = [&]() -> const char* {
@@ -70,6 +78,16 @@ int main(int argc, char** argv) {
             screenshotPath = next();
         } else if (!strcmp(argv[i], "--control")) {
             controlPath = next();
+        } else if (!strcmp(argv[i], "--")) {
+            if (i + 1 >= argc) {
+                usage(argv[0]);
+
+                return 2;
+            }
+
+            cmdArgv = argv + i + 1;
+
+            break;
         } else if (!strcmp(argv[i], "--list")) {
             Device::list();
 
@@ -153,6 +171,30 @@ int main(int argc, char** argv) {
 
         if (controlPath) {
             Control::create(pool.mutPtr(), loop, *sink, *renderer, controlPath);
+        }
+
+        ev_child child;
+
+        if (cmdArgv) {
+            pid_t pid = fork();
+
+            STD_VERIFY(pid >= 0);
+
+            if (pid == 0) {
+                const char* cmd = cmdArgv[0];
+
+                setenv("WAYLAND_DISPLAY", socketName, 1);
+                execvp(cmd, cmdArgv);
+
+                const char* err = strerror(errno);
+
+                sysE << "imway: exec "_sv << cmd << ": "_sv << err << endL;
+                _exit(127);
+            }
+
+            // the compositor lives as long as the command does
+            ev_child_init(&child, childCb, pid, 0);
+            ev_child_start(loop, &child);
         }
 
         wayland->run();

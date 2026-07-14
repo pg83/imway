@@ -11,7 +11,7 @@ trap 'rm -rf "$RT"' EXIT
 export XDG_RUNTIME_DIR="$RT"
 SHOT="$RT/shot.ppm"
 
-"$IMWAY" --socket imway-test --frames 90 --screenshot "$SHOT" >"$RT/imway.log" 2>&1 &
+"$IMWAY" --device headless --socket imway-test --frames 90 --screenshot "$SHOT" >"$RT/imway.log" 2>&1 &
 IMWAY_PID=$!
 
 for _ in $(seq 1 50); do

@@ -9,7 +9,7 @@ RT="$(mktemp -d)"
 trap 'rm -rf "$RT"' EXIT
 export XDG_RUNTIME_DIR="$RT"
 
-"$IMWAY" --socket imway-test --frames 200 &
+"$IMWAY" --device headless --socket imway-test --frames 200 &
 IMWAY_PID=$!
 
 for _ in $(seq 1 50); do

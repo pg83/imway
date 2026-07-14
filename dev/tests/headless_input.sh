@@ -13,7 +13,7 @@ export XDG_RUNTIME_DIR="$RT"
 CTL="$RT/ctl"
 MARKER="$RT/m2ok"
 
-"$IMWAY" --socket imway-input --control "$CTL" --frames 1200 \
+"$IMWAY" --device headless --socket imway-input --control "$CTL" --frames 1200 \
     --screenshot "$RT/shot.ppm" >"$RT/imway.log" 2>&1 &
 IMWAY_PID=$!
 
