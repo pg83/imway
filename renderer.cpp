@@ -331,6 +331,8 @@ namespace {
         }
 
         void spawnLaunch();
+        bool chordAction(u32 mask, u32 sym);
+        void focusNextWindow();
 
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
@@ -417,15 +419,35 @@ void RendererImpl::key(u32 code, bool pressed) {
         keyboard->updateKey(code, pressed);
     }
 
-    // 1. imgui is fed unconditionally: physical key, modifiers, text
     ImGuiIO& io = ImGui::GetIO();
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
+    // modifiers reach imgui even for consumed keys
     io.AddKeyEvent(ImGuiMod_Ctrl, mask & kModCtrl);
     io.AddKeyEvent(ImGuiMod_Shift, mask & kModShift);
     io.AddKeyEvent(ImGuiMod_Alt, mask & kModAlt);
     io.AddKeyEvent(ImGuiMod_Super, mask & kModLogo);
 
+    // 1. compositor-global chords are sacred: consumed before anyone,
+    // imgui included, matched on the group-0 keysym so they work in
+    // any layout
+    if (next && keyboard && code < 256) {
+        if (pressed && chordAction(mask, keyboard->keysymBase(code))) {
+            chordDown[code] = true;
+            next->modsChanged();
+
+            return;
+        }
+
+        if (!pressed && chordDown[code]) {
+            chordDown[code] = false;
+            next->modsChanged();
+
+            return;
+        }
+    }
+
+    // 2. imgui is fed the rest unconditionally: physical key + text
     if (ImGuiKey k = evdevToImGuiKey(code); k != ImGuiKey_None) {
         io.AddKeyEvent(k, pressed);
     }
@@ -442,31 +464,6 @@ void RendererImpl::key(u32 code, bool pressed) {
         return;
     }
 
-    // 2. compositor-global chords are sacred: consumed before anyone,
-    // matched on the group-0 keysym so they work in any layout
-    if (code < 256) {
-        if (pressed && keyboard && mask == kModLogo && keyboard->keysymBase(code) == XKB_KEY_F2) {
-            chordDown[code] = true;
-            launcherOpen = !launcherOpen;
-            launchFocus = launcherOpen;
-
-            if (launcherOpen) {
-                launchBuf[0] = 0;
-            }
-
-            next->modsChanged();
-
-            return;
-        }
-
-        if (!pressed && chordDown[code]) {
-            chordDown[code] = false;
-            next->modsChanged();
-
-            return;
-        }
-    }
-
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
     // lives in the slave's modsChanged)
     bool capture = launcherOpen || io.WantCaptureKeyboard;
@@ -478,6 +475,49 @@ void RendererImpl::key(u32 code, bool pressed) {
     }
 
     next->modsChanged();
+}
+
+bool RendererImpl::chordAction(u32 mask, u32 sym) {
+    if (mask == kModLogo && sym == XKB_KEY_F2) {
+        launcherOpen = !launcherOpen;
+        launchFocus = launcherOpen;
+
+        if (launcherOpen) {
+            launchBuf[0] = 0;
+        }
+
+        return true;
+    }
+
+    if (mask == kModAlt && sym == XKB_KEY_Tab) {
+        focusNextWindow();
+
+        return true;
+    }
+
+    return false;
+}
+
+void RendererImpl::focusNextWindow() {
+    auto& tls = scene->toplevels;
+    long n = (long)tls.length();
+
+    if (!n) {
+        return;
+    }
+
+    long cur = scene->focusedToplevel ? indexOf(tls, scene->focusedToplevel) : -1;
+
+    for (long step = 1; step <= n; step++) {
+        Toplevel* t = tls[(size_t)((cur + step + n) % n)];
+
+        if (t->mapped) {
+            t->raiseRequested = true;
+            scene->needsFrame = true;
+
+            return;
+        }
+    }
 }
 
 void RendererImpl::spawnLaunch() {
