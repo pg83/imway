@@ -1,13 +1,11 @@
-// Сцена — то, что видят renderer и seat: деревья поверхностей с текстурами,
-// экранной геометрией и input-состоянием. Наполняется протокольной частью
-// (server.cpp); протокольные кишки (pending, кэши, xdg-ресурсы) живут там же
-// в impl-наследниках этих структур.
+// Сцена — чистые данные без знания о Wayland: деревья поверхностей с
+// контентом, экранной геометрией и view-фидбеком. Наполняет её wayland-SM
+// (wayland.cpp, там же impl-наследники с протокольными кишками), рендерит
+// и дополняет фидбеком — renderer.
 #pragma once
 
 #include <std/lib/vector.h>
 #include <std/sys/types.h>
-
-struct wl_resource;
 
 struct Popup;
 struct Subsurface;
@@ -17,6 +15,12 @@ struct Toplevel;
 
 struct RectI {
     i32 x = 0, y = 0, w = 0, h = 0;
+};
+
+// формат dmabuf, который умеет GPU (capability рендера, передаётся SM как данные)
+struct DmabufFormat {
+    u32 fourcc = 0;
+    u64 modifier = 0;
 };
 
 inline constexpr int kDmabufMaxPlanes = 4;
@@ -33,11 +37,10 @@ struct DmabufBuffer {
 };
 
 struct Surface {
-    wl_resource* res = nullptr; // канал к клиенту: seat шлёт сюда события указателя
-
     // применённый контент
     int width = 0, height = 0;
     bool hasContent = false;
+    bool dirty = false; // контент обновлён (ставит SM, снимает renderer)
     stl::Vector<u8> pixels;        // BGRA, плотные строки w*4 (shm-путь)
     DmabufBuffer* dmabuf = nullptr; // не-nullptr = контент в dmabuf, pixels пусты
 
@@ -109,10 +112,14 @@ struct Scene {
     stl::Vector<Toplevel*> toplevels;
     stl::Vector<Popup*> popups; // порядок создания = порядок стека
 
+    // текстуры уничтоженных нод: SM складывает, renderer освобождает
+    stl::Vector<SurfaceTexture*> orphanedTextures;
+
     int outW = 1280, outH = 800; // размер output (kms переписывает под режим дисплея)
     double hz = 60.0;
     int framesDone = 0;
 
     // рендер только по необходимости: тик без изменений — пустой (lavapipe = CPU)
     bool needsFrame = true;
+    bool drawCursor = false; // композитный курсор (kms-вывод)
 };

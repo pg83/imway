@@ -11,6 +11,8 @@ inline stl::StringView operator""_sv(const char* s, size_t len) {
     return {(const u8*)s, len};
 }
 
+u32 nowMsec();
+
 // убрать первое вхождение (порядок остальных сохраняется)
 template <typename T>
 bool removeOne(stl::Vector<T>& v, const T& t) {

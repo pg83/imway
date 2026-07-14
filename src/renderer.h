@@ -1,42 +1,41 @@
-// Vulkan headless рендерер: offscreen target + ImGui + текстуры поверхностей.
+// Renderer — view сцены: ImGui+Vulkan, ноль знаний о Wayland. Сам владеет
+// кадровым клоком: по needsFrame рендерит сцену, презентит в Output и
+// уведомляет FrameListener. Сам тянет контент нод по dirty (shm/dmabuf),
+// сам владеет текстурами. Реализует InputSink — ImGui и есть оконный
+// менеджер, ему нужен сырой ввод.
 #pragma once
 
-#include <std/sys/types.h>
+#include "input.h"
 
 namespace stl {
     class ObjPool;
 }
 
+struct DmabufFormat;
+struct ev_loop;
+struct Output;
 struct Scene;
-struct Surface;
-struct SurfaceTexture; // непрозрачный, живёт в renderer.cpp
 
-struct DmabufFormat {
-    u32 fourcc = 0;
-    u64 modifier = 0;
+struct FrameListener {
+    // кадр показан; msec — таймстемп для frame callbacks
+    virtual void frameShown(u32 msec) = 0;
 };
 
-struct Renderer {
+struct Renderer: public InputSink {
     virtual ~Renderer() noexcept;
 
-    // скопировать пиксели поверхности в staging (пересоздать текстуру при ресайзе)
-    virtual void uploadSurface(Surface&) = 0;
-    virtual void destroyTexture(SurfaceTexture*) = 0;
-
-    // dmabuf: форматы для рекламы клиентам и прямой импорт в VkImage
+    // dmabuf-форматы, которые умеет GPU (снимаются как данные для wayland-SM)
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;
-    virtual bool dmabufFormatSupported(u32 fourcc, u64 modifier) const = 0;
-    virtual bool importDmabuf(Surface&) = 0;
 
-    // построить ImGui-кадр по сцене, записать и исполнить command buffer
-    virtual void renderFrame(Scene&) = 0;
+    // уведомления «кадр показан» (подключается после создания SM)
+    virtual void setFrameListener(FrameListener*) = 0;
 
+    // PPM последнего показанного кадра
     virtual bool screenshot(const char* path) = 0;
 
-    // пиксели последнего кадра (BGRA, плотные строки) — источник для scanout
-    virtual const void* readbackData() const = 0;
-
+    // framesLimit > 0 — остановить loop после N кадров (тестовый харнесс);
     // бросает stl::Exception, если Vulkan не поднялся
-    static Renderer* create(stl::ObjPool* pool, int width, int height);
+    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene,
+                            Output& output, int framesLimit);
 };

@@ -1,9 +1,7 @@
-// libinput → Seat. Абсолютная мышь (usb-tablet в QEMU), относительная,
-// кнопки, колесо, клавиатура (сырые evdev-коды).
+// Источники ввода: libinput (абсолютная/относительная мышь, кнопки, колесо,
+// клавиатура — сырые evdev-коды) и tee-разветвитель.
 
-#include "input_linux.h"
-#include "seat.h"
-#include "server.h"
+#include "input.h"
 #include "util.h"
 
 #include <ev.h>
@@ -38,29 +36,29 @@ namespace {
 
     void inputIoCb(struct ev_loop*, ev_io* w, int);
 
-    struct InputLinuxImpl: public InputLinux {
+    struct LibinputSource: public InputSource {
         struct ev_loop* loop = nullptr;
-        Seat* seat = nullptr;
+        InputSink* sink = nullptr;
         int outW = 0, outH = 0;
         udev* ud = nullptr;
         libinput* li = nullptr;
         ev_io io{};
         double relX = 0, relY = 0; // накопленная позиция для относительных устройств
 
-        InputLinuxImpl(struct ev_loop* evLoop, Seat& st, int w, int h);
-        ~InputLinuxImpl() noexcept override;
+        LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h);
+        ~LibinputSource() noexcept override;
 
         void dispatch();
     };
 
     void inputIoCb(struct ev_loop*, ev_io* w, int) {
-        ((InputLinuxImpl*)w->data)->dispatch();
+        ((LibinputSource*)w->data)->dispatch();
     }
 }
 
-InputLinuxImpl::InputLinuxImpl(struct ev_loop* evLoop, Seat& st, int w, int h)
+LibinputSource::LibinputSource(struct ev_loop* evLoop, InputSink& s, int w, int h)
     : loop(evLoop)
-    , seat(&st)
+    , sink(&s)
     , outW(w)
     , outH(h)
     , relX(w / 2.0)
@@ -80,7 +78,7 @@ InputLinuxImpl::InputLinuxImpl(struct ev_loop* evLoop, Seat& st, int w, int h)
     sysO << "imway: libinput ready"_sv << endL;
 }
 
-InputLinuxImpl::~InputLinuxImpl() noexcept {
+LibinputSource::~LibinputSource() noexcept {
     if (li) {
         ev_io_stop(loop, &io);
         libinput_unref(li);
@@ -91,7 +89,7 @@ InputLinuxImpl::~InputLinuxImpl() noexcept {
     }
 }
 
-void InputLinuxImpl::dispatch() {
+void LibinputSource::dispatch() {
     libinput_dispatch(li);
 
     libinput_event* ev;
@@ -120,7 +118,7 @@ void InputLinuxImpl::dispatch() {
                     relY = outH - 1;
                 }
 
-                seat->handleMotion(relX, relY);
+                sink->motion(relX, relY);
 
                 break;
             }
@@ -129,14 +127,14 @@ void InputLinuxImpl::dispatch() {
 
                 relX = libinput_event_pointer_get_absolute_x_transformed(p, outW);
                 relY = libinput_event_pointer_get_absolute_y_transformed(p, outH);
-                seat->handleMotion(relX, relY);
+                sink->motion(relX, relY);
 
                 break;
             }
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                seat->handleButton(libinput_event_pointer_get_button(p),
+                sink->button(libinput_event_pointer_get_button(p),
                                   libinput_event_pointer_get_button_state(p) ==
                                       LIBINPUT_BUTTON_STATE_PRESSED);
 
@@ -152,7 +150,7 @@ void InputLinuxImpl::dispatch() {
                                    p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) /
                                120.0;
 
-                    seat->handleScroll(v);
+                    sink->scroll(v);
                 }
 
                 break;
@@ -160,7 +158,7 @@ void InputLinuxImpl::dispatch() {
             case LIBINPUT_EVENT_KEYBOARD_KEY: {
                 auto* k = libinput_event_get_keyboard_event(ev);
 
-                seat->handleKey(libinput_event_keyboard_get_key(k),
+                sink->key(libinput_event_keyboard_get_key(k),
                                libinput_event_keyboard_get_key_state(k) ==
                                    LIBINPUT_KEY_STATE_PRESSED);
 
@@ -174,10 +172,47 @@ void InputLinuxImpl::dispatch() {
     }
 }
 
-InputLinux::~InputLinux() noexcept {
+namespace {
+    struct TeeSink: public InputSink {
+        InputSink* a = nullptr;
+        InputSink* b = nullptr;
+
+        TeeSink(InputSink& x, InputSink& y)
+            : a(&x)
+            , b(&y)
+        {
+        }
+
+        void motion(double x, double y) override {
+            a->motion(x, y);
+            b->motion(x, y);
+        }
+
+        void button(u32 btn, bool pressed) override {
+            a->button(btn, pressed);
+            b->button(btn, pressed);
+        }
+
+        void key(u32 code, bool pressed) override {
+            a->key(code, pressed);
+            b->key(code, pressed);
+        }
+
+        void scroll(double value) override {
+            a->scroll(value);
+            b->scroll(value);
+        }
+    };
 }
 
-InputLinux* InputLinux::create(ObjPool* pool, struct ev_loop* loop, Seat& seat, int outW,
-                               int outH) {
-    return pool->make<InputLinuxImpl>(loop, seat, outW, outH);
+InputSink* InputSink::tee(ObjPool* pool, InputSink& a, InputSink& b) {
+    return pool->make<TeeSink>(a, b);
+}
+
+InputSource::~InputSource() noexcept {
+}
+
+InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, InputSink& sink,
+                                         int outW, int outH) {
+    return pool->make<LibinputSource>(loop, sink, outW, outH);
 }

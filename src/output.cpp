@@ -1,6 +1,7 @@
-// DRM/KMS-бэкенд: atomic modeset + dumb-буферы, кадр рендерера копируется в scanout.
+// Реализации Output: DRM/KMS (atomic modeset + dumb-буферы, кадр копируется
+// в scanout) и headless.
 
-#include "kms.h"
+#include "output.h"
 #include "util.h"
 
 #include <ev.h>
@@ -63,7 +64,7 @@ namespace {
     void pageFlipHandler(int, unsigned, unsigned, unsigned, void* data);
     void drmIoCb(struct ev_loop*, ev_io* w, int);
 
-    struct KmsImpl: public Kms {
+    struct KmsOutput: public ::Output {
         struct ev_loop* loop = nullptr;
         int fd = -1;
         int ttyFd = -1;
@@ -89,8 +90,8 @@ namespace {
 
         ev_io drmIo{};
 
-        KmsImpl(struct ev_loop* evLoop, const char* path);
-        ~KmsImpl() noexcept override;
+        KmsOutput(struct ev_loop* evLoop, const char* path);
+        ~KmsOutput() noexcept override;
 
         int width() const override {
             return mode.hdisplay;
@@ -115,7 +116,7 @@ namespace {
     };
 
     void pageFlipHandler(int, unsigned, unsigned, unsigned, void* data) {
-        ((KmsImpl*)data)->flipPending = false;
+        ((KmsOutput*)data)->flipPending = false;
     }
 
     void drmIoCb(struct ev_loop*, ev_io* w, int) {
@@ -123,11 +124,11 @@ namespace {
 
         ctx.version = 2;
         ctx.page_flip_handler = pageFlipHandler;
-        drmHandleEvent(((KmsImpl*)w->data)->fd, &ctx);
+        drmHandleEvent(((KmsOutput*)w->data)->fd, &ctx);
     }
 }
 
-KmsImpl::KmsImpl(struct ev_loop* evLoop, const char* path)
+KmsOutput::KmsOutput(struct ev_loop* evLoop, const char* path)
     : loop(evLoop)
 {
     fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
@@ -167,7 +168,7 @@ KmsImpl::KmsImpl(struct ev_loop* evLoop, const char* path)
          << ", plane "_sv << planeId << endL;
 }
 
-KmsImpl::~KmsImpl() noexcept {
+KmsOutput::~KmsOutput() noexcept {
     if (fd < 0) {
         return;
     }
@@ -200,7 +201,7 @@ KmsImpl::~KmsImpl() noexcept {
     fd = -1;
 }
 
-void KmsImpl::pickOutput() {
+void KmsOutput::pickOutput() {
     drmModeRes* res = drmModeGetResources(fd);
 
     STD_VERIFY(res); // drmModeGetResources сломался
@@ -296,7 +297,7 @@ void KmsImpl::pickOutput() {
     STD_VERIFY(planeId); // нет primary plane
 }
 
-void KmsImpl::createDumb(DumbBuffer& b) {
+void KmsOutput::createDumb(DumbBuffer& b) {
     drm_mode_create_dumb create{};
 
     create.width = mode.hdisplay;
@@ -323,7 +324,7 @@ void KmsImpl::createDumb(DumbBuffer& b) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-bool KmsImpl::commit(DumbBuffer& b, bool doModeset) {
+bool KmsOutput::commit(DumbBuffer& b, bool doModeset) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     if (doModeset) {
@@ -366,7 +367,7 @@ bool KmsImpl::commit(DumbBuffer& b, bool doModeset) {
     return true;
 }
 
-void KmsImpl::setupVt() {
+void KmsOutput::setupVt() {
     // выключить обработку клавиатуры ядром и текстовый режим консоли,
     // иначе ввод дублируется в getty, а курсор консоли мигает поверх
     ttyFd = open("/dev/tty1", O_RDWR | O_CLOEXEC);
@@ -382,7 +383,7 @@ void KmsImpl::setupVt() {
     ioctl(ttyFd, KDSETMODE, KD_GRAPHICS);
 }
 
-void KmsImpl::restoreVt() noexcept {
+void KmsOutput::restoreVt() noexcept {
     if (ttyFd < 0) {
         return;
     }
@@ -397,7 +398,7 @@ void KmsImpl::restoreVt() noexcept {
     ttyFd = -1;
 }
 
-bool KmsImpl::start() {
+bool KmsOutput::start() {
     setupVt();
     ev_io_init(&drmIo, drmIoCb, fd, EV_READ);
     drmIo.data = this;
@@ -418,7 +419,7 @@ bool KmsImpl::start() {
     return true;
 }
 
-void KmsImpl::present(const void* pixels) {
+void KmsOutput::present(const void* pixels) {
     if (!modeSet || flipPending) { // предыдущий flip ещё в полёте — дропаем кадр
         return;
     }
@@ -436,9 +437,46 @@ void KmsImpl::present(const void* pixels) {
     }
 }
 
-Kms::~Kms() noexcept {
+namespace {
+    struct HeadlessOutput: public ::Output {
+        int w = 0, h = 0;
+        double hz = 60.0;
+
+        HeadlessOutput(int width, int height, double refresh)
+            : w(width)
+            , h(height)
+            , hz(refresh)
+        {
+        }
+
+        int width() const override {
+            return w;
+        }
+
+        int height() const override {
+            return h;
+        }
+
+        double refresh() const override {
+            return hz;
+        }
+
+        bool start() override {
+            return true;
+        }
+
+        void present(const void*) override {
+        }
+    };
 }
 
-Kms* Kms::create(ObjPool* pool, struct ev_loop* loop, const char* devPath) {
-    return pool->make<KmsImpl>(loop, devPath);
+::Output::~Output() noexcept {
+}
+
+::Output* ::Output::createKms(ObjPool* pool, struct ev_loop* loop, const char* devPath) {
+    return pool->make<KmsOutput>(loop, devPath);
+}
+
+::Output* ::Output::createHeadless(ObjPool* pool, int width, int height, double refresh) {
+    return pool->make<HeadlessOutput>(width, height, refresh);
 }

@@ -1,9 +1,17 @@
-#include "server.h"
+#include "control.h"
+#include "input.h"
+#include "output.h"
+#include "renderer.h"
+#include "scene.h"
 #include "util.h"
+#include "wayland.h"
 
 #include <stdlib.h>
 #include <string.h>
 
+#include <ev.h>
+
+#include <std/dbg/verify.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/view.h>
@@ -35,7 +43,14 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    ServerConfig cfg;
+    bool kms = false;
+    const char* drmDevice = "/dev/dri/card0";
+    const char* socketName = "imway-0";
+    const char* screenshotPath = nullptr;
+    const char* controlPath = nullptr;
+    int outW = 1280, outH = 800;
+    double hz = 60.0;
+    int framesLimit = 0;
 
     for (int i = 1; i < argc; i++) {
         auto next = [&]() -> const char* {
@@ -48,25 +63,25 @@ int main(int argc, char** argv) {
         };
 
         if (!strcmp(argv[i], "--socket")) {
-            cfg.socketName = next();
+            socketName = next();
         } else if (!strcmp(argv[i], "--size")) {
-            if (!parseSize(next(), cfg.outW, cfg.outH)) {
+            if (!parseSize(next(), outW, outH)) {
                 usage(argv[0]);
 
                 return 2;
             }
         } else if (!strcmp(argv[i], "--hz")) {
-            cfg.hz = atof(next());
+            hz = atof(next());
         } else if (!strcmp(argv[i], "--frames")) {
-            cfg.framesLimit = atoi(next());
+            framesLimit = atoi(next());
         } else if (!strcmp(argv[i], "--screenshot")) {
-            cfg.screenshotPath = next();
+            screenshotPath = next();
         } else if (!strcmp(argv[i], "--control")) {
-            cfg.controlPath = next();
+            controlPath = next();
         } else if (!strcmp(argv[i], "--backend")) {
-            cfg.backend = next();
+            kms = !strcmp(next(), "kms");
         } else if (!strcmp(argv[i], "--drm-device")) {
-            cfg.drmDevice = next();
+            drmDevice = next();
         } else {
             usage(argv[0]);
 
@@ -80,14 +95,74 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // пул — владелец всего графа объектов сервера; умирает при выходе из main
+    // пул — владелец всего графа объектов; умирает при выходе из main.
+    // порядок создания = обратный порядок смерти: сцена умирает последней
     ObjPool::Ref pool = ObjPool::fromMemory();
+    struct ev_loop* loop = ev_default_loop(0);
 
     try {
-        Server* server = Server::create(pool.mutPtr(), cfg);
+        auto* scene = pool->make<Scene>();
 
-        server->run();
-        sysO << "imway: clean exit after "_sv << server->scene.framesDone << " frames"_sv << endL;
+        scene->outW = outW;
+        scene->outH = outH;
+        scene->hz = hz;
+
+        ::Output* output = kms ? ::Output::createKms(pool.mutPtr(), loop, drmDevice)
+                             : ::Output::createHeadless(pool.mutPtr(), outW, outH, hz);
+
+        if (kms) { // размер сцены диктует режим дисплея
+            scene->outW = output->width();
+            scene->outH = output->height();
+            scene->hz = output->refresh();
+            scene->drawCursor = true;
+        }
+
+        STD_VERIFY(output->start());
+
+        Renderer* renderer =
+            Renderer::create(pool.mutPtr(), loop, *scene, *output, framesLimit);
+
+        // dmabuf-возможности GPU передаются протоколу как данные
+        Vector<DmabufFormat> formats;
+
+        for (size_t i = 0; i < renderer->dmabufFormatCount(); i++) {
+            formats.pushBack(renderer->dmabufFormat(i));
+        }
+
+        WaylandConfig wcfg;
+
+        wcfg.socketName = socketName;
+        wcfg.formats = formats.data();
+        wcfg.formatCount = formats.length();
+
+        Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
+
+        renderer->setFrameListener(wayland->frameListener());
+
+        // сырой ввод — обоим: view (ImGui как WM) и протоколу
+        InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer, *wayland->sink());
+
+        if (kms) {
+            try {
+                InputSource::createLibinput(pool.mutPtr(), loop, *sink, scene->outW,
+                                            scene->outH);
+            } catch (...) {
+                sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
+            }
+        }
+
+        if (controlPath) {
+            Control::create(pool.mutPtr(), loop, *sink, *renderer, controlPath);
+        }
+
+        wayland->run();
+
+        if (screenshotPath) {
+            renderer->screenshot(screenshotPath);
+            sysO << "imway: screenshot: "_sv << screenshotPath << endL;
+        }
+
+        sysO << "imway: clean exit after "_sv << scene->framesDone << " frames"_sv << endL;
     } catch (...) {
         sysE << "imway: fatal: "_sv << Exception::current() << endL;
 

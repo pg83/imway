@@ -1,10 +1,14 @@
 #include "renderer.h"
+#include "output.h"
 #include "scene.h"
 #include "util.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+
+#include <ev.h>
+#include <linux/input-event-codes.h>
 
 #include <vulkan/vulkan.h>
 
@@ -44,7 +48,17 @@ namespace {
     constexpr u32 kFourccArgb = 0x34325241; // DRM_FORMAT_ARGB8888 ('AR24')
     constexpr u32 kFourccXrgb = 0x34325258; // DRM_FORMAT_XRGB8888 ('XR24')
 
+    void frameTimerCb(struct ev_loop*, ev_timer* w, int);
+
     struct RendererImpl: public Renderer {
+        struct ev_loop* loop = nullptr;
+        Scene* scene = nullptr;
+        ::Output* output = nullptr;
+        FrameListener* listener = nullptr;
+        ev_timer frameTimer{};
+        int framesLimit = 0;
+        int settleFrames = 0; // дорисовать пару кадров после последней активности
+
         int width = 0, height = 0;
 
         VkInstance instance = VK_NULL_HANDLE;
@@ -76,15 +90,28 @@ namespace {
         Vector<DmabufFormat> dmabufFormats_;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, int w, int h)
-            : textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool))
+        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, int limit)
+            : loop(evLoop)
+            , scene(&scn)
+            , output(&out)
+            , framesLimit(limit)
+            , textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool))
         {
-            setup(w, h);
+            setup(scn.outW, scn.outH);
+
+            ImGui::GetIO().MouseDrawCursor = scn.drawCursor; // композитный курсор
+
+            ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
+            frameTimer.data = this;
+            ev_timer_start(loop, &frameTimer);
         }
 
         ~RendererImpl() noexcept override {
+            ev_timer_stop(loop, &frameTimer);
             shutdown();
         }
+
+        void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
         void createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
@@ -99,6 +126,33 @@ namespace {
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
 
+        void setFrameListener(FrameListener* l) override {
+            listener = l;
+        }
+
+        // --- InputSink: сырой ввод для ImGui (окна двигает/ресайзит он) ---
+
+        void motion(double x, double y) override {
+            scene->needsFrame = true;
+            ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
+        }
+
+        void button(u32 btn, bool pressed) override {
+            int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
+
+            scene->needsFrame = true;
+            ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
+        }
+
+        void key(u32, bool) override {
+            scene->needsFrame = true; // клавиши ImGui не нужны, но кадр — да
+        }
+
+        void scroll(double value) override {
+            scene->needsFrame = true;
+            ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
+        }
+
         size_t dmabufFormatCount() const override {
             return dmabufFormats_.length();
         }
@@ -107,17 +161,16 @@ namespace {
             return dmabufFormats_[i];
         }
 
-        bool dmabufFormatSupported(u32 fourcc, u64 modifier) const override;
-        bool importDmabuf(Surface& s) override;
-        void uploadSurface(Surface& s) override;
-        void destroyTexture(SurfaceTexture* tex) override;
-        void renderFrame(Scene& scene) override;
+        bool importDmabuf(Surface& s);
+        void uploadSurface(Surface& s);
+        void destroyTexture(SurfaceTexture* tex);
+        void renderFrame();
         bool screenshot(const char* path) override;
-
-        const void* readbackData() const override {
-            return readbackMap;
-        }
     };
+
+    void frameTimerCb(struct ev_loop*, ev_timer* w, int) {
+        ((RendererImpl*)w->data)->tick();
+    }
 }
 
 u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
@@ -441,16 +494,6 @@ void RendererImpl::queryDmabufFormats() {
 
     sysO << "imway: dmabuf formats: "_sv << dmabufFormats_.length()
          << " (modifiers per fourcc: "_sv << dmabufFormats_.length() / 2 << ")"_sv << endL;
-}
-
-bool RendererImpl::dmabufFormatSupported(u32 fourcc, u64 modifier) const {
-    for (const auto& f : dmabufFormats_) {
-        if (f.fourcc == fourcc && f.modifier == modifier) {
-            return true;
-        }
-    }
-
-    return false;
 }
 
 void RendererImpl::uploadSurface(Surface& s) {
@@ -893,8 +936,8 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui::Render();
 }
 
-void RendererImpl::renderFrame(Scene& scene) {
-    buildUi(scene);
+void RendererImpl::renderFrame() {
+    buildUi(*scene);
 
     vkResetCommandBuffer(cmd, 0);
 
@@ -1045,9 +1088,57 @@ void RendererImpl::shutdown() noexcept {
     device = VK_NULL_HANDLE;
 }
 
+// кадровый клок: по needsFrame рендерим, презентим, уведомляем SM
+void RendererImpl::tick() {
+    // lavapipe — это CPU: без изменений кадр не рисуем вовсе
+    if (scene->needsFrame) {
+        settleFrames = 3; // ImGui дорисует hover/анимации
+    }
+
+    bool active = scene->needsFrame || settleFrames > 0;
+
+    scene->needsFrame = false;
+
+    if (active) {
+        settleFrames--;
+
+        // текстуры уничтоженных нод
+        while (!scene->orphanedTextures.empty()) {
+            destroyTexture(scene->orphanedTextures.popBack());
+        }
+
+        // свежий контент нод — в текстуры (субповерхности тоже, у каждой своя)
+        for (Surface* s : scene->surfaces) {
+            if (s->dirty && s->hasContent) {
+                if (s->dmabuf) {
+                    importDmabuf(*s);
+                } else {
+                    uploadSurface(*s);
+                }
+
+                s->dirty = false;
+            }
+        }
+
+        renderFrame();
+        output->present(readbackMap);
+
+        if (listener) {
+            listener->frameShown(nowMsec());
+        }
+    }
+
+    scene->framesDone++;
+
+    if (framesLimit > 0 && scene->framesDone >= framesLimit) {
+        ev_break(loop, EVBREAK_ALL);
+    }
+}
+
 Renderer::~Renderer() noexcept {
 }
 
-Renderer* Renderer::create(ObjPool* pool, int width, int height) {
-    return pool->make<RendererImpl>(pool, width, height);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output,
+                           int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, framesLimit);
 }

@@ -1,4 +1,5 @@
-// Control-канал: FIFO с текстовыми командами для инъекции input и управления.
+// Control-канал: отладочный харнесс. FIFO с текстовыми командами — инъекция
+// ввода (через InputSink), скриншот (через Renderer), quit (через ev loop).
 #pragma once
 
 namespace stl {
@@ -6,13 +7,13 @@ namespace stl {
 }
 
 struct ev_loop;
+struct InputSink;
 struct Renderer;
-struct Seat;
 
 struct Control {
     virtual ~Control() noexcept;
 
     // бросает stl::Exception, если FIFO не создался
-    static Control* create(stl::ObjPool* pool, struct ev_loop* loop, Seat& seat,
+    static Control* create(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink,
                            Renderer& renderer, const char* fifoPath);
 };

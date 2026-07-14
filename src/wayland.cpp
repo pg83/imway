@@ -1,28 +1,26 @@
-// Ядро композитора: event loop, все wayland-глобалы и обработчики протоколов.
-// Протокольные части модели сцены (pending-состояние, кэши, xdg-ресурсы) —
-// impl-наследники структур сцены, наружу не видны.
+// Wayland state machine: wl_display, все глобалы и обработчики протоколов,
+// seat (фокус/грабы/клавиатура). Протокольные части модели сцены (pending,
+// кэши, xdg-ресурсы) — impl-наследники структур сцены, наружу не видны.
 
-#include "server.h"
+#include "wayland.h"
 
-#include "control.h"
-#include "input_linux.h"
-#include "kms.h"
-#include "renderer.h"
-#include "seat.h"
+#include "input.h"
+#include "renderer.h" // FrameListener
+#include "scene.h"
 #include "util.h"
 
 #include <string.h>
-#include <time.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
+#include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
 #include <xdg-decoration-unstable-v1-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
-
-#include <imgui.h>
+#include <xkbcommon/xkbcommon.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
@@ -36,13 +34,13 @@ using namespace stl;
 
 namespace {
     struct PopupImpl;
-    struct ServerImpl;
     struct SurfaceImpl;
     struct ToplevelImpl;
+    struct WaylandImpl;
 
     // роль xdg_surface — чисто протокольная, сцене не видна
     struct XdgSurface {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         SurfaceImpl* surface = nullptr;
         ToplevelImpl* toplevel = nullptr;
@@ -52,7 +50,8 @@ namespace {
     };
 
     struct SurfaceImpl: public Surface {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr; // канал к клиенту
 
         // pending-состояние (double buffering протокола)
         struct {
@@ -65,7 +64,6 @@ namespace {
             Vector<RectI> inputRegion;
         } pending;
 
-        bool dirty = false; // контент изменился с последней загрузки в текстуру
         Vector<wl_resource*> frameCbs;
 
         // dmabuf-контент: буфер держим до замены (рендер читает память напрямую)
@@ -82,7 +80,7 @@ namespace {
     };
 
     struct SubsurfaceImpl: public Subsurface {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
 
         int pendingX = 0, pendingY = 0;
@@ -102,14 +100,14 @@ namespace {
     };
 
     struct ToplevelImpl: public Toplevel {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
         int cfgW = 0, cfgH = 0; // последний отправленный configure
     };
 
     struct PopupImpl: public Popup {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
         int w = 0, h = 0; // размер из позиционера
@@ -117,12 +115,12 @@ namespace {
 
     // мелкие протокольные объекты с O(1) reuse; srv — для возврата в свой ObjList
     struct RegionBox {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         Vector<RectI> rects;
     };
 
     struct Positioner {
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
 
         int w = 0, h = 0;                   // set_size
         int ax = 0, ay = 0, aw = 0, ah = 0; // anchor_rect
@@ -135,36 +133,81 @@ namespace {
     };
 
     struct BufferBox { // dmabuf wl_buffer
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         DmabufBuffer buf;
     };
 
     struct Params { // zwp_linux_buffer_params_v1
-        ServerImpl* srv = nullptr;
+        WaylandImpl* srv = nullptr;
         BufferBox* pending = nullptr; // накапливаем add(); nullptr после create
     };
 
-    struct ServerImpl: public Server {
-        ObjPool* pool = nullptr;
-        ServerConfig cfg;
+    // seat — не подсистема, а протокольное состояние ввода внутри SM
+    struct SeatState {
+        WaylandImpl* srv = nullptr;
 
+        Vector<wl_resource*> keyboards; // все wl_keyboard всех клиентов
+        Vector<wl_resource*> pointers;
+
+        xkb_context* xkb = nullptr;
+        xkb_keymap* keymap = nullptr;
+        xkb_state* xkbState = nullptr;
+        int keymapFd = -1;
+        u32 keymapSize = 0;
+
+        Toplevel* kbFocus = nullptr;
+        Surface* kbOverride = nullptr; // grab-попап: клавиатура идёт сюда, не в kbFocus
+        Surface* ptrFocus = nullptr;   // поверхность (в т.ч. суб-), куда идут pointer-события
+        int buttonsDown = 0;           // implicit grab, пока >0 — ptrFocus залочен
+
+        double curX = 0, curY = 0; // координаты output
+        Vector<u32> pressedKeys;
+        u32 modsDepressed = 0, modsLatched = 0, modsLocked = 0, modsGroup = 0;
+
+        SeatState(WaylandImpl& impl);
+        ~SeatState() noexcept;
+
+        bool sameClient(wl_resource* res, Toplevel* t);
+        bool sameClientS(wl_resource* res, Surface* s);
+        Surface* pickInTree(Surface& s);
+        Surface* pickPointerTarget();
+        void pointerSetFocus(Surface* s, double sx, double sy);
+
+        void handleMotion(double x, double y);
+        void handleButton(u32 button, bool pressed);
+        void handleScroll(double value);
+        void handleKey(u32 code, bool pressed);
+
+        wl_resource* kbTargetRes();
+        void kbSendLeave(wl_resource* target);
+        void kbSendEnter(wl_resource* target);
+        void updateModifiers();
+
+        void focusToplevel(Toplevel* t);
+        void popupGrabStart(Popup* p);
+        void popupGone(Popup* p);
+        void surfaceGone(Surface* s);
+        void toplevelGone(Toplevel* t);
+    };
+
+    struct WaylandImpl: public Wayland, public InputSink, public FrameListener {
+        ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
+        Scene* scene = nullptr;
+        wl_display* display = nullptr;
         wl_event_loop* wlLoop = nullptr;
 
-        Renderer* renderer = nullptr;
-        Seat* seat = nullptr;
-        Kms* kms = nullptr;
-        InputLinux* input = nullptr;
-        Control* control = nullptr;
+        const char* socketName = nullptr;
+        Vector<DmabufFormat> formats;
+
+        SeatState seat;
 
         ev_io wlIo{};
         ev_prepare flushPrepare{};
-        ev_timer frameTimer{};
         ev_signal sigInt{}, sigTerm{};
         bool watchersStarted = false;
 
         u64 nextToplevelId = 1;
-        int settleFrames = 0; // дорисовать пару кадров после последней активности
 
         // переиспользуемые аллокации протокольных объектов (память из пула)
         ObjList<SurfaceImpl>* surfaceAlloc = nullptr;
@@ -177,15 +220,47 @@ namespace {
         ObjList<BufferBox>* dmabufBoxAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
 
-        ServerImpl(ObjPool* p, const ServerConfig& config);
-        ~ServerImpl() noexcept override;
+        WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
+        ~WaylandImpl() noexcept override;
 
         void run() override;
-        void dismissPopup(Popup& p) override;
 
+        InputSink* sink() override {
+            return this;
+        }
+
+        FrameListener* frameListener() override {
+            return this;
+        }
+
+        // InputSink: сырой ввод → seat-логика
+        void motion(double x, double y) override {
+            seat.handleMotion(x, y);
+        }
+
+        void button(u32 btn, bool pressed) override {
+            seat.handleButton(btn, pressed);
+        }
+
+        void key(u32 code, bool pressed) override {
+            seat.handleKey(code, pressed);
+        }
+
+        void scroll(double value) override {
+            seat.handleScroll(value);
+        }
+
+        // FrameListener: кадр показан — frame callbacks + configure по фидбеку
+        void frameShown(u32 msec) override;
+
+        bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
-        void onFrameTick();
     };
+
+    // канал ноды сцены к клиенту (все ноды создаёт SM как SurfaceImpl)
+    wl_resource* resOf(Surface* s) {
+        return ((SurfaceImpl*)s)->res;
+    }
 
     SubsurfaceImpl& impl(Subsurface* sub) {
         return *(SubsurfaceImpl*)sub;
@@ -194,20 +269,16 @@ namespace {
     // --- event loop ---
 
     void wlIoCb(struct ev_loop*, ev_io* w, int) {
-        auto* s = (ServerImpl*)w->data;
+        auto* s = (WaylandImpl*)w->data;
 
         wl_event_loop_dispatch(s->wlLoop, 0);
     }
 
     // Инвариант libwayland: не засыпать с несброшенными буферами клиентов.
     void flushCb(struct ev_loop*, ev_prepare* w, int) {
-        auto* s = (ServerImpl*)w->data;
+        auto* s = (WaylandImpl*)w->data;
 
         wl_display_flush_clients(s->display);
-    }
-
-    void frameCb(struct ev_loop*, ev_timer* w, int) {
-        ((ServerImpl*)w->data)->onFrameTick();
     }
 
     void signalCb(struct ev_loop* loop, ev_signal*, int) {
@@ -497,7 +568,7 @@ namespace {
     void surfaceCommit(wl_client*, wl_resource* res) {
         SurfaceImpl& s = *surfaceFrom(res);
 
-        s.srv->scene.needsFrame = true;
+        s.srv->scene->needsFrame = true;
 
         SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
         bool toCache = sub && sub->effectiveSync();
@@ -603,7 +674,7 @@ namespace {
 
     void surfaceResourceDestroyed(wl_resource* res) {
         SurfaceImpl* s = surfaceFrom(res);
-        ServerImpl* srv = s->srv;
+        WaylandImpl* srv = s->srv;
 
         detachPendingBuffer(*s);
 
@@ -640,7 +711,7 @@ namespace {
             c->parent = nullptr;
         }
 
-        for (Popup* p : srv->scene.popups) { // попапы умершего родителя гаснут
+        for (Popup* p : srv->scene->popups) { // попапы умершего родителя гаснут
             if (p->parent == s) {
                 p->parent = nullptr;
 
@@ -650,19 +721,18 @@ namespace {
             }
         }
 
-        if (srv->seat) {
-            srv->seat->surfaceGone(s);
-        }
+        srv->seat.surfaceGone(s);
 
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
 
-        if (s->texture && srv->renderer) {
-            srv->renderer->destroyTexture(s->texture);
+        if (s->texture) { // текстуру освободит renderer
+            srv->scene->orphanedTextures.pushBack(s->texture);
+            s->texture = nullptr;
         }
 
-        srv->scene.needsFrame = true;
-        removeOne(srv->scene.surfaces, (Surface*)s);
+        srv->scene->needsFrame = true;
+        removeOne(srv->scene->surfaces, (Surface*)s);
         srv->surfaceAlloc->release(s);
     }
 
@@ -706,7 +776,7 @@ namespace {
     }
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* sres =
             wl_resource_create(client, &wl_surface_interface, wl_resource_get_version(res), id);
 
@@ -720,12 +790,12 @@ namespace {
 
         s->srv = srv;
         s->res = sres;
-        srv->scene.surfaces.pushBack(s);
+        srv->scene->surfaces.pushBack(s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
     }
 
     void compositorCreateRegion(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* rres =
             wl_resource_create(client, &wl_region_interface, wl_resource_get_version(res), id);
 
@@ -899,7 +969,7 @@ namespace {
 
     void subcompositorGetSubsurface(wl_client* client, wl_resource* res, u32 id,
                                     wl_resource* surfaceRes, wl_resource* parentRes) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
@@ -1017,11 +1087,9 @@ namespace {
 
     void toplevelResourceDestroyed(wl_resource* res) {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
-        ServerImpl* srv = t->srv;
+        WaylandImpl* srv = t->srv;
 
-        if (srv->seat) {
-            srv->seat->toplevelGone(t);
-        }
+        srv->seat.toplevelGone(t);
 
         if (t->xdg) {
             t->xdg->toplevel = nullptr;
@@ -1031,9 +1099,9 @@ namespace {
             t->surface->toplevel = nullptr;
         }
 
-        removeOne(srv->scene.toplevels, (Toplevel*)t);
+        removeOne(srv->scene->toplevels, (Toplevel*)t);
         sysO << "imway: toplevel "_sv << (const char*)t->title << " destroyed"_sv << endL;
-        srv->scene.needsFrame = true;
+        srv->scene->needsFrame = true;
         srv->toplevelAlloc->release(t);
     }
 
@@ -1069,7 +1137,7 @@ namespace {
             return;
         }
 
-        ServerImpl* srv = xs->srv;
+        WaylandImpl* srv = xs->srv;
         auto* t = srv->toplevelAlloc->make();
 
         t->srv = srv;
@@ -1083,7 +1151,7 @@ namespace {
             xs->surface->toplevel = t;
         }
 
-        srv->scene.toplevels.pushBack(t);
+        srv->scene->toplevels.pushBack(t);
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
     }
 
@@ -1219,7 +1287,7 @@ namespace {
         xdg_popup_send_repositioned(res, token);
         xdg_popup_send_configure(res, p->x, p->y, p->w, p->h);
         xdg_surface_send_configure(p->xdg->res, wl_display_next_serial(p->srv->display));
-        p->srv->scene.needsFrame = true;
+        p->srv->scene->needsFrame = true;
     }
 
     const struct xdg_popup_interface popupImpl = {
@@ -1230,18 +1298,16 @@ namespace {
 
     void popupResourceDestroyed(wl_resource* res) {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
-        ServerImpl* srv = p->srv;
+        WaylandImpl* srv = p->srv;
 
-        if (srv->seat) {
-            srv->seat->popupGone(p);
-        }
+        srv->seat.popupGone(p);
 
         if (p->xdg) {
             p->xdg->popup = nullptr;
         }
 
-        removeOne(srv->scene.popups, (Popup*)p);
-        srv->scene.needsFrame = true;
+        removeOne(srv->scene->popups, (Popup*)p);
+        srv->scene->needsFrame = true;
         srv->popupAlloc->release(p);
     }
 
@@ -1266,7 +1332,7 @@ namespace {
             return;
         }
 
-        ServerImpl* srv = xs->srv;
+        WaylandImpl* srv = xs->srv;
         auto* p = srv->popupAlloc->make();
 
         p->srv = srv;
@@ -1281,7 +1347,7 @@ namespace {
         p->w = pos->w;
         p->h = pos->h;
         xs->popup = p;
-        srv->scene.popups.pushBack(p);
+        srv->scene->popups.pushBack(p);
         wl_resource_set_implementation(pres, &popupImpl, p, popupResourceDestroyed);
     }
 
@@ -1290,7 +1356,7 @@ namespace {
     }
 
     void wmBaseCreatePositioner(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* pres = wl_resource_create(client, &xdg_positioner_interface,
                                                wl_resource_get_version(res), id);
 
@@ -1307,7 +1373,7 @@ namespace {
     }
 
     void wmBaseGetXdgSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         auto* surface = surfaceFrom(surfaceRes);
         wl_resource* xres =
             wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
@@ -1383,38 +1449,36 @@ namespace {
 
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
-            s.srv->scene.needsFrame = true;
+            s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " ("_sv
                  << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv
                  << s.height << endL;
 
-            if (s.srv->seat) {
-                s.srv->seat->focusToplevel(xs->toplevel); // focus-on-map
-            }
+            s.srv->seat.focusToplevel(xs->toplevel); // focus-on-map
         }
 
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
-            s.srv->scene.needsFrame = true;
+            s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " unmapped"_sv
                  << endL;
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
-            s.srv->scene.needsFrame = true;
+            s.srv->scene->needsFrame = true;
             sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv
                  << xs->popup->x << ","_sv << xs->popup->y << ")"_sv
                  << (xs->popup->grab ? " grab" : "") << endL;
 
-            if (xs->popup->grab && s.srv->seat) {
-                s.srv->seat->popupGrabStart(xs->popup);
+            if (xs->popup->grab) {
+                s.srv->seat.popupGrabStart(xs->popup);
             }
         }
 
         if (xs->popup && xs->popup->mapped && !s.hasContent) {
             xs->popup->mapped = false;
-            s.srv->scene.needsFrame = true;
+            s.srv->scene->needsFrame = true;
         }
     }
 
@@ -1424,11 +1488,9 @@ namespace {
         }
 
         p.mapped = false;
-        p.srv->scene.needsFrame = true;
+        p.srv->scene->needsFrame = true;
 
-        if (p.srv->seat) {
-            p.srv->seat->popupGone(&p);
-        }
+        p.srv->seat.popupGone(&p);
 
         xdg_popup_send_popup_done(p.res);
     }
@@ -1442,7 +1504,7 @@ namespace {
     const struct wl_output_interface outputImpl = {.release = outputRelease};
 
     void outputBind(wl_client* client, void* data, u32 version, u32 id) {
-        auto* srv = (ServerImpl*)data;
+        auto* srv = (WaylandImpl*)data;
         wl_resource* res = wl_resource_create(client, &wl_output_interface, version, id);
 
         if (!res) {
@@ -1456,7 +1518,7 @@ namespace {
         wl_output_send_geometry(res, 0, 0, 340, 210, WL_OUTPUT_SUBPIXEL_UNKNOWN, "imway",
                                 "headless", WL_OUTPUT_TRANSFORM_NORMAL);
         wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED,
-                            srv->scene.outW, srv->scene.outH, (i32)(srv->scene.hz * 1000));
+                            srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
             wl_output_send_scale(res, 1);
@@ -1846,7 +1908,7 @@ namespace {
             return nullptr;
         }
 
-        if (!p->srv->renderer->dmabufFormatSupported(format, b.modifier)) {
+        if (!p->srv->formatSupported(format, b.modifier)) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT,
                                    "формат 0x%x не поддержан", format);
 
@@ -1897,7 +1959,7 @@ namespace {
     };
 
     void dmabufCreateParams(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (ServerImpl*)wl_resource_get_user_data(res);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* pres = wl_resource_create(client, &zwp_linux_buffer_params_v1_interface,
                                                wl_resource_get_version(res), id);
 
@@ -1931,7 +1993,7 @@ namespace {
     };
 
     void dmabufBind(wl_client* client, void* data, u32 version, u32 id) {
-        auto* srv = (ServerImpl*)data;
+        auto* srv = (WaylandImpl*)data;
         wl_resource* res = wl_resource_create(client, &zwp_linux_dmabuf_v1_interface, version, id);
 
         if (!res) {
@@ -1943,11 +2005,7 @@ namespace {
         wl_resource_set_implementation(res, &dmabufImpl, srv, nullptr);
 
         // v1: format-события; v3: modifier-события
-        Renderer* renderer = srv->renderer;
-
-        for (size_t i = 0; i < renderer->dmabufFormatCount(); i++) {
-            DmabufFormat fm = renderer->dmabufFormat(i);
-
+        for (const DmabufFormat& fm : srv->formats) {
             if (version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION) {
                 zwp_linux_dmabuf_v1_send_modifier(res, fm.fourcc, (u32)(fm.modifier >> 32),
                                                   (u32)(fm.modifier & 0xffffffff));
@@ -1956,7 +2014,126 @@ namespace {
             }
         }
     }
-}
+
+    // ================= wl_seat =================
+
+    constexpr u32 kSeatVersion = 5;
+
+    // --- wl_pointer / wl_keyboard / wl_touch ресурсы ---
+
+    SeatState* seatOf(wl_resource* res) {
+        return (SeatState*)wl_resource_get_user_data(res);
+    }
+
+    void pointerSetCursor(wl_client*, wl_resource*, u32, wl_resource*, i32, i32) {
+        // курсоры клиентов игнорируем: курсор рисует ImGui
+    }
+
+    const struct wl_pointer_interface pointerImpl = {
+        .set_cursor = pointerSetCursor,
+        .release = resDestroy,
+    };
+
+    const struct wl_keyboard_interface keyboardImpl = {.release = resDestroy};
+    const struct wl_touch_interface touchImpl = {.release = resDestroy};
+
+    void pointerResourceDestroyed(wl_resource* res) {
+        removeOne(seatOf(res)->pointers, res);
+    }
+
+    void keyboardResourceDestroyed(wl_resource* res) {
+        removeOne(seatOf(res)->keyboards, res);
+    }
+
+    void seatGetPointer(wl_client* client, wl_resource* res, u32 id) {
+        SeatState* seat = seatOf(res);
+        wl_resource* p =
+            wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(res), id);
+
+        if (!p) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(p, &pointerImpl, seat, pointerResourceDestroyed);
+        seat->pointers.pushBack(p);
+    }
+
+    void seatGetKeyboard(wl_client* client, wl_resource* res, u32 id) {
+        SeatState* seat = seatOf(res);
+        wl_resource* k =
+            wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(res), id);
+
+        if (!k) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(k, &keyboardImpl, seat, keyboardResourceDestroyed);
+        seat->keyboards.pushBack(k);
+
+        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->keymapFd,
+                                seat->keymapSize);
+
+        if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
+            wl_keyboard_send_repeat_info(k, 25, 600);
+        }
+
+        // если фокус уже у этого клиента — новая клавиатура должна получить enter
+        SeatState& s = *seat;
+
+        if (s.kbFocus && s.kbFocus->surface &&
+            wl_resource_get_client(resOf(s.kbFocus->surface)) == client) {
+            wl_array keys;
+
+            wl_array_init(&keys);
+
+            for (u32 kc : s.pressedKeys) {
+                *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
+            }
+
+            wl_keyboard_send_enter(k, wl_display_next_serial(s.srv->display),
+                                   resOf(s.kbFocus->surface), &keys);
+            wl_array_release(&keys);
+            wl_keyboard_send_modifiers(k, wl_display_next_serial(s.srv->display),
+                                       s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
+        }
+    }
+
+    void seatGetTouch(wl_client* client, wl_resource* res, u32 id) {
+        wl_resource* t =
+            wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(res), id);
+
+        if (t) {
+            wl_resource_set_implementation(t, &touchImpl, nullptr, nullptr);
+        }
+    }
+
+    const struct wl_seat_interface seatImpl = {
+        .get_pointer = seatGetPointer,
+        .get_keyboard = seatGetKeyboard,
+        .get_touch = seatGetTouch,
+        .release = resDestroy,
+    };
+
+    void seatBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wl_seat_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &seatImpl, data, nullptr);
+        wl_seat_send_capabilities(res, WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_POINTER);
+
+        if (version >= WL_SEAT_NAME_SINCE_VERSION) {
+            wl_seat_send_name(res, "seat0");
+        }
+    }}
 
 // ================= методы impl-структур =================
 
@@ -2045,21 +2222,471 @@ void Positioner::place(int& outX, int& outY) const {
     outY = py + dy;
 }
 
-// ================= ServerImpl =================
+// ================= SeatState =================
 
-ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
-    : pool(p)
-    , cfg(config)
+SeatState::SeatState(WaylandImpl& impl)
+    : srv(&impl)
 {
-    scene.outW = cfg.outW;
-    scene.outH = cfg.outH;
-    scene.hz = cfg.hz;
+    xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    STD_VERIFY(xkb);
+
+    keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    STD_VERIFY(keymap);
+
+    xkbState = xkb_state_new(keymap);
+
+    char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+
+    keymapSize = (u32)strlen(str) + 1;
+    keymapFd = memfd_create("imway-keymap", 0);
+
+    bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;
+
+    free(str);
+    STD_VERIFY(written); // keymap fd не создался
+}
+
+SeatState::~SeatState() noexcept {
+    if (keymapFd >= 0) {
+        close(keymapFd);
+    }
+
+    if (xkbState) {
+        xkb_state_unref(xkbState);
+    }
+
+    if (keymap) {
+        xkb_keymap_unref(keymap);
+    }
+
+    if (xkb) {
+        xkb_context_unref(xkb);
+    }
+}
+
+bool SeatState::sameClientS(wl_resource* res, Surface* s) {
+    return s && wl_resource_get_client(res) == wl_resource_get_client(resOf(s));
+}
+
+bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
+    return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(resOf(t->surface));
+}
+
+// топовая hovered-поверхность дерева: последняя в порядке отрисовки
+// (stackBelow → сама → stackAbove) перекрывает предыдущие;
+// поверхности с input region мимо точки — прозрачны для ввода
+Surface* SeatState::pickInTree(Surface& s) {
+    Surface* found = nullptr;
+
+    for (Subsurface* c : s.stackBelow) {
+        if (c->surface && c->surface->hasContent) {
+            if (Surface* f = pickInTree(*c->surface)) {
+                found = f;
+            }
+        }
+    }
+
+    if (s.hovered && s.inputContains(curX - s.imgX, curY - s.imgY)) {
+        found = &s;
+    }
+
+    for (Subsurface* c : s.stackAbove) {
+        if (c->surface && c->surface->hasContent) {
+            if (Surface* f = pickInTree(*c->surface)) {
+                found = f;
+            }
+        }
+    }
+
+    return found;
+}
+
+Surface* SeatState::pickPointerTarget() {
+    // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order
+    // учтён, внутри окна поздние Image перекрывают ранние — берём последний
+    // hovered в дереве). Попапы сверху: последний созданный — самый верхний.
+    for (size_t i = srv->scene->popups.length(); i > 0; i--) {
+        Popup* p = srv->scene->popups[i - 1];
+
+        if (!p->mapped || !p->surface) {
+            continue;
+        }
+
+        if (Surface* s = pickInTree(*p->surface)) {
+            return s;
+        }
+    }
+
+    for (Toplevel* t : srv->scene->toplevels) {
+        if (!t->mapped || !t->surface) {
+            continue;
+        }
+
+        if (Surface* s = pickInTree(*t->surface)) {
+            return s;
+        }
+    }
+
+    return nullptr;
+}
+
+void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
+    if (ptrFocus == s) {
+        return;
+    }
+
+    if (ptrFocus) {
+        u32 serial = wl_display_next_serial(srv->display);
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, ptrFocus)) {
+                wl_pointer_send_leave(p, serial, resOf(ptrFocus));
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+
+    ptrFocus = s;
+
+    if (s) {
+        u32 serial = wl_display_next_serial(srv->display);
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, s)) {
+                wl_pointer_send_enter(p, serial, resOf(s), wl_fixed_from_double(sx),
+                                      wl_fixed_from_double(sy));
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+}
+
+void SeatState::handleMotion(double x, double y) {
+    curX = x;
+    curY = y;
+    srv->scene->needsFrame = true;
+
+    Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
+
+    if (target != ptrFocus) {
+        double sx = target ? x - target->imgX : 0, sy = target ? y - target->imgY : 0;
+
+        pointerSetFocus(target, sx, sy);
+
+        return;
+    }
+
+    if (!ptrFocus) {
+        return;
+    }
+
+    double sx = x - ptrFocus->imgX;
+    double sy = y - ptrFocus->imgY;
+    u32 t = nowMsec();
+
+    for (wl_resource* p : pointers) {
+        if (sameClientS(p, ptrFocus)) {
+            wl_pointer_send_motion(p, t, wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+
+            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(p);
+            }
+        }
+    }
+}
+
+void SeatState::handleButton(u32 button, bool pressed) {
+    srv->scene->needsFrame = true;
+
+    // hovered-флаги могли освежиться кадрами после последнего motion —
+    // без этого press после одиночного motion уходит мимо клиента
+    if (pressed && buttonsDown == 0) {
+        Surface* target = pickPointerTarget();
+
+        if (target != ptrFocus) {
+            pointerSetFocus(target, target ? curX - target->imgX : 0,
+                            target ? curY - target->imgY : 0);
+        }
+    }
+
+    // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
+    if (pressed) {
+        for (size_t i = srv->scene->popups.length(); i > 0; i--) {
+            Popup* p = srv->scene->popups[i - 1];
+
+            if (!p->mapped || !p->grab) {
+                continue;
+            }
+
+            Surface* proot = p->surface;
+
+            if (ptrFocus && proot && ptrFocus->rootSurface() == proot) {
+                break;
+            }
+
+            xdgPopupDismiss(*(PopupImpl*)p);
+        }
+    }
+
+    // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
+    if (pressed && ptrFocus) {
+        if (Toplevel* t = ptrFocus->rootToplevel()) {
+            focusToplevel(t);
+        }
+    }
+
+    if (ptrFocus) {
+        u32 serial = wl_display_next_serial(srv->display);
+        u32 t = nowMsec();
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, ptrFocus)) {
+                wl_pointer_send_button(p, serial, t, button,
+                                       pressed ? WL_POINTER_BUTTON_STATE_PRESSED
+                                               : WL_POINTER_BUTTON_STATE_RELEASED);
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+
+    buttonsDown += pressed ? 1 : -1;
+
+    if (buttonsDown < 0) {
+        buttonsDown = 0;
+    }
+}
+
+void SeatState::handleScroll(double value) {
+    srv->scene->needsFrame = true;
+
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 t = nowMsec();
+
+    for (wl_resource* p : pointers) {
+        if (sameClientS(p, ptrFocus)) {
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                 wl_fixed_from_double(value * 15.0));
+
+            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(p);
+            }
+        }
+    }
+}
+
+// куда сейчас идёт клавиатура (override > kbFocus)
+wl_resource* SeatState::kbTargetRes() {
+    if (kbOverride) {
+        return resOf(kbOverride);
+    }
+
+    if (kbFocus && kbFocus->surface) {
+        return resOf(kbFocus->surface);
+    }
+
+    return nullptr;
+}
+
+void SeatState::kbSendLeave(wl_resource* target) {
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display);
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_leave(k, serial, target);
+        }
+    }
+}
+
+void SeatState::kbSendEnter(wl_resource* target) {
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display);
+    wl_array keys;
+
+    wl_array_init(&keys);
+
+    for (u32 kc : pressedKeys) {
+        *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
+    }
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_enter(k, serial, target, &keys);
+            wl_keyboard_send_modifiers(k, wl_display_next_serial(srv->display), modsDepressed,
+                                       modsLatched, modsLocked, modsGroup);
+        }
+    }
+
+    wl_array_release(&keys);
+}
+
+void SeatState::updateModifiers() {
+    u32 dep = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_DEPRESSED);
+    u32 lat = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LATCHED);
+    u32 lock = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LOCKED);
+    u32 grp = xkb_state_serialize_layout(xkbState, XKB_STATE_LAYOUT_EFFECTIVE);
+
+    if (dep == modsDepressed && lat == modsLatched && lock == modsLocked && grp == modsGroup) {
+        return;
+    }
+
+    modsDepressed = dep;
+    modsLatched = lat;
+    modsLocked = lock;
+    modsGroup = grp;
+
+    wl_resource* target = kbTargetRes();
+
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(srv->display);
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_modifiers(k, serial, dep, lat, lock, grp);
+        }
+    }
+}
+
+void SeatState::handleKey(u32 code, bool pressed) {
+    srv->scene->needsFrame = true;
+    xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+
+    if (pressed) {
+        pressedKeys.pushBack(code);
+    } else {
+        removeOne(pressedKeys, code);
+    }
+
+    if (wl_resource* target = kbTargetRes()) {
+        u32 serial = wl_display_next_serial(srv->display);
+        u32 t = nowMsec();
+
+        for (wl_resource* k : keyboards) {
+            if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+                wl_keyboard_send_key(k, serial, t, code,
+                                     pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+                                             : WL_KEYBOARD_KEY_STATE_RELEASED);
+            }
+        }
+    }
+
+    updateModifiers();
+}
+
+void SeatState::focusToplevel(Toplevel* t) {
+    if (kbFocus == t) {
+        return;
+    }
+
+    if (kbFocus && kbFocus->surface) {
+        u32 serial = wl_display_next_serial(srv->display);
+
+        for (wl_resource* k : keyboards) {
+            if (sameClient(k, kbFocus)) {
+                wl_keyboard_send_leave(k, serial, resOf(kbFocus->surface));
+            }
+        }
+    }
+
+    kbFocus = t;
+
+    if (t && t->surface) {
+        kbSendEnter(resOf(t->surface));
+        sysO << "imway: focus -> "_sv << (const char*)t->title << endL;
+    }
+}
+
+void SeatState::popupGrabStart(Popup* p) {
+    if (!p->surface) {
+        return;
+    }
+
+    kbSendLeave(kbTargetRes());
+    kbOverride = p->surface;
+    kbSendEnter(resOf(kbOverride));
+}
+
+void SeatState::popupGone(Popup* p) {
+    Surface* s = p->surface;
+
+    if (s && ptrFocus && ptrFocus->rootSurface() == s) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+
+    if (s && kbOverride == s) {
+        kbSendLeave(resOf(kbOverride));
+        kbOverride = nullptr;
+        kbSendEnter(kbTargetRes()); // клавиатура возвращается toplevel'у
+    }
+}
+
+void SeatState::surfaceGone(Surface* s) {
+    if (ptrFocus == s) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+}
+
+void SeatState::toplevelGone(Toplevel* t) {
+    if (ptrFocus && ptrFocus->rootToplevel() == t) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+
+    if (kbFocus == t) {
+        kbFocus = nullptr;
+
+        // отдать фокус последнему замапленному
+        for (size_t i = srv->scene->toplevels.length(); i > 0; i--) {
+            Toplevel* other = srv->scene->toplevels[i - 1];
+
+            if (other != t && other->mapped) {
+                focusToplevel(other);
+
+                break;
+            }
+        }
+    }
+}
+
+// ================= WaylandImpl =================
+
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn,
+                         const WaylandConfig& cfg)
+    : pool(p)
+    , loop(evLoop)
+    , scene(&scn)
+    , socketName(cfg.socketName)
+    , seat(*this)
+{
+    formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();
     STD_VERIFY(display);
 
     wlLoop = wl_display_get_event_loop(display);
-    loop = ev_default_loop(0);
 
     surfaceAlloc = pool->make<ObjList<SurfaceImpl>>(pool);
     subsurfaceAlloc = pool->make<ObjList<SubsurfaceImpl>>(pool);
@@ -2071,41 +2698,13 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     dmabufBoxAlloc = pool->make<ObjList<BufferBox>>(pool);
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
 
-    if (wl_display_add_socket(display, cfg.socketName) != 0) {
-        Errno().raise(StringBuilder() << "wl socket "_sv << cfg.socketName
+    if (wl_display_add_socket(display, socketName) != 0) {
+        Errno().raise(StringBuilder() << "wl socket "_sv << socketName
                                       << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
     wl_display_init_shm(display);
-
-    // kms до рендерера: размер output диктует режим дисплея
-    if (!strcmp(cfg.backend, "kms")) {
-        kms = Kms::create(pool, loop, cfg.drmDevice);
-        scene.outW = kms->width();
-        scene.outH = kms->height();
-        scene.hz = kms->refresh();
-    }
-
-    renderer = Renderer::create(pool, scene.outW, scene.outH);
-    seat = Seat::create(pool, *this);
-
-    if (kms) {
-        STD_VERIFY(kms->start());
-
-        try {
-            input = InputLinux::create(pool, loop, *seat, scene.outW, scene.outH);
-        } catch (...) {
-            sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
-        }
-
-        ImGui::GetIO().MouseDrawCursor = true; // композитный курсор
-    }
-
     createGlobals();
-
-    if (cfg.controlPath) {
-        control = Control::create(pool, loop, *seat, *renderer, cfg.controlPath);
-    }
 
     ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
     wlIo.data = this;
@@ -2115,25 +2714,20 @@ ServerImpl::ServerImpl(ObjPool* p, const ServerConfig& config)
     flushPrepare.data = this;
     ev_prepare_start(loop, &flushPrepare);
 
-    ev_timer_init(&frameTimer, frameCb, 0., 1.0 / scene.hz);
-    frameTimer.data = this;
-    ev_timer_start(loop, &frameTimer);
-
     ev_signal_init(&sigInt, signalCb, SIGINT);
     ev_signal_start(loop, &sigInt);
     ev_signal_init(&sigTerm, signalCb, SIGTERM);
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
-    sysO << "imway: socket "_sv << cfg.socketName << ", output "_sv << scene.outW << "x"_sv
-         << scene.outH << "@"_sv << (i64)scene.hz << endL;
+    sysO << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv
+         << scene->outH << "@"_sv << (i64)scene->hz << endL;
 }
 
-ServerImpl::~ServerImpl() noexcept {
+WaylandImpl::~WaylandImpl() noexcept {
     if (watchersStarted) {
         ev_io_stop(loop, &wlIo);
         ev_prepare_stop(loop, &flushPrepare);
-        ev_timer_stop(loop, &frameTimer);
         ev_signal_stop(loop, &sigInt);
         ev_signal_stop(loop, &sigTerm);
     }
@@ -2146,114 +2740,72 @@ ServerImpl::~ServerImpl() noexcept {
     }
 }
 
-void ServerImpl::createGlobals() {
+void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
     // v3: repositioned-событие у попапов
     wl_global_create(display, &xdg_wm_base_interface, 3, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
-    seatCreateGlobal(display, *seat);
+    wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 
-    if (renderer->dmabufFormatCount() > 0) {
+    if (!formats.empty()) {
         wl_global_create(display, &zwp_linux_dmabuf_v1_interface, 3, this, dmabufBind);
     } else {
-        sysE << "imway: vulkan lacks dmabuf import, linux_dmabuf global not created"_sv << endL;
+        sysE << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
 }
 
-void ServerImpl::dismissPopup(Popup& p) {
-    xdgPopupDismiss(*(PopupImpl*)&p);
+bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
+    for (const DmabufFormat& f : formats) {
+        if (f.fourcc == fourcc && f.modifier == modifier) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
-void ServerImpl::onFrameTick() {
-    // lavapipe — это CPU: без изменений кадр не рисуем вовсе
-    if (scene.needsFrame) {
-        settleFrames = 3; // ImGui дорисует hover/анимации
-    }
-
-    bool active = scene.needsFrame || settleFrames > 0;
-
-    scene.needsFrame = false;
-
-    if (active) {
-        settleFrames--;
-
-        // загрузить свежие пиксели в текстуры (субповерхности тоже — у каждой своя)
-        for (Surface* s : scene.surfaces) {
-            auto* si = (SurfaceImpl*)s;
-
-            if (si->dirty && si->hasContent) {
-                if (si->dmabuf) {
-                    renderer->importDmabuf(*si);
-                } else {
-                    renderer->uploadSurface(*si);
-                }
-
-                si->dirty = false;
-            }
-        }
-
-        renderer->renderFrame(scene);
-
-        if (kms) {
-            kms->present(renderer->readbackData());
-        }
-
-        // frame callbacks — всем деревьям, показанным в кадре (попапам тоже,
-        // GTK не рисует контент меню, пока не получит frame done)
-        u32 t = nowMsec();
-
-        for (Toplevel* tl : scene.toplevels) {
-            if (tl->mapped && tl->surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)tl->surface, t);
-            }
-        }
-
-        for (Popup* p : scene.popups) {
-            if (p->surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)p->surface, t);
-            }
-        }
-
-        // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
-        for (Toplevel* tl : scene.toplevels) {
-            auto* ti = (ToplevelImpl*)tl;
-
-            if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
-                continue;
-            }
-
-            bool differsView =
-                ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
-            bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
-
-            if (differsView && differsSent) {
-                xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
-            }
+void WaylandImpl::frameShown(u32 msec) {
+    // frame callbacks — всем деревьям, показанным в кадре (попапам тоже,
+    // GTK не рисует контент меню, пока не получит frame done)
+    for (Toplevel* tl : scene->toplevels) {
+        if (tl->mapped && tl->surface) {
+            fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
         }
     }
 
-    scene.framesDone++;
+    for (Popup* p : scene->popups) {
+        if (p->surface) {
+            fireFrameCallbacks(*(SurfaceImpl*)p->surface, msec);
+        }
+    }
 
-    if (cfg.framesLimit > 0 && scene.framesDone >= cfg.framesLimit) {
-        ev_break(loop, EVBREAK_ALL);
+    // ресайз ImGui-окном: контент-регион разошёлся с размером поверхности
+    for (Toplevel* tl : scene->toplevels) {
+        auto* ti = (ToplevelImpl*)tl;
+
+        if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
+            continue;
+        }
+
+        bool differsView =
+            ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
+        bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
+
+        if (differsView && differsSent) {
+            xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
+        }
     }
 }
 
-void ServerImpl::run() {
+void WaylandImpl::run() {
     ev_run(loop, 0);
 
-    // скриншот последнего кадра — до разрушения клиентов и рендерера
-    if (cfg.screenshotPath && renderer) {
-        renderer->screenshot(cfg.screenshotPath);
-        sysO << "imway: screenshot: "_sv << cfg.screenshotPath << endL;
-    }
-
-    // клиенты умирают первыми: их деструкторы освобождают текстуры через renderer;
-    // сами подсистемы умрут вместе с пулом (LIFO: control → input → seat → renderer → kms)
+    // клиенты умирают первыми: их текстуры уходят в orphanedTextures,
+    // сами подсистемы умрут вместе с пулом
     wl_display_destroy_clients(display);
     wl_display_destroy(display);
     display = nullptr;
@@ -2261,17 +2813,10 @@ void ServerImpl::run() {
 
 // ================= публичные определения =================
 
-Server::~Server() noexcept {
+Wayland::~Wayland() noexcept {
 }
 
-Server* Server::create(ObjPool* pool, const ServerConfig& config) {
-    return pool->make<ServerImpl>(pool, config);
-}
-
-u32 nowMsec() {
-    timespec ts{};
-
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-
-    return (u32)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene,
+                         const WaylandConfig& cfg) {
+    return pool->make<WaylandImpl>(pool, loop, scene, cfg);
 }

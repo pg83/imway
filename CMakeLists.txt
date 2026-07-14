@@ -106,12 +106,11 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 add_executable(imway
     src/main.cpp
     src/scene.cpp
-    src/server.cpp
+    src/wayland.cpp
     src/control.cpp
-    src/input_linux.cpp
-    src/kms.cpp
+    src/input.cpp
+    src/output.cpp
     src/util.cpp
-    src/seat.cpp
     src/renderer.cpp)
 target_link_libraries(imway PRIVATE
     imgui
