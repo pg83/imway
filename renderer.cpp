@@ -193,7 +193,7 @@ namespace {
             scene->needsFrame = true;
             ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
 
-            // move the hardware cursor right away, without waiting for a frame
+            // keep the plane position fresh for the next frame commit
             if (hwCursorReady && hwVisible) {
                 output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
             }
