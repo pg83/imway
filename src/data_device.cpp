@@ -1,5 +1,6 @@
 // wl_data_device_manager — инертная заглушка (реальный clipboard/DnD впереди).
 
+#include "data_device.h"
 #include "server.h"
 
 #include <wayland-server-protocol.h>

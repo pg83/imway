@@ -204,25 +204,5 @@ struct Server {
     void onFrameTick();
 };
 
-// глобалы
-void compositorCreateGlobals(Server&);
-void xdgShellCreateGlobal(Server&);
-void outputCreateGlobal(Server&);
-void dataDeviceCreateGlobal(Server&);
-void xdgDecorationCreateGlobal(Server&);
-void viewporterCreateGlobal(Server&);
-void linuxDmabufCreateGlobal(Server&);
-
-// реакция xdg-роли на commit поверхности (map-логика, configure dance)
-void xdgHandleCommit(Surface&);
-// послать клиенту configure с новым размером (ресайз ImGui-окном)
-void xdgToplevelConfigureSize(Toplevel&, int w, int h);
-// закрыть попап (popup_done + unmap); клиент затем уничтожит ресурс
-void xdgPopupDismiss(Popup&);
-
-// wp_viewport: применить pending на commit; отвязать при смерти поверхности
-void viewportApplyPending(Surface&);
-void viewportSurfaceGone(Surface&);
-
 // utils
 u32 nowMsec();

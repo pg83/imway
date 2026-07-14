@@ -1,10 +1,18 @@
-#include "server.h"
-#include "util.h"
-
-#include "linux_dmabuf.h"
+#include "compositor.h"
+#include "control.h"
+#include "data_device.h"
+#include "input_linux.h"
 #include "kms.h"
+#include "linux_dmabuf.h"
 #include "renderer.h"
 #include "seat.h"
+#include "seat_output.h"
+#include "server.h"
+#include "util.h"
+#include "viewporter.h"
+#include "xdg_decoration.h"
+#include "xdg_shell.h"
+
 
 #include <string.h>
 #include <time.h>

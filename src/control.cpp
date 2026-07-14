@@ -3,7 +3,7 @@
 //          key CODE press|release | type TEXT | scroll N |
 //          screenshot PATH | quit
 
-#include "kms.h"
+#include "control.h"
 #include "renderer.h"
 #include "seat.h"
 #include "server.h"

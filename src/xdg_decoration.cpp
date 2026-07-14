@@ -2,6 +2,7 @@
 // декорация клиента = ImGui-окно композитора.
 
 #include "server.h"
+#include "xdg_decoration.h"
 
 #include <xdg-decoration-unstable-v1-server-protocol.h>
 

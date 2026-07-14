@@ -3,6 +3,7 @@
 
 #include <std/sys/types.h>
 
+struct Server;
 struct wl_resource;
 
 inline constexpr int kDmabufMaxPlanes = 4;
@@ -20,3 +21,5 @@ struct DmabufBuffer {
 
 // nullptr, если ресурс — не наш dmabuf wl_buffer
 DmabufBuffer* dmabufFromBufferResource(wl_resource*);
+
+void linuxDmabufCreateGlobal(Server&);

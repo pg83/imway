@@ -1,5 +1,6 @@
 // wl_output — один выход.
 
+#include "seat_output.h"
 #include "server.h"
 
 #include <wayland-server-protocol.h>

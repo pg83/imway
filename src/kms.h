@@ -1,4 +1,4 @@
-// Линуксовые бэкенды: DRM/KMS-вывод, libinput-ввод, control-FIFO.
+// DRM/KMS-бэкенд: atomic modeset + dumb-буферы, кадр рендерера копируется в scanout.
 #pragma once
 
 namespace stl {
@@ -17,18 +17,4 @@ struct Kms {
     // открывает DRM, выбирает коннектор/режим; выставляет server.outW/outH;
     // бросает stl::Exception, если девайс не открылся или нет atomic
     static Kms* create(stl::ObjPool* pool, Server&, const char* devPath);
-};
-
-struct InputLinux {
-    virtual ~InputLinux() noexcept;
-
-    // бросает stl::Exception, если libinput/udev не поднялись
-    static InputLinux* create(stl::ObjPool* pool, Server&);
-};
-
-// control-канал: FIFO с текстовыми командами для инъекции input и управления
-struct Control {
-    virtual ~Control() noexcept;
-
-    static Control* create(stl::ObjPool* pool, Server&, const char* fifoPath);
 };

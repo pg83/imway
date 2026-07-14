@@ -1,10 +1,13 @@
 // wl_compositor + wl_surface + wl_region + wl_subcompositor.
 
+#include "compositor.h"
 #include "linux_dmabuf.h"
 #include "renderer.h"
 #include "seat.h"
 #include "server.h"
 #include "util.h"
+#include "viewporter.h"
+#include "xdg_shell.h"
 
 #include <string.h>
 

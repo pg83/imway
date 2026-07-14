@@ -1,7 +1,7 @@
 // libinput → Seat. Абсолютная мышь (usb-tablet в QEMU), относительная,
 // кнопки, колесо, клавиатура (сырые evdev-коды).
 
-#include "kms.h"
+#include "input_linux.h"
 #include "seat.h"
 #include "server.h"
 #include "util.h"

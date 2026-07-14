@@ -4,6 +4,7 @@
 #include "seat.h"
 #include "server.h"
 #include "util.h"
+#include "xdg_shell.h"
 
 #include <string.h>
 

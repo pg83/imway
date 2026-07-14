@@ -1,6 +1,7 @@
 // wp_viewporter: кроп и масштабирование поверхностей.
 
 #include "server.h"
+#include "viewporter.h"
 
 #include <viewporter-server-protocol.h>
 #include <wayland-server-protocol.h>
