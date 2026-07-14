@@ -80,130 +80,136 @@ namespace {
         char line[1024] = "";
         size_t lineLen = 0;
 
-        ControlImpl(Server& srv, const char* fifoPath)
-            : server(&srv)
-        {
-            STD_VERIFY(strlen(fifoPath) < sizeof(path));
-            strcpy(path, fifoPath);
-            unlink(path);
-            STD_VERIFY(mkfifo(path, 0600) == 0);
+        ControlImpl(Server& srv, const char* fifoPath);
+        ~ControlImpl() noexcept override;
 
-            fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-            STD_VERIFY(fd >= 0);
-
-            ev_io_init(&io, controlIoCb, fd, EV_READ);
-            io.data = this;
-            ev_io_start(server->loop, &io);
-            sysO << "imway: control FIFO: "_sv << (const char*)path << endL;
-        }
-
-        ~ControlImpl() noexcept override {
-            if (fd >= 0) {
-                ev_io_stop(server->loop, &io);
-                close(fd);
-            }
-
-            if (path[0]) {
-                unlink(path);
-            }
-        }
-
-        void handleLine(const char* cmd) {
-            Seat& seat = *server->seat;
-            char a[64] = {0}, b[64] = {0};
-            double x, y;
-            u32 code;
-
-            if (sscanf(cmd, "motion %lf %lf", &x, &y) == 2) {
-                seat.handleMotion(x, y);
-            } else if (sscanf(cmd, "button %63s %63s", a, b) == 2) {
-                u32 btn = !strcmp(a, "left") ? BTN_LEFT : !strcmp(a, "right") ? BTN_RIGHT
-                                                                              : BTN_MIDDLE;
-
-                seat.handleButton(btn, !strcmp(b, "press"));
-            } else if (sscanf(cmd, "key %u %63s", &code, b) == 2) {
-                seat.handleKey(code, !strcmp(b, "press"));
-            } else if (!strncmp(cmd, "type ", 5)) {
-                for (const char* p = cmd + 5; *p; p++) {
-                    u32 kc;
-                    bool shift;
-
-                    if (!asciiToKey(*p, kc, shift)) {
-                        continue;
-                    }
-
-                    if (shift) {
-                        seat.handleKey(KEY_LEFTSHIFT, true);
-                    }
-
-                    seat.handleKey(kc, true);
-                    seat.handleKey(kc, false);
-
-                    if (shift) {
-                        seat.handleKey(KEY_LEFTSHIFT, false);
-                    }
-                }
-            } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
-                seat.handleScroll(y);
-            } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
-                // скриншот содержимого последнего отрендеренного кадра
-                server->renderer->screenshot(a);
-                sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
-            } else if (!strcmp(cmd, "quit")) {
-                ev_break(server->loop, EVBREAK_ALL);
-            } else {
-                sysE << "imway: unknown command: "_sv << cmd << endL;
-            }
-        }
-
-        void handleInput() {
-            char tmp[512];
-
-            for (;;) {
-                ssize_t n = read(fd, tmp, sizeof tmp);
-
-                if (n > 0) {
-                    for (ssize_t i = 0; i < n; i++) {
-                        if (tmp[i] == '\n') {
-                            line[lineLen] = 0;
-                            lineLen = 0;
-
-                            if (line[0]) {
-                                handleLine(line);
-                            }
-                        } else if (lineLen + 1 < sizeof(line)) {
-                            line[lineLen++] = tmp[i];
-                        }
-                    }
-                } else if (n == 0) {
-                    reopen(); // писатель закрыл FIFO
-
-                    return;
-                } else {
-                    return; // EAGAIN
-                }
-            }
-        }
-
-        void reopen() {
-            ev_io_stop(server->loop, &io);
-            close(fd);
-
-            fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-
-            if (fd < 0) {
-                return;
-            }
-
-            ev_io_init(&io, controlIoCb, fd, EV_READ);
-            io.data = this;
-            ev_io_start(server->loop, &io);
-        }
+        void handleLine(const char* cmd);
+        void handleInput();
+        void reopen();
     };
 
     void controlIoCb(struct ev_loop*, ev_io* w, int) {
         ((ControlImpl*)w->data)->handleInput();
     }
+}
+
+ControlImpl::ControlImpl(Server& srv, const char* fifoPath)
+    : server(&srv)
+{
+    STD_VERIFY(strlen(fifoPath) < sizeof(path));
+    strcpy(path, fifoPath);
+    unlink(path);
+    STD_VERIFY(mkfifo(path, 0600) == 0);
+
+    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    STD_VERIFY(fd >= 0);
+
+    ev_io_init(&io, controlIoCb, fd, EV_READ);
+    io.data = this;
+    ev_io_start(server->loop, &io);
+    sysO << "imway: control FIFO: "_sv << (const char*)path << endL;
+}
+
+ControlImpl::~ControlImpl() noexcept {
+    if (fd >= 0) {
+        ev_io_stop(server->loop, &io);
+        close(fd);
+    }
+
+    if (path[0]) {
+        unlink(path);
+    }
+}
+
+void ControlImpl::handleLine(const char* cmd) {
+    Seat& seat = *server->seat;
+    char a[64] = {0}, b[64] = {0};
+    double x, y;
+    u32 code;
+
+    if (sscanf(cmd, "motion %lf %lf", &x, &y) == 2) {
+        seat.handleMotion(x, y);
+    } else if (sscanf(cmd, "button %63s %63s", a, b) == 2) {
+        u32 btn = !strcmp(a, "left") ? BTN_LEFT : !strcmp(a, "right") ? BTN_RIGHT : BTN_MIDDLE;
+
+        seat.handleButton(btn, !strcmp(b, "press"));
+    } else if (sscanf(cmd, "key %u %63s", &code, b) == 2) {
+        seat.handleKey(code, !strcmp(b, "press"));
+    } else if (!strncmp(cmd, "type ", 5)) {
+        for (const char* p = cmd + 5; *p; p++) {
+            u32 kc;
+            bool shift;
+
+            if (!asciiToKey(*p, kc, shift)) {
+                continue;
+            }
+
+            if (shift) {
+                seat.handleKey(KEY_LEFTSHIFT, true);
+            }
+
+            seat.handleKey(kc, true);
+            seat.handleKey(kc, false);
+
+            if (shift) {
+                seat.handleKey(KEY_LEFTSHIFT, false);
+            }
+        }
+    } else if (sscanf(cmd, "scroll %lf", &y) == 1) {
+        seat.handleScroll(y);
+    } else if (sscanf(cmd, "screenshot %63s", a) == 1) {
+        // скриншот содержимого последнего отрендеренного кадра
+        server->renderer->screenshot(a);
+        sysO << "imway: screenshot by command: "_sv << (const char*)a << endL;
+    } else if (!strcmp(cmd, "quit")) {
+        ev_break(server->loop, EVBREAK_ALL);
+    } else {
+        sysE << "imway: unknown command: "_sv << cmd << endL;
+    }
+}
+
+void ControlImpl::handleInput() {
+    char tmp[512];
+
+    for (;;) {
+        ssize_t n = read(fd, tmp, sizeof tmp);
+
+        if (n > 0) {
+            for (ssize_t i = 0; i < n; i++) {
+                if (tmp[i] == '\n') {
+                    line[lineLen] = 0;
+                    lineLen = 0;
+
+                    if (line[0]) {
+                        handleLine(line);
+                    }
+                } else if (lineLen + 1 < sizeof(line)) {
+                    line[lineLen++] = tmp[i];
+                }
+            }
+        } else if (n == 0) {
+            reopen(); // писатель закрыл FIFO
+
+            return;
+        } else {
+            return; // EAGAIN
+        }
+    }
+}
+
+void ControlImpl::reopen() {
+    ev_io_stop(server->loop, &io);
+    close(fd);
+
+    fd = open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+    if (fd < 0) {
+        return;
+    }
+
+    ev_io_init(&io, controlIoCb, fd, EV_READ);
+    io.data = this;
+    ev_io_start(server->loop, &io);
 }
 
 Control::~Control() noexcept {

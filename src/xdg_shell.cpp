@@ -210,79 +210,7 @@ namespace {
         XdgShellState* state = nullptr; // для возврата в ObjList при destroy
 
         // левый-верхний угол попапа в координатах родителя
-        void place(int& outX, int& outY) const {
-            int px = ax, py = ay; // якорная точка на anchor_rect
-
-            switch (anchor) {
-                case XDG_POSITIONER_ANCHOR_TOP:
-                    px += aw / 2;
-                    break;
-                case XDG_POSITIONER_ANCHOR_BOTTOM:
-                    px += aw / 2;
-                    py += ah;
-                    break;
-                case XDG_POSITIONER_ANCHOR_LEFT:
-                    py += ah / 2;
-                    break;
-                case XDG_POSITIONER_ANCHOR_RIGHT:
-                    px += aw;
-                    py += ah / 2;
-                    break;
-                case XDG_POSITIONER_ANCHOR_TOP_LEFT:
-                    break;
-                case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
-                    py += ah;
-                    break;
-                case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
-                    px += aw;
-                    break;
-                case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
-                    px += aw;
-                    py += ah;
-                    break;
-                default: // NONE = центр
-                    px += aw / 2;
-                    py += ah / 2;
-                    break;
-            }
-
-            // gravity: в какую сторону попап растёт от якоря
-            switch (gravity) {
-                case XDG_POSITIONER_GRAVITY_TOP:
-                    px -= w / 2;
-                    py -= h;
-                    break;
-                case XDG_POSITIONER_GRAVITY_BOTTOM:
-                    px -= w / 2;
-                    break;
-                case XDG_POSITIONER_GRAVITY_LEFT:
-                    px -= w;
-                    py -= h / 2;
-                    break;
-                case XDG_POSITIONER_GRAVITY_RIGHT:
-                    py -= h / 2;
-                    break;
-                case XDG_POSITIONER_GRAVITY_TOP_LEFT:
-                    px -= w;
-                    py -= h;
-                    break;
-                case XDG_POSITIONER_GRAVITY_BOTTOM_LEFT:
-                    px -= w;
-                    break;
-                case XDG_POSITIONER_GRAVITY_TOP_RIGHT:
-                    py -= h;
-                    break;
-                case XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT:
-                    break;
-                default: // NONE = центр
-                    px -= w / 2;
-                    py -= h / 2;
-                    break;
-            }
-
-            outX = px + dx;
-            outY = py + dy;
-        }
+        void place(int& outX, int& outY) const;
     };
 
     struct XdgShellState { // user data глобала xdg_wm_base
@@ -515,6 +443,80 @@ namespace {
 
         wl_resource_set_implementation(res, &wmBaseImpl, data, nullptr);
     }
+}
+
+void Positioner::place(int& outX, int& outY) const {
+    int px = ax, py = ay; // якорная точка на anchor_rect
+
+    switch (anchor) {
+        case XDG_POSITIONER_ANCHOR_TOP:
+            px += aw / 2;
+            break;
+        case XDG_POSITIONER_ANCHOR_BOTTOM:
+            px += aw / 2;
+            py += ah;
+            break;
+        case XDG_POSITIONER_ANCHOR_LEFT:
+            py += ah / 2;
+            break;
+        case XDG_POSITIONER_ANCHOR_RIGHT:
+            px += aw;
+            py += ah / 2;
+            break;
+        case XDG_POSITIONER_ANCHOR_TOP_LEFT:
+            break;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
+            py += ah;
+            break;
+        case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
+            px += aw;
+            break;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
+            px += aw;
+            py += ah;
+            break;
+        default: // NONE = центр
+            px += aw / 2;
+            py += ah / 2;
+            break;
+    }
+
+    // gravity: в какую сторону попап растёт от якоря
+    switch (gravity) {
+        case XDG_POSITIONER_GRAVITY_TOP:
+            px -= w / 2;
+            py -= h;
+            break;
+        case XDG_POSITIONER_GRAVITY_BOTTOM:
+            px -= w / 2;
+            break;
+        case XDG_POSITIONER_GRAVITY_LEFT:
+            px -= w;
+            py -= h / 2;
+            break;
+        case XDG_POSITIONER_GRAVITY_RIGHT:
+            py -= h / 2;
+            break;
+        case XDG_POSITIONER_GRAVITY_TOP_LEFT:
+            px -= w;
+            py -= h;
+            break;
+        case XDG_POSITIONER_GRAVITY_BOTTOM_LEFT:
+            px -= w;
+            break;
+        case XDG_POSITIONER_GRAVITY_TOP_RIGHT:
+            py -= h;
+            break;
+        case XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT:
+            break;
+        default: // NONE = центр
+            px -= w / 2;
+            py -= h / 2;
+            break;
+    }
+
+    outX = px + dx;
+    outY = py + dy;
 }
 
 void xdgToplevelConfigureSize(Toplevel& t, int w, int h) {

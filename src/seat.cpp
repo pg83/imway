@@ -46,460 +46,34 @@ namespace {
         Vector<u32> pressedKeys;
         u32 modsDepressed = 0, modsLatched = 0, modsLocked = 0, modsGroup = 0;
 
-        SeatImpl(Server& srv)
-            : server(&srv)
-        {
-            xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-            STD_VERIFY(xkb);
+        SeatImpl(Server& srv);
+        ~SeatImpl() noexcept override;
 
-            keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-            STD_VERIFY(keymap);
-
-            xkbState = xkb_state_new(keymap);
-
-            char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
-
-            keymapSize = (u32)strlen(str) + 1;
-            keymapFd = memfd_create("imway-keymap", 0);
-
-            bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;
-
-            free(str);
-            STD_VERIFY(written); // keymap fd не создался
-        }
-
-        ~SeatImpl() noexcept override {
-            if (keymapFd >= 0) {
-                close(keymapFd);
-            }
-
-            if (xkbState) {
-                xkb_state_unref(xkbState);
-            }
-
-            if (keymap) {
-                xkb_keymap_unref(keymap);
-            }
-
-            if (xkb) {
-                xkb_context_unref(xkb);
-            }
-        }
-
-        bool sameClient(wl_resource* res, Toplevel* t) {
-            return t && t->xdg && t->xdg->surface &&
-                   wl_resource_get_client(res) == wl_resource_get_client(t->xdg->surface->res);
-        }
+        bool sameClient(wl_resource* res, Toplevel* t);
 
         bool sameClientS(wl_resource* res, Surface* s) {
             return s && wl_resource_get_client(res) == wl_resource_get_client(s->res);
         }
 
-        // топовая hovered-поверхность дерева: последняя в порядке отрисовки
-        // (stackBelow → сама → stackAbove) перекрывает предыдущие;
-        // поверхности с input region мимо точки — прозрачны для ввода
-        Surface* pickInTree(Surface& s) {
-            Surface* found = nullptr;
-
-            for (Subsurface* c : s.stackBelow) {
-                if (c->surface && c->surface->hasContent) {
-                    if (Surface* f = pickInTree(*c->surface)) {
-                        found = f;
-                    }
-                }
-            }
-
-            if (s.hovered && s.inputContains(curX - s.imgX, curY - s.imgY)) {
-                found = &s;
-            }
-
-            for (Subsurface* c : s.stackAbove) {
-                if (c->surface && c->surface->hasContent) {
-                    if (Surface* f = pickInTree(*c->surface)) {
-                        found = f;
-                    }
-                }
-            }
-
-            return found;
-        }
-
-        Surface* pickPointerTarget() {
-            // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order
-            // учтён, внутри окна поздние Image перекрывают ранние — берём последний
-            // hovered в дереве). Попапы сверху: последний созданный — самый верхний.
-            for (size_t i = server->popups.length(); i > 0; i--) {
-                Popup* p = server->popups[i - 1];
-
-                if (!p->mapped || !p->xdg || !p->xdg->surface) {
-                    continue;
-                }
-
-                if (Surface* s = pickInTree(*p->xdg->surface)) {
-                    return s;
-                }
-            }
-
-            for (Toplevel* t : server->toplevels) {
-                if (!t->mapped || !t->xdg || !t->xdg->surface) {
-                    continue;
-                }
-
-                if (Surface* s = pickInTree(*t->xdg->surface)) {
-                    return s;
-                }
-            }
-
-            return nullptr;
-        }
-
-        void pointerSetFocus(Surface* s, double sx, double sy) {
-            if (ptrFocus == s) {
-                return;
-            }
-
-            if (ptrFocus) {
-                u32 serial = wl_display_next_serial(server->display);
-
-                for (wl_resource* p : pointers) {
-                    if (sameClientS(p, ptrFocus)) {
-                        wl_pointer_send_leave(p, serial, ptrFocus->res);
-
-                        if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                            wl_pointer_send_frame(p);
-                        }
-                    }
-                }
-            }
-
-            ptrFocus = s;
-
-            if (s) {
-                u32 serial = wl_display_next_serial(server->display);
-
-                for (wl_resource* p : pointers) {
-                    if (sameClientS(p, s)) {
-                        wl_pointer_send_enter(p, serial, s->res, wl_fixed_from_double(sx),
-                                              wl_fixed_from_double(sy));
-
-                        if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                            wl_pointer_send_frame(p);
-                        }
-                    }
-                }
-            }
-        }
-
-        void handleMotion(double x, double y) override {
-            curX = x;
-            curY = y;
-            server->needsFrame = true;
-            ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
-
-            Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
-
-            if (target != ptrFocus) {
-                double sx = target ? x - target->imgX : 0, sy = target ? y - target->imgY : 0;
-
-                pointerSetFocus(target, sx, sy);
-
-                return;
-            }
-
-            if (!ptrFocus) {
-                return;
-            }
-
-            double sx = x - ptrFocus->imgX;
-            double sy = y - ptrFocus->imgY;
-            u32 t = nowMsec();
-
-            for (wl_resource* p : pointers) {
-                if (sameClientS(p, ptrFocus)) {
-                    wl_pointer_send_motion(p, t, wl_fixed_from_double(sx),
-                                           wl_fixed_from_double(sy));
-
-                    if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                        wl_pointer_send_frame(p);
-                    }
-                }
-            }
-        }
-
-        void handleButton(u32 button, bool pressed) override {
-            int imguiBtn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
-
-            server->needsFrame = true;
-            ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
-
-            // hovered-флаги могли освежиться кадрами после последнего motion —
-            // без этого press после одиночного motion уходит мимо клиента
-            if (pressed && buttonsDown == 0) {
-                Surface* target = pickPointerTarget();
-
-                if (target != ptrFocus) {
-                    pointerSetFocus(target, target ? curX - target->imgX : 0,
-                                    target ? curY - target->imgY : 0);
-                }
-            }
-
-            // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
-            if (pressed) {
-                for (size_t i = server->popups.length(); i > 0; i--) {
-                    Popup* p = server->popups[i - 1];
-
-                    if (!p->mapped || !p->grab) {
-                        continue;
-                    }
-
-                    Surface* proot = p->xdg ? p->xdg->surface : nullptr;
-
-                    if (ptrFocus && proot && ptrFocus->rootSurface() == proot) {
-                        break;
-                    }
-
-                    xdgPopupDismiss(*p);
-                }
-            }
-
-            // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
-            if (pressed && ptrFocus) {
-                if (Toplevel* t = ptrFocus->rootToplevel()) {
-                    focusToplevel(t);
-                }
-            }
-
-            if (ptrFocus) {
-                u32 serial = wl_display_next_serial(server->display);
-                u32 t = nowMsec();
-
-                for (wl_resource* p : pointers) {
-                    if (sameClientS(p, ptrFocus)) {
-                        wl_pointer_send_button(p, serial, t, button,
-                                               pressed ? WL_POINTER_BUTTON_STATE_PRESSED
-                                                       : WL_POINTER_BUTTON_STATE_RELEASED);
-
-                        if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                            wl_pointer_send_frame(p);
-                        }
-                    }
-                }
-            }
-
-            buttonsDown += pressed ? 1 : -1;
-
-            if (buttonsDown < 0) {
-                buttonsDown = 0;
-            }
-        }
-
-        void handleScroll(double value) override {
-            server->needsFrame = true;
-            ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
-
-            if (!ptrFocus) {
-                return;
-            }
-
-            u32 t = nowMsec();
-
-            for (wl_resource* p : pointers) {
-                if (sameClientS(p, ptrFocus)) {
-                    wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
-                                         wl_fixed_from_double(value * 15.0));
-
-                    if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
-                        wl_pointer_send_frame(p);
-                    }
-                }
-            }
-        }
-
-        // куда сейчас идёт клавиатура (override > kbFocus)
-        wl_resource* kbTargetRes() {
-            if (kbOverride) {
-                return kbOverride->res;
-            }
-
-            if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
-                return kbFocus->xdg->surface->res;
-            }
-
-            return nullptr;
-        }
-
-        void kbSendLeave(wl_resource* target) {
-            if (!target) {
-                return;
-            }
-
-            u32 serial = wl_display_next_serial(server->display);
-
-            for (wl_resource* k : keyboards) {
-                if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
-                    wl_keyboard_send_leave(k, serial, target);
-                }
-            }
-        }
-
-        void kbSendEnter(wl_resource* target) {
-            if (!target) {
-                return;
-            }
-
-            u32 serial = wl_display_next_serial(server->display);
-            wl_array keys;
-
-            wl_array_init(&keys);
-
-            for (u32 kc : pressedKeys) {
-                *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
-            }
-
-            for (wl_resource* k : keyboards) {
-                if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
-                    wl_keyboard_send_enter(k, serial, target, &keys);
-                    wl_keyboard_send_modifiers(k, wl_display_next_serial(server->display),
-                                               modsDepressed, modsLatched, modsLocked, modsGroup);
-                }
-            }
-
-            wl_array_release(&keys);
-        }
-
-        void updateModifiers() {
-            u32 dep = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_DEPRESSED);
-            u32 lat = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LATCHED);
-            u32 lock = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LOCKED);
-            u32 grp = xkb_state_serialize_layout(xkbState, XKB_STATE_LAYOUT_EFFECTIVE);
-
-            if (dep == modsDepressed && lat == modsLatched && lock == modsLocked &&
-                grp == modsGroup) {
-                return;
-            }
-
-            modsDepressed = dep;
-            modsLatched = lat;
-            modsLocked = lock;
-            modsGroup = grp;
-
-            wl_resource* target = kbTargetRes();
-
-            if (!target) {
-                return;
-            }
-
-            u32 serial = wl_display_next_serial(server->display);
-
-            for (wl_resource* k : keyboards) {
-                if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
-                    wl_keyboard_send_modifiers(k, serial, dep, lat, lock, grp);
-                }
-            }
-        }
-
-        void handleKey(u32 code, bool pressed) override {
-            server->needsFrame = true;
-            xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
-
-            if (pressed) {
-                pressedKeys.pushBack(code);
-            } else {
-                removeOne(pressedKeys, code);
-            }
-
-            if (wl_resource* target = kbTargetRes()) {
-                u32 serial = wl_display_next_serial(server->display);
-                u32 t = nowMsec();
-
-                for (wl_resource* k : keyboards) {
-                    if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
-                        wl_keyboard_send_key(k, serial, t, code,
-                                             pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
-                                                     : WL_KEYBOARD_KEY_STATE_RELEASED);
-                    }
-                }
-            }
-
-            updateModifiers();
-        }
-
-        void focusToplevel(Toplevel* t) override {
-            if (kbFocus == t) {
-                return;
-            }
-
-            if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
-                u32 serial = wl_display_next_serial(server->display);
-
-                for (wl_resource* k : keyboards) {
-                    if (sameClient(k, kbFocus)) {
-                        wl_keyboard_send_leave(k, serial, kbFocus->xdg->surface->res);
-                    }
-                }
-            }
-
-            kbFocus = t;
-
-            if (t && t->xdg && t->xdg->surface) {
-                kbSendEnter(t->xdg->surface->res);
-                sysO << "imway: focus -> "_sv << (const char*)t->title << endL;
-            }
-        }
-
-        void popupGrabStart(Popup* p) override {
-            if (!p->xdg || !p->xdg->surface) {
-                return;
-            }
-
-            kbSendLeave(kbTargetRes());
-            kbOverride = p->xdg->surface;
-            kbSendEnter(kbOverride->res);
-        }
-
-        void popupGone(Popup* p) override {
-            Surface* s = p->xdg ? p->xdg->surface : nullptr;
-
-            if (s && ptrFocus && ptrFocus->rootSurface() == s) {
-                ptrFocus = nullptr;
-                buttonsDown = 0;
-            }
-
-            if (s && kbOverride == s) {
-                kbSendLeave(kbOverride->res);
-                kbOverride = nullptr;
-                kbSendEnter(kbTargetRes()); // клавиатура возвращается toplevel'у
-            }
-        }
-
-        void surfaceGone(Surface* s) override {
-            if (ptrFocus == s) {
-                ptrFocus = nullptr;
-                buttonsDown = 0;
-            }
-        }
-
-        void toplevelGone(Toplevel* t) override {
-            if (ptrFocus && ptrFocus->rootToplevel() == t) {
-                ptrFocus = nullptr;
-                buttonsDown = 0;
-            }
-
-            if (kbFocus == t) {
-                kbFocus = nullptr;
-
-                // отдать фокус последнему замапленному
-                for (size_t i = server->toplevels.length(); i > 0; i--) {
-                    Toplevel* other = server->toplevels[i - 1];
-
-                    if (other != t && other->mapped) {
-                        focusToplevel(other);
-
-                        break;
-                    }
-                }
-            }
-        }
+        Surface* pickInTree(Surface& s);
+        Surface* pickPointerTarget();
+        void pointerSetFocus(Surface* s, double sx, double sy);
+
+        void handleMotion(double x, double y) override;
+        void handleButton(u32 button, bool pressed) override;
+        void handleScroll(double value) override;
+        void handleKey(u32 code, bool pressed) override;
+
+        wl_resource* kbTargetRes();
+        void kbSendLeave(wl_resource* target);
+        void kbSendEnter(wl_resource* target);
+        void updateModifiers();
+
+        void focusToplevel(Toplevel* t) override;
+        void popupGrabStart(Popup* p) override;
+        void popupGone(Popup* p) override;
+        void surfaceGone(Surface* s) override;
+        void toplevelGone(Toplevel* t) override;
     };
 
     // --- wl_pointer / wl_keyboard / wl_touch ресурсы ---
@@ -615,6 +189,455 @@ namespace {
 
         if (version >= WL_SEAT_NAME_SINCE_VERSION) {
             wl_seat_send_name(res, "seat0");
+        }
+    }
+}
+
+SeatImpl::SeatImpl(Server& srv)
+    : server(&srv)
+{
+    xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    STD_VERIFY(xkb);
+
+    keymap = xkb_keymap_new_from_names(xkb, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    STD_VERIFY(keymap);
+
+    xkbState = xkb_state_new(keymap);
+
+    char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+
+    keymapSize = (u32)strlen(str) + 1;
+    keymapFd = memfd_create("imway-keymap", 0);
+
+    bool written = keymapFd >= 0 && write(keymapFd, str, keymapSize) == (ssize_t)keymapSize;
+
+    free(str);
+    STD_VERIFY(written); // keymap fd не создался
+}
+
+SeatImpl::~SeatImpl() noexcept {
+    if (keymapFd >= 0) {
+        close(keymapFd);
+    }
+
+    if (xkbState) {
+        xkb_state_unref(xkbState);
+    }
+
+    if (keymap) {
+        xkb_keymap_unref(keymap);
+    }
+
+    if (xkb) {
+        xkb_context_unref(xkb);
+    }
+}
+
+bool SeatImpl::sameClient(wl_resource* res, Toplevel* t) {
+    return t && t->xdg && t->xdg->surface &&
+           wl_resource_get_client(res) == wl_resource_get_client(t->xdg->surface->res);
+}
+
+// топовая hovered-поверхность дерева: последняя в порядке отрисовки
+// (stackBelow → сама → stackAbove) перекрывает предыдущие;
+// поверхности с input region мимо точки — прозрачны для ввода
+Surface* SeatImpl::pickInTree(Surface& s) {
+    Surface* found = nullptr;
+
+    for (Subsurface* c : s.stackBelow) {
+        if (c->surface && c->surface->hasContent) {
+            if (Surface* f = pickInTree(*c->surface)) {
+                found = f;
+            }
+        }
+    }
+
+    if (s.hovered && s.inputContains(curX - s.imgX, curY - s.imgY)) {
+        found = &s;
+    }
+
+    for (Subsurface* c : s.stackAbove) {
+        if (c->surface && c->surface->hasContent) {
+            if (Surface* f = pickInTree(*c->surface)) {
+                found = f;
+            }
+        }
+    }
+
+    return found;
+}
+
+Surface* SeatImpl::pickPointerTarget() {
+    // hovered-флаги выставлены ImGui в последнем кадре (между окнами z-order
+    // учтён, внутри окна поздние Image перекрывают ранние — берём последний
+    // hovered в дереве). Попапы сверху: последний созданный — самый верхний.
+    for (size_t i = server->popups.length(); i > 0; i--) {
+        Popup* p = server->popups[i - 1];
+
+        if (!p->mapped || !p->xdg || !p->xdg->surface) {
+            continue;
+        }
+
+        if (Surface* s = pickInTree(*p->xdg->surface)) {
+            return s;
+        }
+    }
+
+    for (Toplevel* t : server->toplevels) {
+        if (!t->mapped || !t->xdg || !t->xdg->surface) {
+            continue;
+        }
+
+        if (Surface* s = pickInTree(*t->xdg->surface)) {
+            return s;
+        }
+    }
+
+    return nullptr;
+}
+
+void SeatImpl::pointerSetFocus(Surface* s, double sx, double sy) {
+    if (ptrFocus == s) {
+        return;
+    }
+
+    if (ptrFocus) {
+        u32 serial = wl_display_next_serial(server->display);
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, ptrFocus)) {
+                wl_pointer_send_leave(p, serial, ptrFocus->res);
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+
+    ptrFocus = s;
+
+    if (s) {
+        u32 serial = wl_display_next_serial(server->display);
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, s)) {
+                wl_pointer_send_enter(p, serial, s->res, wl_fixed_from_double(sx),
+                                      wl_fixed_from_double(sy));
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+}
+
+void SeatImpl::handleMotion(double x, double y) {
+    curX = x;
+    curY = y;
+    server->needsFrame = true;
+    ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
+
+    Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
+
+    if (target != ptrFocus) {
+        double sx = target ? x - target->imgX : 0, sy = target ? y - target->imgY : 0;
+
+        pointerSetFocus(target, sx, sy);
+
+        return;
+    }
+
+    if (!ptrFocus) {
+        return;
+    }
+
+    double sx = x - ptrFocus->imgX;
+    double sy = y - ptrFocus->imgY;
+    u32 t = nowMsec();
+
+    for (wl_resource* p : pointers) {
+        if (sameClientS(p, ptrFocus)) {
+            wl_pointer_send_motion(p, t, wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+
+            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(p);
+            }
+        }
+    }
+}
+
+void SeatImpl::handleButton(u32 button, bool pressed) {
+    int imguiBtn = button == BTN_LEFT ? 0 : button == BTN_RIGHT ? 1 : 2;
+
+    server->needsFrame = true;
+    ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
+
+    // hovered-флаги могли освежиться кадрами после последнего motion —
+    // без этого press после одиночного motion уходит мимо клиента
+    if (pressed && buttonsDown == 0) {
+        Surface* target = pickPointerTarget();
+
+        if (target != ptrFocus) {
+            pointerSetFocus(target, target ? curX - target->imgX : 0,
+                            target ? curY - target->imgY : 0);
+        }
+    }
+
+    // grab-попапы: клик мимо — закрыть (каскадно, сверху вниз до попавшего)
+    if (pressed) {
+        for (size_t i = server->popups.length(); i > 0; i--) {
+            Popup* p = server->popups[i - 1];
+
+            if (!p->mapped || !p->grab) {
+                continue;
+            }
+
+            Surface* proot = p->xdg ? p->xdg->surface : nullptr;
+
+            if (ptrFocus && proot && ptrFocus->rootSurface() == proot) {
+                break;
+            }
+
+            xdgPopupDismiss(*p);
+        }
+    }
+
+    // click-to-focus: клавиатурный фокус — toplevel'у корня дерева
+    if (pressed && ptrFocus) {
+        if (Toplevel* t = ptrFocus->rootToplevel()) {
+            focusToplevel(t);
+        }
+    }
+
+    if (ptrFocus) {
+        u32 serial = wl_display_next_serial(server->display);
+        u32 t = nowMsec();
+
+        for (wl_resource* p : pointers) {
+            if (sameClientS(p, ptrFocus)) {
+                wl_pointer_send_button(p, serial, t, button,
+                                       pressed ? WL_POINTER_BUTTON_STATE_PRESSED
+                                               : WL_POINTER_BUTTON_STATE_RELEASED);
+
+                if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                    wl_pointer_send_frame(p);
+                }
+            }
+        }
+    }
+
+    buttonsDown += pressed ? 1 : -1;
+
+    if (buttonsDown < 0) {
+        buttonsDown = 0;
+    }
+}
+
+void SeatImpl::handleScroll(double value) {
+    server->needsFrame = true;
+    ImGui::GetIO().AddMouseWheelEvent(0.f, (float)-value);
+
+    if (!ptrFocus) {
+        return;
+    }
+
+    u32 t = nowMsec();
+
+    for (wl_resource* p : pointers) {
+        if (sameClientS(p, ptrFocus)) {
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL,
+                                 wl_fixed_from_double(value * 15.0));
+
+            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(p);
+            }
+        }
+    }
+}
+
+// куда сейчас идёт клавиатура (override > kbFocus)
+wl_resource* SeatImpl::kbTargetRes() {
+    if (kbOverride) {
+        return kbOverride->res;
+    }
+
+    if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
+        return kbFocus->xdg->surface->res;
+    }
+
+    return nullptr;
+}
+
+void SeatImpl::kbSendLeave(wl_resource* target) {
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(server->display);
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_leave(k, serial, target);
+        }
+    }
+}
+
+void SeatImpl::kbSendEnter(wl_resource* target) {
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(server->display);
+    wl_array keys;
+
+    wl_array_init(&keys);
+
+    for (u32 kc : pressedKeys) {
+        *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
+    }
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_enter(k, serial, target, &keys);
+            wl_keyboard_send_modifiers(k, wl_display_next_serial(server->display), modsDepressed,
+                                       modsLatched, modsLocked, modsGroup);
+        }
+    }
+
+    wl_array_release(&keys);
+}
+
+void SeatImpl::updateModifiers() {
+    u32 dep = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_DEPRESSED);
+    u32 lat = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LATCHED);
+    u32 lock = xkb_state_serialize_mods(xkbState, XKB_STATE_MODS_LOCKED);
+    u32 grp = xkb_state_serialize_layout(xkbState, XKB_STATE_LAYOUT_EFFECTIVE);
+
+    if (dep == modsDepressed && lat == modsLatched && lock == modsLocked && grp == modsGroup) {
+        return;
+    }
+
+    modsDepressed = dep;
+    modsLatched = lat;
+    modsLocked = lock;
+    modsGroup = grp;
+
+    wl_resource* target = kbTargetRes();
+
+    if (!target) {
+        return;
+    }
+
+    u32 serial = wl_display_next_serial(server->display);
+
+    for (wl_resource* k : keyboards) {
+        if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            wl_keyboard_send_modifiers(k, serial, dep, lat, lock, grp);
+        }
+    }
+}
+
+void SeatImpl::handleKey(u32 code, bool pressed) {
+    server->needsFrame = true;
+    xkb_state_update_key(xkbState, code + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+
+    if (pressed) {
+        pressedKeys.pushBack(code);
+    } else {
+        removeOne(pressedKeys, code);
+    }
+
+    if (wl_resource* target = kbTargetRes()) {
+        u32 serial = wl_display_next_serial(server->display);
+        u32 t = nowMsec();
+
+        for (wl_resource* k : keyboards) {
+            if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+                wl_keyboard_send_key(k, serial, t, code,
+                                     pressed ? WL_KEYBOARD_KEY_STATE_PRESSED
+                                             : WL_KEYBOARD_KEY_STATE_RELEASED);
+            }
+        }
+    }
+
+    updateModifiers();
+}
+
+void SeatImpl::focusToplevel(Toplevel* t) {
+    if (kbFocus == t) {
+        return;
+    }
+
+    if (kbFocus && kbFocus->xdg && kbFocus->xdg->surface) {
+        u32 serial = wl_display_next_serial(server->display);
+
+        for (wl_resource* k : keyboards) {
+            if (sameClient(k, kbFocus)) {
+                wl_keyboard_send_leave(k, serial, kbFocus->xdg->surface->res);
+            }
+        }
+    }
+
+    kbFocus = t;
+
+    if (t && t->xdg && t->xdg->surface) {
+        kbSendEnter(t->xdg->surface->res);
+        sysO << "imway: focus -> "_sv << (const char*)t->title << endL;
+    }
+}
+
+void SeatImpl::popupGrabStart(Popup* p) {
+    if (!p->xdg || !p->xdg->surface) {
+        return;
+    }
+
+    kbSendLeave(kbTargetRes());
+    kbOverride = p->xdg->surface;
+    kbSendEnter(kbOverride->res);
+}
+
+void SeatImpl::popupGone(Popup* p) {
+    Surface* s = p->xdg ? p->xdg->surface : nullptr;
+
+    if (s && ptrFocus && ptrFocus->rootSurface() == s) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+
+    if (s && kbOverride == s) {
+        kbSendLeave(kbOverride->res);
+        kbOverride = nullptr;
+        kbSendEnter(kbTargetRes()); // клавиатура возвращается toplevel'у
+    }
+}
+
+void SeatImpl::surfaceGone(Surface* s) {
+    if (ptrFocus == s) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+}
+
+void SeatImpl::toplevelGone(Toplevel* t) {
+    if (ptrFocus && ptrFocus->rootToplevel() == t) {
+        ptrFocus = nullptr;
+        buttonsDown = 0;
+    }
+
+    if (kbFocus == t) {
+        kbFocus = nullptr;
+
+        // отдать фокус последнему замапленному
+        for (size_t i = server->toplevels.length(); i > 0; i--) {
+            Toplevel* other = server->toplevels[i - 1];
+
+            if (other != t && other->mapped) {
+                focusToplevel(other);
+
+                break;
+            }
         }
     }
 }
