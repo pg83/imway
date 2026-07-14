@@ -105,6 +105,22 @@ struct Popup {
     bool grab = false;
 };
 
+enum class CursorKind {
+    unset,
+    hidden,
+    def,
+    text,
+    hand,
+    grab,
+    move,
+    nsResize,
+    ewResize,
+    neswResize,
+    nwseResize,
+    notAllowed,
+    wait,
+};
+
 struct Scene {
     stl::Vector<Surface*> surfaces;
     stl::Vector<Toplevel*> toplevels;
@@ -121,4 +137,8 @@ struct Scene {
     bool drawCursor = false;
 
     Surface* dragIcon = nullptr;
+
+    CursorKind cursorShape = CursorKind::unset;
+    Surface* cursorSurface = nullptr;
+    int cursorHotX = 0, cursorHotY = 0;
 };

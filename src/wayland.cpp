@@ -12,6 +12,7 @@
 
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
+#include <cursor-shape-v1-server-protocol.h>
 #include <primary-selection-unstable-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <viewporter-server-protocol.h>
@@ -716,6 +717,11 @@ namespace {
 
         if (srv->seat.dragTarget == s) {
             srv->seat.dragTarget = nullptr;
+        }
+
+        if (srv->scene->cursorSurface == s) {
+            srv->scene->cursorSurface = nullptr;
+            srv->scene->cursorShape = CursorKind::unset;
         }
 
         detachPendingBuffer(*s);
@@ -2308,13 +2314,133 @@ namespace {
         }
     }
 
+    CursorKind cursorKindFromShape(u32 shape) {
+        switch (shape) {
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT:
+                return CursorKind::text;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER:
+                return CursorKind::hand;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING:
+                return CursorKind::grab;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL:
+                return CursorKind::move;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ROW_RESIZE:
+                return CursorKind::nsResize;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COL_RESIZE:
+                return CursorKind::ewResize;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE:
+                return CursorKind::neswResize;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE:
+                return CursorKind::nwseResize;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NO_DROP:
+                return CursorKind::notAllowed;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_PROGRESS:
+                return CursorKind::wait;
+            default:
+                return CursorKind::def;
+        }
+    }
+
+    void cursorShapeDeviceSetShape(wl_client* client, wl_resource* res, u32, u32 shape) {
+        auto* seat = (SeatState*)wl_resource_get_user_data(res);
+
+        if (!seat || !seat->ptrFocus) {
+            return;
+        }
+
+        if (wl_resource_get_client(resOf(seat->ptrFocus)) != client) {
+            return;
+        }
+
+        Scene* scn = seat->srv->scene;
+
+        scn->cursorSurface = nullptr;
+        scn->cursorShape = cursorKindFromShape(shape);
+        scn->needsFrame = true;
+    }
+
+    const struct wp_cursor_shape_device_v1_interface cursorShapeDeviceImpl = {
+        .destroy = resDestroy,
+        .set_shape = cursorShapeDeviceSetShape,
+    };
+
+    void cursorShapeGetPointer(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
+        wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
+
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(d, &cursorShapeDeviceImpl, wl_resource_get_user_data(pointerRes), nullptr);
+    }
+
+    void cursorShapeGetTabletTool(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
+
+        if (d) {
+            wl_resource_set_implementation(d, &cursorShapeDeviceImpl, nullptr, nullptr);
+        }
+    }
+
+    const struct wp_cursor_shape_manager_v1_interface cursorShapeManagerImpl = {
+        .destroy = resDestroy,
+        .get_pointer = cursorShapeGetPointer,
+        .get_tablet_tool_v2 = cursorShapeGetTabletTool,
+    };
+
+    void cursorShapeManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_cursor_shape_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &cursorShapeManagerImpl, data, nullptr);
+    }
+
     constexpr u32 kSeatVersion = 5;
 
     SeatState* seatOf(wl_resource* res) {
         return (SeatState*)wl_resource_get_user_data(res);
     }
 
-    void pointerSetCursor(wl_client*, wl_resource*, u32, wl_resource*, i32, i32) {
+    void pointerSetCursor(wl_client* client, wl_resource* res, u32, wl_resource* surfRes, i32 hotX, i32 hotY) {
+        SeatState* seat = seatOf(res);
+
+        if (!seat || !seat->ptrFocus) {
+            return;
+        }
+
+        if (wl_resource_get_client(resOf(seat->ptrFocus)) != client) {
+            return;
+        }
+
+        Scene* scn = seat->srv->scene;
+
+        scn->cursorSurface = surfRes ? (Surface*)surfaceFrom(surfRes) : nullptr;
+        scn->cursorShape = surfRes ? CursorKind::unset : CursorKind::hidden;
+        scn->cursorHotX = hotX;
+        scn->cursorHotY = hotY;
+        scn->needsFrame = true;
     }
 
     const struct wl_pointer_interface pointerImpl = {
@@ -2616,6 +2742,8 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     }
 
     ptrFocus = s;
+    srv->scene->cursorShape = CursorKind::unset;
+    srv->scene->cursorSurface = nullptr;
 
     if (s) {
         u32 serial = wl_display_next_serial(srv->display);
@@ -3182,6 +3310,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
+    wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 1, this, cursorShapeManagerBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 
@@ -3217,6 +3346,10 @@ void WaylandImpl::frameShown(u32 msec) {
 
     if (scene->dragIcon) {
         fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon, msec);
+    }
+
+    if (scene->cursorSurface) {
+        fireFrameCallbacks(*(SurfaceImpl*)scene->cursorSurface, msec);
     }
 
     for (Toplevel* tl : scene->toplevels) {

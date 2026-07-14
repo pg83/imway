@@ -1010,6 +1010,40 @@ void RendererImpl::buildUi(Scene& scene) {
         drawSurfaceTreeOverlay(*scene.dragIcon, mp.x + 4, mp.y + 4);
     }
 
+    bool overClient = false;
+
+    for (Surface* s : scene.surfaces) {
+        if (s->hovered) {
+            overClient = true;
+        }
+    }
+
+    if (overClient && scene.cursorSurface && scene.cursorSurface->texture) {
+        ImVec2 mp = ImGui::GetMousePos();
+
+        drawSurfaceTreeOverlay(*scene.cursorSurface, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
+        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    } else if (overClient && scene.cursorShape != CursorKind::unset) {
+        ImGuiMouseCursor c = ImGuiMouseCursor_Arrow;
+
+        switch (scene.cursorShape) {
+            case CursorKind::hidden: c = ImGuiMouseCursor_None; break;
+            case CursorKind::text: c = ImGuiMouseCursor_TextInput; break;
+            case CursorKind::hand: c = ImGuiMouseCursor_Hand; break;
+            case CursorKind::grab: c = ImGuiMouseCursor_Hand; break;
+            case CursorKind::move: c = ImGuiMouseCursor_ResizeAll; break;
+            case CursorKind::nsResize: c = ImGuiMouseCursor_ResizeNS; break;
+            case CursorKind::ewResize: c = ImGuiMouseCursor_ResizeEW; break;
+            case CursorKind::neswResize: c = ImGuiMouseCursor_ResizeNESW; break;
+            case CursorKind::nwseResize: c = ImGuiMouseCursor_ResizeNWSE; break;
+            case CursorKind::notAllowed: c = ImGuiMouseCursor_NotAllowed; break;
+            case CursorKind::wait: c = ImGuiMouseCursor_Wait; break;
+            default: break;
+        }
+
+        ImGui::SetMouseCursor(c);
+    }
+
 }
 
 void RendererImpl::renderFrame(int scanIdx) {

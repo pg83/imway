@@ -87,6 +87,19 @@ add_custom_command(OUTPUT "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c
     COMMAND ${WAYLAND_SCANNER} private-code "${PRIMARY_XML}" "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c"
     DEPENDS "${PRIMARY_XML}")
 
+set(CURSOR_SHAPE_XML "${WAYLAND_PROTOCOLS_DIR}/staging/cursor-shape/cursor-shape-v1.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/cursor-shape-v1-server-protocol.h"
+    COMMAND ${WAYLAND_SCANNER} server-header "${CURSOR_SHAPE_XML}" "${PROTO_DIR}/cursor-shape-v1-server-protocol.h"
+    DEPENDS "${CURSOR_SHAPE_XML}")
+add_custom_command(OUTPUT "${PROTO_DIR}/cursor-shape-v1-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${CURSOR_SHAPE_XML}" "${PROTO_DIR}/cursor-shape-v1-protocol.c"
+    DEPENDS "${CURSOR_SHAPE_XML}")
+
+set(TABLET_XML "${WAYLAND_PROTOCOLS_DIR}/unstable/tablet/tablet-unstable-v2.xml")
+add_custom_command(OUTPUT "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
+    COMMAND ${WAYLAND_SCANNER} private-code "${TABLET_XML}" "${PROTO_DIR}/tablet-unstable-v2-protocol.c"
+    DEPENDS "${TABLET_XML}")
+
 add_library(protocols STATIC
     "${PROTO_DIR}/xdg-shell-protocol.c"
     "${PROTO_DIR}/xdg-shell-server-protocol.h"
@@ -100,7 +113,10 @@ add_library(protocols STATIC
     "${PROTO_DIR}/xdg-decoration-unstable-v1-protocol.c"
     "${PROTO_DIR}/xdg-decoration-unstable-v1-server-protocol.h"
     "${PROTO_DIR}/primary-selection-unstable-v1-protocol.c"
-    "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h")
+    "${PROTO_DIR}/primary-selection-unstable-v1-server-protocol.h"
+    "${PROTO_DIR}/cursor-shape-v1-protocol.c"
+    "${PROTO_DIR}/cursor-shape-v1-server-protocol.h"
+    "${PROTO_DIR}/tablet-unstable-v2-protocol.c")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
 
 # ---- Dear ImGui (vendored) ----
