@@ -109,6 +109,13 @@ namespace {
         ((LibinputSource*)w->data)->inotifyEvents();
     }
 
+    // libinput ships touchpads with tap-to-click off, the compositor opts in
+    void configureDevice(libinput_device* dev) {
+        if (libinput_device_config_tap_get_finger_count(dev) > 0) {
+            libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
+        }
+    }
+
     int drainDeviceAdded(libinput* li) {
         libinput_dispatch(li);
 
@@ -116,6 +123,7 @@ namespace {
 
         while (libinput_event* ev = libinput_get_event(li)) {
             if (libinput_event_get_type(ev) == LIBINPUT_EVENT_DEVICE_ADDED) {
+                configureDevice(libinput_event_get_device(ev));
                 n++;
             }
 
@@ -289,6 +297,9 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_GESTURE_HOLD_END:
                 sink->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
                 break;
+            case LIBINPUT_EVENT_DEVICE_ADDED:
+                configureDevice(libinput_event_get_device(ev));
+                break;
             case LIBINPUT_EVENT_DEVICE_REMOVED: {
                 // free the slot so a re-plugged device can come back
                 if (inoFd >= 0) {
@@ -316,15 +327,20 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_SCROLL_FINGER:
             case LIBINPUT_EVENT_POINTER_SCROLL_CONTINUOUS: {
                 auto* p = libinput_event_get_pointer_event(ev);
+                bool wheel = libinput_event_get_type(ev) == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL;
 
+                // sink units are wheel notches; v120 is only valid for wheels,
+                // finger/continuous values come in scroll units, ~15 per notch
                 double dx = 0, dy = 0;
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
-                    dy = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 120.0;
+                    dy = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 120.0
+                               : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 15.0;
                 }
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
-                    dx = libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 120.0;
+                    dx = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 120.0
+                               : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 15.0;
                 }
 
                 if (dx != 0 || dy != 0) {
