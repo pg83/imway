@@ -23,4 +23,5 @@ struct DeviceVk {
 
 struct ScanoutBuffer {
     VkImage image = VK_NULL_HANDLE;
+    VkFormat format = kVkFormat;
 };

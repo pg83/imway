@@ -25,7 +25,7 @@ using namespace stl;
 
 namespace {
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--list] [-- CMD ARG...]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
     void childCb(struct ev_loop* loop, ev_child* w, int) {
@@ -39,14 +39,15 @@ int main(int argc, char** argv) {
     const char* outputName = nullptr;
     const char* modeStr = nullptr;
     const char* socketName = "imway-0";
-    const char* xkbLayout = nullptr;
-    const char* xkbOptions = nullptr;
+    const char* xkbLayout = "us,ru";
+    const char* xkbOptions = "grp:caps_toggle";
     const char* fontPath = nullptr;
     float uiScale = 1.f;
     const char* screenshotPath = nullptr;
     const char* controlPath = nullptr;
     int framesLimit = 0;
     double dpmsSec = 0;
+    double hdrNits = 0;
     char** cmdArgv = nullptr;
 
     for (int i = 1; i < argc; i++) {
@@ -87,6 +88,8 @@ int main(int argc, char** argv) {
             framesLimit = (int)StringView(next()).stou();
         } else if (arg == "--dpms"_sv) {
             dpmsSec = parseFloat(StringView(next()));
+        } else if (arg == "--hdr"_sv) {
+            hdrNits = parseFloat(StringView(next()));
         } else if (arg == "--screenshot"_sv) {
             screenshotPath = next();
         } else if (arg == "--control"_sv) {
@@ -140,12 +143,12 @@ int main(int argc, char** argv) {
 
         Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, StringView(devicePath) == "auto"_sv ? nullptr : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
 
-        ::Output* output = device->createOutput(outputName, modeStr);
+        ::Output* output = device->createOutput(outputName, modeStr, hdrNits);
 
         scene->outW = output->width();
         scene->outH = output->height();
         scene->hz = output->refresh();
-        scene->drawCursor = kms;
+        scene->drawCursor = kms || getenv("IMWAY_FORCE_CURSOR");
 
         STD_VERIFY(output->start());
 

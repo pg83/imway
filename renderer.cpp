@@ -8,6 +8,7 @@
 #include "util.h"
 
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <time.h>
@@ -120,6 +121,7 @@ namespace {
         int hwHotX = 0, hwHotY = 0;
         bool hwVisible = false;
         int hwKind = -2;               // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
+        int pendingShape = -1;         // shape waiting for end-of-frame rasterization
         Surface* hwSurf = nullptr;
         bool hwSurfStale = false;
         Vector<u32> hwShapeCache[ImGuiMouseCursor_COUNT];
@@ -137,6 +139,7 @@ namespace {
         VkFence curFence = VK_NULL_HANDLE;
 
         int drmFd = -1;
+        VkFormat fmt = kVkFormat;
         bool hasSyncFd = false;
         VkSemaphore syncOut = VK_NULL_HANDLE;
         VkSemaphore syncWaitPool[16] = {};
@@ -158,6 +161,10 @@ namespace {
             hasSyncFd = vk.hasSyncFd;
             drmFd = vk.drmFd;
             setup(scn.outW, scn.outH);
+
+            // before any input arrives the cursor sits at the screen center,
+            // matching the input source's initial position
+            ImGui::GetIO().AddMousePosEvent((float)scn.outW / 2.f, (float)scn.outH / 2.f);
 
             if (out.vsynced()) {
                 ev_prepare_init(&prep, prepareCb);
@@ -183,7 +190,7 @@ namespace {
         void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
-        void createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
+        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
         void shutdown() noexcept;
@@ -192,6 +199,7 @@ namespace {
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
+        void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
         void motion(double x, double y) override {
@@ -292,11 +300,11 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return UINT32_MAX;
 }
 
-void RendererImpl::createImage(int w, int h, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = kVkFormat;
+    ici.format = format;
     ici.extent = {(u32)w, (u32)h, 1};
     ici.mipLevels = 1;
     ici.arrayLayers = 1;
@@ -343,14 +351,18 @@ void RendererImpl::setup(int w, int h) {
     height = h;
     scanout = output->scanoutCount() > 0;
 
+    if (scanout) {
+        fmt = output->scanoutBuffer(0)->format;
+    }
+
     if (!scanout) {
-        createImage(width, height, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
+        createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
         vci.image = target;
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format = kVkFormat;
+        vci.format = fmt;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
     }
@@ -359,7 +371,7 @@ void RendererImpl::setup(int w, int h) {
 
     VkAttachmentDescription att{};
 
-    att.format = kVkFormat;
+    att.format = fmt;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
     att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -389,7 +401,7 @@ void RendererImpl::setup(int w, int h) {
 
             vci.image = output->scanoutBuffer(i)->image;
             vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            vci.format = kVkFormat;
+            vci.format = fmt;
             vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
             VkImageView view = VK_NULL_HANDLE;
@@ -489,6 +501,10 @@ void RendererImpl::setup(int w, int h) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
+    // dragging inside the client area belongs to the client (text selection),
+    // windows move by their title bar only
+    io.ConfigWindowsMoveFromTitleBarOnly = true;
+
     if (uiScale != 1.f) {
         ImGuiStyle& st = ImGui::GetStyle();
 
@@ -516,13 +532,13 @@ void RendererImpl::setup(int w, int h) {
     hwCapH = output->cursorCapH();
 
     if (hwCapW > 0 && hwCapH > 0) {
-        createImage(hwCapW, hwCapH, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
+        createImage(hwCapW, hwCapH, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
 
         VkImageViewCreateInfo cvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
         cvi.image = curImg;
         cvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        cvi.format = kVkFormat;
+        cvi.format = fmt;
         cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curView));
 
@@ -578,7 +594,7 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex->h = s.height;
 
         try {
-            createImage(s.width, s.height, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+            createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
             createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
         } catch (...) {
             sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
@@ -1260,6 +1276,20 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     // B8G8R8A8 bytes match DRM ARGB8888, and rendering onto transparent
     // black with src-alpha blending yields premultiplied pixels
     memcpy(out, curReadbackMap, (size_t)hwCapW * hwCapH * 4);
+
+    if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        // HDR scanout renders 10-bit; the cursor plane wants ARGB8888
+        // (alpha collapses to 4 levels, tolerable on a 1px fringe)
+        for (size_t i = 0; i < (size_t)hwCapW * hwCapH; i++) {
+            u32 v = out[i];
+            u32 a = ((v >> 30) & 3) * 85;
+            u32 r = (v >> 22) & 0xff;
+            u32 g = (v >> 12) & 0xff;
+            u32 b = (v >> 2) & 0xff;
+
+            out[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+    }
 }
 
 void RendererImpl::buildUi(Scene& scene) {
@@ -1433,7 +1463,6 @@ void RendererImpl::buildUi(Scene& scene) {
         drawSurfaceTreeOverlay(*ps, p->parent->imgX + (float)p->x, p->parent->imgY + (float)p->y);
     }
 
-    ImGui::Render();
     if (scene.dragIcon && scene.dragIcon->texture) {
         ImVec2 mp = ImGui::GetMousePos();
 
@@ -1448,6 +1477,14 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
+    // everything below draws into the foreground list, which sits on top of
+    // all windows anyway — and it MUST happen before ImGui::Render(): draw
+    // data totals are snapshotted there, late commands are silently dropped
+    cursorUi(scene, overClient);
+    ImGui::Render();
+}
+
+void RendererImpl::cursorUi(Scene& scene, bool overClient) {
     Surface* cs = overClient && scene.cursorSurface && scene.cursorSurface->texture ? scene.cursorSurface : nullptr;
 
     if (cs) {
@@ -1520,6 +1557,10 @@ void RendererImpl::buildUi(Scene& scene) {
     if (!hwCursor) {
         hwVisible = false;
 
+        if (getenv("IMWAY_DEBUG_CURSOR") && scene.framesDone % 120 == 0) {
+            sysE << "cursor dbg: kind "_sv << kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
+        }
+
         if (kind != ImGuiMouseCursor_None) {
             drawMouseCursor(ImGui::GetForegroundDrawList(), mp, uiScale, kind);
         }
@@ -1542,13 +1583,16 @@ void RendererImpl::buildUi(Scene& scene) {
         Vector<u32>& img = hwShapeCache[kind];
 
         if (!img.length()) {
-            img.zero((size_t)hwCapW * hwCapH);
-            rasterizeShape(kind, img.mutData());
+            // rasterizing goes through the imgui vulkan backend, which must
+            // not run mid-frame (on the very first frame it is not even
+            // initialized yet and produces an empty image): defer to the
+            // end of renderFrame
+            pendingShape = kind;
+        } else {
+            output->setCursorImage(img.data());
+            hwKind = kind;
+            hwSurf = nullptr;
         }
-
-        output->setCursorImage(img.data());
-        hwKind = kind;
-        hwSurf = nullptr;
     }
 
     hwHotX = hwCapW / 2;
@@ -1729,6 +1773,26 @@ void RendererImpl::renderFrame(int scanIdx) {
             close(outFd);
         }
     }
+
+    if (pendingShape >= 0) {
+        int kind = pendingShape;
+
+        pendingShape = -1;
+
+        if (hwCursorReady && output->cursorCapW() > 0) {
+            Vector<u32>& img = hwShapeCache[kind];
+
+            if (!img.length()) {
+                img.zero((size_t)hwCapW * hwCapH);
+                rasterizeShape(kind, img.mutData());
+            }
+
+            output->setCursorImage(img.data());
+            hwKind = kind;
+            hwSurf = nullptr;
+            scene->needsFrame = true;
+        }
+    }
 }
 
 bool RendererImpl::screenshot(const char* path) {
@@ -1790,10 +1854,20 @@ bool RendererImpl::screenshot(const char* path) {
     for (int y = 0; y < height; y++) {
         const unsigned char* src = px + (size_t)y * width * 4;
 
-        for (int x = 0; x < width; x++) {
-            row.mut(x * 3 + 0) = src[x * 4 + 2];
-            row.mut(x * 3 + 1) = src[x * 4 + 1];
-            row.mut(x * 3 + 2) = src[x * 4 + 0];
+        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            const u32* p = (const u32*)src;
+
+            for (int x = 0; x < width; x++) {
+                row.mut(x * 3 + 0) = (u8)((p[x] >> 22) & 0xff);
+                row.mut(x * 3 + 1) = (u8)((p[x] >> 12) & 0xff);
+                row.mut(x * 3 + 2) = (u8)((p[x] >> 2) & 0xff);
+            }
+        } else {
+            for (int x = 0; x < width; x++) {
+                row.mut(x * 3 + 0) = src[x * 4 + 2];
+                row.mut(x * 3 + 1) = src[x * 4 + 1];
+                row.mut(x * 3 + 2) = src[x * 4 + 0];
+            }
         }
 
         writeAll(row.data(), row.length());

@@ -10,6 +10,7 @@
 #include <ev.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -331,6 +332,66 @@ namespace {
         return id;
     }
 
+    u64 getPropValue(int fd, u32 objId, u32 objType, const char* name, u64 def) {
+        drmModeObjectProperties* props = drmModeObjectGetProperties(fd, objId, objType);
+
+        if (!props) {
+            return def;
+        }
+
+        u64 value = def;
+
+        for (u32 i = 0; i < props->count_props; i++) {
+            drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
+
+            if (p) {
+                if (StringView(p->name) == StringView(name)) {
+                    value = props->prop_values[i];
+                }
+
+                drmModeFreeProperty(p);
+            }
+        }
+
+        drmModeFreeObjectProperties(props);
+
+        return value;
+    }
+
+    bool getEnumProp(int fd, u32 objId, u32 objType, const char* name, const char* valueName, u32* propId, u64* value) {
+        drmModeObjectProperties* props = drmModeObjectGetProperties(fd, objId, objType);
+
+        if (!props) {
+            return false;
+        }
+
+        bool found = false;
+
+        for (u32 i = 0; i < props->count_props && !found; i++) {
+            drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
+
+            if (!p) {
+                continue;
+            }
+
+            if (StringView(p->name) == StringView(name)) {
+                for (int e = 0; e < p->count_enums; e++) {
+                    if (StringView(p->enums[e].name) == StringView(valueName)) {
+                        *propId = p->prop_id;
+                        *value = p->enums[e].value;
+                        found = true;
+                    }
+                }
+            }
+
+            drmModeFreeProperty(p);
+        }
+
+        drmModeFreeObjectProperties(props);
+
+        return found;
+    }
+
     u32 planeModifiers(int fd, u32 planeId, u32 fourcc, u64* out, u32 max) {
         u32 propId = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "IN_FORMATS");
         u32 n = 0;
@@ -412,18 +473,18 @@ namespace {
         sb = ScanBuf{};
     }
 
-    bool createScanBuf(const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, ScanBuf& sb) {
+    bool createScanBuf(const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, VkFormat vkFmt, u32 fourcc, ScanBuf& sb) {
         VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
         VkFormatProperties2 fprops{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
 
         fprops.pNext = &modList;
-        vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &fprops);
+        vkGetPhysicalDeviceFormatProperties2(vk.phys, vkFmt, &fprops);
 
         Vector<VkDrmFormatModifierPropertiesEXT> vkMods;
 
         vkMods.zero(modList.drmFormatModifierCount);
         modList.pDrmFormatModifierProperties = vkMods.mutData();
-        vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &fprops);
+        vkGetPhysicalDeviceFormatProperties2(vk.phys, vkFmt, &fprops);
 
         Vector<u64> cands;
 
@@ -461,7 +522,7 @@ namespace {
             VkPhysicalDeviceImageFormatInfo2 ifi{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
 
             ifi.pNext = &extInfo;
-            ifi.format = kVkFormat;
+            ifi.format = vkFmt;
             ifi.type = VK_IMAGE_TYPE_2D;
             ifi.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
             ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -502,7 +563,7 @@ namespace {
 
         ici.pNext = &extCreate;
         ici.imageType = VK_IMAGE_TYPE_2D;
-        ici.format = kVkFormat;
+        ici.format = vkFmt;
         ici.extent = {(u32)w, (u32)h, 1};
         ici.mipLevels = 1;
         ici.arrayLayers = 1;
@@ -594,12 +655,14 @@ namespace {
         u32 offsets[4] = {(u32)layout.offset};
         u64 modifiers[4] = {chosen.drmFormatModifier};
 
-        if (drmModeAddFB2WithModifiers(fd, w, h, DRM_FORMAT_XRGB8888, handles, pitches, offsets, modifiers, &sb.fbId, DRM_MODE_FB_MODIFIERS) != 0) {
+        if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pitches, offsets, modifiers, &sb.fbId, DRM_MODE_FB_MODIFIERS) != 0) {
             sysE << "imway: scanout: AddFB2WithModifiers failed, errno "_sv << errno << endL;
             destroyScanBuf(vk, fd, sb);
 
             return false;
         }
+
+        sb.pub.format = vkFmt;
 
         return true;
     }
@@ -627,6 +690,13 @@ namespace {
         u32 plSrcX = 0, plSrcY = 0, plSrcW = 0, plSrcH = 0;
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
+        double hdrNits = 0;
+        bool hdrActive = false;
+        u32 connColorspace = 0, connHdrMeta = 0;
+        u64 colorspaceBt2020 = 0;
+        u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
+        u32 hdrMetaBlob = 0, degammaBlob = 0, ctmBlob = 0, gammaBlob = 0;
+
         u32 cursorPlaneId = 0;
         u32 cuFbId = 0, cuCrtcId = 0;
         u32 cuSrcX = 0, cuSrcY = 0, cuSrcW = 0, cuSrcH = 0;
@@ -645,7 +715,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr);
+        KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -664,6 +734,7 @@ namespace {
         }
 
         void pickPipe(const char* connector, const char* modeStr);
+        bool setupHdr();
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor);
         bool commit(u32 fbId, bool doModeset);
@@ -763,8 +834,8 @@ namespace {
             return formats[i];
         }
 
-        ::Output* createOutput(const char* connector, const char* modeStr) override {
-            output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr);
+        ::Output* createOutput(const char* connector, const char* modeStr, double hdrNits) override {
+            output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr, hdrNits);
 
             return output;
         }
@@ -871,7 +942,7 @@ namespace {
             return formats[i];
         }
 
-        ::Output* createOutput(const char*, const char* modeStr) override;
+        ::Output* createOutput(const char*, const char* modeStr, double hdrNits) override;
 
         Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) override {
             return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
@@ -1024,7 +1095,7 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr) : fd(drmFd), vk(v) {
+KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits) : fd(drmFd), vk(v), hdrNits(hdrWhiteNits) {
     session.addListener(this);
     pickPipe(connector, modeStr);
 
@@ -1078,12 +1149,27 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
 
     drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob);
 
+    u32 scanFourcc = DRM_FORMAT_XRGB8888;
+    VkFormat scanVk = kVkFormat;
+
+    if (hdrNits > 0) {
+        if (setupHdr()) {
+            hdrActive = true;
+            scanFourcc = DRM_FORMAT_XRGB2101010;
+            scanVk = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+            sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv << hdrNits << " nits"_sv << endL;
+        } else {
+            sysE << "imway: HDR unsupported here, staying SDR"_sv << endL;
+            hdrNits = 0;
+        }
+    }
+
     if (vk.hasDmabuf) {
         u64 mods[64];
-        u32 nmods = planeModifiers(fd, planeId, DRM_FORMAT_XRGB8888, mods, 64);
+        u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
 
         for (auto& sb : scan) {
-            if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, sb)) {
+            if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
                 scanCount++;
             } else {
                 break;
@@ -1144,6 +1230,12 @@ KmsOutput::~KmsOutput() noexcept {
 
     if (modeBlob) {
         drmModeDestroyPropertyBlob(fd, modeBlob);
+    }
+
+    for (u32 blob : {hdrMetaBlob, degammaBlob, ctmBlob, gammaBlob}) {
+        if (blob) {
+            drmModeDestroyPropertyBlob(fd, blob);
+        }
     }
 }
 
@@ -1285,6 +1377,96 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
     STD_VERIFY(planeId);
 }
 
+// SDR desktop on an HDR display: the whole transform runs on the DCN scanout
+// pipeline, the renderer keeps producing plain sRGB. DEGAMMA_LUT decodes sRGB
+// to linear, CTM rotates BT.709 primaries into BT.2020, GAMMA_LUT maps linear
+// [0..1] to PQ with 1.0 pinned at hdrNits — that knob is the macOS-style
+// "sdr white" brightness
+bool KmsOutput::setupHdr() {
+    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "BT2020_RGB", &connColorspace, &colorspaceBt2020)) {
+        sysE << "imway: hdr: connector has no Colorspace/BT2020_RGB"_sv << endL;
+
+        return false;
+    }
+
+    connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
+    crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
+    crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
+    crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
+
+    u64 degSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT_SIZE", 0);
+    u64 gamSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", 0);
+
+    if (!connHdrMeta || !crtcDegammaProp || !crtcCtmProp || !crtcGammaProp || !degSize || !gamSize) {
+        sysE << "imway: hdr: missing kms props (meta "_sv << connHdrMeta << ", degamma "_sv << crtcDegammaProp << "/"_sv << degSize << ", ctm "_sv << crtcCtmProp << ", gamma "_sv << crtcGammaProp << "/"_sv << gamSize << ")"_sv << endL;
+
+        return false;
+    }
+
+    u64 mods[64];
+
+    if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, mods, 64) == 0) {
+        sysE << "imway: hdr: primary plane has no XRGB2101010"_sv << endL;
+
+        return false;
+    }
+
+    hdr_output_metadata meta{};
+
+    meta.metadata_type = 0;
+    meta.hdmi_metadata_type1.metadata_type = 0;
+    meta.hdmi_metadata_type1.eotf = 2; // SMPTE ST 2084 (PQ)
+    // BT.2020 primaries in 0.00002 units, R/G/B then D65 white
+    meta.hdmi_metadata_type1.display_primaries[0] = {35400, 14600};
+    meta.hdmi_metadata_type1.display_primaries[1] = {8500, 39850};
+    meta.hdmi_metadata_type1.display_primaries[2] = {6550, 2300};
+    meta.hdmi_metadata_type1.white_point = {15635, 16450};
+    meta.hdmi_metadata_type1.max_display_mastering_luminance = 1000; // 1 nit units
+    meta.hdmi_metadata_type1.min_display_mastering_luminance = 1;    // 0.0001 nit units
+    meta.hdmi_metadata_type1.max_cll = 1000;
+    meta.hdmi_metadata_type1.max_fall = 400;
+    drmModeCreatePropertyBlob(fd, &meta, sizeof(meta), &hdrMetaBlob);
+
+    Vector<drm_color_lut> lut;
+
+    lut.zero((size_t)degSize);
+
+    for (u64 i = 0; i < degSize; i++) {
+        double x = (double)i / (double)(degSize - 1);
+        double lin = x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
+        u16 v = (u16)(lin * 65535.0 + 0.5);
+
+        lut.mut(i) = {v, v, v, 0};
+    }
+
+    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(degSize * sizeof(drm_color_lut)), &degammaBlob);
+
+    // BT.709 -> BT.2020, S31.32 fixed point (all coefficients positive)
+    static const double m709to2020[9] = {0.627404, 0.329283, 0.043313, 0.069097, 0.919540, 0.011362, 0.016391, 0.088013, 0.895595};
+    drm_color_ctm ctm{};
+
+    for (int i = 0; i < 9; i++) {
+        ctm.matrix[i] = (u64)(m709to2020[i] * 4294967296.0 + 0.5);
+    }
+
+    drmModeCreatePropertyBlob(fd, &ctm, sizeof(ctm), &ctmBlob);
+
+    lut.zero((size_t)gamSize);
+
+    for (u64 i = 0; i < gamSize; i++) {
+        double y = (double)i / (double)(gamSize - 1) * hdrNits / 10000.0;
+        double ym = pow(y, 0.1593017578125);
+        double pq = pow((0.8359375 + 18.8515625 * ym) / (1.0 + 18.6875 * ym), 78.84375);
+        u16 v = (u16)(pq * 65535.0 + 0.5);
+
+        lut.mut(i) = {v, v, v, 0};
+    }
+
+    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamSize * sizeof(drm_color_lut)), &gammaBlob);
+
+    return hdrMetaBlob && degammaBlob && ctmBlob && gammaBlob;
+}
+
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     drm_mode_create_dumb create{};
 
@@ -1317,6 +1499,14 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
         drmModeAtomicAddProperty(req, connectorId, connCrtcId, crtcId);
         drmModeAtomicAddProperty(req, crtcId, crtcModeId, modeBlob);
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 1);
+
+        if (hdrActive) {
+            drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
+            drmModeAtomicAddProperty(req, connectorId, connHdrMeta, hdrMetaBlob);
+            drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, degammaBlob);
+            drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, ctmBlob);
+            drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+        }
     }
 
     drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
@@ -1330,8 +1520,15 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
     drmModeAtomicAddProperty(req, planeId, plCrtcW, mode.hdisplay);
     drmModeAtomicAddProperty(req, planeId, plCrtcH, mode.vdisplay);
 
-    if (withCursor && cursorPlaneId && cursorEnabled) {
-        addCursorProps(req);
+    if (cursorPlaneId && cursorEnabled) {
+        if (withCursor) {
+            addCursorProps(req);
+        } else {
+            // shut the plane off explicitly, otherwise the kernel keeps
+            // scanning out the last cursor state — a frozen cursor on screen
+            drmModeAtomicAddProperty(req, cursorPlaneId, cuFbId, 0);
+            drmModeAtomicAddProperty(req, cursorPlaneId, cuCrtcId, 0);
+        }
     }
 
     u32 flags = DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
@@ -1601,7 +1798,7 @@ HeadlessDevice::~HeadlessDevice() noexcept {
     }
 }
 
-::Output* HeadlessDevice::createOutput(const char*, const char* modeStr) {
+::Output* HeadlessDevice::createOutput(const char*, const char* modeStr, double) {
     ModeSpec m{1280, 800, 60};
 
     if (modeStr) {

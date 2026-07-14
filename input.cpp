@@ -7,6 +7,7 @@
 #include <ev.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/inotify.h>
 #include <unistd.h>
 
 #include <libinput.h>
@@ -39,8 +40,33 @@ namespace {
         ev_io io{};
         double relX = 0, relY = 0;
 
+        // path-backend hotplug: inotify on /dev/input, one bit per eventN
+        int inoFd = -1;
+        ev_io inoIo{};
+        u64 pathBits = 0;
+
         LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn);
         ~LibinputSource() noexcept;
+
+        bool pathAdd(int n) {
+            if (n < 0 || n >= 64 || (pathBits & (1ull << n))) {
+                return false;
+            }
+
+            CStr<64> p;
+
+            p << "/dev/input/event"_sv << n;
+
+            if (!libinput_path_add_device(li, p.cStr())) {
+                return false;
+            }
+
+            pathBits |= 1ull << n;
+
+            return true;
+        }
+
+        void inotifyEvents();
 
         void sessionEnabled() override {
             libinput_resume(li);
@@ -79,6 +105,10 @@ namespace {
         ((LibinputSource*)w->data)->dispatch();
     }
 
+    void inotifyCb(struct ev_loop*, ev_io* w, int) {
+        ((LibinputSource*)w->data)->inotifyEvents();
+    }
+
     int drainDeviceAdded(libinput* li) {
         libinput_dispatch(li);
 
@@ -107,19 +137,23 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
 
     if (devices == 0) {
         // empty udev db (no udevd running): enumeration finds nothing,
-        // open /dev/input/event* directly; no input hotplug in this mode
+        // open /dev/input/event* directly, hotplug via inotify below
         libinput_unref(li);
         li = libinput_path_create_context(&liIface, this);
         STD_VERIFY(li);
 
         for (int i = 0; i < 64; i++) {
-            CStr<64> p;
-
-            p << "/dev/input/event"_sv << i;
-
-            if (libinput_path_add_device(li, p.cStr())) {
+            if (pathAdd(i)) {
                 devices++;
             }
+        }
+
+        inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+
+        if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB) >= 0) {
+            ev_io_init(&inoIo, inotifyCb, inoFd, EV_READ);
+            inoIo.data = this;
+            ev_io_start(loop, &inoIo);
         }
     }
 
@@ -132,7 +166,46 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
     sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }
 
+void LibinputSource::inotifyEvents() {
+    alignas(8) char buf[4096];
+
+    for (;;) {
+        ssize_t n = read(inoFd, buf, sizeof(buf));
+
+        if (n <= 0) {
+            return;
+        }
+
+        for (ssize_t off = 0; off < n;) {
+            auto* e = (const inotify_event*)(buf + off);
+
+            off += (ssize_t)sizeof(inotify_event) + e->len;
+
+            if (!e->len) {
+                continue;
+            }
+
+            StringView name(e->name);
+
+            if (!name.startsWith("event"_sv)) {
+                continue;
+            }
+
+            int idx = (int)StringView(name.begin() + 5, name.end()).stou();
+
+            if (pathAdd(idx)) {
+                sysO << "imway: input device event"_sv << idx << " plugged"_sv << endL;
+            }
+        }
+    }
+}
+
 LibinputSource::~LibinputSource() noexcept {
+    if (inoFd >= 0) {
+        ev_io_stop(loop, &inoIo);
+        close(inoFd);
+    }
+
     if (li) {
         ev_io_stop(loop, &io);
         libinput_unref(li);
@@ -216,6 +289,22 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_GESTURE_HOLD_END:
                 sink->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
                 break;
+            case LIBINPUT_EVENT_DEVICE_REMOVED: {
+                // free the slot so a re-plugged device can come back
+                if (inoFd >= 0) {
+                    StringView sys(libinput_device_get_sysname(libinput_event_get_device(ev)));
+
+                    if (sys.startsWith("event"_sv)) {
+                        int idx = (int)StringView(sys.begin() + 5, sys.end()).stou();
+
+                        if (idx >= 0 && idx < 64) {
+                            pathBits &= ~(1ull << idx);
+                        }
+                    }
+                }
+
+                break;
+            }
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
