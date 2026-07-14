@@ -15,6 +15,15 @@ pkg_check_modules(INPUT          REQUIRED IMPORTED_TARGET libinput)
 pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
 
+# велосипедная стандартная библиотека (github.com/pg83/std), собирается make'ом
+set(STD_ROOT "" CACHE PATH "корень репозитория std (libstd.a должен быть собран)")
+if(NOT STD_ROOT)
+    message(FATAL_ERROR "нужен -DSTD_ROOT=/path/to/std")
+endif()
+add_library(pgstd STATIC IMPORTED)
+set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_ROOT}/std/libstd.a")
+target_include_directories(pgstd INTERFACE "${STD_ROOT}")
+
 # libev не ставит pkg-config файл
 find_library(EV_LIBRARY ev REQUIRED)
 find_path(EV_INCLUDE_DIR ev.h REQUIRED)
@@ -112,6 +121,7 @@ add_executable(imway
 target_link_libraries(imway PRIVATE
     imgui
     protocols
+    pgstd
     Vulkan::Vulkan
     PkgConfig::WAYLAND_SERVER
     PkgConfig::DRM
