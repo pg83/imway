@@ -16,6 +16,8 @@ struct FrameListener;
 struct Session;
 
 struct Device {
+    virtual unsigned long long renderDevice() const = 0;
+
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;
 

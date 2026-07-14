@@ -31,6 +31,7 @@ struct SurfaceTexture {
     int w = 0, h = 0;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkDeviceMemory extraMemory[3] = {};
     VkImageView view = VK_NULL_HANDLE;
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
@@ -572,6 +573,12 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
         ImGui_ImplVulkan_RemoveTexture(tex->ds);
     }
 
+    for (VkDeviceMemory m : tex->extraMemory) {
+        if (m) {
+            vkFreeMemory(device, m, nullptr);
+        }
+    }
+
     if (tex->view) {
         vkDestroyImageView(device, tex->view, nullptr);
     }
@@ -603,7 +610,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    if (b->nplanes != 1) {
+    if (b->nplanes < 1 || b->nplanes > kDmabufMaxPlanes) {
         return false;
     }
 
@@ -625,17 +632,24 @@ bool RendererImpl::importDmabuf(Surface& s) {
     tex->h = b->height;
     tex->external = true;
 
-    VkSubresourceLayout plane{};
+    VkSubresourceLayout planes[kDmabufMaxPlanes] = {};
+    bool disjoint = false;
 
-    plane.offset = b->offsets[0];
-    plane.rowPitch = b->strides[0];
+    for (int i = 0; i < b->nplanes; i++) {
+        planes[i].offset = b->offsets[i];
+        planes[i].rowPitch = b->strides[i];
+
+        if (b->fds[i] != b->fds[0]) {
+            disjoint = true;
+        }
+    }
 
     VkImageDrmFormatModifierExplicitCreateInfoEXT modInfo{
         VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT};
 
     modInfo.drmFormatModifier = b->modifier;
-    modInfo.drmFormatModifierPlaneCount = 1;
-    modInfo.pPlaneLayouts = &plane;
+    modInfo.drmFormatModifierPlaneCount = (u32)b->nplanes;
+    modInfo.pPlaneLayouts = planes;
 
     VkExternalMemoryImageCreateInfo extInfo{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
 
@@ -655,6 +669,10 @@ bool RendererImpl::importDmabuf(Surface& s) {
     ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
+    if (disjoint) {
+        ici.flags |= VK_IMAGE_CREATE_DISJOINT_BIT;
+    }
+
     if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
         sysE << "imway: dmabuf vkCreateImage failed"_sv << endL;
         textureAlloc->release(tex);
@@ -662,54 +680,127 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    int fd = dup(b->fds[0]);
-    VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+    auto pickType = [&](u32 bits, int fd) -> u32 {
+        VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
-    if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) != VK_SUCCESS) {
-        sysE << "imway: vkGetMemoryFdPropertiesKHR failed"_sv << endL;
-        close(fd);
-        vkDestroyImage(device, tex->image, nullptr);
-        textureAlloc->release(tex);
-
-        return false;
-    }
-
-    VkMemoryRequirements req{};
-
-    vkGetImageMemoryRequirements(device, tex->image, &req);
-
-    u32 typeBits = req.memoryTypeBits & fdProps.memoryTypeBits;
-    u32 memType = UINT32_MAX;
-
-    for (u32 i = 0; i < 32 && memType == UINT32_MAX; i++) {
-        if (typeBits & (1u << i)) {
-            memType = i;
+        if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) != VK_SUCCESS) {
+            return UINT32_MAX;
         }
+
+        u32 typeBits = bits & fdProps.memoryTypeBits;
+
+        for (u32 i = 0; i < 32; i++) {
+            if (typeBits & (1u << i)) {
+                return i;
+            }
+        }
+
+        return UINT32_MAX;
+    };
+
+    bool bound = false;
+
+    if (!disjoint) {
+        int fd = dup(b->fds[0]);
+        VkMemoryRequirements req{};
+
+        vkGetImageMemoryRequirements(device, tex->image, &req);
+
+        u32 memType = pickType(req.memoryTypeBits, fd);
+
+        VkImportMemoryFdInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+
+        importInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        importInfo.fd = fd;
+
+        VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+
+        dedicated.image = tex->image;
+        dedicated.pNext = &importInfo;
+
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.pNext = &dedicated;
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = memType;
+        bound = memType != UINT32_MAX && vkAllocateMemory(device, &mai, nullptr, &tex->memory) == VK_SUCCESS && vkBindImageMemory(device, tex->image, tex->memory, 0) == VK_SUCCESS;
+
+        if (!bound) {
+            close(fd);
+        }
+    } else {
+        constexpr VkImageAspectFlagBits kPlaneAspects[kDmabufMaxPlanes] = {VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT};
+        VkBindImageMemoryInfo binds[kDmabufMaxPlanes] = {};
+        VkBindImagePlaneMemoryInfo planeInfos[kDmabufMaxPlanes] = {};
+
+        bound = true;
+
+        for (int i = 0; i < b->nplanes && bound; i++) {
+            VkImagePlaneMemoryRequirementsInfo planeReq{VK_STRUCTURE_TYPE_IMAGE_PLANE_MEMORY_REQUIREMENTS_INFO};
+
+            planeReq.planeAspect = kPlaneAspects[i];
+
+            VkImageMemoryRequirementsInfo2 ri{VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2};
+
+            ri.pNext = &planeReq;
+            ri.image = tex->image;
+
+            VkMemoryRequirements2 req2{VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+
+            vkGetImageMemoryRequirements2(device, &ri, &req2);
+
+            int fd = dup(b->fds[i]);
+            u32 memType = pickType(req2.memoryRequirements.memoryTypeBits, fd);
+
+            VkImportMemoryFdInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+
+            importInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+            importInfo.fd = fd;
+
+            VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+            mai.pNext = &importInfo;
+            mai.allocationSize = req2.memoryRequirements.size;
+            mai.memoryTypeIndex = memType;
+
+            VkDeviceMemory mem = VK_NULL_HANDLE;
+
+            if (memType == UINT32_MAX || vkAllocateMemory(device, &mai, nullptr, &mem) != VK_SUCCESS) {
+                close(fd);
+                bound = false;
+
+                break;
+            }
+
+            if (i == 0) {
+                tex->memory = mem;
+            } else {
+                tex->extraMemory[i - 1] = mem;
+            }
+
+            planeInfos[i].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_PLANE_MEMORY_INFO;
+            planeInfos[i].planeAspect = kPlaneAspects[i];
+            binds[i].sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO;
+            binds[i].pNext = &planeInfos[i];
+            binds[i].image = tex->image;
+            binds[i].memory = mem;
+        }
+
+        bound = bound && vkBindImageMemory2(device, (u32)b->nplanes, binds) == VK_SUCCESS;
     }
 
-    VkImportMemoryFdInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
-
-    importInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
-    importInfo.fd = fd;
-
-    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
-
-    dedicated.image = tex->image;
-    dedicated.pNext = &importInfo;
-
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-
-    mai.pNext = &dedicated;
-    mai.allocationSize = req.size;
-    mai.memoryTypeIndex = memType;
-
-    if (memType == UINT32_MAX || vkAllocateMemory(device, &mai, nullptr, &tex->memory) != VK_SUCCESS || vkBindImageMemory(device, tex->image, tex->memory, 0) != VK_SUCCESS) {
-        sysE << "imway: dmabuf memory import failed"_sv << endL;
-        close(fd);
+    if (!bound) {
+        sysE << "imway: dmabuf memory import failed ("_sv << b->nplanes << " planes)"_sv << endL;
         vkDestroyImage(device, tex->image, nullptr);
 
         if (tex->memory) {
             vkFreeMemory(device, tex->memory, nullptr);
+        }
+
+        for (VkDeviceMemory m : tex->extraMemory) {
+            if (m) {
+                vkFreeMemory(device, m, nullptr);
+            }
         }
 
         textureAlloc->release(tex);

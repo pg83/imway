@@ -19,6 +19,7 @@ struct WaylandConfig {
     const char* xkbOptions = nullptr;
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;
+    unsigned long long mainDevice = 0;
 };
 
 struct Wayland {

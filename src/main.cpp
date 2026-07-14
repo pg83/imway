@@ -131,6 +131,7 @@ int main(int argc, char** argv) {
         wcfg.xkbOptions = xkbOptions;
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
+        wcfg.mainDevice = device->renderDevice();
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
 

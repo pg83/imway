@@ -148,6 +148,20 @@ namespace {
         vkGetPhysicalDeviceProperties(vk.phys, &props);
         sysO << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
 
+        if (hasExt(vk.phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
+            VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+            VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+
+            p2.pNext = &drm;
+            vkGetPhysicalDeviceProperties2(vk.phys, &p2);
+
+            if (drm.hasRender) {
+                vk.renderDev = makedev((u32)drm.renderMajor, (u32)drm.renderMinor);
+            } else if (drm.hasPrimary) {
+                vk.renderDev = makedev((u32)drm.primaryMajor, (u32)drm.primaryMinor);
+            }
+        }
+
         u32 qn = 0;
 
         vkGetPhysicalDeviceQueueFamilyProperties(vk.phys, &qn, nullptr);
@@ -242,7 +256,7 @@ namespace {
         vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &props);
 
         for (const auto& m : mods) {
-            if (m.drmFormatModifierPlaneCount != 1) {
+            if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes) {
                 continue;
             }
 
@@ -680,6 +694,10 @@ namespace {
         KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
         ~KmsDevice() noexcept;
 
+        unsigned long long renderDevice() const override {
+            return vk.renderDev;
+        }
+
         size_t dmabufFormatCount() const override {
             return formats.length();
         }
@@ -759,6 +777,10 @@ namespace {
 
         HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
         ~HeadlessDevice() noexcept;
+
+        unsigned long long renderDevice() const override {
+            return vk.renderDev;
+        }
 
         size_t dmabufFormatCount() const override {
             return formats.length();

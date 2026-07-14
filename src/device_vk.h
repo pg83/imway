@@ -15,6 +15,7 @@ struct DeviceVk {
     u32 queueFamily = 0;
     VkQueue queue = VK_NULL_HANDLE;
     bool hasDmabuf = false;
+    u64 renderDev = 0;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 };
 

@@ -6,6 +6,7 @@
 #include "scene.h"
 #include "util.h"
 
+#include <fcntl.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -225,6 +226,9 @@ namespace {
         const char* xkbLayout = nullptr;
         const char* xkbOptions = nullptr;
         Vector<DmabufFormat> formats;
+        u64 mainDevice = 0;
+        int fbTableFd = -1;
+        u32 fbTableSize = 0;
 
         SeatState seat;
 
@@ -2280,12 +2284,51 @@ namespace {
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
 
-    void dmabufGetDefaultFeedback(wl_client*, wl_resource* res, u32) {
-        wl_resource_post_error(res, WL_DISPLAY_ERROR_IMPLEMENTATION, "feedback (v4) не реализован");
+    const struct zwp_linux_dmabuf_feedback_v1_interface dmabufFeedbackImpl = {
+        .destroy = resDestroy,
+    };
+
+    void sendFeedback(WaylandImpl* srv, wl_client* client, wl_resource* parent, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_linux_dmabuf_feedback_v1_interface, wl_resource_get_version(parent), id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &dmabufFeedbackImpl, srv, nullptr);
+        zwp_linux_dmabuf_feedback_v1_send_format_table(res, srv->fbTableFd, srv->fbTableSize);
+
+        wl_array dev;
+
+        wl_array_init(&dev);
+        *(u64*)wl_array_add(&dev, sizeof(u64)) = srv->mainDevice;
+        zwp_linux_dmabuf_feedback_v1_send_main_device(res, &dev);
+        zwp_linux_dmabuf_feedback_v1_send_tranche_target_device(res, &dev);
+        wl_array_release(&dev);
+
+        wl_array indices;
+
+        wl_array_init(&indices);
+
+        for (u16 i = 0; i < (u16)srv->formats.length(); i++) {
+            *(u16*)wl_array_add(&indices, sizeof(u16)) = i;
+        }
+
+        zwp_linux_dmabuf_feedback_v1_send_tranche_formats(res, &indices);
+        wl_array_release(&indices);
+        zwp_linux_dmabuf_feedback_v1_send_tranche_flags(res, 0);
+        zwp_linux_dmabuf_feedback_v1_send_tranche_done(res);
+        zwp_linux_dmabuf_feedback_v1_send_done(res);
     }
 
-    void dmabufGetSurfaceFeedback(wl_client*, wl_resource* res, u32, wl_resource*) {
-        wl_resource_post_error(res, WL_DISPLAY_ERROR_IMPLEMENTATION, "feedback (v4) не реализован");
+    void dmabufGetDefaultFeedback(wl_client* client, wl_resource* res, u32 id) {
+        sendFeedback((WaylandImpl*)wl_resource_get_user_data(res), client, res, id);
+    }
+
+    void dmabufGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        sendFeedback((WaylandImpl*)wl_resource_get_user_data(res), client, res, id);
     }
 
     const struct zwp_linux_dmabuf_v1_interface dmabufImpl = {
@@ -2308,6 +2351,10 @@ namespace {
         wl_resource_set_implementation(res, &dmabufImpl, srv, nullptr);
 
         for (const DmabufFormat& fm : srv->formats) {
+            if (version >= 4) {
+                break;
+            }
+
             if (version >= ZWP_LINUX_DMABUF_V1_MODIFIER_SINCE_VERSION) {
                 zwp_linux_dmabuf_v1_send_modifier(res, fm.fourcc, (u32)(fm.modifier >> 32), (u32)(fm.modifier & 0xffffffff));
             } else {
@@ -3257,7 +3304,7 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), xkbLayout(cfg.xkbLayout), xkbOptions(cfg.xkbOptions), seat(*this) {
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), xkbLayout(cfg.xkbLayout), xkbOptions(cfg.xkbOptions), mainDevice(cfg.mainDevice), seat(*this) {
     formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();
@@ -3327,7 +3374,28 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
 
     if (!formats.empty()) {
-        wl_global_create(display, &zwp_linux_dmabuf_v1_interface, 3, this, dmabufBind);
+        int dmabufVersion = 3;
+
+        if (mainDevice) {
+            fbTableSize = (u32)(formats.length() * 16);
+            fbTableFd = memfd_create("imway-format-table", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+            STD_VERIFY(fbTableFd >= 0);
+
+            for (const DmabufFormat& fm : formats) {
+                struct {
+                    u32 fourcc;
+                    u32 pad;
+                    u64 modifier;
+                } entry = {fm.fourcc, 0, fm.modifier};
+
+                STD_VERIFY(write(fbTableFd, &entry, sizeof(entry)) == sizeof(entry));
+            }
+
+            fcntl(fbTableFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
+            dmabufVersion = 4;
+        }
+
+        wl_global_create(display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
     } else {
         sysE << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
