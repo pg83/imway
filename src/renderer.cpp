@@ -1,6 +1,7 @@
 #include "renderer.h"
 
 #include "frame_listener.h"
+#include "input_sink.h"
 #include "output.h"
 #include "scene.h"
 #include "util.h"
@@ -49,7 +50,9 @@ namespace {
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
 
-    struct RendererImpl: public Renderer {
+    struct RendererImpl: public Renderer, public InputSink {
+        InputSink* sink() override { return this; }
+
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
         ::Output* output = nullptr;

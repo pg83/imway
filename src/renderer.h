@@ -1,18 +1,22 @@
 #pragma once
 
-#include "input_sink.h"
+#include <stddef.h>
 
 namespace stl {
     class ObjPool;
 }
 
-struct DmabufFormat;
 struct ev_loop;
-struct FrameListener;
-struct Output;
-struct Scene;
 
-struct Renderer: public InputSink {
+struct Scene;
+struct Output;
+struct DmabufFormat;
+struct FrameListener;
+struct InputSink;
+
+struct Renderer {
+    virtual InputSink* sink() = 0;
+
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;
 

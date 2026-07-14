@@ -132,7 +132,7 @@ int main(int argc, char** argv) {
 
         renderer->setFrameListener(wayland->frameListener());
 
-        InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer, *wayland->sink());
+        InputSink* sink = InputSink::tee(pool.mutPtr(), *renderer->sink(), *wayland->sink());
 
         if (kms) {
             try {

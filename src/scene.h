@@ -4,10 +4,10 @@
 #include <std/sys/types.h>
 
 struct Popup;
-struct Subsurface;
 struct Surface;
-struct SurfaceTexture;
 struct Toplevel;
+struct Subsurface;
+struct SurfaceTexture;
 
 struct RectI {
     i32 x = 0, y = 0, w = 0, h = 0;
