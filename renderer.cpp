@@ -55,6 +55,7 @@ struct SurfaceTexture {
     void* stagingMap = nullptr;
     VkDescriptorSet ds = VK_NULL_HANDLE;
     RectI uploadRect;
+    u32 mips = 1;
     bool needsUpload = false;
     bool firstUse = true;
     bool external = false;
@@ -230,7 +231,7 @@ namespace {
         void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
-        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem);
+        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
         void shutdown() noexcept;
@@ -522,7 +523,14 @@ SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
 
     tex->w = w;
     tex->h = h;
-    createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+
+    // icons get drawn far below their raster size; without a mip chain the
+    // minification aliases thin detail (icon borders) into stray specks
+    for (int m = w > h ? w : h; m > 1; m /= 2) {
+        tex->mips++;
+    }
+
+    createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, tex->image, tex->memory, tex->mips);
     createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -530,7 +538,7 @@ SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = kVkFormat;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
     VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
     tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
@@ -752,13 +760,13 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return UINT32_MAX;
 }
 
-void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem) {
+void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
     ici.format = format;
     ici.extent = {(u32)w, (u32)h, 1};
-    ici.mipLevels = 1;
+    ici.mipLevels = mips;
     ici.arrayLayers = 1;
     ici.samples = VK_SAMPLE_COUNT_1_BIT;
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -931,6 +939,8 @@ void RendererImpl::setup(int w, int h) {
 
     sci.magFilter = VK_FILTER_LINEAR;
     sci.minFilter = VK_FILTER_LINEAR;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    sci.maxLod = VK_LOD_CLAMP_NONE;
     sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -2743,7 +2753,7 @@ void RendererImpl::renderFrame(int scanIdx) {
         toDst.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         toDst.image = tex->image;
-        toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
         vkCmdPipelineBarrier(cmd, tex->firstUse ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
 
         RectI r = tex->uploadRect;
@@ -2762,13 +2772,56 @@ void RendererImpl::renderFrame(int scanIdx) {
         vkCmdCopyBufferToImage(cmd, tex->staging, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         tex->uploadRect = {};
 
-        VkImageMemoryBarrier toRead = toDst;
+        if (tex->mips > 1) {
+            // rebuild the mip chain from level 0
+            int mw = tex->w, mh = tex->h;
 
-        toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+            for (u32 i = 1; i < tex->mips; i++) {
+                VkImageMemoryBarrier srcB = toDst;
+
+                srcB.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                srcB.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                srcB.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                srcB.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                srcB.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 1, 0, 1};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &srcB);
+
+                int nw = mw > 1 ? mw / 2 : 1;
+                int nh = mh > 1 ? mh / 2 : 1;
+                VkImageBlit blit{};
+
+                blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i - 1, 0, 1};
+                blit.srcOffsets[1] = {mw, mh, 1};
+                blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, i, 0, 1};
+                blit.dstOffsets[1] = {nw, nh, 1};
+                vkCmdBlitImage(cmd, tex->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+                mw = nw;
+                mh = nh;
+            }
+
+            // levels 0..n-2 sit in TRANSFER_SRC, the last one in DST
+            VkImageMemoryBarrier toRead = toDst;
+
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips - 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, tex->mips - 1, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+        } else {
+            VkImageMemoryBarrier toRead = toDst;
+
+            toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+        }
+
         tex->needsUpload = false;
         tex->firstUse = false;
     }
