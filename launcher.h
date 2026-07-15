@@ -1,12 +1,8 @@
 #pragma once
 
+#include <std/str/builder.h>
 #include <std/sys/types.h>
 
-namespace stl {
-    class ObjPool;
-}
-
-struct Scene;
 struct Icon;
 struct IconStore;
 
@@ -16,14 +12,10 @@ struct IconResolver {
     virtual u64 iconTexture(const Icon* icon) = 0;
 };
 
-struct Launcher {
-    virtual void toggle() = 0;
-    virtual bool isOpen() const = 0;
-
-    // one uniform list: row 0 is the query field, then xdg desktop entries;
-    // up/down + enter or a mouse click, imgui calls inside, so this runs
-    // between NewFrame and Render
-    virtual void draw(int screenW, int screenH, float uiScale, IconResolver& texes) = 0;
-
-    static Launcher* create(stl::ObjPool* pool, Scene& scene, IconStore& icons);
-};
+// the launcher is a plain imgui widget, not an entity: the caller owns the
+// open flag, the widget owns dialog-scoped storage — the .desktop list is
+// read anew when the dialog opens and dropped when it closes. row 0 is the
+// query field, then the xdg desktop entries; up/down + enter or a mouse
+// click. imgui calls inside, so this runs between NewFrame and Render.
+// returns true when the user picked something; run receives the command line
+bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, stl::StringBuilder& run);

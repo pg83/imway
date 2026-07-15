@@ -179,7 +179,8 @@ namespace {
         bool altTabActive = false;
         Toplevel* altTabSel = nullptr;
 
-        Launcher* launcher = nullptr;
+        bool launcherOpen = false;
+        IconStore* icons = nullptr;
 
         // hardware cursor plane state
         bool hwCursorReady = false;
@@ -322,6 +323,7 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
     , scene(&scn)
     , output(&out)
     , listener(&l)
+    , icons(&icons)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
@@ -337,7 +339,6 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
     nextUiScale = scale;
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
-    launcher = Launcher::create(p, scn, icons);
     setup(scn.outW, scn.outH);
 
     // before any input arrives the cursor sits at the screen center
@@ -668,7 +669,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
     // lives in the slave's modsChanged)
-    bool capture = launcher->isOpen() || altTabActive || io.WantCaptureKeyboard;
+    bool capture = launcherOpen || altTabActive || io.WantCaptureKeyboard;
 
     scene->kbCaptured = capture;
 
@@ -684,7 +685,8 @@ void RendererImpl::key(u32 code, bool pressed) {
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
     if (mask == kModLogo && sym == XKB_KEY_F2) {
-        launcher->toggle();
+        launcherOpen = !launcherOpen;
+        scene->needsFrame = true;
 
         return true;
     }
@@ -2072,6 +2074,31 @@ void RendererImpl::inspectorUi(Scene& scene) {
     ImGui::End();
 }
 
+static void spawnClient(StringView cmd, StringView sock) {
+    if (cmd.empty() || sock.empty()) {
+        return;
+    }
+
+    // materialize before the fork, both live until the exec
+    Buffer c(cmd), s(sock);
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // double fork: the command reparents to init, no zombies
+        if (fork() != 0) {
+            _exit(0);
+        }
+
+        setenv("WAYLAND_DISPLAY", s.cStr(), 1);
+        execlp("sh", "sh", "-c", c.cStr(), (char*)nullptr);
+        _exit(127);
+    }
+
+    if (pid > 0) {
+        waitpid(pid, nullptr, 0);
+    }
+}
+
 void RendererImpl::buildUi(Scene& scene) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -2390,7 +2417,15 @@ void RendererImpl::buildUi(Scene& scene) {
         altTabSel = nullptr;
     }
 
-    launcher->draw(width, height, uiScale, *this);
+    if (launcherOpen) {
+        StringBuilder cmd;
+
+        if (drawLauncher(width, height, uiScale, *icons, *this, launcherOpen, cmd)) {
+            spawnClient(sv(cmd), scene.socketName);
+        }
+
+        scene.needsFrame = true;
+    }
 
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)
