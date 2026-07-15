@@ -141,8 +141,8 @@ namespace {
 
         const char* fontPath = nullptr;
         float uiScale = 1.f;
-        bool scaleDirty = false;   // scale committed: restyle before the next frame
-        float scaleEdit = 0.f;     // slider-side scale value, applied on release
+        float nextUiScale = 1.f;   // written by the ui, applied at frame start
+        float scaleEdit = 0.f;     // slider-side scale value, committed on release
         float sdrNits = -1.f;      // menu copy of the output sdr white, -1 = unqueried
         bool nightOn = false;      // night light toggle + temperature
         float nightK = 3400.f;
@@ -338,6 +338,7 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
 {
     fontPath = font;
     uiScale = scale;
+    nextUiScale = scale;
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     launcher = Launcher::create(p, scn, icons);
@@ -2088,8 +2089,10 @@ void RendererImpl::buildUi(Scene& scene) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.DeltaTime = (float)(1.0 / scene.hz);
 
-    if (scaleDirty) {
-        scaleDirty = false;
+    // the ui only writes nextUiScale: the scale flips here and nowhere
+    // else, so a whole frame never mixes the new scale with the old style
+    if (nextUiScale != uiScale) {
+        uiScale = nextUiScale;
 
         // restyle from a pristine copy: ScaleAllSizes compounds otherwise
         ImGuiStyle fresh;
@@ -2142,9 +2145,8 @@ void RendererImpl::buildUi(Scene& scene) {
 
             // applying mid-drag rescales the slider under the cursor and the
             // value feedback-loops against its own widget: commit on release
-            if (ImGui::IsItemDeactivatedAfterEdit() && scaleEdit != uiScale) {
-                uiScale = scaleEdit;
-                scaleDirty = true;
+            if (ImGui::IsItemDeactivatedAfterEdit()) {
+                nextUiScale = scaleEdit;
                 scene.needsFrame = true;
             }
 
@@ -2534,7 +2536,15 @@ void RendererImpl::buildUi(Scene& scene) {
     bool overClient = false;
 
     for (Surface* s : scene.surfaces) {
-        if (s->hovered) {
+        // decoration surfaces (cursor image, drag icon) ride the pointer:
+        // their hover flags go stale the moment they stop being drawn and
+        // would pin this true forever; contentless surfaces likewise keep
+        // the flag from their last drawn frame
+        if (s == scene.cursorSurface || s == scene.dragIcon) {
+            continue;
+        }
+
+        if (s->hovered && s->hasContent) {
             overClient = true;
         }
     }

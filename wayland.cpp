@@ -969,6 +969,11 @@ namespace {
         s.inputRegion.clear();
         s.inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
 
+        // viewport state applies on this surface's commit even when the
+        // content itself parks in a sync-subsurface cache — otherwise a
+        // synced child using wp_viewport never gets its src/dst at all
+        viewportApplyPending(s);
+
         if (toCache) {
             for (wl_resource* cb : s.pending.frames) {
                 sub->cache.frames.pushBack(cb);
@@ -984,8 +989,6 @@ namespace {
         }
 
         s.pending.frames.clear();
-
-        viewportApplyPending(s);
 
         applyChildrenCaches(s);
 
@@ -3898,6 +3901,18 @@ namespace {
 
         wl_resource_set_implementation(p, &pointerImpl, seat, pointerResourceDestroyed);
         seat->pointers.pushBack(p);
+
+        // a pointer created while its surface already holds focus gets the
+        // enter right away — the keyboard path below does the same
+        SeatState& st = *seat;
+
+        if (st.ptrFocus && wl_resource_get_client(resOf(st.ptrFocus)) == client) {
+            wl_pointer_send_enter(p, wl_display_next_serial(st.srv->display), resOf(st.ptrFocus), wl_fixed_from_double(st.curX - st.ptrFocus->imgX), wl_fixed_from_double(st.curY - st.ptrFocus->imgY));
+
+            if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
+                wl_pointer_send_frame(p);
+            }
+        }
     }
 
     void seatGetKeyboard(wl_client* client, wl_resource* res, u32 id) {
