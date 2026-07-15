@@ -693,7 +693,7 @@ namespace {
         double hdrNits = 0;
         bool hdrActive = false;
         u32 connColorspace = 0, connHdrMeta = 0;
-        u64 colorspaceBt2020 = 0;
+        u64 colorspaceBt2020 = 0, colorspaceDefault = 0;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
         u32 hdrMetaBlob = 0, degammaBlob = 0, ctmBlob = 0, gammaBlob = 0;
         u64 gamLutSize = 0;
@@ -1054,9 +1054,15 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
     plCrtcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     plCrtcH = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
 
-    // gamma is useful without hdr too (night light), grab it up front
+    // the whole color pipeline is fetched up front: gamma serves the night
+    // light without hdr, and ALL of it is needed for the startup scrub —
+    // kms color state survives compositor restarts
     crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
     gamLutSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", 0);
+    crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
+    crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
+    connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
+    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "Default", &connColorspace, &colorspaceDefault);
 
     if (cursorPlaneId) {
         try {
@@ -1144,6 +1150,34 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
 }
 
 KmsOutput::~KmsOutput() noexcept {
+    if (modesetDone) {
+        // hand the display back clean: neutral colorspace, no luts
+        drmModeAtomicReq* req = drmModeAtomicAlloc();
+
+        if (connColorspace) {
+            drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceDefault);
+        }
+
+        if (connHdrMeta) {
+            drmModeAtomicAddProperty(req, connectorId, connHdrMeta, 0);
+        }
+
+        if (crtcDegammaProp) {
+            drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
+        }
+
+        if (crtcCtmProp) {
+            drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
+        }
+
+        if (crtcGammaProp) {
+            drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
+        }
+
+        drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
+        drmModeAtomicFree(req);
+    }
+
     restoreVt();
 
     for (auto& sb : scan) {
@@ -1346,10 +1380,6 @@ bool KmsOutput::setupHdr() {
         return false;
     }
 
-    connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
-    crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
-    crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
-
     u64 degSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT_SIZE", 0);
 
     if (!connHdrMeta || !crtcDegammaProp || !crtcCtmProp || !crtcGammaProp || !degSize || !gamLutSize) {
@@ -1443,7 +1473,9 @@ void KmsOutput::buildGammaLut() {
         tempToRgb(tempK, mr, mg, mb);
     }
 
-    if (!hdrActive && tempK <= 0) {
+    // gate on hdrNits, not hdrActive: this runs from setupHdr before the
+    // caller has flipped hdrActive, and gating on the flag kills hdr setup
+    if (hdrNits <= 0 && tempK <= 0) {
         return;
     }
 
@@ -1454,7 +1486,7 @@ void KmsOutput::buildGammaLut() {
     for (u64 i = 0; i < gamLutSize; i++) {
         double x = (double)i / (double)(gamLutSize - 1);
 
-        if (hdrActive) {
+        if (hdrNits > 0) {
             auto pq = [](double y) {
                 double ym = pow(y, 0.1593017578125);
 
@@ -1548,9 +1580,29 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
             drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, degammaBlob);
             drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, ctmBlob);
             drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
-        } else if (gammaBlob && crtcGammaProp) {
-            // night light without the hdr pipeline
-            drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+        } else {
+            // scrub color state left over by a previous session: connector
+            // and crtc props are not reset by anyone on restart
+            if (connColorspace) {
+                drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceDefault);
+            }
+
+            if (connHdrMeta) {
+                drmModeAtomicAddProperty(req, connectorId, connHdrMeta, 0);
+            }
+
+            if (crtcDegammaProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
+            }
+
+            if (crtcCtmProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
+            }
+
+            if (crtcGammaProp) {
+                // 0 unless the night light already built a tint ramp
+                drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+            }
         }
     }
 

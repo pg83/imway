@@ -2141,6 +2141,8 @@ void RendererImpl::buildUi(Scene& scene) {
                     output->setSdrWhite(sdrNits);
                     scene.needsFrame = true;
                 }
+            } else {
+                ImGui::TextDisabled("hdr off (start with --hdr)");
             }
 
             bool night = ImGui::Checkbox("##nighton", &nightOn);
