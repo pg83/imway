@@ -182,13 +182,11 @@ int main(int argc, char** argv) {
         wcfg.iconStore = iconStore;
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, fontPath, uiScale, framesLimit);
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, *kb, *wayland->sink(), fontPath, uiScale, framesLimit);
 
         if (session) {
             session->addListener(wayland->sessionListener());
         }
-
-        renderer->attachInput(kb, wayland->sink());
 
         InputSink* sink = renderer->sink();
 

@@ -16,8 +16,7 @@ struct IconStore;
 
 struct Renderer {
     virtual InputSink* sink() = 0;
-    virtual void attachInput(Keyboard* kb, InputSink* next) = 0;
     virtual bool screenshot(const char* path) = 0;
 
-    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit);
+    static Renderer* create(stl::ObjPool* pool, struct ev_loop* loop, Scene& scene, Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit);
 };

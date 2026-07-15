@@ -71,7 +71,6 @@ namespace {
     struct RendererImpl: public Renderer, public InputSink, public IconResolver {
         InputSink* sink() override;
 
-        void attachInput(Keyboard* kb, InputSink* slave) override;
 
         void modsChanged() override;
 
@@ -224,7 +223,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit);
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, const char* font, float scale, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -314,16 +313,13 @@ InputSink* RendererImpl::sink() {
     return this;
 }
 
-void RendererImpl::attachInput(Keyboard* kb, InputSink* slave) {
-    keyboard = kb;
-    next = slave;
-}
-
 void RendererImpl::modsChanged() {
 }
 
-RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit)
+RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, const char* font, float scale, int limit)
     : loop(evLoop)
+    , keyboard(&kb)
+    , next(&slave)
     , pool(p)
     , scene(&scn)
     , output(&out)
@@ -3167,6 +3163,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }

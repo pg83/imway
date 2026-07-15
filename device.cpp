@@ -805,7 +805,7 @@ namespace {
         size_t dmabufFormatCount() const override;
         DmabufFormat dmabufFormat(size_t i) const override;
         ::Output* createOutput(const char* connector, const char* modeStr, double hdrNits) override;
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override;
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) override;
     };
 
     struct HeadlessOutput: public ::Output {
@@ -852,7 +852,7 @@ namespace {
         size_t dmabufFormatCount() const override;
         DmabufFormat dmabufFormat(size_t i) const override;
         ::Output* createOutput(const char*, const char* modeStr, double hdrNits) override;
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override;
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) override;
     };
 
     int openKmsNode(Session& session, const char* devPath, StringBuilder& outPath) {
@@ -976,8 +976,8 @@ DmabufFormat KmsDevice::dmabufFormat(size_t i) const {
     return output;
 }
 
-Renderer* KmsDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
+Renderer* KmsDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+    return Renderer::create(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }
 
 namespace {
@@ -1998,8 +1998,8 @@ DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
     return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
 }
 
-Renderer* HeadlessDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
+Renderer* HeadlessDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+    return Renderer::create(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }
 
 Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath) {
