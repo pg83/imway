@@ -1878,6 +1878,21 @@ void RendererImpl::buildUi(Scene& scene) {
 
             drawSurfaceTree(*root, origin.x, origin.y);
 
+            // a configure is only a suggestion: terminals commit sizes
+            // snapped to the cell grid — once the mouse is up, fit the frame
+            // to what the client actually committed (blocky resize)
+            if (!t->fullscreen && !ImGui::IsAnyMouseDown()) {
+                int gw = root->geomW(), gh = root->geomH();
+
+                if ((int)avail.x != gw || (int)avail.y != gh) {
+                    const ImGuiStyle& gs = ImGui::GetStyle();
+                    float header = t->csd ? 0.f : ImGui::GetFrameHeight();
+
+                    ImGui::SetWindowSize(ImVec2((float)gw + gs.WindowPadding.x * 2, (float)gh + gs.WindowPadding.y * 2 + header));
+                    scene.needsFrame = true;
+                }
+            }
+
             // imgui paints its resize grip before window contents, so the
             // client image buries it; repaint on top, and claim the corner
             // for the ui — presses there must resize, not click the client

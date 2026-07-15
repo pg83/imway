@@ -1860,10 +1860,12 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_FULLSCREEN;
         }
 
-        // every window is "tiled": CSD toolkits (GTK) then drop their drop
+        // csd windows are "tiled": the toolkits (GTK) then drop their drop
         // shadows, invisible resize margins and rounded corners, which we
-        // would otherwise have to crop via window geometry
-        if (wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
+        // would otherwise have to crop via window geometry; ssd clients must
+        // NOT get it — a tiled window has to fill the size exactly, which
+        // disables cell-snapped resizing in terminals (foot resize-by-cells)
+        if (t.csd && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_LEFT;
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_RIGHT;
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_TOP;
