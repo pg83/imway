@@ -100,16 +100,20 @@ void LauncherImpl::rescan() {
 
         dir << base << "/applications"_sv;
 
-        listDir(sv(dir), [this, &dir](const TPathInfo& e) {
-            if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
-                return;
-            }
+        // missing xdg dirs are normal: listDir throws, skip them
+        try {
+            listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+                if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
+                    return;
+                }
 
-            StringBuilder f;
+                StringBuilder f;
 
-            f << sv(dir) << "/"_sv << e.item;
-            parseDesktop(f);
-        });
+                f << sv(dir) << "/"_sv << e.item;
+                parseDesktop(f);
+            });
+        } catch (...) {
+        }
     });
 
     quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry* a, const Entry* b) {
@@ -256,7 +260,7 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
     ImGui::SetNextWindowPos(ImVec2((float)screenW / 2.f, (float)screenH / 4.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH / 2.f));
 
-    if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize)) {
+    if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel < n) {
             sel++;
         }

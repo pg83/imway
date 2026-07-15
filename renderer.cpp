@@ -976,6 +976,10 @@ void RendererImpl::setup(int w, int h) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
+    // clients are imgui windows: docking gives tabs and splits of wayland
+    // windows for free
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+
     // dragging inside the client area belongs to the client (text selection),
     // windows move by their title bar only
     io.ConfigWindowsMoveFromTitleBarOnly = true;
@@ -1716,6 +1720,9 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     dd.DisplaySize = ImVec2((float)hwCapW, (float)hwCapH);
     dd.FramebufferScale = ImVec2(1.f, 1.f);
     dd.Textures = &ImGui::GetPlatformIO().Textures;
+    // the docking backend dereferences the owner viewport for its render
+    // buffers; the hand-built draw data must point at the main one
+    dd.OwnerViewport = ImGui::GetMainViewport();
 
     // the imgui backend cycles shared vertex buffers; make sure no frame is in flight
     vkQueueWaitIdle(queue);
@@ -1889,19 +1896,22 @@ void RendererImpl::sampleStats() {
     if (batPct == -2) {
         batPct = -1;
 
-        listDir("/sys/class/power_supply"_sv, [this, &content](const TPathInfo& e) {
-            if (!batPath.empty()) {
-                return;
-            }
+        try {
+            listDir("/sys/class/power_supply"_sv, [this, &content](const TPathInfo& e) {
+                if (!batPath.empty()) {
+                    return;
+                }
 
-            StringBuilder p;
+                StringBuilder p;
 
-            p << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
+                p << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
 
-            if (readSmallFile(p, content).startsWith("Battery"_sv)) {
-                batPath << "/sys/class/power_supply/"_sv << e.item;
-            }
-        });
+                if (readSmallFile(p, content).startsWith("Battery"_sv)) {
+                    batPath << "/sys/class/power_supply/"_sv << e.item;
+                }
+            });
+        } catch (...) {
+        }
     }
 
     if (!batPath.empty()) {
@@ -1921,7 +1931,7 @@ void RendererImpl::calendarUi() {
 
     ImGui::SetNextWindowPos(ImVec2((float)width - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
 
-    if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+    if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
         if (calFresh) {
             ImGui::SetWindowFocus();
             calFresh = false;
@@ -2018,7 +2028,7 @@ void RendererImpl::calendarUi() {
 void RendererImpl::inspectorUi(Scene& scene) {
     ImGui::SetNextWindowSize(ImVec2(440.f * uiScale, 400.f * uiScale), ImGuiCond_FirstUseEver);
 
-    if (ImGui::Begin("inspector", &inspectorOpen)) {
+    if (ImGui::Begin("inspector", &inspectorOpen, ImGuiWindowFlags_NoDocking)) {
         float last = frameMs[(frameMsIdx + 119) % 120];
 
         ImGui::PlotLines("##ft", frameMs, 120, frameMsIdx, nullptr, 0.f, 8.f, ImVec2(-1.f, 44.f * uiScale));
@@ -2283,27 +2293,20 @@ void RendererImpl::buildUi(Scene& scene) {
 
         auto& label = sb();
 
-        u64 winIcon = t->csd || t->fullscreen ? 0 : iconTexture(t->icon);
-
-        // spaces reserve title bar room, the icon is painted over them
-        if (winIcon) {
-            float spaceW = ImGui::CalcTextSize(" ").x;
-            int nsp = (int)((ImGui::GetFontSize() + 4.f) / (spaceW > 0.f ? spaceW : 4.f)) + 1;
-
-            for (int k = 0; k < nsp; k++) {
-                label << " "_sv;
-            }
-        }
-
         label << title << "###toplevel"_sv << (u64)t->id;
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
 
         if (!t->winSizeSet) {
-            const ImGuiStyle& st = ImGui::GetStyle();
-            float header = t->csd ? 0.f : ImGui::GetFrameHeight();
+            // sizing a docked window would fight the node (this path also
+            // re-arms on unset_fullscreen)
+            if (!t->docked) {
+                const ImGuiStyle& st = ImGui::GetStyle();
+                float header = t->csd ? 0.f : ImGui::GetFrameHeight();
 
-            ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + header), ImGuiCond_Always);
+                ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + header), ImGuiCond_Always);
+            }
+
             t->winSizeSet = true;
         }
 
@@ -2315,20 +2318,26 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         if (t->fullscreen) {
+            // NoDocking alone does not pull a docked window out of its node
+            ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
             ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2((float)width, (float)height), ImGuiCond_Always);
-            flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus;
+            flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking;
         }
 
         bool stayOpen = true;
 
         if (ImGui::Begin(label.cStr(), t->csd ? nullptr : &stayOpen, flags)) {
+            bool docked = ImGui::IsWindowDocked();
+
+            t->docked = docked;
+
             if (ImGui::IsWindowFocused()) {
                 scene.focusedToplevel = t;
             }
 
             // super+drag moves the window from anywhere, not just the bar
-            if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && keyboard && (keyboard->modMask() & kModLogo)) {
+            if (!docked && ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && keyboard && (keyboard->modMask() & kModLogo)) {
                 moving = t;
                 resizing = nullptr;
 
@@ -2346,7 +2355,7 @@ void RendererImpl::buildUi(Scene& scene) {
             if (t->moveRequested) {
                 t->moveRequested = false;
 
-                if (ImGui::IsAnyMouseDown()) {
+                if (!docked && ImGui::IsAnyMouseDown()) {
                     moving = t;
                     resizing = nullptr;
 
@@ -2357,7 +2366,7 @@ void RendererImpl::buildUi(Scene& scene) {
             }
 
             if (t->resizeEdges) {
-                if (ImGui::IsAnyMouseDown()) {
+                if (!docked && ImGui::IsAnyMouseDown()) {
                     resizing = t;
                     moving = nullptr;
                     activeEdges = t->resizeEdges;
@@ -2429,27 +2438,12 @@ void RendererImpl::buildUi(Scene& scene) {
 
             drawSurfaceTree(*root, origin.x, origin.y);
 
-            if (winIcon) {
-                const ImGuiStyle& gs = ImGui::GetStyle();
-                float fs = ImGui::GetFontSize();
-                ImVec2 wp = ImGui::GetWindowPos();
-                float ix = wp.x + gs.FramePadding.x + fs + gs.ItemInnerSpacing.x;
-                float iy = wp.y + gs.FramePadding.y;
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-
-                // the window drawlist is clipped to the content area, the
-                // title bar needs an explicit escape
-                dl->PushClipRect(wp, ImVec2(wp.x + ImGui::GetWindowSize().x, wp.y + fs * 2.f), false);
-                dl->AddImage((ImTextureID)winIcon, ImVec2(ix, iy), ImVec2(ix + fs, iy + fs));
-                dl->PopClipRect();
-            }
-
             // a configure is only a suggestion: terminals commit sizes
             // snapped to the cell grid — once the mouse is up and avail is
             // stable, fit the frame to what the client actually committed
             // (blocky resize); never in the same frame as a fresh intent,
             // or the stale-avail configure and the snap ping-pong forever
-            if (!freshIntent && !t->fullscreen && !ImGui::IsAnyMouseDown()) {
+            if (!freshIntent && !docked && !t->fullscreen && !ImGui::IsAnyMouseDown()) {
                 int gw = root->geomW(), gh = root->geomH();
 
                 if (wantW != gw || wantH != gh) {
@@ -2469,7 +2463,7 @@ void RendererImpl::buildUi(Scene& scene) {
             // imgui paints its resize grip before window contents, so the
             // client image buries it; repaint on top, and claim the corner
             // for the ui — presses there must resize, not click the client
-            if (!t->fullscreen) {
+            if (!docked && !t->fullscreen) {
                 float fs = ImGui::GetFontSize();
                 float ra = ImGui::GetStyle().WindowRounding + 1.f + fs * 0.2f;
                 float grip = (float)(int)(fs * 1.10f > ra ? fs * 1.10f : ra);

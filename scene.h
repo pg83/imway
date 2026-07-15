@@ -133,6 +133,10 @@ struct Toplevel {
     bool fullscreen = false;
     bool activated = false;
     bool raiseRequested = false;
+
+    // written by the renderer: the window sits in a dock node, so it must
+    // fill its size exactly — wayland turns this into TILED states
+    bool docked = false;
 };
 
 struct Popup {

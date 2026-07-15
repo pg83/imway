@@ -146,6 +146,7 @@ namespace {
         XdgSurface* xdg = nullptr;
         int cfgW = 0, cfgH = 0;
         int prevW = 0, prevH = 0;
+        bool cfgDocked = false;
 
         // pool icon built from client pixels (xdg-toplevel-icon); wayland
         // owns it: released on replace and on destroy
@@ -1838,7 +1839,7 @@ namespace {
         // would otherwise have to crop via window geometry; ssd clients must
         // NOT get it — a tiled window has to fill the size exactly, which
         // disables cell-snapped resizing in terminals (foot resize-by-cells)
-        if (t.csd && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
+        if ((t.csd || t.docked) && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_LEFT;
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_RIGHT;
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_TOP;
@@ -1850,6 +1851,7 @@ namespace {
         xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
         t.cfgW = w;
         t.cfgH = h;
+        t.cfgDocked = t.docked;
         sysO << "imway: configure "_sv << sv(t.title) << " -> "_sv << w << "x"_sv << h << endL;
     }
 
@@ -5194,7 +5196,8 @@ void WaylandImpl::frameShown(u32 msec) {
         bool differsView = ti->desiredW != ti->surface->geomW() || ti->desiredH != ti->surface->geomH();
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
-        if (differsView && differsSent) {
+        // dock state changes alone need a configure: TILED comes and goes
+        if ((differsView && differsSent) || ti->docked != ti->cfgDocked) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
         }
     }

@@ -130,16 +130,21 @@ void IconStoreImpl::buildIndex() {
 
         dir << base << "/applications"_sv;
 
-        listDir(sv(dir), [this, &dir](const TPathInfo& e) {
-            if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
-                return;
-            }
+        // xdg data dirs routinely do not exist: listDir throws, opendir
+        // used to shrug — keep shrugging
+        try {
+            listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+                if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
+                    return;
+                }
 
-            StringBuilder f;
+                StringBuilder f;
 
-            f << sv(dir) << "/"_sv << e.item;
-            addDesktop(f, e.item.prefix(e.item.length() - 8));
-        });
+                f << sv(dir) << "/"_sv << e.item;
+                addDesktop(f, e.item.prefix(e.item.length() - 8));
+            });
+        } catch (...) {
+        }
     });
 }
 
