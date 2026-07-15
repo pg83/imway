@@ -4,6 +4,8 @@
 #include "frame_listener.h"
 #include "input_sink.h"
 #include "keyboard.h"
+#include "icon_pool.h"
+#include "icon_store.h"
 #include "launcher.h"
 #include "output.h"
 #include "scene.h"
@@ -65,7 +67,7 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
 
-    struct RendererImpl: public Renderer, public InputSink, public IconHost {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver {
         InputSink* sink() override { return this; }
 
         void attachInput(Keyboard* kb, InputSink* slave) override {
@@ -77,6 +79,7 @@ namespace {
         }
 
         struct ev_loop* loop = nullptr;
+        stl::ObjPool* pool = nullptr;
         Scene* scene = nullptr;
         ::Output* output = nullptr;
         FrameListener* listener = nullptr;
@@ -110,6 +113,16 @@ namespace {
 
         ObjList<SurfaceTexture>* textureAlloc = nullptr;
         Vector<SurfaceTexture*> textures;
+
+        // icon textures keyed by Icon::gen; entries the previous frame did
+        // not touch are destroyed at the start of the next one
+        struct IconTex {
+            u64 gen = 0;
+            SurfaceTexture* tex = nullptr;
+            bool used = false;
+        };
+
+        Vector<IconTex> iconTexes;
 
         struct DmabufCacheEntry {
             DmabufBuffer* key = nullptr;
@@ -210,12 +223,12 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* pool, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, const char* font, float scale, int limit) : loop(evLoop), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(pool->make<ObjList<SurfaceTexture>>(pool)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit) : loop(evLoop), pool(p), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(p->make<ObjList<SurfaceTexture>>(p)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
             fontPath = font;
             uiScale = scale;
             hasSyncFd = vk.hasSyncFd;
             drmFd = vk.drmFd;
-            launcher = Launcher::create(pool, scn, *this);
+            launcher = Launcher::create(p, scn, icons);
             setup(scn.outW, scn.outH);
 
             // before any input arrives the cursor sits at the screen center,
@@ -367,7 +380,31 @@ namespace {
             }
         }
 
-        u64 iconTexture(const u32* argb, int w, int h) override {
+        // IconResolver: gen -> texture, textures are born on first use
+        u64 iconTexture(const Icon* icon) override {
+            if (!icon || icon->width <= 0 || icon->argb.length() < (size_t)icon->width * icon->height) {
+                return 0;
+            }
+
+            for (size_t i = 0; i < iconTexes.length(); i++) {
+                if (iconTexes[i].gen == icon->gen) {
+                    iconTexes.mut(i).used = true;
+
+                    return (u64)(uintptr_t)iconTexes[i].tex->ds;
+                }
+            }
+
+            IconTex it;
+
+            it.gen = icon->gen;
+            it.tex = makeIconTexture(icon->argb.data(), icon->width, icon->height);
+            it.used = true;
+            iconTexes.pushBack(it);
+
+            return (u64)(uintptr_t)it.tex->ds;
+        }
+
+        SurfaceTexture* makeIconTexture(const u32* argb, int w, int h) {
             SurfaceTexture* tex = textureAlloc->make();
 
             tex->w = w;
@@ -389,7 +426,7 @@ namespace {
             tex->needsUpload = true;
             textures.pushBack(tex);
 
-            return (u64)(uintptr_t)tex->ds;
+            return tex;
         }
 
         bool chordAction(u32 mask, u32 sym);
@@ -1980,6 +2017,19 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
+    // icon textures the previous frame did not reference die now
+    for (size_t i = 0; i < iconTexes.length();) {
+        if (!iconTexes[i].used) {
+            // destroyTexture unlinks from textures and releases the object
+            destroyTexture(iconTexes[i].tex);
+            iconTexes.mut(i) = iconTexes.back();
+            iconTexes.popBack();
+        } else {
+            iconTexes.mut(i).used = false;
+            i++;
+        }
+    }
+
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
@@ -2149,6 +2199,18 @@ void RendererImpl::buildUi(Scene& scene) {
 
         auto& label = sb();
 
+        u64 winIcon = t->csd || t->fullscreen ? 0 : iconTexture(t->icon);
+
+        // spaces reserve title bar room, the icon is painted over them
+        if (winIcon) {
+            float spaceW = ImGui::CalcTextSize(" ").x;
+            int nsp = (int)((ImGui::GetFontSize() + 4.f) / (spaceW > 0.f ? spaceW : 4.f)) + 1;
+
+            for (int k = 0; k < nsp; k++) {
+                label << " "_sv;
+            }
+        }
+
         label << title << "###toplevel"_sv << (u64)t->id;
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
@@ -2276,6 +2338,21 @@ void RendererImpl::buildUi(Scene& scene) {
 
             drawSurfaceTree(*root, origin.x, origin.y);
 
+            if (winIcon) {
+                const ImGuiStyle& gs = ImGui::GetStyle();
+                float fs = ImGui::GetFontSize();
+                ImVec2 wp = ImGui::GetWindowPos();
+                float ix = wp.x + gs.FramePadding.x + fs + gs.ItemInnerSpacing.x;
+                float iy = wp.y + gs.FramePadding.y;
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                // the window drawlist is clipped to the content area, the
+                // title bar needs an explicit escape
+                dl->PushClipRect(wp, ImVec2(wp.x + ImGui::GetWindowSize().x, wp.y + fs * 2.f), false);
+                dl->AddImage((ImTextureID)winIcon, ImVec2(ix, iy), ImVec2(ix + fs, iy + fs));
+                dl->PopClipRect();
+            }
+
             // a configure is only a suggestion: terminals commit sizes
             // snapped to the cell grid — once the mouse is up, fit the frame
             // to what the client actually committed (blocky resize)
@@ -2360,7 +2437,7 @@ void RendererImpl::buildUi(Scene& scene) {
         altTabSel = nullptr;
     }
 
-    launcher->draw(width, height, uiScale);
+    launcher->draw(width, height, uiScale, *this);
 
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)
@@ -2418,6 +2495,12 @@ void RendererImpl::buildUi(Scene& scene) {
 
                 if (t == altTabSel) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), IM_COL32(255, 200, 60, 255), 0.f, 0, 3.f);
+                }
+
+                if (u64 tabIcon = iconTexture(t->icon)) {
+                    float isz = 20.f * uiScale;
+
+                    dl->AddImage((ImTextureID)tabIcon, ImVec2(x + 3.f, y + 3.f), ImVec2(x + 3.f + isz, y + 3.f + isz));
                 }
 
                 StringView title(t->title);
@@ -3002,6 +3085,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
 }

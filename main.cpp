@@ -4,6 +4,8 @@
 #include "input_sink.h"
 #include "keyboard.h"
 #include "output.h"
+#include "icon_pool.h"
+#include "icon_store.h"
 #include "renderer.h"
 #include "scene.h"
 #include "session.h"
@@ -173,9 +175,14 @@ int main(int argc, char** argv) {
         wcfg.dpmsSec = kms ? dpmsSec : 0;
         wcfg.drmFd = device->drmFd();
 
-        Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
+        IconPool* iconPool = IconPool::create(pool.mutPtr());
+        IconStore* iconStore = IconStore::create(pool.mutPtr(), loop, *iconPool);
 
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), fontPath, uiScale, framesLimit);
+        wcfg.iconPool = iconPool;
+        wcfg.iconStore = iconStore;
+
+        Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, fontPath, uiScale, framesLimit);
 
         if (session) {
             session->addListener(wayland->sessionListener());

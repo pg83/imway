@@ -1,6 +1,8 @@
 #include "launcher.h"
+#include "icon_store.h"
 #include "scene.h"
 #include "util.h"
+#include "xdg_utils.h"
 
 #include <dirent.h>
 #include <fcntl.h>
@@ -10,7 +12,6 @@
 #include <unistd.h>
 
 #include <imgui.h>
-#include <lunasvg.h>
 
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
@@ -27,7 +28,6 @@ namespace {
         char name[128] = "";
         char exec[256] = "";
         char icon[256] = "";
-        u64 tex = 0; // 0 = not loaded yet, 1 = load failed
     };
 
     void setStr(char* dst, size_t cap, StringView v) {
@@ -39,7 +39,7 @@ namespace {
 
     struct LauncherImpl: public Launcher {
         Scene* scene = nullptr;
-        IconHost* icons = nullptr;
+        IconStore* icons = nullptr;
 
         bool open = false;
         bool focusField = false;
@@ -48,7 +48,7 @@ namespace {
         Vector<Entry> entries;
         Vector<u32> vis;
 
-        LauncherImpl(Scene& scn, IconHost& host) : scene(&scn), icons(&host) {
+        LauncherImpl(Scene& scn, IconStore& store) : scene(&scn), icons(&store) {
         }
 
         void toggle() override {
@@ -68,42 +68,12 @@ namespace {
             return open;
         }
 
-        void forEachDataDir(auto&& fn) {
-            if (const char* home = getenv("XDG_DATA_HOME")) {
-                fn(StringView(home));
-            } else if (const char* h = getenv("HOME")) {
-                // fn formats paths of its own: this one needs its own builder
-                StringBuilder p;
-
-                p << h << "/.local/share"_sv;
-                fn(sv(p));
-            }
-
-            const char* xdg = getenv("XDG_DATA_DIRS");
-            StringView rest(xdg ? xdg : "/usr/local/share:/usr/share");
-
-            while (!rest.empty()) {
-                StringView one, tail;
-
-                if (!rest.split(':', one, tail)) {
-                    one = rest;
-                    tail = {};
-                }
-
-                if (!one.empty()) {
-                    fn(one);
-                }
-
-                rest = tail;
-            }
-        }
-
         void rescan() {
             entries.clear();
 
-            forEachDataDir([this](StringView base) {
+            forEachXdgDataDir([this](StringView base) {
                 // parseDesktop formats via the shared builder underneath,
-                // the directory paths live across those calls
+                // the directory path lives across those calls
                 StringBuilder dir;
 
                 dir << base << "/applications"_sv;
@@ -114,6 +84,8 @@ namespace {
                     return;
                 }
 
+                size_t mark = dir.used();
+
                 while (dirent* de = readdir(d)) {
                     StringView n(de->d_name);
 
@@ -121,10 +93,9 @@ namespace {
                         continue;
                     }
 
-                    StringBuilder f;
-
-                    f << sv(dir) << "/"_sv << n;
-                    parseDesktop(f.cStr());
+                    dir.seekAbsolute(mark);
+                    dir << "/"_sv << n;
+                    parseDesktop(dir.cStr());
                 }
 
                 closedir(d);
@@ -226,61 +197,6 @@ namespace {
             setStr(en.exec, sizeof(en.exec), sv(out));
         }
 
-        u64 icon(Entry& e) {
-            if (e.tex) {
-                return e.tex == 1 ? 0 : e.tex;
-            }
-
-            e.tex = 1;
-
-            StringView ic(e.icon);
-
-            if (ic.empty()) {
-                return 0;
-            }
-
-            if (ic[0] == '/') {
-                if (ic.endsWith(".svg"_sv)) {
-                    loadSvg(e, e.icon);
-                }
-            } else {
-                forEachDataDir([this, &e, ic](StringView base) {
-                    if (e.tex != 1) {
-                        return;
-                    }
-
-                    auto& p = sb();
-
-                    p << base << "/icons/hicolor/scalable/apps/"_sv << ic << ".svg"_sv;
-
-                    if (access(p.cStr(), R_OK) == 0) {
-                        loadSvg(e, p.cStr());
-                    }
-                });
-            }
-
-            return e.tex == 1 ? 0 : e.tex;
-        }
-
-        void loadSvg(Entry& e, const char* path) {
-            auto doc = lunasvg::Document::loadFromFile(path);
-
-            if (!doc) {
-                return;
-            }
-
-            lunasvg::Bitmap bmp = doc->renderToBitmap(kIconPx, kIconPx);
-
-            if (bmp.isNull()) {
-                return;
-            }
-
-            // lunasvg bitmaps are premultiplied ARGB32, same as our textures
-            if (u64 tex = icons->iconTexture((const u32*)bmp.data(), kIconPx, kIconPx)) {
-                e.tex = tex;
-            }
-        }
-
         void refilter() {
             vis.clear();
 
@@ -321,11 +237,11 @@ namespace {
             }
         }
 
-        void draw(int screenW, int screenH, float uiScale) override;
+        void draw(int screenW, int screenH, float uiScale, IconResolver& texes) override;
     };
 }
 
-void LauncherImpl::draw(int screenW, int screenH, float uiScale) {
+void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& texes) {
     if (!open) {
         return;
     }
@@ -369,7 +285,7 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale) {
         bool navved = ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow);
 
         for (long i = 0; i < n; i++) {
-            Entry& e = entries.mut(vis[(size_t)i]);
+            const Entry& e = entries[vis[(size_t)i]];
             bool selected = sel == i + 1;
 
             ImGui::PushID((int)vis[(size_t)i]);
@@ -385,7 +301,7 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale) {
 
             ImGui::SameLine(ImGui::GetStyle().FramePadding.x);
 
-            if (u64 tex = icon(e)) {
+            if (u64 tex = texes.iconTexture(icons->forIconValue(StringView(e.icon)))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(rowH, rowH));
             } else {
                 ImGui::Dummy(ImVec2(rowH, rowH));
@@ -417,6 +333,6 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale) {
     scene->needsFrame = true;
 }
 
-Launcher* Launcher::create(ObjPool* pool, Scene& scene, IconHost& icons) {
+Launcher* Launcher::create(ObjPool* pool, Scene& scene, IconStore& icons) {
     return pool->make<LauncherImpl>(scene, icons);
 }

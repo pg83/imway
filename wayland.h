@@ -15,6 +15,8 @@ struct InputSink;
 struct DmabufFormat;
 struct FrameListener;
 struct SessionListener;
+struct IconPool;
+struct IconStore;
 
 struct WaylandConfig {
     const char* socketName = "imway-0";
@@ -25,6 +27,8 @@ struct WaylandConfig {
     Output* output = nullptr;
     double dpmsSec = 0;
     int drmFd = -1;
+    IconPool* iconPool = nullptr;
+    IconStore* iconStore = nullptr;
 };
 
 struct Wayland {

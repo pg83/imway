@@ -3,6 +3,7 @@
 #include <std/lib/vector.h>
 #include <std/sys/types.h>
 
+struct Icon;
 struct Popup;
 struct Surface;
 struct Toplevel;
@@ -110,6 +111,12 @@ struct Toplevel {
     // true until the client accepts server-side decorations over
     // xdg-decoration; csd windows draw their own bar, we draw none
     bool csd = true;
+
+    // window icon, resolved eagerly by wayland (on set_app_id and
+    // xdg-toplevel-icon set_icon); store-owned unless iconFromClient, which
+    // also shields it from app_id changes and icon store reloads
+    Icon* icon = nullptr;
+    bool iconFromClient = false;
 
     bool winSizeSet = false;
     int desiredW = 0, desiredH = 0;

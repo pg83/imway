@@ -40,6 +40,7 @@ unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
 unstable/idle-inhibit/idle-inhibit-unstable-v1.xml
 staging/ext-idle-notify/ext-idle-notify-v1.xml
 staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml
+staging/xdg-toplevel-icon/xdg-toplevel-icon-v1.xml
 "
 
 for xml in $PROTOCOLS; do
@@ -64,6 +65,9 @@ control.cpp
 input.cpp
 keyboard.cpp
 launcher.cpp
+icon_store.cpp
+icon_pool.cpp
+xdg_utils.cpp
 session.cpp
 device.cpp
 util.cpp

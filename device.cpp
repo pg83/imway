@@ -889,8 +889,8 @@ namespace {
             return output;
         }
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
         }
     };
 
@@ -1007,8 +1007,8 @@ namespace {
 
         ::Output* createOutput(const char*, const char* modeStr, double hdrNits) override;
 
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, const char* fontPath, float uiScale, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, fontPath, uiScale, framesLimit);
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override {
+            return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
         }
     };
 

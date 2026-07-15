@@ -1,5 +1,7 @@
 
 #include "wayland.h"
+#include "icon_pool.h"
+#include "icon_store.h"
 
 #include "input_sink.h"
 #include "frame_listener.h"
@@ -25,6 +27,7 @@
 #include <pointer-constraints-unstable-v1-server-protocol.h>
 #include <pointer-gestures-unstable-v1-server-protocol.h>
 #include <presentation-time-server-protocol.h>
+#include <xdg-toplevel-icon-v1-server-protocol.h>
 #include <primary-selection-unstable-v1-server-protocol.h>
 #include <relative-pointer-unstable-v1-server-protocol.h>
 #include <single-pixel-buffer-v1-server-protocol.h>
@@ -142,6 +145,10 @@ namespace {
         XdgSurface* xdg = nullptr;
         int cfgW = 0, cfgH = 0;
         int prevW = 0, prevH = 0;
+
+        // pool icon built from client pixels (xdg-toplevel-icon); wayland
+        // owns it: released on replace and on destroy
+        Icon* ownIcon = nullptr;
     };
 
     struct PopupImpl: public Popup {
@@ -154,6 +161,15 @@ namespace {
     struct RegionBox {
         WaylandImpl* srv = nullptr;
         Vector<RectI> rects;
+    };
+
+    // xdg-toplevel-icon: pixels are copied out of the wl_shm buffer right
+    // at add_buffer time, the largest reasonable size wins
+    struct IconBox {
+        WaylandImpl* srv = nullptr;
+        char name[128] = "";
+        Vector<u32> pixels;
+        int w = 0, h = 0;
     };
 
     struct ConstraintBox {
@@ -291,7 +307,7 @@ namespace {
         void toplevelGone(Toplevel* t);
     };
 
-    struct WaylandImpl: public Wayland, public InputSink, public FrameListener, public SessionListener {
+    struct WaylandImpl: public Wayland, public InputSink, public FrameListener, public SessionListener, public IconStoreListener {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
@@ -336,6 +352,9 @@ namespace {
         ObjList<SpbBox>* spbAlloc = nullptr;
         ObjList<Params>* dmabufParamsAlloc = nullptr;
         ObjList<ConstraintBox>* constraintAlloc = nullptr;
+        ObjList<IconBox>* iconAlloc = nullptr;
+        IconPool* iconPool = nullptr;
+        IconStore* icons = nullptr;
         ObjList<TimelineBox>* timelineAlloc = nullptr;
         int drmFd = -1;
 
@@ -360,6 +379,18 @@ namespace {
         ~WaylandImpl() noexcept;
 
         void run() override;
+
+        // icon store reload: re-resolve every window still on a .desktop
+        // match; client-set icons are not ours to touch
+        void iconsReloaded() override {
+            for (Toplevel* tl : scene->toplevels) {
+                if (!tl->iconFromClient) {
+                    tl->icon = icons->forAppId(StringView(tl->appId));
+                }
+            }
+
+            scene->needsFrame = true;
+        }
 
         InputSink* sink() override {
             return this;
@@ -1452,6 +1483,12 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
         copyBounded(t->appId, sizeof(t->appId), appId);
+
+        // resolve right here: a client icon set via xdg-toplevel-icon wins
+        if (!t->iconFromClient && t->srv->icons) {
+            t->icon = t->srv->icons->forAppId(StringView(t->appId));
+            t->srv->scene->needsFrame = true;
+        }
     }
 
     void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
@@ -1546,6 +1583,11 @@ namespace {
 
         if (t->surface) {
             t->surface->toplevel = nullptr;
+        }
+
+        if (t->ownIcon && srv->iconPool) {
+            srv->iconPool->release(t->ownIcon);
+            t->ownIcon = nullptr;
         }
 
         removeOne(srv->scene->toplevels, (Toplevel*)t);
@@ -3286,6 +3328,141 @@ namespace {
         }
     }
 
+    // ---- xdg-toplevel-icon ----
+    void iconResourceDestroyed(wl_resource* res) {
+        auto* box = (IconBox*)wl_resource_get_user_data(res);
+
+        box->srv->iconAlloc->release(box);
+    }
+
+    void iconSetName(wl_client*, wl_resource* res, const char* name) {
+        auto* box = (IconBox*)wl_resource_get_user_data(res);
+
+        copyBounded(box->name, sizeof(box->name), name);
+    }
+
+    void iconAddBuffer(wl_client*, wl_resource* res, wl_resource* bufferRes, i32) {
+        auto* box = (IconBox*)wl_resource_get_user_data(res);
+        wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
+
+        if (!shm) {
+            return; // dmabuf icons: not worth the plumbing
+        }
+
+        u32 fmt = wl_shm_buffer_get_format(shm);
+
+        if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
+            return;
+        }
+
+        int w = wl_shm_buffer_get_width(shm);
+        int h = wl_shm_buffer_get_height(shm);
+
+        if (w <= 0 || h <= 0 || w > 256 || h > 256 || w <= box->w) {
+            return;
+        }
+
+        i32 stride = wl_shm_buffer_get_stride(shm);
+
+        wl_shm_buffer_begin_access(shm);
+
+        const u8* src = (const u8*)wl_shm_buffer_get_data(shm);
+
+        box->pixels.clear();
+
+        for (int y = 0; y < h; y++) {
+            box->pixels.append((const u32*)(src + (size_t)y * stride), (size_t)w);
+        }
+
+        wl_shm_buffer_end_access(shm);
+        box->w = w;
+        box->h = h;
+    }
+
+    const struct xdg_toplevel_icon_v1_interface iconImpl = {
+        .destroy = resDestroy,
+        .set_name = iconSetName,
+        .add_buffer = iconAddBuffer,
+    };
+
+    void iconManagerCreateIcon(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &xdg_toplevel_icon_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        IconBox* box = srv->iconAlloc->make();
+
+        box->srv = srv;
+        wl_resource_set_implementation(r, &iconImpl, box, iconResourceDestroyed);
+    }
+
+    void iconManagerSetIcon(wl_client*, wl_resource* res, wl_resource* toplevelRes, wl_resource* iconRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
+
+        if (!t) {
+            return;
+        }
+
+        if (t->ownIcon && srv->iconPool) {
+            srv->iconPool->release(t->ownIcon);
+            t->ownIcon = nullptr;
+        }
+
+        t->icon = nullptr;
+        t->iconFromClient = false;
+
+        if (iconRes) {
+            auto* box = (IconBox*)wl_resource_get_user_data(iconRes);
+
+            if (box->pixels.length() && srv->iconPool) {
+                Icon* ic = srv->iconPool->acquire();
+
+                ic->width = box->w;
+                ic->height = box->h;
+                ic->argb.append(box->pixels.data(), box->pixels.length());
+                t->ownIcon = ic;
+                t->icon = ic;
+                t->iconFromClient = true;
+            } else if (box->name[0] && srv->icons) {
+                t->icon = srv->icons->byName(StringView(box->name));
+                t->iconFromClient = t->icon != nullptr;
+            }
+        }
+
+        if (!t->iconFromClient && srv->icons) {
+            // back to the .desktop match
+            t->icon = srv->icons->forAppId(StringView(t->appId));
+        }
+
+        srv->scene->needsFrame = true;
+    }
+
+    const struct xdg_toplevel_icon_manager_v1_interface iconManagerImpl = {
+        .destroy = resDestroy,
+        .create_icon = iconManagerCreateIcon,
+        .set_icon = iconManagerSetIcon,
+    };
+
+    void iconManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_toplevel_icon_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &iconManagerImpl, data, nullptr);
+        xdg_toplevel_icon_manager_v1_send_icon_size(res, 48);
+        xdg_toplevel_icon_manager_v1_send_done(res);
+    }
+
     void presentationFeedback(wl_client* client, wl_resource* res, wl_resource* surfRes, u32 id) {
         wl_resource* fb = wl_resource_create(client, &wp_presentation_feedback_interface, 1, id);
 
@@ -4899,11 +5076,18 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     spbAlloc = pool->make<ObjList<SpbBox>>(pool);
     dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
     constraintAlloc = pool->make<ObjList<ConstraintBox>>(pool);
+    iconAlloc = pool->make<ObjList<IconBox>>(pool);
     idleAlloc = pool->make<ObjList<IdleNotif>>(pool);
     timelineAlloc = pool->make<ObjList<TimelineBox>>(pool);
 
     output = cfg.output;
     dpmsSec = cfg.dpmsSec;
+    iconPool = cfg.iconPool;
+    icons = cfg.iconStore;
+
+    if (icons) {
+        icons->setListener(this);
+    }
     drmFd = cfg.drmFd;
 
     if (output && dpmsSec > 0) {
@@ -4977,6 +5161,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
     wl_global_create(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
+    wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
 
     u64 syncCap = 0;
