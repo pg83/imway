@@ -67,6 +67,9 @@ keyboard.cpp
 launcher.cpp
 icon_store.cpp
 icon_pool.cpp
+icon.cpp
+device_vk.cpp
+input_sink.cpp
 xdg_utils.cpp
 session.cpp
 device.cpp

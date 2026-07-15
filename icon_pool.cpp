@@ -1,3 +1,4 @@
+#include "icon.h"
 #include "icon_pool.h"
 
 #include <std/mem/obj_pool.h>

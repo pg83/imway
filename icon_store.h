@@ -7,6 +7,7 @@ namespace stl {
 }
 
 struct ev_loop;
+
 struct Icon;
 struct IconPool;
 

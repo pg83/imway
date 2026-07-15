@@ -1,5 +1,6 @@
 
 #include "wayland.h"
+#include "icon.h"
 #include "icon_pool.h"
 #include "icon_store.h"
 

@@ -1,3 +1,4 @@
+#include "icon.h"
 #include "icon_store.h"
 #include "icon_pool.h"
 #include "util.h"

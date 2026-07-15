@@ -4,6 +4,7 @@
 #include "frame_listener.h"
 #include "input_sink.h"
 #include "keyboard.h"
+#include "icon.h"
 #include "icon_pool.h"
 #include "icon_store.h"
 #include "launcher.h"
