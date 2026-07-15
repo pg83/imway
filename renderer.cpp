@@ -14,6 +14,7 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -677,7 +678,10 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     scene->kbCaptured = capture;
 
-    if (!capture) {
+    // presses under capture stay ours; releases always go through — the
+    // slave drops the ones whose press the client never saw, and a release
+    // lost to a capture window would leave the client with a stuck key
+    if (!capture || !pressed) {
         next->key(code, pressed);
     }
 
@@ -2420,9 +2424,16 @@ void RendererImpl::buildUi(Scene& scene) {
             }
 
             ImVec2 avail = ImGui::GetContentRegionAvail();
+            int wantW = (int)avail.x;
+            int wantH = (int)avail.y;
 
-            t->desiredW = (int)avail.x;
-            t->desiredH = (int)avail.y;
+            // avail just changed (user resize, restyle): that is a fresh
+            // intent, the client gets configured with it below; a stable
+            // avail means whatever geometry the client commits is truth
+            bool freshIntent = wantW != t->desiredW || wantH != t->desiredH;
+
+            t->desiredW = wantW;
+            t->desiredH = wantH;
 
             ImVec2 origin = ImGui::GetCursorScreenPos();
 
@@ -2444,16 +2455,23 @@ void RendererImpl::buildUi(Scene& scene) {
             }
 
             // a configure is only a suggestion: terminals commit sizes
-            // snapped to the cell grid — once the mouse is up, fit the frame
-            // to what the client actually committed (blocky resize)
-            if (!t->fullscreen && !ImGui::IsAnyMouseDown()) {
+            // snapped to the cell grid — once the mouse is up and avail is
+            // stable, fit the frame to what the client actually committed
+            // (blocky resize); never in the same frame as a fresh intent,
+            // or the stale-avail configure and the snap ping-pong forever
+            if (!freshIntent && !t->fullscreen && !ImGui::IsAnyMouseDown()) {
                 int gw = root->geomW(), gh = root->geomH();
 
-                if ((int)avail.x != gw || (int)avail.y != gh) {
+                if (wantW != gw || wantH != gh) {
                     const ImGuiStyle& gs = ImGui::GetStyle();
                     float header = t->csd ? 0.f : ImGui::GetFrameHeight();
 
-                    ImGui::SetWindowSize(ImVec2((float)gw + gs.WindowPadding.x * 2, (float)gh + gs.WindowPadding.y * 2 + header));
+                    // ceil, because imgui floors the window size: with
+                    // fractional chrome (scale slider) a plain sum floors
+                    // avail to geom-1 and the snap re-arms every frame
+                    ImGui::SetWindowSize(ImVec2(ceilf((float)gw + gs.WindowPadding.x * 2), ceilf((float)gh + gs.WindowPadding.y * 2 + header)));
+                    t->desiredW = gw;
+                    t->desiredH = gh;
                     scene.needsFrame = true;
                 }
             }
