@@ -43,6 +43,13 @@ else()
     target_link_libraries(pgstd INTERFACE std)
 endif()
 
+find_library(LUNASVG_LIBRARY lunasvg REQUIRED)
+find_library(PLUTOVG_LIBRARY plutovg REQUIRED)
+find_path(LUNASVG_INCLUDE_DIR lunasvg.h PATH_SUFFIXES lunasvg REQUIRED)
+add_library(lunasvg::lunasvg INTERFACE IMPORTED)
+target_link_libraries(lunasvg::lunasvg INTERFACE ${LUNASVG_LIBRARY} ${PLUTOVG_LIBRARY})
+target_include_directories(lunasvg::lunasvg INTERFACE ${LUNASVG_INCLUDE_DIR})
+
 # libev does not install a pkg-config file
 find_library(EV_LIBRARY ev REQUIRED)
 find_path(EV_INCLUDE_DIR ev.h REQUIRED)
@@ -209,6 +216,7 @@ add_executable(imway
     control.cpp
     input.cpp
     keyboard.cpp
+    launcher.cpp
     session.cpp
     device.cpp
     util.cpp
@@ -220,6 +228,7 @@ target_link_libraries(imway PRIVATE
     protocols
     pgstd
     Vulkan::Vulkan
+    lunasvg::lunasvg
     PkgConfig::WAYLAND_SERVER
     PkgConfig::DRM
     PkgConfig::INPUT

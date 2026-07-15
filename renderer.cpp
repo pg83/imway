@@ -4,6 +4,7 @@
 #include "frame_listener.h"
 #include "input_sink.h"
 #include "keyboard.h"
+#include "launcher.h"
 #include "output.h"
 #include "scene.h"
 #include "util.h"
@@ -63,7 +64,7 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
 
-    struct RendererImpl: public Renderer, public InputSink {
+    struct RendererImpl: public Renderer, public InputSink, public IconHost {
         InputSink* sink() override { return this; }
 
         void attachInput(Keyboard* kb, InputSink* slave) override {
@@ -139,10 +140,7 @@ namespace {
         bool altTabActive = false;
         Toplevel* altTabSel = nullptr;
 
-        // super-F2 launcher
-        bool launcherOpen = false;
-        bool launchFocus = false;
-        char launchBuf[256] = "";
+        Launcher* launcher = nullptr;
 
         // hardware cursor plane state
         bool hwCursorReady = false;
@@ -189,6 +187,7 @@ namespace {
             uiScale = scale;
             hasSyncFd = vk.hasSyncFd;
             drmFd = vk.drmFd;
+            launcher = Launcher::create(pool, scn, *this);
             setup(scn.outW, scn.outH);
 
             // before any input arrives the cursor sits at the screen center,
@@ -334,7 +333,31 @@ namespace {
             }
         }
 
-        void spawnLaunch();
+        u64 iconTexture(const u32* argb, int w, int h) override {
+            SurfaceTexture* tex = textureAlloc->make();
+
+            tex->w = w;
+            tex->h = h;
+            createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+            createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+
+            VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+            vci.image = tex->image;
+            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vci.format = kVkFormat;
+            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
+            tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+            memcpy(tex->stagingMap, argb, (size_t)w * h * 4);
+            tex->uploadRect = {0, 0, w, h};
+            tex->needsUpload = true;
+            textures.pushBack(tex);
+
+            return (u64)(uintptr_t)tex->ds;
+        }
+
         bool chordAction(u32 mask, u32 sym);
         void altTabStep(long dir);
         void altTabCommit();
@@ -493,7 +516,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
     // lives in the slave's modsChanged)
-    bool capture = launcherOpen || altTabActive || io.WantCaptureKeyboard;
+    bool capture = launcher->isOpen() || altTabActive || io.WantCaptureKeyboard;
 
     scene->kbCaptured = capture;
 
@@ -506,12 +529,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
     if (mask == kModLogo && sym == XKB_KEY_F2) {
-        launcherOpen = !launcherOpen;
-        launchFocus = launcherOpen;
-
-        if (launcherOpen) {
-            launchBuf[0] = 0;
-        }
+        launcher->toggle();
 
         return true;
     }
@@ -563,30 +581,6 @@ void RendererImpl::altTabCommit() {
     scene->needsFrame = true;
 }
 
-void RendererImpl::spawnLaunch() {
-    StringView cmd(launchBuf);
-
-    if (cmd.empty() || !scene->socketName) {
-        return;
-    }
-
-    pid_t pid = fork();
-
-    if (pid == 0) {
-        // double fork: the command reparents to init, no zombies to reap
-        if (fork() != 0) {
-            _exit(0);
-        }
-
-        setenv("WAYLAND_DISPLAY", scene->socketName, 1);
-        execlp("sh", "sh", "-c", launchBuf, (char*)nullptr);
-        _exit(127);
-    }
-
-    if (pid > 0) {
-        waitpid(pid, nullptr, 0);
-    }
-}
 
 u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties mp{};
@@ -1823,34 +1817,7 @@ void RendererImpl::buildUi(Scene& scene) {
         altTabSel = nullptr;
     }
 
-    if (launcherOpen) {
-        float lw = (float)width / 4.f < 320.f ? 320.f : (float)width / 4.f;
-
-        ImGui::SetNextWindowPos(ImVec2((float)width / 2.f, (float)height / 3.f), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-        ImGui::SetNextWindowSize(ImVec2(lw, 0.f));
-
-        if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
-            ImGui::TextUnformatted("run");
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(-1.f);
-
-            if (launchFocus) {
-                ImGui::SetKeyboardFocusHere();
-                launchFocus = false;
-            }
-
-            if (ImGui::InputText("##cmd", launchBuf, sizeof(launchBuf), ImGuiInputTextFlags_EnterReturnsTrue)) {
-                spawnLaunch();
-                launcherOpen = false;
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                launcherOpen = false;
-            }
-        }
-
-        ImGui::End();
-    }
+    launcher->draw(width, height, uiScale);
 
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)

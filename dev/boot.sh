@@ -16,7 +16,7 @@ JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
 CXXFLAGS="-std=c++23 -O2 -g -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
-LIBS="-lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -lstd"
+LIBS="-lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
 mkdir -p "$B/protocols" "$B/obj"
 
@@ -63,6 +63,7 @@ wayland.cpp
 control.cpp
 input.cpp
 keyboard.cpp
+launcher.cpp
 session.cpp
 device.cpp
 util.cpp
