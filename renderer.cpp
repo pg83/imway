@@ -135,12 +135,6 @@ namespace {
         Vector<VkImageView> scanViews;
         Vector<VkFramebuffer> scanFbs;
 
-        Toplevel* moving = nullptr;
-        ImVec2 moveOff{};
-        Toplevel* resizing = nullptr;
-        u32 activeEdges = 0;
-        ImVec2 resizeStartSz{}, resizeStartPos{}, resizeStartMouse{};
-
         StringView fontPath;
         float uiScale = 1.f;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
@@ -417,11 +411,8 @@ void RendererImpl::button(u32 btn, bool pressed) {
     ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
 
     // presses over our ui stay ours; releases always go through, the
-    // slave drops the ones whose press it never saw; super+press is
-    // a compositor gesture (window move), never the client's
-    bool superChord = keyboard && (keyboard->modMask() & kModLogo);
-
-    if (next && (!pressed || (!scene->ptrCaptured && !superChord))) {
+    // slave drops the ones whose press it never saw
+    if (next && (!pressed || !scene->ptrCaptured)) {
         next->button(btn, pressed);
     }
 }
@@ -2257,21 +2248,11 @@ void RendererImpl::buildUi(Scene& scene) {
         inspectorUi(scene);
     }
 
-    if (moving && !contains(scene.toplevels, moving)) {
-        moving = nullptr;
-    }
-
-    if (resizing && !contains(scene.toplevels, resizing)) {
-        resizing = nullptr;
-    }
-
-    // client frames are half-width; the grip keeps its stock size and is
-    // repainted over the texture below
+    // client frames are half-width
     const ImVec2 fullPad = ImGui::GetStyle().WindowPadding;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(fullPad.x * 0.5f, fullPad.y * 0.5f));
 
-    bool overGrip = false;
     int i = 0;
 
     for (Toplevel* t : scene.toplevels) {
@@ -2328,23 +2309,10 @@ void RendererImpl::buildUi(Scene& scene) {
         bool stayOpen = true;
 
         if (ImGui::Begin(label.cStr(), t->csd ? nullptr : &stayOpen, flags)) {
-            bool docked = ImGui::IsWindowDocked();
-
-            t->docked = docked;
+            t->docked = ImGui::IsWindowDocked();
 
             if (ImGui::IsWindowFocused()) {
                 scene.focusedToplevel = t;
-            }
-
-            // super+drag moves the window from anywhere, not just the bar
-            if (!docked && ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && keyboard && (keyboard->modMask() & kModLogo)) {
-                moving = t;
-                resizing = nullptr;
-
-                ImVec2 wp = ImGui::GetWindowPos();
-
-                moveOff = ImVec2(wp.x - io.MousePos.x, wp.y - io.MousePos.y);
-                ImGui::SetWindowFocus();
             }
 
             if (t->raiseRequested) {
@@ -2352,136 +2320,21 @@ void RendererImpl::buildUi(Scene& scene) {
                 ImGui::SetWindowFocus();
             }
 
-            if (t->moveRequested) {
-                t->moveRequested = false;
-
-                if (!docked && ImGui::IsAnyMouseDown()) {
-                    moving = t;
-                    resizing = nullptr;
-
-                    ImVec2 wp = ImGui::GetWindowPos();
-
-                    moveOff = ImVec2(wp.x - io.MousePos.x, wp.y - io.MousePos.y);
-                }
-            }
-
-            if (t->resizeEdges) {
-                if (!docked && ImGui::IsAnyMouseDown()) {
-                    resizing = t;
-                    moving = nullptr;
-                    activeEdges = t->resizeEdges;
-                    resizeStartSz = ImGui::GetWindowSize();
-                    resizeStartPos = ImGui::GetWindowPos();
-                    resizeStartMouse = io.MousePos;
-                }
-
-                t->resizeEdges = 0;
-            }
-
-            if (moving == t) {
-                if (ImGui::IsAnyMouseDown()) {
-                    ImGui::SetWindowPos(ImVec2(io.MousePos.x + moveOff.x, io.MousePos.y + moveOff.y));
-                    scene.needsFrame = true;
-                } else {
-                    moving = nullptr;
-                }
-            }
-
-            if (resizing == t) {
-                if (ImGui::IsAnyMouseDown()) {
-                    float dx = io.MousePos.x - resizeStartMouse.x;
-                    float dy = io.MousePos.y - resizeStartMouse.y;
-                    ImVec2 sz = resizeStartSz;
-                    ImVec2 pos = resizeStartPos;
-
-                    if (activeEdges & 8) {
-                        sz.x += dx;
-                    } else if (activeEdges & 4) {
-                        sz.x -= dx;
-                        pos.x += dx;
-                    }
-
-                    if (activeEdges & 2) {
-                        sz.y += dy;
-                    } else if (activeEdges & 1) {
-                        sz.y -= dy;
-                        pos.y += dy;
-                    }
-
-                    sz.x = sz.x < 120.f ? 120.f : sz.x;
-                    sz.y = sz.y < 80.f ? 80.f : sz.y;
-                    ImGui::SetWindowSize(sz);
-
-                    if (activeEdges & 5) {
-                        ImGui::SetWindowPos(pos);
-                    }
-
-                    scene.needsFrame = true;
-                } else {
-                    resizing = nullptr;
-                }
-            }
+            // client-initiated move/resize is dormant until it returns at
+            // the dock-group level; the flags are consumed so they do not
+            // go stale
+            t->moveRequested = false;
+            t->resizeEdges = 0;
 
             ImVec2 avail = ImGui::GetContentRegionAvail();
-            int wantW = (int)avail.x;
-            int wantH = (int)avail.y;
 
-            // avail just changed (user resize, restyle): that is a fresh
-            // intent, the client gets configured with it below; a stable
-            // avail means whatever geometry the client commits is truth
-            bool freshIntent = wantW != t->desiredW || wantH != t->desiredH;
-
-            t->desiredW = wantW;
-            t->desiredH = wantH;
+            t->desiredW = (int)avail.x;
+            t->desiredH = (int)avail.y;
 
             ImVec2 origin = ImGui::GetCursorScreenPos();
 
             drawSurfaceTree(*root, origin.x, origin.y);
 
-            // a configure is only a suggestion: terminals commit sizes
-            // snapped to the cell grid — once the mouse is up and avail is
-            // stable, fit the frame to what the client actually committed
-            // (blocky resize); never in the same frame as a fresh intent,
-            // or the stale-avail configure and the snap ping-pong forever
-            if (!freshIntent && !docked && !t->fullscreen && !ImGui::IsAnyMouseDown()) {
-                int gw = root->geomW(), gh = root->geomH();
-
-                if (wantW != gw || wantH != gh) {
-                    const ImGuiStyle& gs = ImGui::GetStyle();
-                    float header = t->csd ? 0.f : ImGui::GetFrameHeight();
-
-                    // ceil, because imgui floors the window size: with
-                    // fractional chrome (scale slider) a plain sum floors
-                    // avail to geom-1 and the snap re-arms every frame
-                    ImGui::SetWindowSize(ImVec2(ceilf((float)gw + gs.WindowPadding.x * 2), ceilf((float)gh + gs.WindowPadding.y * 2 + header)));
-                    t->desiredW = gw;
-                    t->desiredH = gh;
-                    scene.needsFrame = true;
-                }
-            }
-
-            // imgui paints its resize grip before window contents, so the
-            // client image buries it; repaint on top, and claim the corner
-            // for the ui — presses there must resize, not click the client
-            if (!docked && !t->fullscreen) {
-                float fs = ImGui::GetFontSize();
-                float ra = ImGui::GetStyle().WindowRounding + 1.f + fs * 0.2f;
-                float grip = (float)(int)(fs * 1.10f > ra ? fs * 1.10f : ra);
-                ImVec2 wp = ImGui::GetWindowPos();
-                ImVec2 ws = ImGui::GetWindowSize();
-                ImVec2 br(wp.x + ws.x, wp.y + ws.y);
-                bool hot = ImGui::IsWindowHovered() && io.MousePos.x < br.x && io.MousePos.y < br.y && (io.MousePos.x - (br.x - grip)) + (io.MousePos.y - (br.y - grip)) >= grip;
-                ImU32 col = ImGui::GetColorU32(hot ? (ImGui::IsMouseDown(0) ? ImGuiCol_ResizeGripActive : ImGuiCol_ResizeGripHovered) : ImGuiCol_ResizeGrip);
-                ImDrawList* dl = ImGui::GetWindowDrawList();
-
-                dl->PushClipRect(wp, br, false);
-                dl->AddTriangleFilled(ImVec2(br.x - grip, br.y), br, ImVec2(br.x, br.y - grip), col);
-                dl->PopClipRect();
-
-                if (hot) {
-                    overGrip = true;
-                }
-            }
         } else {
             markTreeUnhovered(*root);
         }
@@ -2541,7 +2394,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)
-    scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && (!overClient || overGrip);
+    scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && !overClient;
 
     // everything below draws into the foreground list, which sits on top of
     // all windows anyway — and it MUST happen before ImGui::Render(): draw
