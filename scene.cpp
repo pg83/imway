@@ -8,6 +8,34 @@ int Surface::viewH() const {
     return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : height / bufferScale;
 }
 
+int Surface::geomX() const {
+    return hasGeom ? geom.x : 0;
+}
+
+int Surface::geomY() const {
+    return hasGeom ? geom.y : 0;
+}
+
+int Surface::geomW() const {
+    if (!hasGeom || geom.w <= 0) {
+        return viewW();
+    }
+
+    int avail = viewW() - geom.x;
+
+    return geom.w < avail ? geom.w : (avail > 0 ? avail : viewW());
+}
+
+int Surface::geomH() const {
+    if (!hasGeom || geom.h <= 0) {
+        return viewH();
+    }
+
+    int avail = viewH() - geom.y;
+
+    return geom.h < avail ? geom.h : (avail > 0 ? avail : viewH());
+}
+
 bool Surface::inputContains(double sx, double sy) const {
     if (!inputRegionSet) {
         return true;

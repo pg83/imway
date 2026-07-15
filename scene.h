@@ -64,6 +64,16 @@ struct Surface {
     int viewW() const;
     int viewH() const;
 
+    // xdg window geometry: the visible rect within the surface (CSD shadows
+    // and margins live outside of it); zero-initialized means "whole surface"
+    RectI geom;
+    bool hasGeom = false;
+
+    int geomX() const;
+    int geomY() const;
+    int geomW() const;
+    int geomH() const;
+
     bool inputRegionSet = false;
     stl::Vector<RectI> inputRegion;
     bool inputContains(double sx, double sy) const;

@@ -1320,57 +1320,75 @@ bool RendererImpl::importDmabuf(Surface& s) {
     return true;
 }
 
+// x/y is where the VISIBLE part (window geometry) goes; imgX/imgY keep the
+// screen position of the surface origin, so client coordinate math holds
 void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
+    float gx = 0.f, gy = 0.f;
+    float w = (float)s.viewW(), h = (float)s.viewH();
+    ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+    bool viewported = s.vp.hasSrc || s.vp.hasDst;
+
+    if (s.texture && s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
+        uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
+        uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+    } else if (s.texture && !viewported && s.hasGeom && s.texture->w > 0 && s.texture->h > 0) {
+        gx = (float)s.geomX();
+        gy = (float)s.geomY();
+        w = (float)s.geomW();
+        h = (float)s.geomH();
+        uv0 = ImVec2(gx / (float)s.texture->w, gy / (float)s.texture->h);
+        uv1 = ImVec2((gx + w) / (float)s.texture->w, (gy + h) / (float)s.texture->h);
+    }
+
     for (Subsurface* c : s.stackBelow) {
         if (c->surface && c->surface->hasContent) {
-            drawSurfaceTree(*c->surface, x + (float)c->x, y + (float)c->y);
+            drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
     }
 
     if (s.texture) {
-        ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
-
-        if (s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
-            uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
-        }
-
-        float w = (float)s.viewW(), h = (float)s.viewH();
-
         ImGui::SetCursorScreenPos(ImVec2(x, y));
         ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv0, uv1);
-        s.imgX = x;
-        s.imgY = y;
+        s.imgX = x - gx;
+        s.imgY = y - gy;
         s.hovered = ImGui::IsItemHovered();
     }
 
     for (Subsurface* c : s.stackAbove) {
         if (c->surface && c->surface->hasContent) {
-            drawSurfaceTree(*c->surface, x + (float)c->x, y + (float)c->y);
+            drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
     }
 }
 
 void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
+    float gx = 0.f, gy = 0.f;
+    float w = (float)s.viewW(), h = (float)s.viewH();
+    ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+    bool viewported = s.vp.hasSrc || s.vp.hasDst;
+
+    if (s.texture && s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
+        uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
+        uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
+    } else if (s.texture && !viewported && s.hasGeom && s.texture->w > 0 && s.texture->h > 0) {
+        gx = (float)s.geomX();
+        gy = (float)s.geomY();
+        w = (float)s.geomW();
+        h = (float)s.geomH();
+        uv0 = ImVec2(gx / (float)s.texture->w, gy / (float)s.texture->h);
+        uv1 = ImVec2((gx + w) / (float)s.texture->w, (gy + h) / (float)s.texture->h);
+    }
+
     for (Subsurface* c : s.stackBelow) {
         if (c->surface && c->surface->hasContent) {
-            drawSurfaceTreeOverlay(*c->surface, x + (float)c->x, y + (float)c->y);
+            drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
     }
 
     if (s.texture) {
-        ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
-
-        if (s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
-            uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-            uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
-        }
-
-        float w = (float)s.viewW(), h = (float)s.viewH();
-
         ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(x, y), ImVec2(x + w, y + h), uv0, uv1);
-        s.imgX = x;
-        s.imgY = y;
+        s.imgX = x - gx;
+        s.imgY = y - gy;
 
         ImVec2 m = ImGui::GetIO().MousePos;
 
@@ -1379,7 +1397,7 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
 
     for (Subsurface* c : s.stackAbove) {
         if (c->surface && c->surface->hasContent) {
-            drawSurfaceTreeOverlay(*c->surface, x + (float)c->x, y + (float)c->y);
+            drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
     }
 }
@@ -1676,7 +1694,7 @@ void RendererImpl::buildUi(Scene& scene) {
         if (!t->winSizeSet) {
             const ImGuiStyle& st = ImGui::GetStyle();
 
-            ImGui::SetNextWindowSize(ImVec2((float)root->viewW() + st.WindowPadding.x * 2, (float)root->viewH() + st.WindowPadding.y * 2 + ImGui::GetFrameHeight()), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + ImGui::GetFrameHeight()), ImGuiCond_Always);
             t->winSizeSet = true;
         }
 
@@ -1794,7 +1812,7 @@ void RendererImpl::buildUi(Scene& scene) {
             continue;
         }
 
-        drawSurfaceTreeOverlay(*ps, p->parent->imgX + (float)p->x, p->parent->imgY + (float)p->y);
+        drawSurfaceTreeOverlay(*ps, p->parent->imgX + (float)p->parent->geomX() + (float)p->x, p->parent->imgY + (float)p->parent->geomY() + (float)p->y);
     }
 
     if (scene.dragIcon && scene.dragIcon->texture) {
@@ -1838,7 +1856,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 continue;
             }
 
-            float sw = (float)t->surface->viewW(), sh = (float)t->surface->viewH();
+            float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
             float tw = sh > 0.f ? th * sw / sh : th;
 
             total += (tw > th * 2.f ? th * 2.f : tw) + pad;
@@ -1859,7 +1877,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     continue;
                 }
 
-                float sw = (float)t->surface->viewW(), sh = (float)t->surface->viewH();
+                float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
                 float tw = sh > 0.f ? th * sw / sh : th;
 
                 if (tw > th * 2.f) {
@@ -1867,8 +1885,11 @@ void RendererImpl::buildUi(Scene& scene) {
                 }
 
                 float y = y0 + pad;
+                float texW = (float)t->surface->texture->w, texH = (float)t->surface->texture->h;
+                ImVec2 tuv0((float)t->surface->geomX() / texW, (float)t->surface->geomY() / texH);
+                ImVec2 tuv1(((float)t->surface->geomX() + sw) / texW, ((float)t->surface->geomY() + sh) / texH);
 
-                dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th));
+                dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th), tuv0, tuv1);
 
                 if (t == altTabSel) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), IM_COL32(255, 200, 60, 255), 0.f, 0, 3.f);

@@ -71,6 +71,8 @@ namespace {
         PopupImpl* popup = nullptr;
         bool initialConfigureSent = false;
         bool acked = false;
+        RectI pendGeom;
+        bool pendGeomSet = false;
     };
 
     struct SurfaceImpl: public Surface {
@@ -1589,7 +1591,11 @@ namespace {
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes);
 
-    void xdgSurfaceSetWindowGeometry(wl_client*, wl_resource*, i32, i32, i32, i32) {
+    void xdgSurfaceSetWindowGeometry(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+
+        xs->pendGeom = {x, y, w, h};
+        xs->pendGeomSet = true;
     }
 
     void xdgSurfaceAckConfigure(wl_client*, wl_resource* res, u32) {
@@ -1854,6 +1860,16 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_FULLSCREEN;
         }
 
+        // every window is "tiled": CSD toolkits (GTK) then drop their drop
+        // shadows, invisible resize margins and rounded corners, which we
+        // would otherwise have to crop via window geometry
+        if (wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_TILED_LEFT_SINCE_VERSION) {
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_LEFT;
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_RIGHT;
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_TOP;
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_BOTTOM;
+        }
+
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
         xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
@@ -1871,6 +1887,13 @@ namespace {
 
         if (!xs) {
             return;
+        }
+
+        if (xs->pendGeomSet) {
+            s.geom = xs->pendGeom;
+            s.hasGeom = true;
+            xs->pendGeomSet = false;
+            s.srv->scene->needsFrame = true;
         }
 
         if (!xs->initialConfigureSent) {
@@ -4074,8 +4097,8 @@ void SeatState::updateConfineRect() {
     }
 
     Scene* scn = srv->scene;
-    double x0 = ptrFocus->imgX, y0 = ptrFocus->imgY;
-    double x1 = x0 + ptrFocus->viewW() - 1, y1 = y0 + ptrFocus->viewH() - 1;
+    double x0 = ptrFocus->imgX + ptrFocus->geomX(), y0 = ptrFocus->imgY + ptrFocus->geomY();
+    double x1 = x0 + ptrFocus->geomW() - 1, y1 = y0 + ptrFocus->geomH() - 1;
 
     if (c->hasRegion && !c->regionBox.empty()) {
         double rx0 = ptrFocus->imgX + c->regionBox.x;
@@ -5002,7 +5025,7 @@ void WaylandImpl::frameShown(u32 msec) {
             continue;
         }
 
-        bool differsView = ti->desiredW != ti->surface->viewW() || ti->desiredH != ti->surface->viewH();
+        bool differsView = ti->desiredW != ti->surface->geomW() || ti->desiredH != ti->surface->geomH();
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
         if (differsView && differsSent) {
