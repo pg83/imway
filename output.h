@@ -25,6 +25,14 @@ struct Output {
     virtual double sdrWhiteNits() const = 0;
     virtual void setSdrWhite(double nits) = 0;
 
+    // night light: color temperature in kelvin, <= 0 or >= 6500 is neutral;
+    // rides the GAMMA_LUT like the sdr white knob, works without hdr too
+    virtual void setColorTemp(double kelvin) = 0;
+
+    // timestamp (CLOCK_MONOTONIC ns) and vblank sequence of the last
+    // completed pageflip; false when the backend has no real flips
+    virtual bool lastFlip(u64& nsec, u32& seq) const = 0;
+
     virtual bool start() = 0;
 
     virtual bool ready() const = 0;

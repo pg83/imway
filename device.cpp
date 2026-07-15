@@ -698,6 +698,11 @@ namespace {
         u32 hdrMetaBlob = 0, degammaBlob = 0, ctmBlob = 0, gammaBlob = 0;
         u64 gamLutSize = 0;
         bool gammaDirty = false;
+        double tempK = 0; // night light color temperature, 0 = neutral
+
+        // last completed pageflip, for presentation-time feedback
+        u64 flipNs = 0;
+        u32 flipSeq = 0;
 
         u32 cursorPlaneId = 0;
         u32 cuFbId = 0, cuCrtcId = 0;
@@ -752,6 +757,29 @@ namespace {
             buildGammaLut();
             gammaDirty = true;
         }
+
+        void setColorTemp(double kelvin) override {
+            double k = kelvin <= 0 || kelvin >= 6500 ? 0 : kelvin;
+
+            if (k == tempK) {
+                return;
+            }
+
+            tempK = k;
+            buildGammaLut();
+            gammaDirty = true;
+        }
+
+        bool lastFlip(u64& nsec, u32& seq) const override {
+            if (!flipNs) {
+                return false;
+            }
+
+            nsec = flipNs;
+            seq = flipSeq;
+
+            return true;
+        }
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor);
         bool commit(u32 fbId, bool doModeset);
@@ -804,8 +832,12 @@ namespace {
         void present(const void* pixels) override;
     };
 
-    void pageFlipHandler(int, unsigned, unsigned, unsigned, void* data) {
-        ((KmsOutput*)data)->flipPending = false;
+    void pageFlipHandler(int, unsigned seq, unsigned sec, unsigned usec, void* data) {
+        auto* out = (KmsOutput*)data;
+
+        out->flipPending = false;
+        out->flipNs = (u64)sec * 1000000000ull + (u64)usec * 1000ull;
+        out->flipSeq = seq;
     }
 
     void drmIoCb(struct ev_loop*, ev_io* w, int) {
@@ -903,6 +935,13 @@ namespace {
         }
 
         void setSdrWhite(double) override {
+        }
+
+        void setColorTemp(double) override {
+        }
+
+        bool lastFlip(u64&, u32&) const override {
+            return false;
         }
 
         bool start() override {
@@ -1137,6 +1176,10 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char*
     plCrtcY = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_Y");
     plCrtcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     plCrtcH = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
+
+    // gamma is useful without hdr too (night light), grab it up front
+    crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
+    gamLutSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", 0);
 
     if (cursorPlaneId) {
         try {
@@ -1417,13 +1460,11 @@ bool KmsOutput::setupHdr() {
     connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
     crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
     crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
-    crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
 
     u64 degSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT_SIZE", 0);
-    u64 gamSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", 0);
 
-    if (!connHdrMeta || !crtcDegammaProp || !crtcCtmProp || !crtcGammaProp || !degSize || !gamSize) {
-        sysE << "imway: hdr: missing kms props (meta "_sv << connHdrMeta << ", degamma "_sv << crtcDegammaProp << "/"_sv << degSize << ", ctm "_sv << crtcCtmProp << ", gamma "_sv << crtcGammaProp << "/"_sv << gamSize << ")"_sv << endL;
+    if (!connHdrMeta || !crtcDegammaProp || !crtcCtmProp || !crtcGammaProp || !degSize || !gamLutSize) {
+        sysE << "imway: hdr: missing kms props (meta "_sv << connHdrMeta << ", degamma "_sv << crtcDegammaProp << "/"_sv << degSize << ", ctm "_sv << crtcCtmProp << ", gamma "_sv << crtcGammaProp << "/"_sv << gamLutSize << ")"_sv << endL;
 
         return false;
     }
@@ -1476,31 +1517,67 @@ bool KmsOutput::setupHdr() {
 
     drmModeCreatePropertyBlob(fd, &ctm, sizeof(ctm), &ctmBlob);
 
-    gamLutSize = gamSize;
     buildGammaLut();
 
     return hdrMetaBlob && degammaBlob && ctmBlob && gammaBlob;
 }
 
-// linear [0..1] -> PQ with 1.0 pinned at hdrNits; rebuilt whenever the sdr
-// white knob moves (the kernel keeps its own copy, dropping ours is safe)
+// Tanner Helland's fit of the black body curve; only the warm (< 6500K)
+// side matters here, red stays at 1.0
+static void tempToRgb(double k, double& r, double& g, double& b) {
+    double t = k / 100.0;
+
+    r = 1.0;
+    g = (99.4708025861 * log(t) - 161.1195681661) / 255.0;
+    b = t <= 19.0 ? 0.0 : (138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0;
+    g = g < 0 ? 0 : g > 1 ? 1 : g;
+    b = b < 0 ? 0 : b > 1 ? 1 : b;
+}
+
+// the single GAMMA_LUT carries both knobs: linear [0..1] -> PQ with 1.0
+// pinned at hdrNits when the hdr pipeline is up, a plain srgb-encoded ramp
+// otherwise, both tinted by the night light temperature; with everything
+// neutral the blob is dropped (0 = kernel passthrough)
 void KmsOutput::buildGammaLut() {
-    Vector<drm_color_lut> lut;
-
-    lut.zero((size_t)gamLutSize);
-
-    for (u64 i = 0; i < gamLutSize; i++) {
-        double y = (double)i / (double)(gamLutSize - 1) * hdrNits / 10000.0;
-        double ym = pow(y, 0.1593017578125);
-        double pq = pow((0.8359375 + 18.8515625 * ym) / (1.0 + 18.6875 * ym), 78.84375);
-        u16 v = (u16)(pq * 65535.0 + 0.5);
-
-        lut.mut(i) = {v, v, v, 0};
+    if (!crtcGammaProp || !gamLutSize) {
+        return;
     }
 
     if (gammaBlob) {
         drmModeDestroyPropertyBlob(fd, gammaBlob);
         gammaBlob = 0;
+    }
+
+    double mr = 1, mg = 1, mb = 1;
+
+    if (tempK > 0) {
+        tempToRgb(tempK, mr, mg, mb);
+    }
+
+    if (!hdrActive && tempK <= 0) {
+        return;
+    }
+
+    Vector<drm_color_lut> lut;
+
+    lut.zero((size_t)gamLutSize);
+
+    for (u64 i = 0; i < gamLutSize; i++) {
+        double x = (double)i / (double)(gamLutSize - 1);
+
+        if (hdrActive) {
+            auto pq = [](double y) {
+                double ym = pow(y, 0.1593017578125);
+
+                return pow((0.8359375 + 18.8515625 * ym) / (1.0 + 18.6875 * ym), 78.84375);
+            };
+            double y = x * hdrNits / 10000.0;
+
+            lut.mut(i) = {(u16)(pq(y * mr) * 65535.0 + 0.5), (u16)(pq(y * mg) * 65535.0 + 0.5), (u16)(pq(y * mb) * 65535.0 + 0.5), 0};
+        } else {
+            // redshift-style: scale the encoded ramp, close enough for a tint
+            lut.mut(i) = {(u16)(x * mr * 65535.0 + 0.5), (u16)(x * mg * 65535.0 + 0.5), (u16)(x * mb * 65535.0 + 0.5), 0};
+        }
     }
 
     drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamLutSize * sizeof(drm_color_lut)), &gammaBlob);
@@ -1545,11 +1622,15 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
             drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, degammaBlob);
             drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, ctmBlob);
             drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+        } else if (gammaBlob && crtcGammaProp) {
+            // night light without the hdr pipeline
+            drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
         }
     }
 
-    // live sdr-white change: a GAMMA_LUT swap does not need a modeset
-    if (hdrActive && gammaDirty && !doModeset) {
+    // live lut change (sdr white / night light): no modeset needed, a zero
+    // blob resets the crtc to passthrough
+    if (crtcGammaProp && gammaDirty && !doModeset) {
         drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
     }
 

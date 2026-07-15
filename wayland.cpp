@@ -536,10 +536,24 @@ namespace {
         }
 
         if (!s.presentFeedbacks.empty()) {
-            timespec ts{};
+            // prefer the kernel's pageflip timestamp + vblank sequence over
+            // "now": mpv & co feed these into their vsync phase estimators
+            u64 flipNs = 0;
+            u32 seq = 0;
+            u32 flags;
 
-            clock_gettime(CLOCK_MONOTONIC, &ts);
+            if (s.srv->output && s.srv->output->lastFlip(flipNs, seq)) {
+                flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
+            } else {
+                timespec ts{};
 
+                clock_gettime(CLOCK_MONOTONIC, &ts);
+                flipNs = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+                flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC;
+            }
+
+            u64 sec = flipNs / 1000000000ull;
+            u32 nsec = (u32)(flipNs % 1000000000ull);
             u32 refreshNs = s.srv->scene->hz > 0 ? (u32)(1e9 / s.srv->scene->hz) : 0;
             Vector<wl_resource*> fbs;
 
@@ -547,7 +561,7 @@ namespace {
 
             for (wl_resource* fb : fbs) {
                 wl_resource_set_user_data(fb, nullptr);
-                wp_presentation_feedback_send_presented(fb, (u32)(ts.tv_sec >> 32), (u32)ts.tv_sec, (u32)ts.tv_nsec, refreshNs, 0, 0, WP_PRESENTATION_FEEDBACK_KIND_VSYNC);
+                wp_presentation_feedback_send_presented(fb, (u32)(sec >> 32), (u32)sec, nsec, refreshNs, 0, seq, flags);
                 wl_resource_destroy(fb);
             }
         }

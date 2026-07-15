@@ -132,6 +132,8 @@ namespace {
         bool scaleDirty = false;   // scale committed: restyle before the next frame
         float scaleEdit = 0.f;     // slider-side scale value, applied on release
         float sdrNits = -1.f;      // menu copy of the output sdr white, -1 = unqueried
+        bool nightOn = false;      // night light toggle + temperature
+        float nightK = 3400.f;
 
         // input mastering: imgui first, leftovers to the wayland slave sink
         Keyboard* keyboard = nullptr;
@@ -1672,6 +1674,17 @@ void RendererImpl::buildUi(Scene& scene) {
                     output->setSdrWhite(sdrNits);
                     scene.needsFrame = true;
                 }
+            }
+
+            bool night = ImGui::Checkbox("##nighton", &nightOn);
+
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(180.f * uiScale - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+            night |= ImGui::SliderFloat("night", &nightK, 2500.f, 6500.f, "%.0f K", ImGuiSliderFlags_AlwaysClamp);
+
+            if (night) {
+                output->setColorTemp(nightOn ? nightK : 0);
+                scene.needsFrame = true;
             }
 
             ImGui::EndMenu();
