@@ -35,3 +35,8 @@ as string storage and no hand-rolled copy helpers. Fixed arrays are fine for
 what they really are: stack IO scratch, bounded wire tokens in trivial
 `stl::Vector` elements, rings/bitmaps/index tables, and imgui InputText
 buffers (its API contract).
+
+No `const char*` in our interfaces: parameters and members are `StringView`
+(empty = unset) or `StringBuilder&` when the callee needs a NUL. Materialize
+only at the C call: `Buffer(sv).cStr()`. Prefer libstd io over raw syscalls:
+`readFileContent`, `listDir`, `FDRegular`, `memFD`.
