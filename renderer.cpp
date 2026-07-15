@@ -9,6 +9,7 @@
 #include "scene.h"
 #include "util.h"
 
+#include <dirent.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -135,6 +136,28 @@ namespace {
         bool nightOn = false;      // night light toggle + temperature
         float nightK = 3400.f;
 
+        // bar widgets: /proc-fed cpu history, meminfo, battery; sampled at
+        // most once per ~2s, the clock timer keeps frames coming
+        u64 statMs = 0;
+        u64 cpuPrevBusy = 0, cpuPrevTotal = 0;
+        float cpuHist[96] = {};
+        int cpuIdx = 0;
+        int cpuPct = 0;
+        long memUsedMb = 0;
+        long batPct = -2;          // -2 unprobed, -1 no battery
+        bool batCharging = false;
+        char batPath[128] = "";
+
+        // calendar popup under the clock
+        bool calOpen = false;
+        bool calFresh = false;
+        int calYear = 0, calMon = 0;
+
+        // inspector overlay (Super+F12)
+        bool inspectorOpen = false;
+        float frameMs[120] = {};
+        int frameMsIdx = 0;
+
         // input mastering: imgui first, leftovers to the wayland slave sink
         Keyboard* keyboard = nullptr;
         InputSink* next = nullptr;
@@ -209,7 +232,7 @@ namespace {
                 ev_timer_start(loop, &frameTimer);
             }
 
-            ev_timer_init(&clockTimer, clockTimerCb, 10., 10.);
+            ev_timer_init(&clockTimer, clockTimerCb, 2., 2.);
             clockTimer.data = this;
             ev_timer_start(loop, &clockTimer);
         }
@@ -237,6 +260,9 @@ namespace {
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
+        void sampleStats();
+        void calendarUi();
+        void inspectorUi(Scene& scene);
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
@@ -538,6 +564,13 @@ void RendererImpl::key(u32 code, bool pressed) {
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
     if (mask == kModLogo && sym == XKB_KEY_F2) {
         launcher->toggle();
+
+        return true;
+    }
+
+    if (mask == kModLogo && sym == XKB_KEY_F12) {
+        inspectorOpen = !inspectorOpen;
+        scene->needsFrame = true;
 
         return true;
     }
@@ -1614,6 +1647,312 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     }
 }
 
+namespace {
+    StringView readSmallFile(const char* path, char* buf, size_t cap) {
+        int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+
+        if (fd < 0) {
+            return {};
+        }
+
+        ssize_t n = read(fd, buf, cap);
+
+        close(fd);
+
+        return n > 0 ? StringView((const u8*)buf, (size_t)n) : StringView{};
+    }
+
+    // "MemAvailable:    1234 kB" -> 1234
+    long meminfoKb(StringView text, StringView key) {
+        StringView rest = text;
+
+        while (!rest.empty()) {
+            StringView line, tail;
+
+            if (!rest.split('\n', line, tail)) {
+                line = rest;
+                tail = {};
+            }
+
+            rest = tail;
+
+            if (line.startsWith(key)) {
+                long v = 0;
+
+                for (u8 c : line) {
+                    if (c >= '0' && c <= '9') {
+                        v = v * 10 + (c - '0');
+                    }
+                }
+
+                return v;
+            }
+        }
+
+        return 0;
+    }
+}
+
+void RendererImpl::sampleStats() {
+    u64 now = nowMsec();
+
+    if (statMs && now - statMs < 1900) {
+        return;
+    }
+
+    statMs = now;
+
+    char buf[2048];
+
+    // cpu: busy/total delta over the first /proc/stat line
+    if (StringView st = readSmallFile("/proc/stat", buf, sizeof(buf)); !st.empty()) {
+        u64 vals[8] = {};
+        int n = 0;
+        u64 cur = 0;
+        bool in = false;
+
+        for (u8 c : st) {
+            if (c == '\n') {
+                break;
+            }
+
+            if (c >= '0' && c <= '9') {
+                cur = cur * 10 + (c - '0');
+                in = true;
+            } else if (in) {
+                if (n < 8) {
+                    vals[n++] = cur;
+                }
+
+                cur = 0;
+                in = false;
+            }
+        }
+
+        u64 total = 0;
+
+        for (int i = 0; i < n; i++) {
+            total += vals[i];
+        }
+
+        u64 busy = total - vals[3] - vals[4]; // minus idle, iowait
+
+        if (cpuPrevTotal && total > cpuPrevTotal) {
+            cpuPct = (int)((busy - cpuPrevBusy) * 100 / (total - cpuPrevTotal));
+        }
+
+        cpuPrevBusy = busy;
+        cpuPrevTotal = total;
+        cpuHist[cpuIdx] = (float)cpuPct;
+        cpuIdx = (cpuIdx + 1) % 96;
+    }
+
+    if (StringView mi = readSmallFile("/proc/meminfo", buf, sizeof(buf)); !mi.empty()) {
+        long total = meminfoKb(mi, "MemTotal:"_sv);
+        long avail = meminfoKb(mi, "MemAvailable:"_sv);
+
+        memUsedMb = (total - avail) / 1024;
+    }
+
+    if (batPct == -2) {
+        batPct = -1;
+
+        if (DIR* d = opendir("/sys/class/power_supply")) {
+            while (dirent* de = readdir(d)) {
+                if (de->d_name[0] == '.') {
+                    continue;
+                }
+
+                auto& p = sb();
+
+                p << "/sys/class/power_supply/"_sv << (const char*)de->d_name;
+
+                size_t baseLen = p.used();
+
+                p << "/type"_sv;
+
+                if (readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Battery"_sv)) {
+                    p.seekAbsolute(baseLen);
+
+                    if (p.used() < sizeof(batPath)) {
+                        memcpy(batPath, p.cStr(), p.used() + 1);
+                    }
+
+                    break;
+                }
+            }
+
+            closedir(d);
+        }
+    }
+
+    if (batPath[0]) {
+        auto& p = sb();
+
+        p << (const char*)batPath << "/capacity"_sv;
+        batPct = (long)readSmallFile(p.cStr(), buf, sizeof(buf)).stou();
+        p.reset();
+        p << (const char*)batPath << "/status"_sv;
+        batCharging = readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Charging"_sv);
+    }
+}
+
+void RendererImpl::calendarUi() {
+    static const char* kMonths[12] = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"};
+    static const int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+
+    ImGui::SetNextWindowPos(ImVec2((float)width - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
+
+    if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings)) {
+        if (calFresh) {
+            ImGui::SetWindowFocus();
+            calFresh = false;
+        } else if (!ImGui::IsWindowFocused()) {
+            calOpen = false;
+        }
+
+        float cell = ImGui::GetFontSize() * 2.2f;
+
+        if (ImGui::ArrowButton("##pm", ImGuiDir_Left)) {
+            if (--calMon < 0) {
+                calMon = 11;
+                calYear--;
+            }
+        }
+
+        auto& hdr = sb();
+
+        hdr << kMonths[calMon] << " "_sv << calYear;
+
+        float hw = ImGui::CalcTextSize(hdr.cStr()).x;
+
+        ImGui::SameLine((cell * 7.f - hw) / 2.f);
+        ImGui::TextUnformatted(hdr.cStr());
+        ImGui::SameLine(cell * 7.f - ImGui::GetFrameHeight());
+
+        if (ImGui::ArrowButton("##nm", ImGuiDir_Right)) {
+            if (++calMon > 11) {
+                calMon = 0;
+                calYear++;
+            }
+        }
+
+        static const char* kWd[7] = {"mo", "tu", "we", "th", "fr", "sa", "su"};
+
+        for (int i = 0; i < 7; i++) {
+            if (i) {
+                ImGui::SameLine((float)i * cell + ImGui::GetStyle().WindowPadding.x);
+            }
+
+            ImGui::TextDisabled("%s", kWd[i]);
+        }
+
+        bool leap = calYear % 4 == 0 && (calYear % 100 != 0 || calYear % 400 == 0);
+        int days = kDays[calMon] + (calMon == 1 && leap ? 1 : 0);
+        tm f{};
+
+        f.tm_year = calYear - 1900;
+        f.tm_mon = calMon;
+        f.tm_mday = 1;
+        f.tm_hour = 12;
+        mktime(&f);
+
+        int col = (f.tm_wday + 6) % 7; // monday-based
+        time_t nowT = time(nullptr);
+        tm today{};
+
+        localtime_r(&nowT, &today);
+
+        for (int day = 1; day <= days; day++) {
+            if (col) {
+                ImGui::SameLine((float)col * cell + ImGui::GetStyle().WindowPadding.x);
+            }
+
+            auto& ds = sb();
+
+            ds << day;
+
+            bool isToday = today.tm_year + 1900 == calYear && today.tm_mon == calMon && today.tm_mday == day;
+
+            if (isToday) {
+                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 60, 255));
+            }
+
+            ImGui::TextUnformatted(ds.cStr());
+
+            if (isToday) {
+                ImGui::PopStyleColor();
+            }
+
+            if (++col == 7) {
+                col = 0;
+            }
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            calOpen = false;
+        }
+    }
+
+    ImGui::End();
+}
+
+void RendererImpl::inspectorUi(Scene& scene) {
+    ImGui::SetNextWindowSize(ImVec2(440.f * uiScale, 400.f * uiScale), ImGuiCond_FirstUseEver);
+
+    if (ImGui::Begin("inspector", &inspectorOpen)) {
+        float last = frameMs[(frameMsIdx + 119) % 120];
+
+        ImGui::PlotLines("##ft", frameMs, 120, frameMsIdx, nullptr, 0.f, 8.f, ImVec2(-1.f, 44.f * uiScale));
+
+        auto& l = sb();
+
+        l << "frame "_sv << (i64)scene.framesDone << ", "_sv << (i64)last << "."_sv << (i64)(last * 10) % 10 << " ms, textures "_sv << (u64)textures.length() << ", dmabuf cache "_sv << (u64)dmabufCache.length();
+        ImGui::TextUnformatted(l.cStr());
+        l.reset();
+        l << "kb -> "_sv << (scene.kbCaptured ? "ui" : "client") << ", ptr -> "_sv << (scene.ptrCaptured ? "ui" : "client") << ", focus: "_sv << (scene.focusedToplevel ? (const char*)scene.focusedToplevel->title : "-");
+        ImGui::TextUnformatted(l.cStr());
+        l.reset();
+        l << "cursor shape "_sv << (i64)scene.cursorShape << ", hw kind "_sv << hwKind << (hwVisible ? ", visible"_sv : ", hidden"_sv) << (scene.pointerLocked ? ", LOCKED"_sv : ""_sv) << (scene.pointerConfined ? ", CONFINED"_sv : ""_sv);
+        ImGui::TextUnformatted(l.cStr());
+        ImGui::Separator();
+
+        for (Toplevel* t : scene.toplevels) {
+            StringView title(t->title);
+
+            l.reset();
+            l << (title.length() > 200 ? title.prefix(200) : title) << "###insp"_sv << (u64)t->id;
+
+            if (ImGui::TreeNode(l.cStr())) {
+                Surface* s = t->surface;
+
+                l.reset();
+                l << "app_id "_sv << (t->appId[0] ? (const char*)t->appId : "-") << (t->mapped ? ", mapped"_sv : ""_sv) << (t->csd ? ", csd"_sv : ", ssd"_sv) << (t->fullscreen ? ", fullscreen"_sv : ""_sv);
+                ImGui::TextUnformatted(l.cStr());
+
+                if (s) {
+                    l.reset();
+                    l << "buffer "_sv << s->width << "x"_sv << s->height << " @"_sv << s->bufferScale << (s->dmabuf ? " dmabuf"_sv : " shm"_sv) << ", geom "_sv << s->geomX() << ","_sv << s->geomY() << " "_sv << s->geomW() << "x"_sv << s->geomH();
+                    ImGui::TextUnformatted(l.cStr());
+                    l.reset();
+                    l << "subsurfaces "_sv << (u64)(s->stackBelow.length() + s->stackAbove.length()) << ", pos "_sv << (i64)s->imgX << ","_sv << (i64)s->imgY;
+                    ImGui::TextUnformatted(l.cStr());
+                }
+
+                ImGui::TreePop();
+            }
+        }
+
+        if (scene.popups.length()) {
+            l.reset();
+            l << (u64)scene.popups.length() << " popup(s)"_sv;
+            ImGui::TextUnformatted(l.cStr());
+        }
+    }
+
+    ImGui::End();
+}
+
 void RendererImpl::buildUi(Scene& scene) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -1695,7 +2034,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
         localtime_r(&now, &lt);
 
-        CStr<64> clock;
+        auto& clock = sb();
         auto pad2 = [&clock](int v) {
             if (v < 10) {
                 clock << 0;
@@ -1716,16 +2055,62 @@ void RendererImpl::buildUi(Scene& scene) {
         float cw = ImGui::CalcTextSize(clock.cStr()).x;
         float x = ImGui::GetWindowWidth() - cw - st.ItemSpacing.x;
 
+        ImGui::SameLine(x);
+        ImGui::TextUnformatted(clock.cStr());
+
+        if (ImGui::IsItemClicked()) {
+            calOpen = !calOpen;
+
+            if (calOpen) {
+                calFresh = true;
+                calYear = lt.tm_year + 1900;
+                calMon = lt.tm_mon;
+            }
+        }
+
+        float xl = x;
+
         if (scene.layout[0]) {
             float lw = ImGui::CalcTextSize(scene.layout).x;
 
-            ImGui::SameLine(x - lw - st.ItemSpacing.x * 2);
+            xl = x - lw - st.ItemSpacing.x * 2;
+            ImGui::SameLine(xl);
             ImGui::TextUnformatted(scene.layout);
         }
 
-        ImGui::SameLine(x);
-        ImGui::TextUnformatted(clock.cStr());
+        // clock is on screen, the shared builder is free again
+        sampleStats();
+
+        auto& stat = sb();
+
+        stat << "cpu "_sv << cpuPct << "%  "_sv << memUsedMb / 1024 << "."_sv << memUsedMb % 1024 * 10 / 1024 << "G"_sv;
+
+        if (batPct >= 0) {
+            stat << "  bat "_sv << batPct << "%"_sv;
+
+            if (batCharging) {
+                stat << "+"_sv;
+            }
+        }
+
+        float sw = ImGui::CalcTextSize(stat.cStr()).x;
+        float plotW = 56.f * uiScale;
+        float xs = xl - sw - st.ItemSpacing.x * 2;
+        float xp = xs - plotW - st.ItemSpacing.x;
+
+        ImGui::SameLine(xp);
+        ImGui::PlotLines("##cpu", cpuHist, 96, cpuIdx, nullptr, 0.f, 100.f, ImVec2(plotW, ImGui::GetFontSize()));
+        ImGui::SameLine(xs);
+        ImGui::TextUnformatted(stat.cStr());
         ImGui::EndMainMenuBar();
+    }
+
+    if (calOpen) {
+        calendarUi();
+    }
+
+    if (inspectorOpen) {
+        inspectorUi(scene);
     }
 
     if (moving && !contains(scene.toplevels, moving)) {
@@ -1762,7 +2147,7 @@ void RendererImpl::buildUi(Scene& scene) {
             title = title.prefix(280);
         }
 
-        CStr<320> label;
+        auto& label = sb();
 
         label << title << "###toplevel"_sv << (u64)t->id;
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
@@ -2041,7 +2426,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     title = title.prefix(24);
                 }
 
-                CStr<64> lbl;
+                auto& lbl = sb();
 
                 lbl << title;
                 dl->AddText(ImVec2(x, y + th + pad * 0.75f), IM_COL32(230, 230, 230, 255), lbl.cStr());
@@ -2530,6 +2915,10 @@ void RendererImpl::shutdown() noexcept {
 }
 
 void RendererImpl::frameNow() {
+    timespec ft0{};
+
+    clock_gettime(CLOCK_MONOTONIC, &ft0);
+
     if (scene->needsFrame) {
         settleFrames = 3;
     }
@@ -2585,6 +2974,12 @@ void RendererImpl::frameNow() {
     if (listener) {
         listener->frameShown(nowMsec());
     }
+
+    timespec ft1{};
+
+    clock_gettime(CLOCK_MONOTONIC, &ft1);
+    frameMs[frameMsIdx] = (float)((double)(ft1.tv_sec - ft0.tv_sec) * 1e3 + (double)(ft1.tv_nsec - ft0.tv_nsec) / 1e6);
+    frameMsIdx = (frameMsIdx + 1) % 120;
 
     scene->framesDone++;
 

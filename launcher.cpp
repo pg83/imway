@@ -72,10 +72,11 @@ namespace {
             if (const char* home = getenv("XDG_DATA_HOME")) {
                 fn(StringView(home));
             } else if (const char* h = getenv("HOME")) {
-                CStr<256> p;
+                // fn formats paths of its own: this one needs its own builder
+                StringBuilder p;
 
                 p << h << "/.local/share"_sv;
-                fn(p.view());
+                fn(sv(p));
             }
 
             const char* xdg = getenv("XDG_DATA_DIRS");
@@ -101,7 +102,9 @@ namespace {
             entries.clear();
 
             forEachDataDir([this](StringView base) {
-                CStr<320> dir;
+                // parseDesktop formats via the shared builder underneath,
+                // the directory paths live across those calls
+                StringBuilder dir;
 
                 dir << base << "/applications"_sv;
 
@@ -118,9 +121,9 @@ namespace {
                         continue;
                     }
 
-                    CStr<512> f;
+                    StringBuilder f;
 
-                    f << dir.view() << "/"_sv << n;
+                    f << sv(dir) << "/"_sv << n;
                     parseDesktop(f.cStr());
                 }
 
@@ -205,7 +208,7 @@ namespace {
 
         // strip the %f/%u/... field codes from Exec
         static void setExec(Entry& en, StringView val) {
-            CStr<256> out;
+            auto& out = sb();
             const u8* b = val.begin();
             const u8* seg = b;
 
@@ -220,7 +223,7 @@ namespace {
             }
 
             out << StringView(seg, b);
-            setStr(en.exec, sizeof(en.exec), out.view());
+            setStr(en.exec, sizeof(en.exec), sv(out));
         }
 
         u64 icon(Entry& e) {
@@ -246,7 +249,7 @@ namespace {
                         return;
                     }
 
-                    CStr<512> p;
+                    auto& p = sb();
 
                     p << base << "/icons/hicolor/scalable/apps/"_sv << ic << ".svg"_sv;
 

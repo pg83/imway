@@ -52,7 +52,7 @@ namespace {
                 return false;
             }
 
-            CStr<64> p;
+            auto& p = sb();
 
             p << "/dev/input/event"_sv << n;
 

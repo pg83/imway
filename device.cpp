@@ -61,7 +61,7 @@ namespace {
         return m.w > 0 && m.h > 0;
     }
 
-    void connectorName(const drmModeConnector* c, CStr<64>& out) {
+    void connectorName(const drmModeConnector* c, StringBuilder& out) {
         const char* t = drmModeGetConnectorTypeName(c->connector_type);
 
         out << (t ? t : "Unknown") << "-"_sv << c->connector_type_id;
@@ -855,7 +855,7 @@ namespace {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         int fd = -1;
-        CStr<64> path;
+        StringBuilder path;
         DeviceVk vk{};
         Vector<DmabufFormat> formats;
         ev_io drmIo{};
@@ -1012,7 +1012,7 @@ namespace {
         }
     };
 
-    int openKmsNode(Session& session, const char* devPath, CStr<64>& outPath) {
+    int openKmsNode(Session& session, const char* devPath, StringBuilder& outPath) {
         if (devPath) {
             int fd = session.openDevice(devPath);
 
@@ -1026,7 +1026,7 @@ namespace {
         }
 
         for (int i = 0; i < 8; i++) {
-            CStr<64> p;
+            auto& p = sb();
 
             p << "/dev/dri/card"_sv << i;
 
@@ -1042,7 +1042,7 @@ namespace {
                 continue;
             }
 
-            outPath << p.view();
+            outPath << sv(p);
 
             return fd;
         }
@@ -1085,7 +1085,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char*
         ev_io_start(loop, &udevIo);
     }
 
-    sysO << "imway: device "_sv << path.view() << endL;
+    sysO << "imway: device "_sv << sv(path) << endL;
 }
 
 KmsDevice::~KmsDevice() noexcept {
@@ -1117,7 +1117,7 @@ namespace {
         }
 
         const char* node = udev_device_get_devnode(d);
-        bool ours = node && StringView(node) == dev->path.view();
+        bool ours = node && StringView(node) == sv(dev->path);
 
         udev_device_unref(d);
 
@@ -1324,10 +1324,10 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
         bool ok = c->connection == DRM_MODE_CONNECTED && c->count_modes > 0;
 
         if (ok && connector) {
-            CStr<64> name;
+            auto& name = sb();
 
             connectorName(c, name);
-            ok = name.view() == StringView(connector);
+            ok = sv(name) == StringView(connector);
         }
 
         if (ok) {
@@ -1897,7 +1897,7 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop) : pool(p), lo
 
         // a render node is enough for syncobj ioctls (explicit sync)
         for (int i = 128; i < 136 && syncFd < 0; i++) {
-            CStr<64> pth;
+            auto& pth = sb();
 
             pth << "/dev/dri/renderD"_sv << i;
 
@@ -1947,7 +1947,7 @@ Device* Device::createHeadless(ObjPool* pool, struct ev_loop* loop) {
 
 void Device::list() {
     for (int i = 0; i < 8; i++) {
-        CStr<64> p;
+        auto& p = sb();
 
         p << "/dev/dri/card"_sv << i;
 
@@ -1960,7 +1960,7 @@ void Device::list() {
         bool atomic = drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0;
         drmVersion* ver = drmGetVersion(fd);
 
-        sysO << p.view() << ": "_sv << (ver && ver->name ? ver->name : "?") << (atomic ? ", atomic"_sv : ", NO atomic (unusable)"_sv) << endL;
+        sysO << sv(p) << ": "_sv << (ver && ver->name ? ver->name : "?") << (atomic ? ", atomic"_sv : ", NO atomic (unusable)"_sv) << endL;
 
         if (ver) {
             drmFreeVersion(ver);
@@ -1976,10 +1976,10 @@ void Device::list() {
                     continue;
                 }
 
-                CStr<64> name;
+                auto& name = sb();
 
                 connectorName(conn, name);
-                sysO << "  "_sv << name.view() << (conn->connection == DRM_MODE_CONNECTED ? ": connected"_sv : ": disconnected"_sv);
+                sysO << "  "_sv << sv(name) << (conn->connection == DRM_MODE_CONNECTED ? ": connected"_sv : ": disconnected"_sv);
 
                 for (int m = 0; m < conn->count_modes; m++) {
                     const drmModeModeInfo& mi = conn->modes[m];

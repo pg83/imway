@@ -3,54 +3,23 @@
 #include <string.h>
 
 #include <std/dbg/verify.h>
-#include <std/ios/out_zc.h>
 #include <std/lib/vector.h>
+#include <std/str/builder.h>
 #include <std/str/view.h>
 
 inline stl::StringView operator""_sv(const char* s, size_t len) {
     return {(const u8*)s, len};
 }
 
-// fixed-capacity stream producing a NUL-terminated string for C APIs;
-// string writes are truncated to fit, number writes must fit whole:
-// libstd requests 24 spare bytes per integer (128 per float) up front,
-// so size N with that headroom, not just for the expected characters
-template <size_t N>
-class CStr: public stl::ZeroCopyOutput {
-    char buf[N];
-    size_t used = 0;
+// the compositor is single threaded: one shared scratch builder serves all
+// transient formatting. sb() resets it on every acquire — never hold the
+// reference across a call that may format too; overlapping lifetimes get
+// their own local StringBuilder
+stl::StringBuilder& sb();
 
-    size_t writeImpl(const void* data, size_t len) override {
-        size_t avail = N - 1 - used;
-        size_t n = len < avail ? len : avail;
-
-        memcpy(buf + used, data, n);
-        used += n;
-
-        return len;
-    }
-
-    void* imbueImpl(size_t* len) override {
-        STD_VERIFY(used + *len < N);
-
-        return buf + used;
-    }
-
-    void commitImpl(size_t len) override {
-        used += len;
-    }
-
-public:
-    const char* cStr() noexcept {
-        buf[used] = 0;
-
-        return buf;
-    }
-
-    stl::StringView view() const noexcept {
-        return {(const u8*)buf, used};
-    }
-};
+inline stl::StringView sv(const stl::StringBuilder& b) {
+    return {(const u8*)b.data(), b.used()};
+}
 
 double parseFloat(stl::StringView s);
 

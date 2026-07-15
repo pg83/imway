@@ -69,7 +69,7 @@ namespace {
         Renderer* renderer = nullptr;
         int fd = -1;
         ev_io io{};
-        CStr<256> path;
+        StringBuilder path;
         char line[1024] = "";
         size_t lineLen = 0;
 
@@ -98,7 +98,7 @@ ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, co
     ev_io_init(&io, controlIoCb, fd, EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
-    sysO << "imway: control FIFO: "_sv << path.view() << endL;
+    sysO << "imway: control FIFO: "_sv << sv(path) << endL;
 }
 
 ControlImpl::~ControlImpl() noexcept {
@@ -107,7 +107,7 @@ ControlImpl::~ControlImpl() noexcept {
         close(fd);
     }
 
-    if (!path.view().empty()) {
+    if (!sv(path).empty()) {
         unlink(path.cStr());
     }
 }
@@ -165,7 +165,7 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "scroll"_sv) {
         sink->scroll(0, parseFloat(args));
     } else if (verb == "screenshot"_sv) {
-        CStr<256> p;
+        auto& p = sb();
 
         p << args;
         renderer->screenshot(p.cStr());

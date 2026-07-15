@@ -3331,7 +3331,7 @@ namespace {
 
     void activationTokenCommit(wl_client*, wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CStr<64> token;
+        auto& token = sb();
 
         token << "imway-"_sv << (u64)++srv->tokenCounter;
         xdg_activation_token_v1_send_done(res, token.cStr());

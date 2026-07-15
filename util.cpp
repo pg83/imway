@@ -4,6 +4,14 @@
 
 using namespace stl;
 
+StringBuilder& sb() {
+    static StringBuilder b(512);
+
+    b.reset();
+
+    return b;
+}
+
 double parseFloat(StringView s) {
     bool neg = s.startsWith("-"_sv);
 
