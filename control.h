@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std/str/view.h>
+
 namespace stl {
     class ObjPool;
 }
@@ -10,5 +12,5 @@ struct Renderer;
 struct InputSink;
 
 struct Control {
-    static Control* create(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, const char* fifoPath);
+    static Control* create(stl::ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, stl::StringView fifoPath);
 };

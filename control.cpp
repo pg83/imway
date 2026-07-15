@@ -73,7 +73,7 @@ namespace {
         char line[1024] = "";
         size_t lineLen = 0;
 
-        ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath);
+        ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, StringView fifoPath);
         ~ControlImpl() noexcept;
 
         void handleLine(StringView cmd);
@@ -86,12 +86,11 @@ namespace {
     }
 }
 
-ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath)
+ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, StringView fifoPath)
     : loop(evLoop)
     , sink(&s)
     , renderer(&rnd)
 {
-    STD_VERIFY(StringView(fifoPath).length() < 256);
     path << fifoPath;
     unlink(path.cStr());
     STD_VERIFY(mkfifo(path.cStr(), 0600) == 0);
@@ -169,10 +168,7 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "scroll"_sv) {
         sink->scroll(0, parseFloat(args));
     } else if (verb == "screenshot"_sv) {
-        auto& p = sb();
-
-        p << args;
-        renderer->screenshot(p.cStr());
+        renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;
     } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
@@ -224,6 +220,6 @@ void ControlImpl::reopen() {
     ev_io_start(loop, &io);
 }
 
-Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, const char* fifoPath) {
+Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, StringView fifoPath) {
     return pool->make<ControlImpl>(loop, sink, renderer, fifoPath);
 }

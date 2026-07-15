@@ -23,7 +23,7 @@ using namespace stl;
 
 namespace {
     struct DirectSession: public Session {
-        const char* seatName() const override;
+        StringView seatName() const override;
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
         void addListener(SessionListener*) override;
@@ -49,7 +49,7 @@ namespace {
         SeatSession(struct ev_loop* evLoop);
         ~SeatSession() noexcept;
 
-        const char* seatName() const override;
+        StringView seatName() const override;
 
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
@@ -78,8 +78,8 @@ namespace {
     };
 }
 
-const char* DirectSession::seatName() const {
-    return "seat0";
+StringView DirectSession::seatName() const {
+    return "seat0"_sv;
 }
 
 int DirectSession::openDevice(const char* path) {
@@ -131,8 +131,8 @@ SeatSession::~SeatSession() noexcept {
     seat = nullptr;
 }
 
-const char* SeatSession::seatName() const {
-    return libseat_seat_name(seat);
+StringView SeatSession::seatName() const {
+    return StringView(libseat_seat_name(seat));
 }
 
 int SeatSession::openDevice(const char* path) {

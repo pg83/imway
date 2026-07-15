@@ -315,7 +315,7 @@ namespace {
         wl_display* display = nullptr;
         wl_event_loop* wlLoop = nullptr;
 
-        const char* socketName = nullptr;
+        StringView socketName;
         Keyboard* keyboard = nullptr;
         Vector<DmabufFormat> formats;
         u64 mainDevice = 0;
@@ -5035,7 +5035,7 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
         ev_timer_again(loop, &dpmsTimer);
     }
 
-    if (wl_display_add_socket(display, socketName) != 0) {
+    if (wl_display_add_socket(display, Buffer(socketName).cStr()) != 0) {
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 

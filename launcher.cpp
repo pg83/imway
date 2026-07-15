@@ -4,7 +4,6 @@
 #include "util.h"
 #include "xdg_utils.h"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,7 +13,9 @@
 #include <imgui.h>
 
 #include <std/alg/qsort.h>
+#include <std/ios/fs_utils.h>
 #include <std/lib/vector.h>
+#include <std/sys/fs.h>
 #include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/fd.h>
@@ -51,13 +52,13 @@ namespace {
         void toggle() override;
         bool isOpen() const override;
         void rescan();
-        void parseDesktop(const char* file);
+        void parseDesktop(StringBuilder& file);
 
         // strip the %f/%u/... field codes from Exec
         void setExec(Entry& en, StringView val);
 
         void refilter();
-        void run(const char* cmd);
+        void run(StringView cmd);
 
         void draw(int screenW, int screenH, float uiScale, IconResolver& texes) override;
     };
@@ -95,33 +96,20 @@ void LauncherImpl::rescan() {
     entries.clear();
 
     forEachXdgDataDir([this](StringView base) {
-        // parseDesktop formats via the shared builder underneath,
-        // the directory path lives across those calls
         StringBuilder dir;
 
         dir << base << "/applications"_sv;
 
-        DIR* d = opendir(dir.cStr());
-
-        if (!d) {
-            return;
-        }
-
-        size_t mark = dir.used();
-
-        while (dirent* de = readdir(d)) {
-            StringView n(de->d_name);
-
-            if (!n.endsWith(".desktop"_sv)) {
-                continue;
+        listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+            if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
+                return;
             }
 
-            dir.seekAbsolute(mark);
-            dir << "/"_sv << n;
-            parseDesktop(dir.cStr());
-        }
+            StringBuilder f;
 
-        closedir(d);
+            f << sv(dir) << "/"_sv << e.item;
+            parseDesktop(f);
+        });
     });
 
     quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry* a, const Entry* b) {
@@ -129,31 +117,20 @@ void LauncherImpl::rescan() {
     });
 }
 
-void LauncherImpl::parseDesktop(const char* file) {
-    ScopedFD fd(::open(file, O_RDONLY | O_CLOEXEC));
+void LauncherImpl::parseDesktop(StringBuilder& file) {
+    Buffer data;
 
-    if (fd.get() < 0) {
+    readFileContent(file, data);
+
+    if (data.empty()) {
         return;
-    }
-
-    Vector<u8> data;
-    u8 buf[4096];
-
-    for (;;) {
-        ssize_t n = read(fd.get(), buf, sizeof(buf));
-
-        if (n <= 0) {
-            break;
-        }
-
-        data.append(buf, (size_t)n);
     }
 
     Entry* en = entryAlloc.make();
     bool inSection = false;
     bool display = true;
     bool isApp = false;
-    StringView rest((const u8*)data.data(), data.length());
+    StringView rest = sv(data);
 
     while (!rest.empty()) {
         StringView line, tail;
@@ -236,11 +213,13 @@ void LauncherImpl::refilter() {
     }
 }
 
-void LauncherImpl::run(const char* cmd) {
-    if (!cmd[0] || !scene->socketName) {
+void LauncherImpl::run(StringView cmd) {
+    if (cmd.empty() || scene->socketName.empty()) {
         return;
     }
 
+    // materialize before the fork, both live until the exec
+    Buffer c(cmd), sock(scene->socketName);
     pid_t pid = fork();
 
     if (pid == 0) {
@@ -249,8 +228,8 @@ void LauncherImpl::run(const char* cmd) {
             _exit(0);
         }
 
-        setenv("WAYLAND_DISPLAY", scene->socketName, 1);
-        execlp("sh", "sh", "-c", cmd, (char*)nullptr);
+        setenv("WAYLAND_DISPLAY", sock.cStr(), 1);
+        execlp("sh", "sh", "-c", c.cStr(), (char*)nullptr);
         _exit(127);
     }
 
@@ -309,7 +288,7 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
             ImGui::PushID((int)vis[(size_t)i]);
 
             if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                run(e.exec.cStr());
+                run(sv(e.exec));
                 open = false;
             }
 
@@ -333,9 +312,9 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
 
         if (enter) {
             if (sel >= 1 && sel <= n) {
-                run(entries[vis[(size_t)(sel - 1)]]->exec.cStr());
+                run(sv(entries[vis[(size_t)(sel - 1)]]->exec));
             } else {
-                run(query);
+                run(StringView(query));
             }
 
             open = false;

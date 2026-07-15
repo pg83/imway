@@ -4,7 +4,6 @@
 #include "util.h"
 #include "xdg_utils.h"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <string.h>
 #include <sys/inotify.h>
@@ -13,8 +12,10 @@
 #include <ev.h>
 #include <lunasvg.h>
 
+#include <std/ios/fs_utils.h>
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
+#include <std/sys/fs.h>
 #include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
@@ -56,11 +57,11 @@ namespace {
         ~IconStoreImpl() noexcept;
 
         void buildIndex();
-        void addDesktop(const char* file, StringView fileId);
+        void addDesktop(StringBuilder& file, StringView fileId);
         void drainInotify();
         void setListener(IconStoreListener* l) override;
         void reload();
-        Icon* loadSvgFile(const char* path);
+        Icon* loadSvgFile(StringBuilder& path);
         Icon* cached(StringView key, auto&& load);
         Icon* byName(StringView name) override;
         Icon* forIconValue(StringView v) override;
@@ -125,58 +126,30 @@ void IconStoreImpl::buildIndex() {
     index.clear();
 
     forEachXdgDataDir([this](StringView base) {
-        StringBuilder p;
+        StringBuilder dir;
 
-        p << base << "/applications"_sv;
+        dir << base << "/applications"_sv;
 
-        DIR* d = opendir(p.cStr());
-
-        if (!d) {
-            return;
-        }
-
-        size_t mark = p.used();
-
-        while (dirent* de = readdir(d)) {
-            StringView n(de->d_name);
-
-            if (!n.endsWith(".desktop"_sv)) {
-                continue;
+        listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+            if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
+                return;
             }
 
-            p.seekAbsolute(mark);
-            p << "/"_sv << n;
-            addDesktop(p.cStr(), n.prefix(n.length() - 8));
-        }
+            StringBuilder f;
 
-        closedir(d);
+            f << sv(dir) << "/"_sv << e.item;
+            addDesktop(f, e.item.prefix(e.item.length() - 8));
+        });
     });
 }
 
-void IconStoreImpl::addDesktop(const char* file, StringView fileId) {
-    int fd = ::open(file, O_RDONLY | O_CLOEXEC);
+void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
+    Buffer data;
 
-    if (fd < 0) {
-        return;
-    }
-
-    Vector<u8> data;
-    u8 buf[4096];
-
-    for (;;) {
-        ssize_t n = read(fd, buf, sizeof(buf));
-
-        if (n <= 0) {
-            break;
-        }
-
-        data.append(buf, (size_t)n);
-    }
-
-    close(fd);
+    readFileContent(file, data);
 
     bool inSection = false;
-    StringView rest((const u8*)data.data(), data.length());
+    StringView rest = sv(data);
     DesktopIcon* di = indexAlloc.make();
 
     di->fileId << fileId;
@@ -261,8 +234,8 @@ void IconStoreImpl::reload() {
     sysO << "imway: icon store reloaded, "_sv << (u64)index.length() << " entries"_sv << endL;
 }
 
-Icon* IconStoreImpl::loadSvgFile(const char* path) {
-    auto doc = lunasvg::Document::loadFromFile(path);
+Icon* IconStoreImpl::loadSvgFile(StringBuilder& path) {
+    auto doc = lunasvg::Document::loadFromFile(path.cStr());
 
     if (!doc) {
         return nullptr;
@@ -319,7 +292,7 @@ Icon* IconStoreImpl::byName(StringView name) {
             p << base << "/icons/hicolor/scalable/apps/"_sv << name << ".svg"_sv;
 
             if (access(p.cStr(), R_OK) == 0) {
-                found = loadSvgFile(p.cStr());
+                found = loadSvgFile(p);
             }
         });
 
@@ -345,7 +318,7 @@ Icon* IconStoreImpl::forIconValue(StringView v) {
 
         p << v;
 
-        return loadSvgFile(p.cStr());
+        return loadSvgFile(p);
     });
 }
 

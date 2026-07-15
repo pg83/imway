@@ -42,9 +42,9 @@ namespace {
         double hz = 0;
     };
 
-    bool parseModeSpec(const char* s, ModeSpec& m) {
-        StringView v(s);
-        StringView wh = v, hz;
+    bool parseModeSpec(StringView s, ModeSpec& m) {
+        StringView wh = s, hz;
+        StringView v = s;
 
         v.split('@', wh, hz);
 
@@ -722,7 +722,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits);
+        KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -731,7 +731,7 @@ namespace {
         int width() const override;
         int height() const override;
         double refresh() const override;
-        void pickPipe(const char* connector, const char* modeStr);
+        void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
         void buildGammaLut();
 
@@ -797,15 +797,15 @@ namespace {
         ev_io udevIo{};
         KmsOutput* output = nullptr;
 
-        KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
+        KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView devPath);
         ~KmsDevice() noexcept;
 
         int drmFd() const override;
         unsigned long long renderDevice() const override;
         size_t dmabufFormatCount() const override;
         DmabufFormat dmabufFormat(size_t i) const override;
-        ::Output* createOutput(const char* connector, const char* modeStr, double hdrNits) override;
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) override;
+        ::Output* createOutput(StringView connector, StringView modeStr, double hdrNits) override;
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) override;
     };
 
     struct HeadlessOutput: public ::Output {
@@ -851,13 +851,13 @@ namespace {
         unsigned long long renderDevice() const override;
         size_t dmabufFormatCount() const override;
         DmabufFormat dmabufFormat(size_t i) const override;
-        ::Output* createOutput(const char*, const char* modeStr, double hdrNits) override;
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) override;
+        ::Output* createOutput(StringView, StringView modeStr, double hdrNits) override;
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) override;
     };
 
-    int openKmsNode(Session& session, const char* devPath, StringBuilder& outPath) {
-        if (devPath) {
-            int fd = session.openDevice(devPath);
+    int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath) {
+        if (!devPath.empty()) {
+            int fd = session.openDevice(Buffer(devPath).cStr());
 
             if (fd < 0) {
                 Errno(-fd).raise(StringBuilder() << "kms: open "_sv << devPath);
@@ -896,7 +896,7 @@ namespace {
     }
 }
 
-KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath)
+KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView devPath)
     : pool(p)
     , loop(evLoop)
     , session(&s)
@@ -970,13 +970,13 @@ DmabufFormat KmsDevice::dmabufFormat(size_t i) const {
     return formats[i];
 }
 
-::Output* KmsDevice::createOutput(const char* connector, const char* modeStr, double hdrNits) {
+::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {
     output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr, hdrNits);
 
     return output;
 }
 
-Renderer* KmsDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+Renderer* KmsDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
     return Renderer::create(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }
 
@@ -1032,7 +1032,7 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits)
+KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
     : fd(drmFd)
     , vk(v)
     , hdrNits(hdrWhiteNits)
@@ -1230,7 +1230,7 @@ double KmsOutput::refresh() const {
     return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
 }
 
-void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
+void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     drmModeRes* res = drmModeGetResources(fd);
 
     STD_VERIFY(res);
@@ -1246,11 +1246,11 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
 
         bool ok = c->connection == DRM_MODE_CONNECTED && c->count_modes > 0;
 
-        if (ok && connector) {
+        if (ok && !connector.empty()) {
             auto& name = sb();
 
             connectorName(c, name);
-            ok = sv(name) == StringView(connector);
+            ok = sv(name) == connector;
         }
 
         if (ok) {
@@ -1260,7 +1260,7 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
         }
     }
 
-    if (!conn && connector) {
+    if (!conn && !connector.empty()) {
         sysE << "imway: connector "_sv << connector << " not found or not connected (see imway --list)"_sv << endL;
     }
 
@@ -1268,7 +1268,7 @@ void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
 
     connectorId = conn->connector_id;
 
-    if (modeStr) {
+    if (!modeStr.empty()) {
         ModeSpec want{};
 
         STD_VERIFY(parseModeSpec(modeStr, want));
@@ -2040,21 +2040,21 @@ DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
     return formats[i];
 }
 
-::Output* HeadlessDevice::createOutput(const char*, const char* modeStr, double) {
+::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double) {
     ModeSpec m{1280, 800, 60};
 
-    if (modeStr) {
+    if (!modeStr.empty()) {
         STD_VERIFY(parseModeSpec(modeStr, m));
     }
 
     return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
 }
 
-Renderer* HeadlessDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+Renderer* HeadlessDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
     return Renderer::create(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }
 
-Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath) {
+Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, Session& session, StringView devPath) {
     return pool->make<KmsDevice>(pool, loop, session, devPath);
 }
 

@@ -2,6 +2,8 @@
 
 #include <stddef.h>
 
+#include <std/str/view.h>
+
 namespace stl {
     class ObjPool;
 }
@@ -19,7 +21,7 @@ struct IconPool;
 struct IconStore;
 
 struct WaylandConfig {
-    const char* socketName = "imway-0";
+    stl::StringView socketName = "imway-0";
     Keyboard* keyboard = nullptr;
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;

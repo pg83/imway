@@ -4,6 +4,7 @@
 
 #include <std/dbg/verify.h>
 #include <std/lib/vector.h>
+#include <std/lib/buffer.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 
@@ -17,7 +18,7 @@ inline stl::StringView operator""_sv(const char* s, size_t len) {
 // their own local StringBuilder
 stl::StringBuilder& sb();
 
-inline stl::StringView sv(const stl::StringBuilder& b) {
+inline stl::StringView sv(const stl::Buffer& b) {
     return {(const u8*)b.data(), b.used()};
 }
 

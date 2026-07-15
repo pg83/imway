@@ -38,23 +38,23 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    const char* devicePath = "auto";
-    const char* outputName = nullptr;
-    const char* modeStr = nullptr;
-    const char* socketName = "imway-0";
-    const char* xkbLayout = "us,ru";
-    const char* xkbOptions = "grp:caps_toggle";
-    const char* fontPath = nullptr;
+    StringView devicePath = "auto";
+    StringView outputName;
+    StringView modeStr;
+    StringView socketName = "imway-0";
+    StringView xkbLayout = "us,ru";
+    StringView xkbOptions = "grp:caps_toggle";
+    StringView fontPath;
     float uiScale = 1.f;
-    const char* screenshotPath = nullptr;
-    const char* controlPath = nullptr;
+    StringView screenshotPath;
+    StringView controlPath;
     int framesLimit = 0;
     double dpmsSec = 0;
     double hdrNits = 0;
     char** cmdArgv = nullptr;
 
     for (int i = 1; i < argc; i++) {
-        auto next = [&]() -> const char* {
+        auto next = [&]() -> StringView {
             if (i + 1 >= argc) {
                 usage(argv[0]);
                 exit(2);
@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    bool kms = StringView(devicePath) != "headless"_sv;
+    bool kms = devicePath != "headless"_sv;
 
     if (!getenv("XDG_RUNTIME_DIR")) {
         sysE << "XDG_RUNTIME_DIR is not set"_sv << endL;
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, StringView(devicePath) == "auto"_sv ? nullptr : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
+        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, devicePath == "auto"_sv ? StringView{} : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(outputName, modeStr, hdrNits);
 
@@ -198,7 +198,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (controlPath) {
+        if (!controlPath.empty()) {
             Control::create(pool.mutPtr(), loop, *sink, *renderer, controlPath);
         }
 
@@ -212,7 +212,7 @@ int main(int argc, char** argv) {
             if (pid == 0) {
                 const char* cmd = cmdArgv[0];
 
-                setenv("WAYLAND_DISPLAY", socketName, 1);
+                setenv("WAYLAND_DISPLAY", Buffer(socketName).cStr(), 1);
                 execvp(cmd, cmdArgv);
 
                 try {
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
 
         wayland->run();
 
-        if (screenshotPath) {
+        if (!screenshotPath.empty()) {
             renderer->screenshot(screenshotPath);
             sysO << "imway: screenshot: "_sv << screenshotPath << endL;
         }

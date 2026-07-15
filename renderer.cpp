@@ -12,7 +12,6 @@
 #include "scene.h"
 #include "util.h"
 
-#include <dirent.h>
 #include <fcntl.h>
 #include <math.h>
 #include <stdlib.h>
@@ -36,7 +35,10 @@
 #include <imgui_impl_vulkan.h>
 
 #include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
 #include <std/ios/sys.h>
+#include <std/sys/fs.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
@@ -139,7 +141,7 @@ namespace {
         u32 activeEdges = 0;
         ImVec2 resizeStartSz{}, resizeStartPos{}, resizeStartMouse{};
 
-        const char* fontPath = nullptr;
+        StringView fontPath;
         float uiScale = 1.f;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
         float scaleEdit = 0.f;     // slider-side scale value, committed on release
@@ -225,7 +227,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, const char* font, float scale, int limit);
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -290,7 +292,7 @@ namespace {
 
         void frameNow();
         void renderFrame(int scanIdx);
-        bool screenshot(const char* path) override;
+        bool screenshot(StringView path) override;
     };
 
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
@@ -318,7 +320,7 @@ InputSink* RendererImpl::sink() {
 void RendererImpl::modsChanged() {
 }
 
-RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, const char* font, float scale, int limit)
+RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit)
     : loop(evLoop)
     , keyboard(&kb)
     , next(&slave)
@@ -956,10 +958,16 @@ void RendererImpl::setup(int w, int h) {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    const char* fontCandidates[] = {fontPath, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/TTF/DejaVuSans.ttf"};
+    StringView fontCandidates[] = {fontPath, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv, "/usr/share/fonts/TTF/DejaVuSans.ttf"_sv};
 
-    for (const char* f : fontCandidates) {
-        if (f && access(f, R_OK) == 0 && io.Fonts->AddFontFromFileTTF(f, 16.f, nullptr, io.Fonts->GetGlyphRangesCyrillic())) {
+    for (StringView f : fontCandidates) {
+        if (f.empty()) {
+            continue;
+        }
+
+        Buffer p(f);
+
+        if (access(p.cStr(), R_OK) == 0 && io.Fonts->AddFontFromFileTTF(p.cStr(), 16.f, nullptr, io.Fonts->GetGlyphRangesCyrillic())) {
             break;
         }
     }
@@ -1778,18 +1786,11 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
 }
 
 namespace {
-    StringView readSmallFile(const char* path, char* buf, size_t cap) {
-        int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    StringView readSmallFile(Buffer& path, Buffer& out) {
+        out.reset();
+        readFileContent(path, out);
 
-        if (fd < 0) {
-            return {};
-        }
-
-        ssize_t n = read(fd, buf, cap);
-
-        close(fd);
-
-        return n > 0 ? StringView((const u8*)buf, (size_t)n) : StringView{};
+        return sv(out);
     }
 
     // "MemAvailable:    1234 kB" -> 1234
@@ -1832,10 +1833,11 @@ void RendererImpl::sampleStats() {
 
     statMs = now;
 
-    char buf[2048];
+    Buffer content;
 
     // cpu: busy/total delta over the first /proc/stat line
-    if (StringView st = readSmallFile("/proc/stat", buf, sizeof(buf)); !st.empty()) {
+    if (Buffer path("/proc/stat"_sv); !readSmallFile(path, content).empty()) {
+        StringView st = sv(content);
         u64 vals[8] = {};
         int n = 0;
         u64 cur = 0;
@@ -1877,9 +1879,9 @@ void RendererImpl::sampleStats() {
         cpuIdx = (cpuIdx + 1) % 96;
     }
 
-    if (StringView mi = readSmallFile("/proc/meminfo", buf, sizeof(buf)); !mi.empty()) {
-        long total = meminfoKb(mi, "MemTotal:"_sv);
-        long avail = meminfoKb(mi, "MemAvailable:"_sv);
+    if (Buffer path("/proc/meminfo"_sv); !readSmallFile(path, content).empty()) {
+        long total = meminfoKb(sv(content), "MemTotal:"_sv);
+        long avail = meminfoKb(sv(content), "MemAvailable:"_sv);
 
         memUsedMb = (total - avail) / 1024;
     }
@@ -1887,40 +1889,29 @@ void RendererImpl::sampleStats() {
     if (batPct == -2) {
         batPct = -1;
 
-        if (DIR* d = opendir("/sys/class/power_supply")) {
-            while (dirent* de = readdir(d)) {
-                if (de->d_name[0] == '.') {
-                    continue;
-                }
-
-                auto& p = sb();
-
-                p << "/sys/class/power_supply/"_sv << (const char*)de->d_name;
-
-                size_t baseLen = p.used();
-
-                p << "/type"_sv;
-
-                if (readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Battery"_sv)) {
-                    p.seekAbsolute(baseLen);
-                    batPath << sv(p);
-
-                    break;
-                }
+        listDir("/sys/class/power_supply"_sv, [this, &content](const TPathInfo& e) {
+            if (!batPath.empty()) {
+                return;
             }
 
-            closedir(d);
-        }
+            StringBuilder p;
+
+            p << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
+
+            if (readSmallFile(p, content).startsWith("Battery"_sv)) {
+                batPath << "/sys/class/power_supply/"_sv << e.item;
+            }
+        });
     }
 
     if (!batPath.empty()) {
         auto& p = sb();
 
         p << sv(batPath) << "/capacity"_sv;
-        batPct = (long)readSmallFile(p.cStr(), buf, sizeof(buf)).stou();
+        batPct = (long)readSmallFile(p, content).stou();
         p.reset();
         p << sv(batPath) << "/status"_sv;
-        batCharging = readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Charging"_sv);
+        batCharging = readSmallFile(p, content).startsWith("Charging"_sv);
     }
 }
 
@@ -2991,7 +2982,7 @@ void RendererImpl::renderFrame(int scanIdx) {
     }
 }
 
-bool RendererImpl::screenshot(const char* path) {
+bool RendererImpl::screenshot(StringView path) {
     if (!haveFrame) {
         return false;
     }
@@ -3020,27 +3011,17 @@ bool RendererImpl::screenshot(const char* path) {
         vkResetFences(device, 1, &fence);
     }
 
-    ScopedFD f(open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+    ScopedFD f(open(Buffer(path).cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
     if (f.get() < 0) {
         return false;
     }
 
-    auto writeAll = [&f](const void* data, size_t len) {
-        auto* b = (const u8*)data;
+    FDRegular out(f);
+    auto& hdr = sb();
 
-        while (len) {
-            size_t n = f.write(b, len);
-
-            b += n;
-            len -= n;
-        }
-    };
-
-    StringBuilder ppm;
-
-    ppm << "P6\n"_sv << width << " "_sv << height << "\n255\n"_sv;
-    writeAll(ppm.data(), StringView(ppm).length());
+    hdr << "P6\n"_sv << width << " "_sv << height << "\n255\n"_sv;
+    out.write(hdr.data(), hdr.used());
 
     auto* px = (const unsigned char*)readbackMap;
     Vector<u8> row;
@@ -3066,8 +3047,10 @@ bool RendererImpl::screenshot(const char* path) {
             }
         }
 
-        writeAll(row.data(), row.length());
+        out.write(row.data(), row.length());
     }
+
+    out.finish();
 
     return true;
 }
@@ -3243,6 +3226,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, const char* fontPath, float uiScale, int framesLimit) {
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
     return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
 }

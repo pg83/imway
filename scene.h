@@ -2,6 +2,7 @@
 
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
+#include <std/str/view.h>
 #include <std/sys/types.h>
 
 struct Icon;
@@ -173,10 +174,11 @@ struct Scene {
     bool needsFrame = true;
     bool drawCursor = false;
 
-    // short active-layout name for the menu bar, written by wayland
+    // short active-layout name for the menu bar, written by wayland;
+    // fixed 2-3 letter code, filled by the keyboard API
     char layout[4] = "";
 
-    const char* socketName = nullptr;
+    stl::StringView socketName;
 
     // written by the renderer (imgui truth of the last frame), read by wayland
     Toplevel* focusedToplevel = nullptr;

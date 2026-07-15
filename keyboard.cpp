@@ -9,6 +9,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include <std/dbg/verify.h>
+#include <std/sys/mem_fd.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 
@@ -22,7 +23,7 @@ namespace {
         int fd = -1;
         u32 size = 0;
 
-        KeyboardImpl(const char* layout, const char* options);
+        KeyboardImpl(StringView layout, StringView options);
         ~KeyboardImpl() noexcept;
 
         void updateKey(u32 evdevCode, bool pressed) override;
@@ -37,18 +38,20 @@ namespace {
     };
 }
 
-KeyboardImpl::KeyboardImpl(const char* layout, const char* options)
+KeyboardImpl::KeyboardImpl(StringView layout, StringView options)
 {
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(ctx);
 
+    // xkb wants NUL-terminated strings: materialize right at the call
+    Buffer l(layout), o(options);
     xkb_rule_names names{};
 
-    names.layout = layout;
-    names.options = options;
+    names.layout = l.cStr();
+    names.options = o.cStr();
     keymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
-    if (!keymap && (layout || options)) {
+    if (!keymap && (!layout.empty() || !options.empty())) {
         sysE << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
         keymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
@@ -61,7 +64,7 @@ KeyboardImpl::KeyboardImpl(const char* layout, const char* options)
     char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
 
     size = (u32)StringView(str).length() + 1;
-    fd = memfd_create("imway-keymap", 0);
+    fd = memFD("imway-keymap");
 
     bool written = fd >= 0 && write(fd, str, size) == (ssize_t)size;
 
@@ -171,6 +174,6 @@ void KeyboardImpl::layoutShort(char out[4]) const {
     out[2] = 0;
 }
 
-Keyboard* Keyboard::create(ObjPool* pool, const char* layout, const char* options) {
+Keyboard* Keyboard::create(ObjPool* pool, StringView layout, StringView options) {
     return pool->make<KeyboardImpl>(layout, options);
 }

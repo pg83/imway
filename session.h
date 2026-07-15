@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std/str/view.h>
+
 namespace stl {
     class ObjPool;
 }
@@ -12,7 +14,7 @@ struct SessionListener {
 };
 
 struct Session {
-    virtual const char* seatName() const = 0;
+    virtual stl::StringView seatName() const = 0;
 
     virtual int openDevice(const char* path) = 0;
     virtual void closeDevice(int fd) = 0;

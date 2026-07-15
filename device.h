@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std/str/view.h>
+
 #include <stddef.h>
 
 namespace stl {
@@ -22,10 +24,10 @@ struct Device {
     virtual size_t dmabufFormatCount() const = 0;
     virtual DmabufFormat dmabufFormat(size_t i) const = 0;
 
-    virtual Output* createOutput(const char* connector, const char* mode, double hdrNits) = 0;
-    virtual Renderer* createRenderer(Scene& scene, Output& output, FrameListener& listener, struct IconStore& icons, struct Keyboard& kb, struct InputSink& slave, const char* fontPath, float uiScale, int framesLimit) = 0;
+    virtual Output* createOutput(stl::StringView connector, stl::StringView mode, double hdrNits) = 0;
+    virtual Renderer* createRenderer(Scene& scene, Output& output, FrameListener& listener, struct IconStore& icons, struct Keyboard& kb, struct InputSink& slave, stl::StringView fontPath, float uiScale, int framesLimit) = 0;
 
-    static Device* createKms(stl::ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath);
+    static Device* createKms(stl::ObjPool* pool, struct ev_loop* loop, Session& session, stl::StringView devPath);
     static Device* createHeadless(stl::ObjPool* pool, struct ev_loop* loop);
 
     static void list();

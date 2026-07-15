@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std/str/view.h>
+
 #include <std/sys/types.h>
 
 namespace stl {
@@ -39,5 +41,5 @@ struct Keyboard {
     // two-letter uppercase name of the active layout, e.g. EN / RU
     virtual void layoutShort(char out[4]) const = 0;
 
-    static Keyboard* create(stl::ObjPool* pool, const char* layout, const char* options);
+    static Keyboard* create(stl::ObjPool* pool, stl::StringView layout, stl::StringView options);
 };
