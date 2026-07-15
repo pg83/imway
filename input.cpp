@@ -147,7 +147,14 @@ namespace {
 
 // path backend only: the udev one needs a running udevd for enumeration AND
 // hotplug; a direct /dev/input scan plus inotify behaves the same either way
-LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn) : loop(evLoop), session(&ses), sink(&s), scene(&scn), relX(scn.outW / 2.0), relY(scn.outH / 2.0) {
+LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn)
+    : loop(evLoop)
+    , session(&ses)
+    , sink(&s)
+    , scene(&scn)
+    , relX(scn.outW / 2.0)
+    , relY(scn.outH / 2.0)
+{
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
 

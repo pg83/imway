@@ -11,7 +11,9 @@ namespace {
         Vector<Icon*> freeList;
         u64 gen = 0;
 
-        IconPoolImpl(ObjPool* p) : pool(p) {
+        IconPoolImpl(ObjPool* p)
+            : pool(p)
+        {
         }
 
         Icon* acquire() override {

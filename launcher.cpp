@@ -48,7 +48,10 @@ namespace {
         Vector<Entry> entries;
         Vector<u32> vis;
 
-        LauncherImpl(Scene& scn, IconStore& store) : scene(&scn), icons(&store) {
+        LauncherImpl(Scene& scn, IconStore& store)
+            : scene(&scn)
+            , icons(&store)
+        {
         }
 
         void toggle() override {

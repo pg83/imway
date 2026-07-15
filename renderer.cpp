@@ -224,7 +224,20 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit) : loop(evLoop), pool(p), scene(&scn), output(&out), listener(&l), framesLimit(limit), instance(vk.instance), phys(vk.phys), device(vk.device), queueFamily(vk.queueFamily), queue(vk.queue), textureAlloc(p->make<ObjList<SurfaceTexture>>(p)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps) {
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit)
+            : loop(evLoop)
+            , pool(p)
+            , scene(&scn)
+            , output(&out)
+            , listener(&l)
+            , framesLimit(limit)
+            , instance(vk.instance)
+            , phys(vk.phys)
+            , device(vk.device)
+            , queueFamily(vk.queueFamily)
+            , queue(vk.queue)
+            , textureAlloc(p->make<ObjList<SurfaceTexture>>(p)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps)
+        {
             fontPath = font;
             uiScale = scale;
             hasSyncFd = vk.hasSyncFd;

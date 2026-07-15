@@ -86,7 +86,11 @@ namespace {
     }
 }
 
-ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath) : loop(evLoop), sink(&s), renderer(&rnd) {
+ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, const char* fifoPath)
+    : loop(evLoop)
+    , sink(&s)
+    , renderer(&rnd)
+{
     STD_VERIFY(StringView(fifoPath).length() < 256);
     path << fifoPath;
     unlink(path.cStr());

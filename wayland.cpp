@@ -4134,7 +4134,9 @@ void Positioner::place(int& outX, int& outY) const {
     outY = py + dy;
 }
 
-SeatState::SeatState(WaylandImpl& impl) : srv(&impl) {
+SeatState::SeatState(WaylandImpl& impl)
+    : srv(&impl)
+{
     kb = impl.keyboard;
     STD_VERIFY(kb);
     layoutIndicator();
@@ -5057,7 +5059,15 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg) : pool(p), loop(evLoop), scene(&scn), socketName(cfg.socketName), keyboard(cfg.keyboard), mainDevice(cfg.mainDevice), seat(*this) {
+WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg)
+    : pool(p)
+    , loop(evLoop)
+    , scene(&scn)
+    , socketName(cfg.socketName)
+    , keyboard(cfg.keyboard)
+    , mainDevice(cfg.mainDevice)
+    , seat(*this)
+{
     formats.append(cfg.formats, cfg.formatCount);
 
     display = wl_display_create();

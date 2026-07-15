@@ -12,7 +12,9 @@ template <typename F>
 struct DirVisitor: public DirVisitorFace {
     F fn;
 
-    DirVisitor(F f) : fn(f) {
+    DirVisitor(F f)
+        : fn(f)
+    {
     }
 
     void visit(stl::StringView dir) override {

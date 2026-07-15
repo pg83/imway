@@ -898,7 +898,11 @@ namespace {
         int w = 0, h = 0;
         double hz = 60.0;
 
-        HeadlessOutput(int width, int height, double refresh) : w(width), h(height), hz(refresh) {
+        HeadlessOutput(int width, int height, double refresh)
+            : w(width)
+            , h(height)
+            , hz(refresh)
+        {
         }
 
         int width() const override {
@@ -1053,7 +1057,11 @@ namespace {
     }
 }
 
-KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath) : pool(p), loop(evLoop), session(&s) {
+KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath)
+    : pool(p)
+    , loop(evLoop)
+    , session(&s)
+{
     fd = openKmsNode(s, devPath, path);
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
@@ -1159,7 +1167,11 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits) : fd(drmFd), vk(v), hdrNits(hdrWhiteNits) {
+KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, const char* connector, const char* modeStr, double hdrWhiteNits)
+    : fd(drmFd)
+    , vk(v)
+    , hdrNits(hdrWhiteNits)
+{
     session.addListener(this);
     pickPipe(connector, modeStr);
 
@@ -1889,7 +1901,10 @@ void KmsOutput::present(const void* pixels) {
     }
 }
 
-HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop) : pool(p), loop(evLoop) {
+HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
+    : pool(p)
+    , loop(evLoop)
+{
     initVulkan(vk, -1);
 
     if (vk.hasDmabuf) {

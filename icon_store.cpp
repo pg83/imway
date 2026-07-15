@@ -54,7 +54,10 @@ namespace {
         ev_io inoIo{};
         ev_timer reloadTimer{};
 
-        IconStoreImpl(struct ev_loop* l, IconPool& p) : loop(l), icons(&p) {
+        IconStoreImpl(struct ev_loop* l, IconPool& p)
+            : loop(l)
+            , icons(&p)
+        {
             buildIndex();
 
             inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);

@@ -94,7 +94,9 @@ namespace {
     };
 }
 
-SeatSession::SeatSession(struct ev_loop* evLoop) : loop(evLoop) {
+SeatSession::SeatSession(struct ev_loop* evLoop)
+    : loop(evLoop)
+{
     seat = libseat_open_seat(&kSeatListener, this);
 
     if (!seat) {
