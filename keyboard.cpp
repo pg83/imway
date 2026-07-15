@@ -75,6 +75,14 @@ namespace {
             xkb_state_update_key(state, evdevCode + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
         }
 
+        void setGroup(u32 group) override {
+            u32 dep = xkb_state_serialize_mods(state, XKB_STATE_MODS_DEPRESSED);
+            u32 lat = xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED);
+            u32 lock = xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED);
+
+            xkb_state_update_mask(state, dep, lat, lock, 0, 0, group);
+        }
+
         KeyMods mods() const override {
             KeyMods m;
 

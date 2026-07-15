@@ -4718,6 +4718,12 @@ void SeatState::focusToplevel(Toplevel* t) {
         return;
     }
 
+    // the layout belongs to the window: park the current group with the
+    // window that loses focus
+    if (kbFocus) {
+        kbFocus->xkbGroup = kb->mods().group;
+    }
+
     if (kbFocus && kbFocus->surface) {
         auto* old = (ToplevelImpl*)kbFocus;
 
@@ -4747,6 +4753,19 @@ void SeatState::focusToplevel(Toplevel* t) {
     }
 
     kbFocus = t;
+
+    if (t) {
+        kb->setGroup(t->xkbGroup);
+
+        // refresh the cache silently so kbSendEnter carries fresh modifiers
+        KeyMods m = kb->mods();
+
+        modsDepressed = m.depressed;
+        modsLatched = m.latched;
+        modsLocked = m.locked;
+        modsGroup = m.group;
+        layoutIndicator();
+    }
 
     if (t && t->surface) {
         kbSendEnter(resOf(t->surface));

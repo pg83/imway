@@ -21,6 +21,9 @@ struct KeyMods {
 struct Keyboard {
     virtual void updateKey(u32 evdevCode, bool pressed) = 0;
 
+    // switch the active layout group, preserving modifier state
+    virtual void setGroup(u32 group) = 0;
+
     virtual KeyMods mods() const = 0;
     virtual u32 modMask() const = 0;
 

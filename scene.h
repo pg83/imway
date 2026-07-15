@@ -94,6 +94,9 @@ struct Toplevel {
     char appId[128] = "";
     bool mapped = false;
 
+    // per-window keyboard layout, restored on focus
+    u32 xkbGroup = 0;
+
     bool winSizeSet = false;
     int desiredW = 0, desiredH = 0;
 
