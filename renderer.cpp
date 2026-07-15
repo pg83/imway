@@ -260,8 +260,11 @@ namespace {
             ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
 
             // presses over our ui stay ours; releases always go through, the
-            // slave drops the ones whose press it never saw
-            if (next && (!pressed || !scene->ptrCaptured)) {
+            // slave drops the ones whose press it never saw; super+press is
+            // a compositor gesture (window move), never the client's
+            bool superChord = keyboard && (keyboard->modMask() & kModLogo);
+
+            if (next && (!pressed || (!scene->ptrCaptured && !superChord))) {
                 next->button(btn, pressed);
             }
         }
@@ -1466,10 +1469,10 @@ namespace {
                 cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
                 return;
             case ImGuiMouseCursor_ResizeNESW:
-                cursorPoly(dl, ns, 10, p, s, R, -R);
+                cursorPoly(dl, ns, 10, p, s, R, R);
                 return;
             case ImGuiMouseCursor_ResizeNWSE:
-                cursorPoly(dl, ns, 10, p, s, R, R);
+                cursorPoly(dl, ns, 10, p, s, R, -R);
                 return;
             case ImGuiMouseCursor_ResizeAll:
                 cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
@@ -1666,6 +1669,13 @@ void RendererImpl::buildUi(Scene& scene) {
         resizing = nullptr;
     }
 
+    // client frames are half-width; the grip keeps its stock size and is
+    // repainted over the texture below
+    const ImVec2 fullPad = ImGui::GetStyle().WindowPadding;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(fullPad.x * 0.5f, fullPad.y * 0.5f));
+
+    bool overGrip = false;
     int i = 0;
 
     for (Toplevel* t : scene.toplevels) {
@@ -1693,12 +1703,18 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (!t->winSizeSet) {
             const ImGuiStyle& st = ImGui::GetStyle();
+            float header = t->csd ? 0.f : ImGui::GetFrameHeight();
 
-            ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + ImGui::GetFrameHeight()), ImGuiCond_Always);
+            ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + header), ImGuiCond_Always);
             t->winSizeSet = true;
         }
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+        // csd clients (gtk) bring their own header bar; ours would double it
+        if (t->csd) {
+            flags |= ImGuiWindowFlags_NoTitleBar;
+        }
 
         if (t->fullscreen) {
             ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
@@ -1706,9 +1722,22 @@ void RendererImpl::buildUi(Scene& scene) {
             flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus;
         }
 
-        if (ImGui::Begin(label.cStr(), nullptr, flags)) {
+        bool stayOpen = true;
+
+        if (ImGui::Begin(label.cStr(), t->csd ? nullptr : &stayOpen, flags)) {
             if (ImGui::IsWindowFocused()) {
                 scene.focusedToplevel = t;
+            }
+
+            // super+drag moves the window from anywhere, not just the bar
+            if (ImGui::IsMouseClicked(0) && ImGui::IsWindowHovered() && keyboard && (keyboard->modMask() & kModLogo)) {
+                moving = t;
+                resizing = nullptr;
+
+                ImVec2 wp = ImGui::GetWindowPos();
+
+                moveOff = ImVec2(wp.x - io.MousePos.x, wp.y - io.MousePos.y);
+                ImGui::SetWindowFocus();
             }
 
             if (t->raiseRequested) {
@@ -1794,12 +1823,41 @@ void RendererImpl::buildUi(Scene& scene) {
             ImVec2 origin = ImGui::GetCursorScreenPos();
 
             drawSurfaceTree(*root, origin.x, origin.y);
+
+            // imgui paints its resize grip before window contents, so the
+            // client image buries it; repaint on top, and claim the corner
+            // for the ui — presses there must resize, not click the client
+            if (!t->fullscreen) {
+                float fs = ImGui::GetFontSize();
+                float ra = ImGui::GetStyle().WindowRounding + 1.f + fs * 0.2f;
+                float grip = (float)(int)(fs * 1.10f > ra ? fs * 1.10f : ra);
+                ImVec2 wp = ImGui::GetWindowPos();
+                ImVec2 ws = ImGui::GetWindowSize();
+                ImVec2 br(wp.x + ws.x, wp.y + ws.y);
+                bool hot = ImGui::IsWindowHovered() && io.MousePos.x < br.x && io.MousePos.y < br.y && (io.MousePos.x - (br.x - grip)) + (io.MousePos.y - (br.y - grip)) >= grip;
+                ImU32 col = ImGui::GetColorU32(hot ? (ImGui::IsMouseDown(0) ? ImGuiCol_ResizeGripActive : ImGuiCol_ResizeGripHovered) : ImGuiCol_ResizeGrip);
+                ImDrawList* dl = ImGui::GetWindowDrawList();
+
+                dl->PushClipRect(wp, br, false);
+                dl->AddTriangleFilled(ImVec2(br.x - grip, br.y), br, ImVec2(br.x, br.y - grip), col);
+                dl->PopClipRect();
+
+                if (hot) {
+                    overGrip = true;
+                }
+            }
         } else {
             markTreeUnhovered(*root);
         }
 
         ImGui::End();
+
+        if (!stayOpen) {
+            t->closeRequested = true;
+        }
     }
+
+    ImGui::PopStyleVar();
 
     for (Popup* p : scene.popups) {
         Surface* ps = p->surface;
@@ -1839,7 +1897,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)
-    scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && !overClient;
+    scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && (!overClient || overGrip);
 
     // everything below draws into the foreground list, which sits on top of
     // all windows anyway — and it MUST happen before ImGui::Render(): draw

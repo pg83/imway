@@ -2325,13 +2325,21 @@ namespace {
         zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
+    void decoResourceDestroyed(wl_resource* res) {
+        // the client dropped the decoration object: back to csd per spec
+        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
+            t->csd = true;
+            t->srv->scene->needsFrame = true;
+        }
+    }
+
     const struct zxdg_toplevel_decoration_v1_interface decoImpl = {
         .destroy = resDestroy,
         .set_mode = decoSetMode,
         .unset_mode = decoUnsetMode,
     };
 
-    void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+    void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id, wl_resource* toplevelRes) {
         wl_resource* d = wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface, wl_resource_get_version(res), id);
 
         if (!d) {
@@ -2340,7 +2348,13 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(d, &decoImpl, nullptr, nullptr);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
+
+        // we always answer SERVER_SIDE, so negotiating at all means our bar
+        t->csd = false;
+        t->srv->scene->needsFrame = true;
+
+        wl_resource_set_implementation(d, &decoImpl, t, decoResourceDestroyed);
         zxdg_toplevel_decoration_v1_send_configure(d, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
@@ -4996,6 +5010,18 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 void WaylandImpl::frameShown(u32 msec) {
     if (scene->focusedToplevel && scene->focusedToplevel != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel);
+    }
+
+    for (Toplevel* tl : scene->toplevels) {
+        auto* ti = (ToplevelImpl*)tl;
+
+        if (ti->closeRequested) {
+            ti->closeRequested = false;
+
+            if (ti->res) {
+                xdg_toplevel_send_close(ti->res);
+            }
+        }
     }
 
     for (Toplevel* tl : scene->toplevels) {

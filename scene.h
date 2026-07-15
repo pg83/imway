@@ -107,11 +107,19 @@ struct Toplevel {
     // per-window keyboard layout, restored on focus
     u32 xkbGroup = 0;
 
+    // true until the client accepts server-side decorations over
+    // xdg-decoration; csd windows draw their own bar, we draw none
+    bool csd = true;
+
     bool winSizeSet = false;
     int desiredW = 0, desiredH = 0;
 
     bool moveRequested = false;
     u32 resizeEdges = 0;
+
+    // set by the ui (title bar close button), wayland turns it into
+    // xdg_toplevel.close on the next shown frame
+    bool closeRequested = false;
 
     bool fullscreen = false;
     bool activated = false;
