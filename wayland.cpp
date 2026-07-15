@@ -4528,10 +4528,9 @@ void SeatState::releaseAllKeys() {
         }
     }
 
-    for (u32 code : pressedKeys) {
-        kb->updateKey(code, false);
-    }
-
+    // note: the shared xkb state is NOT touched here — it mirrors physical
+    // keys and is owned by the render-side master; poking it used to strip
+    // a physically-held Alt from the modifier mask mid alt-tab
     pressedKeys.clear();
 }
 

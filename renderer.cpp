@@ -135,6 +135,10 @@ namespace {
         bool kbCapturePrev = false;
         bool chordDown[256] = {};
 
+        // alt-tab overlay: selection commits on Alt release
+        bool altTabActive = false;
+        Toplevel* altTabSel = nullptr;
+
         // super-F2 launcher
         bool launcherOpen = false;
         bool launchFocus = false;
@@ -332,7 +336,8 @@ namespace {
 
         void spawnLaunch();
         bool chordAction(u32 mask, u32 sym);
-        void focusNextWindow();
+        void altTabStep(long dir);
+        void altTabCommit();
 
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
@@ -428,10 +433,26 @@ void RendererImpl::key(u32 code, bool pressed) {
     io.AddKeyEvent(ImGuiMod_Alt, mask & kModAlt);
     io.AddKeyEvent(ImGuiMod_Super, mask & kModLogo);
 
+    if (altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
+        altTabActive = false;
+        altTabSel = nullptr;
+        scene->needsFrame = true;
+    }
+
     // 1. compositor-global chords are sacred: consumed before anyone,
     // imgui included, matched on the group-0 keysym so they work in
     // any layout
     if (next && keyboard && code < 256) {
+        if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
+            altTabActive = false;
+            altTabSel = nullptr;
+            scene->needsFrame = true;
+            chordDown[code] = true;
+            next->modsChanged();
+
+            return;
+        }
+
         if (pressed && chordAction(mask, keyboard->keysymBase(code))) {
             chordDown[code] = true;
             next->modsChanged();
@@ -441,6 +462,12 @@ void RendererImpl::key(u32 code, bool pressed) {
 
         if (!pressed && chordDown[code]) {
             chordDown[code] = false;
+
+            // switching happens on Tab release; Alt only holds the overlay
+            if (altTabActive && keyboard->keysymBase(code) == XKB_KEY_Tab) {
+                altTabCommit();
+            }
+
             next->modsChanged();
 
             return;
@@ -466,7 +493,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
     // lives in the slave's modsChanged)
-    bool capture = launcherOpen || io.WantCaptureKeyboard;
+    bool capture = launcherOpen || altTabActive || io.WantCaptureKeyboard;
 
     scene->kbCaptured = capture;
 
@@ -490,7 +517,13 @@ bool RendererImpl::chordAction(u32 mask, u32 sym) {
     }
 
     if (mask == kModAlt && sym == XKB_KEY_Tab) {
-        focusNextWindow();
+        altTabStep(1);
+
+        return true;
+    }
+
+    if (mask == (kModAlt | kModShift) && sym == XKB_KEY_Tab) {
+        altTabStep(-1);
 
         return true;
     }
@@ -498,7 +531,7 @@ bool RendererImpl::chordAction(u32 mask, u32 sym) {
     return false;
 }
 
-void RendererImpl::focusNextWindow() {
+void RendererImpl::altTabStep(long dir) {
     auto& tls = scene->toplevels;
     long n = (long)tls.length();
 
@@ -506,18 +539,28 @@ void RendererImpl::focusNextWindow() {
         return;
     }
 
-    long cur = scene->focusedToplevel ? indexOf(tls, scene->focusedToplevel) : -1;
+    Toplevel* base = altTabActive && contains(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
+    long cur = base ? indexOf(tls, base) : -1;
 
     for (long step = 1; step <= n; step++) {
-        Toplevel* t = tls[(size_t)((cur + step + n) % n)];
+        Toplevel* t = tls[(size_t)(((cur + dir * step) % n + n) % n)];
 
         if (t->mapped) {
-            t->raiseRequested = true;
+            altTabActive = true;
+            altTabSel = t;
             scene->needsFrame = true;
 
             return;
         }
     }
+}
+
+void RendererImpl::altTabCommit() {
+    if (contains(scene->toplevels, altTabSel) && altTabSel->mapped) {
+        altTabSel->raiseRequested = true;
+    }
+
+    scene->needsFrame = true;
 }
 
 void RendererImpl::spawnLaunch() {
@@ -1774,6 +1817,12 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
+    if (altTabActive && !contains(scene.toplevels, altTabSel)) {
+        // the selected window died under the overlay
+        altTabActive = false;
+        altTabSel = nullptr;
+    }
+
     if (launcherOpen) {
         float lw = (float)width / 4.f < 320.f ? 320.f : (float)width / 4.f;
 
@@ -1810,6 +1859,69 @@ void RendererImpl::buildUi(Scene& scene) {
     // everything below draws into the foreground list, which sits on top of
     // all windows anyway — and it MUST happen before ImGui::Render(): draw
     // data totals are snapshotted there, late commands are silently dropped
+    if (altTabActive) {
+        ImDrawList* dl = ImGui::GetForegroundDrawList();
+        float th = 120.f * uiScale;
+        float pad = 12.f * uiScale;
+        float total = pad;
+        int count = 0;
+
+        for (Toplevel* t : scene.toplevels) {
+            if (!t->mapped || !t->surface || !t->surface->texture) {
+                continue;
+            }
+
+            float sw = (float)t->surface->viewW(), sh = (float)t->surface->viewH();
+            float tw = sh > 0.f ? th * sw / sh : th;
+
+            total += (tw > th * 2.f ? th * 2.f : tw) + pad;
+            count++;
+        }
+
+        if (count) {
+            float lineH = ImGui::GetFontSize();
+            float boxH = th + lineH + pad * 3.f;
+            float x = ((float)width - total) / 2.f;
+            float y0 = ((float)height - boxH) / 2.f;
+
+            dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + total, y0 + boxH), IM_COL32(18, 18, 24, 235), 8.f * uiScale);
+            x += pad;
+
+            for (Toplevel* t : scene.toplevels) {
+                if (!t->mapped || !t->surface || !t->surface->texture) {
+                    continue;
+                }
+
+                float sw = (float)t->surface->viewW(), sh = (float)t->surface->viewH();
+                float tw = sh > 0.f ? th * sw / sh : th;
+
+                if (tw > th * 2.f) {
+                    tw = th * 2.f;
+                }
+
+                float y = y0 + pad;
+
+                dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th));
+
+                if (t == altTabSel) {
+                    dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), IM_COL32(255, 200, 60, 255), 0.f, 0, 3.f);
+                }
+
+                StringView title(t->title);
+
+                if (title.length() > 24) {
+                    title = title.prefix(24);
+                }
+
+                CStr<64> lbl;
+
+                lbl << title;
+                dl->AddText(ImVec2(x, y + th + pad * 0.75f), IM_COL32(230, 230, 230, 255), lbl.cStr());
+                x += tw + pad;
+            }
+        }
+    }
+
     cursorUi(scene, overClient);
     ImGui::Render();
 }
