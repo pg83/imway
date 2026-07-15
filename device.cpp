@@ -696,6 +696,8 @@ namespace {
         u64 colorspaceBt2020 = 0;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
         u32 hdrMetaBlob = 0, degammaBlob = 0, ctmBlob = 0, gammaBlob = 0;
+        u64 gamLutSize = 0;
+        bool gammaDirty = false;
 
         u32 cursorPlaneId = 0;
         u32 cuFbId = 0, cuCrtcId = 0;
@@ -735,6 +737,21 @@ namespace {
 
         void pickPipe(const char* connector, const char* modeStr);
         bool setupHdr();
+        void buildGammaLut();
+
+        double sdrWhiteNits() const override {
+            return hdrActive ? hdrNits : 0;
+        }
+
+        void setSdrWhite(double nits) override {
+            if (!hdrActive || nits <= 0 || nits == hdrNits) {
+                return;
+            }
+
+            hdrNits = nits;
+            buildGammaLut();
+            gammaDirty = true;
+        }
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor);
         bool commit(u32 fbId, bool doModeset);
@@ -881,6 +898,13 @@ namespace {
         void setPowerSave(bool) override {
         }
 
+        double sdrWhiteNits() const override {
+            return 0;
+        }
+
+        void setSdrWhite(double) override {
+        }
+
         bool start() override {
             return true;
         }
@@ -1010,7 +1034,8 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char*
     ud = udev_new();
 
     if (ud) {
-        mon = udev_monitor_new_from_netlink(ud, "udev");
+        // "kernel" = raw uevents, works with or without a running udevd
+        mon = udev_monitor_new_from_netlink(ud, "kernel");
     }
 
     if (mon) {
@@ -1451,10 +1476,21 @@ bool KmsOutput::setupHdr() {
 
     drmModeCreatePropertyBlob(fd, &ctm, sizeof(ctm), &ctmBlob);
 
-    lut.zero((size_t)gamSize);
+    gamLutSize = gamSize;
+    buildGammaLut();
 
-    for (u64 i = 0; i < gamSize; i++) {
-        double y = (double)i / (double)(gamSize - 1) * hdrNits / 10000.0;
+    return hdrMetaBlob && degammaBlob && ctmBlob && gammaBlob;
+}
+
+// linear [0..1] -> PQ with 1.0 pinned at hdrNits; rebuilt whenever the sdr
+// white knob moves (the kernel keeps its own copy, dropping ours is safe)
+void KmsOutput::buildGammaLut() {
+    Vector<drm_color_lut> lut;
+
+    lut.zero((size_t)gamLutSize);
+
+    for (u64 i = 0; i < gamLutSize; i++) {
+        double y = (double)i / (double)(gamLutSize - 1) * hdrNits / 10000.0;
         double ym = pow(y, 0.1593017578125);
         double pq = pow((0.8359375 + 18.8515625 * ym) / (1.0 + 18.6875 * ym), 78.84375);
         u16 v = (u16)(pq * 65535.0 + 0.5);
@@ -1462,9 +1498,12 @@ bool KmsOutput::setupHdr() {
         lut.mut(i) = {v, v, v, 0};
     }
 
-    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamSize * sizeof(drm_color_lut)), &gammaBlob);
+    if (gammaBlob) {
+        drmModeDestroyPropertyBlob(fd, gammaBlob);
+        gammaBlob = 0;
+    }
 
-    return hdrMetaBlob && degammaBlob && ctmBlob && gammaBlob;
+    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamLutSize * sizeof(drm_color_lut)), &gammaBlob);
 }
 
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
@@ -1509,6 +1548,11 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
         }
     }
 
+    // live sdr-white change: a GAMMA_LUT swap does not need a modeset
+    if (hdrActive && gammaDirty && !doModeset) {
+        drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+    }
+
     drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
     drmModeAtomicAddProperty(req, planeId, plCrtcId, crtcId);
     drmModeAtomicAddProperty(req, planeId, plSrcX, 0);
@@ -1540,6 +1584,10 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
     int ret = drmModeAtomicCommit(fd, req, flags, this);
 
     drmModeAtomicFree(req);
+
+    if (ret == 0) {
+        gammaDirty = false;
+    }
 
     return ret == 0 ? 0 : errno;
 }

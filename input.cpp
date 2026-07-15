@@ -11,7 +11,6 @@
 #include <unistd.h>
 
 #include <libinput.h>
-#include <libudev.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
@@ -35,15 +34,15 @@ namespace {
         Session* session = nullptr;
         InputSink* sink = nullptr;
         Scene* scene = nullptr;
-        udev* ud = nullptr;
         libinput* li = nullptr;
         ev_io io{};
         double relX = 0, relY = 0;
 
-        // path-backend hotplug: inotify on /dev/input, one bit per eventN
+        // hotplug: inotify on /dev/input, one bit + device slot per eventN
         int inoFd = -1;
         ev_io inoIo{};
         u64 pathBits = 0;
+        libinput_device* pathDevs[64] = {};
 
         LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn);
         ~LibinputSource() noexcept;
@@ -64,6 +63,35 @@ namespace {
             pathBits |= 1ull << n;
 
             return true;
+        }
+
+        // the node vanished: yank the device now — libinput only notices a
+        // dead fd on its next read, and a replug reusing the same number
+        // must not find the slot still taken
+        void pathDrop(int n) {
+            if (n < 0 || n >= 64) {
+                return;
+            }
+
+            if (pathDevs[n]) {
+                libinput_path_remove_device(pathDevs[n]);
+                libinput_device_unref(pathDevs[n]);
+                pathDevs[n] = nullptr;
+            }
+
+            pathBits &= ~(1ull << n);
+        }
+
+        static int sysnameIndex(libinput_device* dev) {
+            StringView sys(libinput_device_get_sysname(dev));
+
+            if (!sys.startsWith("event"_sv)) {
+                return -1;
+            }
+
+            int idx = (int)StringView(sys.begin() + 5, sys.end()).stou();
+
+            return idx >= 0 && idx < 64 ? idx : -1;
         }
 
         void inotifyEvents();
@@ -115,54 +143,28 @@ namespace {
             libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
         }
     }
-
-    int drainDeviceAdded(libinput* li) {
-        libinput_dispatch(li);
-
-        int n = 0;
-
-        while (libinput_event* ev = libinput_get_event(li)) {
-            if (libinput_event_get_type(ev) == LIBINPUT_EVENT_DEVICE_ADDED) {
-                configureDevice(libinput_event_get_device(ev));
-                n++;
-            }
-
-            libinput_event_destroy(ev);
-        }
-
-        return n;
-    }
 }
 
+// path backend only: the udev one needs a running udevd for enumeration AND
+// hotplug; a direct /dev/input scan plus inotify behaves the same either way
 LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn) : loop(evLoop), session(&ses), sink(&s), scene(&scn), relX(scn.outW / 2.0), relY(scn.outH / 2.0) {
-    ud = udev_new();
-    li = libinput_udev_create_context(&liIface, this, ud);
+    li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
 
-    STD_VERIFY(libinput_udev_assign_seat(li, ses.seatName()) == 0);
+    int devices = 0;
 
-    int devices = drainDeviceAdded(li);
-
-    if (devices == 0) {
-        // empty udev db (no udevd running): enumeration finds nothing,
-        // open /dev/input/event* directly, hotplug via inotify below
-        libinput_unref(li);
-        li = libinput_path_create_context(&liIface, this);
-        STD_VERIFY(li);
-
-        for (int i = 0; i < 64; i++) {
-            if (pathAdd(i)) {
-                devices++;
-            }
+    for (int i = 0; i < 64; i++) {
+        if (pathAdd(i)) {
+            devices++;
         }
+    }
 
-        inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
-        if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB) >= 0) {
-            ev_io_init(&inoIo, inotifyCb, inoFd, EV_READ);
-            inoIo.data = this;
-            ev_io_start(loop, &inoIo);
-        }
+    if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
+        ev_io_init(&inoIo, inotifyCb, inoFd, EV_READ);
+        inoIo.data = this;
+        ev_io_start(loop, &inoIo);
     }
 
     ses.addListener(this);
@@ -201,7 +203,9 @@ void LibinputSource::inotifyEvents() {
 
             int idx = (int)StringView(name.begin() + 5, name.end()).stou();
 
-            if (pathAdd(idx)) {
+            if (e->mask & IN_DELETE) {
+                pathDrop(idx);
+            } else if (pathAdd(idx)) {
                 sysO << "imway: input device event"_sv << idx << " plugged"_sv << endL;
             }
         }
@@ -214,13 +218,15 @@ LibinputSource::~LibinputSource() noexcept {
         close(inoFd);
     }
 
+    for (libinput_device* d : pathDevs) {
+        if (d) {
+            libinput_device_unref(d);
+        }
+    }
+
     if (li) {
         ev_io_stop(loop, &io);
         libinput_unref(li);
-    }
-
-    if (ud) {
-        udev_unref(ud);
     }
 }
 
@@ -297,21 +303,30 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_GESTURE_HOLD_END:
                 sink->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
                 break;
-            case LIBINPUT_EVENT_DEVICE_ADDED:
-                configureDevice(libinput_event_get_device(ev));
+            case LIBINPUT_EVENT_DEVICE_ADDED: {
+                libinput_device* dev = libinput_event_get_device(ev);
+
+                configureDevice(dev);
+
+                int idx = sysnameIndex(dev);
+
+                if (idx >= 0 && !pathDevs[idx]) {
+                    pathDevs[idx] = libinput_device_ref(dev);
+                }
+
                 break;
+            }
             case LIBINPUT_EVENT_DEVICE_REMOVED: {
-                // free the slot so a re-plugged device can come back
-                if (inoFd >= 0) {
-                    StringView sys(libinput_device_get_sysname(libinput_event_get_device(ev)));
+                // free the slot so a re-plugged device can come back; the
+                // identity check matters: after a pathDrop + fast re-add the
+                // stale removal must not clear the fresh device's slot
+                libinput_device* dev = libinput_event_get_device(ev);
+                int idx = sysnameIndex(dev);
 
-                    if (sys.startsWith("event"_sv)) {
-                        int idx = (int)StringView(sys.begin() + 5, sys.end()).stou();
-
-                        if (idx >= 0 && idx < 64) {
-                            pathBits &= ~(1ull << idx);
-                        }
-                    }
+                if (idx >= 0 && pathDevs[idx] == dev) {
+                    libinput_device_unref(dev);
+                    pathDevs[idx] = nullptr;
+                    pathBits &= ~(1ull << idx);
                 }
 
                 break;

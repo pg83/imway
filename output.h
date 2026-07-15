@@ -19,6 +19,12 @@ struct Output {
     // false turns the display off (DPMS), true brings it back
     virtual void setPowerSave(bool on) = 0;
 
+    // macOS-style "sdr white": brightness of SDR 1.0 on the HDR pipeline in
+    // nits, 0 means the hdr path is off; setting takes effect on the next
+    // frame commit via a GAMMA_LUT rebuild
+    virtual double sdrWhiteNits() const = 0;
+    virtual void setSdrWhite(double nits) = 0;
+
     virtual bool start() = 0;
 
     virtual bool ready() const = 0;

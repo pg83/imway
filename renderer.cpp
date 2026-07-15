@@ -129,6 +129,9 @@ namespace {
 
         const char* fontPath = nullptr;
         float uiScale = 1.f;
+        bool scaleDirty = false;   // scale committed: restyle before the next frame
+        float scaleEdit = 0.f;     // slider-side scale value, applied on release
+        float sdrNits = -1.f;      // menu copy of the output sdr white, -1 = unqueried
 
         // input mastering: imgui first, leftovers to the wayland slave sink
         Keyboard* keyboard = nullptr;
@@ -1615,13 +1618,64 @@ void RendererImpl::buildUi(Scene& scene) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.DeltaTime = (float)(1.0 / scene.hz);
 
+    if (scaleDirty) {
+        scaleDirty = false;
+
+        // restyle from a pristine copy: ScaleAllSizes compounds otherwise
+        ImGuiStyle fresh;
+
+        fresh.FontScaleMain = uiScale;
+        fresh.ScaleAllSizes(uiScale);
+        ImGui::GetStyle() = fresh;
+
+        // hw cursor bitmaps bake the scale in: drop and re-rasterize
+        for (Vector<u32>& img : hwShapeCache) {
+            img.clear();
+        }
+
+        if (hwKind >= 0) {
+            pendingShape = hwKind;
+            hwKind = -2;
+        }
+    }
+
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
     scene.focusedToplevel = nullptr;
 
     if (ImGui::BeginMainMenuBar()) {
-        ImGui::TextUnformatted("imway");
+        if (sdrNits < 0.f) {
+            sdrNits = (float)output->sdrWhiteNits();
+        }
+
+        if (scaleEdit == 0.f) {
+            scaleEdit = uiScale;
+        }
+
+        if (ImGui::BeginMenu("settings")) {
+            ImGui::SetNextItemWidth(180.f * uiScale);
+            ImGui::SliderFloat("scale", &scaleEdit, 1.f, 3.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+
+            // applying mid-drag rescales the slider under the cursor and the
+            // value feedback-loops against its own widget: commit on release
+            if (ImGui::IsItemDeactivatedAfterEdit() && scaleEdit != uiScale) {
+                uiScale = scaleEdit;
+                scaleDirty = true;
+                scene.needsFrame = true;
+            }
+
+            if (sdrNits > 0.f) {
+                ImGui::SetNextItemWidth(180.f * uiScale);
+
+                if (ImGui::SliderFloat("hdr", &sdrNits, 80.f, 300.f, "%.0f nits", ImGuiSliderFlags_AlwaysClamp)) {
+                    output->setSdrWhite(sdrNits);
+                    scene.needsFrame = true;
+                }
+            }
+
+            ImGui::EndMenu();
+        }
 
         time_t now = time(nullptr);
         tm lt{};
