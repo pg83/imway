@@ -168,7 +168,7 @@ namespace {
     // at add_buffer time, the largest reasonable size wins
     struct IconBox {
         WaylandImpl* srv = nullptr;
-        char name[128] = "";
+        StringBuilder name;
         Vector<u32> pixels;
         int w = 0, h = 0;
     };
@@ -341,22 +341,22 @@ namespace {
 
         u64 nextToplevelId = 1;
 
-        ObjList<SurfaceImpl>* surfaceAlloc = nullptr;
-        ObjList<SubsurfaceImpl>* subsurfaceAlloc = nullptr;
-        ObjList<XdgSurface>* xdgSurfaceAlloc = nullptr;
-        ObjList<ToplevelImpl>* toplevelAlloc = nullptr;
-        ObjList<PopupImpl>* popupAlloc = nullptr;
-        ObjList<RegionBox>* regionAlloc = nullptr;
-        ObjList<Positioner>* positionerAlloc = nullptr;
-        ObjList<BufferBox>* dmabufBoxAlloc = nullptr;
-        ObjList<DataSource>* dataSourceAlloc = nullptr;
-        ObjList<SpbBox>* spbAlloc = nullptr;
-        ObjList<Params>* dmabufParamsAlloc = nullptr;
-        ObjList<ConstraintBox>* constraintAlloc = nullptr;
-        ObjList<IconBox>* iconAlloc = nullptr;
+        ObjList<SurfaceImpl> surfaceAlloc;
+        ObjList<SubsurfaceImpl> subsurfaceAlloc;
+        ObjList<XdgSurface> xdgSurfaceAlloc;
+        ObjList<ToplevelImpl> toplevelAlloc;
+        ObjList<PopupImpl> popupAlloc;
+        ObjList<RegionBox> regionAlloc;
+        ObjList<Positioner> positionerAlloc;
+        ObjList<BufferBox> dmabufBoxAlloc;
+        ObjList<DataSource> dataSourceAlloc;
+        ObjList<SpbBox> spbAlloc;
+        ObjList<Params> dmabufParamsAlloc;
+        ObjList<ConstraintBox> constraintAlloc;
+        ObjList<IconBox> iconAlloc;
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
-        ObjList<TimelineBox>* timelineAlloc = nullptr;
+        ObjList<TimelineBox> timelineAlloc;
         int drmFd = -1;
 
         struct IdleNotif {
@@ -366,7 +366,7 @@ namespace {
             ev_timer timer{};
         };
 
-        ObjList<IdleNotif>* idleAlloc = nullptr;
+        ObjList<IdleNotif> idleAlloc;
         Vector<IdleNotif*> idleNotifs;
         int idleInhibitors = 0;
         ::Output* output = nullptr;
@@ -528,14 +528,6 @@ namespace {
         }
     }
 
-    void copyBounded(char* dst, size_t cap, const char* src) {
-        StringView s(src);
-        size_t len = s.length() < cap ? s.length() : cap - 1;
-
-        memcpy(dst, s.data(), len);
-        dst[len] = 0;
-    }
-
     void resDestroy(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
     }
@@ -582,7 +574,7 @@ namespace {
 
         if (--t->refs == 0 && !t->resAlive) {
             drmSyncobjDestroy(t->srv->drmFd, t->handle);
-            t->srv->timelineAlloc->release(t);
+            t->srv->timelineAlloc.release(t);
         }
     }
 
@@ -1114,7 +1106,7 @@ namespace {
 
         srv->scene->needsFrame = true;
         removeOne(srv->scene->surfaces, (Surface*)s);
-        srv->surfaceAlloc->release(s);
+        srv->surfaceAlloc.release(s);
     }
 
     void regionDestroy(wl_client*, wl_resource* res) {
@@ -1151,7 +1143,7 @@ namespace {
     void regionResourceDestroyed(wl_resource* res) {
         auto* box = (RegionBox*)wl_resource_get_user_data(res);
 
-        box->srv->regionAlloc->release(box);
+        box->srv->regionAlloc.release(box);
     }
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
@@ -1164,7 +1156,7 @@ namespace {
             return;
         }
 
-        auto* s = srv->surfaceAlloc->make();
+        auto* s = srv->surfaceAlloc.make();
 
         s->srv = srv;
         s->res = sres;
@@ -1182,7 +1174,7 @@ namespace {
             return;
         }
 
-        auto* box = srv->regionAlloc->make();
+        auto* box = srv->regionAlloc.make();
 
         box->srv = srv;
         wl_resource_set_implementation(rres, &regionImpl, box, regionResourceDestroyed);
@@ -1333,7 +1325,7 @@ namespace {
             sub->surface->sub = nullptr;
         }
 
-        sub->srv->subsurfaceAlloc->release(sub);
+        sub->srv->subsurfaceAlloc.release(sub);
     }
 
     void subcompositorDestroy(wl_client*, wl_resource* res) {
@@ -1359,7 +1351,7 @@ namespace {
             return;
         }
 
-        auto* sub = srv->subsurfaceAlloc->make();
+        auto* sub = srv->subsurfaceAlloc.make();
 
         sub->srv = srv;
         sub->surface = surface;
@@ -1397,17 +1389,20 @@ namespace {
     void toplevelSetTitle(wl_client*, wl_resource* res, const char* title) {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        copyBounded(t->title, sizeof(t->title), title);
+        t->title.reset();
+        t->title << title;
+        t->srv->scene->needsFrame = true;
     }
 
     void toplevelSetAppId(wl_client*, wl_resource* res, const char* appId) {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        copyBounded(t->appId, sizeof(t->appId), appId);
+        t->appId.reset();
+        t->appId << appId;
 
         // resolve right here: a client icon set via xdg-toplevel-icon wins
         if (!t->iconFromClient && t->srv->icons) {
-            t->icon = t->srv->icons->forAppId(StringView(t->appId));
+            t->icon = t->srv->icons->forAppId(sv(t->appId));
             t->srv->scene->needsFrame = true;
         }
     }
@@ -1512,9 +1507,9 @@ namespace {
         }
 
         removeOne(srv->scene->toplevels, (Toplevel*)t);
-        sysO << "imway: toplevel "_sv << (const char*)t->title << " destroyed"_sv << endL;
+        sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
-        srv->toplevelAlloc->release(t);
+        srv->toplevelAlloc.release(t);
     }
 
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
@@ -1549,13 +1544,14 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* t = srv->toplevelAlloc->make();
+        auto* t = srv->toplevelAlloc.make();
 
         t->srv = srv;
         t->res = tres;
         t->xdg = xs;
         t->surface = xs->surface;
         t->id = srv->nextToplevelId++;
+        t->title << "(untitled)"_sv;
         xs->toplevel = t;
 
         if (xs->surface) {
@@ -1605,7 +1601,7 @@ namespace {
             xs->popup->surface = nullptr;
         }
 
-        xs->srv->xdgSurfaceAlloc->release(xs);
+        xs->srv->xdgSurfaceAlloc.release(xs);
     }
 
     Positioner* positionerFrom(wl_resource* res) {
@@ -1675,7 +1671,7 @@ namespace {
     void positionerResourceDestroyed(wl_resource* res) {
         Positioner* p = positionerFrom(res);
 
-        p->srv->positionerAlloc->release(p);
+        p->srv->positionerAlloc.release(p);
     }
 
     void popupDestroy(wl_client*, wl_resource* res) {
@@ -1719,7 +1715,7 @@ namespace {
 
         removeOne(srv->scene->popups, (Popup*)p);
         srv->scene->needsFrame = true;
-        srv->popupAlloc->release(p);
+        srv->popupAlloc.release(p);
     }
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes) {
@@ -1741,7 +1737,7 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* p = srv->popupAlloc->make();
+        auto* p = srv->popupAlloc.make();
 
         p->srv = srv;
         p->res = pres;
@@ -1773,7 +1769,7 @@ namespace {
             return;
         }
 
-        Positioner* p = srv->positionerAlloc->make();
+        Positioner* p = srv->positionerAlloc.make();
 
         p->srv = srv;
         wl_resource_set_implementation(pres, &positionerImpl, p, positionerResourceDestroyed);
@@ -1790,7 +1786,7 @@ namespace {
             return;
         }
 
-        auto* xs = srv->xdgSurfaceAlloc->make();
+        auto* xs = srv->xdgSurfaceAlloc.make();
 
         xs->srv = srv;
         xs->res = xres;
@@ -1854,7 +1850,7 @@ namespace {
         xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
         t.cfgW = w;
         t.cfgH = h;
-        sysO << "imway: configure "_sv << (const char*)t.title << " -> "_sv << w << "x"_sv << h << endL;
+        sysO << "imway: configure "_sv << sv(t.title) << " -> "_sv << w << "x"_sv << h << endL;
     }
 
     void xdgToplevelReconfigure(ToplevelImpl& t) {
@@ -1888,7 +1884,7 @@ namespace {
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " ("_sv << (const char*)xs->toplevel->appId << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
+            sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
 
             s.srv->seat.focusToplevel(xs->toplevel);
         }
@@ -1896,7 +1892,7 @@ namespace {
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << (const char*)xs->toplevel->title << " unmapped"_sv << endL;
+            sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
@@ -2005,7 +2001,7 @@ namespace {
         }
 
         src->srv->seat.sourceGone(src);
-        src->srv->dataSourceAlloc->release(src);
+        src->srv->dataSourceAlloc.release(src);
     }
 
     u32 chooseDndAction(u32 offered) {
@@ -2173,7 +2169,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->dataSourceAlloc->make();
+        DataSource* src = srv->dataSourceAlloc.make();
 
         src->srv = srv;
         src->res = s;
@@ -2252,7 +2248,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->dataSourceAlloc->make();
+        DataSource* src = srv->dataSourceAlloc.make();
 
         src->srv = srv;
         src->res = s;
@@ -2756,7 +2752,7 @@ namespace {
             c->surface->constraint = nullptr;
         }
 
-        c->srv->constraintAlloc->release(c);
+        c->srv->constraintAlloc.release(c);
     }
 
     void constraintSetRegion(wl_client*, wl_resource* res, wl_resource* regionRes) {
@@ -2809,7 +2805,7 @@ namespace {
             return;
         }
 
-        ConstraintBox* c = srv->constraintAlloc->make();
+        ConstraintBox* c = srv->constraintAlloc.make();
 
         c->srv = srv;
         c->surface = s;
@@ -2993,7 +2989,7 @@ namespace {
 
         ev_timer_stop(n->srv->loop, &n->timer);
         removeOne(n->srv->idleNotifs, n);
-        n->srv->idleAlloc->release(n);
+        n->srv->idleAlloc.release(n);
     }
 
     const struct ext_idle_notification_v1_interface idleNotificationImpl = {.destroy = relPointerDestroy};
@@ -3008,7 +3004,7 @@ namespace {
             return;
         }
 
-        WaylandImpl::IdleNotif* n = srv->idleAlloc->make();
+        WaylandImpl::IdleNotif* n = srv->idleAlloc.make();
 
         n->srv = srv;
         n->res = r;
@@ -3048,7 +3044,7 @@ namespace {
 
         if (t->refs == 0) {
             drmSyncobjDestroy(t->srv->drmFd, t->handle);
-            t->srv->timelineAlloc->release(t);
+            t->srv->timelineAlloc.release(t);
         }
     }
 
@@ -3150,7 +3146,7 @@ namespace {
             return;
         }
 
-        TimelineBox* t = srv->timelineAlloc->make();
+        TimelineBox* t = srv->timelineAlloc.make();
 
         t->srv = srv;
         t->handle = handle;
@@ -3216,7 +3212,7 @@ namespace {
     void spbBufferResourceDestroyed(wl_resource* res) {
         SpbBox* box = (SpbBox*)wl_resource_get_user_data(res);
 
-        box->srv->spbAlloc->release(box);
+        box->srv->spbAlloc.release(box);
     }
 
     void spbCreateBuffer(wl_client* client, wl_resource* res, u32 id, u32 r, u32 g, u32 b, u32 a) {
@@ -3229,7 +3225,7 @@ namespace {
             return;
         }
 
-        SpbBox* box = srv->spbAlloc->make();
+        SpbBox* box = srv->spbAlloc.make();
 
         box->srv = srv;
         box->argb = ((a >> 24) << 24) | ((r >> 24) << 16) | ((g >> 24) << 8) | (b >> 24);
@@ -3253,13 +3249,14 @@ namespace {
     void iconResourceDestroyed(wl_resource* res) {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
 
-        box->srv->iconAlloc->release(box);
+        box->srv->iconAlloc.release(box);
     }
 
     void iconSetName(wl_client*, wl_resource* res, const char* name) {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
 
-        copyBounded(box->name, sizeof(box->name), name);
+        box->name.reset();
+        box->name << name;
     }
 
     void iconAddBuffer(wl_client*, wl_resource* res, wl_resource* bufferRes, i32) {
@@ -3316,7 +3313,7 @@ namespace {
             return;
         }
 
-        IconBox* box = srv->iconAlloc->make();
+        IconBox* box = srv->iconAlloc.make();
 
         box->srv = srv;
         wl_resource_set_implementation(r, &iconImpl, box, iconResourceDestroyed);
@@ -3350,15 +3347,15 @@ namespace {
                 t->ownIcon = ic;
                 t->icon = ic;
                 t->iconFromClient = true;
-            } else if (box->name[0] && srv->icons) {
-                t->icon = srv->icons->byName(StringView(box->name));
+            } else if (!box->name.empty() && srv->icons) {
+                t->icon = srv->icons->byName(sv(box->name));
                 t->iconFromClient = t->icon != nullptr;
             }
         }
 
         if (!t->iconFromClient && srv->icons) {
             // back to the .desktop match
-            t->icon = srv->icons->forAppId(StringView(t->appId));
+            t->icon = srv->icons->forAppId(sv(t->appId));
         }
 
         srv->scene->needsFrame = true;
@@ -3464,7 +3461,7 @@ namespace {
             return;
         }
 
-        sysO << "imway: activation ("_sv << token << ") -> "_sv << (const char*)tl->title << endL;
+        sysO << "imway: activation ("_sv << token << ") -> "_sv << sv(tl->title) << endL;
         srv->seat.focusToplevel(tl);
         tl->raiseRequested = true;
         srv->scene->needsFrame = true;
@@ -3519,7 +3516,7 @@ namespace {
             }
         }
 
-        box->srv->dmabufBoxAlloc->release(box);
+        box->srv->dmabufBoxAlloc.release(box);
     }
 
     Params* paramsFrom(wl_resource* res) {
@@ -3536,10 +3533,10 @@ namespace {
                 }
             }
 
-            p->srv->dmabufBoxAlloc->release(p->pending);
+            p->srv->dmabufBoxAlloc.release(p->pending);
         }
 
-        p->srv->dmabufParamsAlloc->release(p);
+        p->srv->dmabufParamsAlloc.release(p);
     }
 
     void paramsAdd(wl_client*, wl_resource* res, i32 fd, u32 planeIdx, u32 offset, u32 stride, u32 modifierHi, u32 modifierLo) {
@@ -3657,10 +3654,10 @@ namespace {
             return;
         }
 
-        auto* p = srv->dmabufParamsAlloc->make();
+        auto* p = srv->dmabufParamsAlloc.make();
 
         p->srv = srv;
-        p->pending = srv->dmabufBoxAlloc->make();
+        p->pending = srv->dmabufBoxAlloc.make();
         p->pending->srv = srv;
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
@@ -4934,7 +4931,7 @@ void SeatState::focusToplevel(Toplevel* t) {
 
     if (t && t->surface) {
         kbSendEnter(resOf(t->surface));
-        sysO << "imway: focus -> "_sv << (const char*)t->title << endL;
+        sysO << "imway: focus -> "_sv << sv(t->title) << endL;
     }
 }
 
@@ -4999,6 +4996,21 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     , keyboard(cfg.keyboard)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
+    , surfaceAlloc(p)
+    , subsurfaceAlloc(p)
+    , xdgSurfaceAlloc(p)
+    , toplevelAlloc(p)
+    , popupAlloc(p)
+    , regionAlloc(p)
+    , positionerAlloc(p)
+    , dmabufBoxAlloc(p)
+    , dataSourceAlloc(p)
+    , spbAlloc(p)
+    , dmabufParamsAlloc(p)
+    , constraintAlloc(p)
+    , iconAlloc(p)
+    , idleAlloc(p)
+    , timelineAlloc(p)
 {
     formats.append(cfg.formats, cfg.formatCount);
 
@@ -5006,22 +5018,6 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
     STD_VERIFY(display);
 
     wlLoop = wl_display_get_event_loop(display);
-
-    surfaceAlloc = pool->make<ObjList<SurfaceImpl>>(pool);
-    subsurfaceAlloc = pool->make<ObjList<SubsurfaceImpl>>(pool);
-    xdgSurfaceAlloc = pool->make<ObjList<XdgSurface>>(pool);
-    toplevelAlloc = pool->make<ObjList<ToplevelImpl>>(pool);
-    popupAlloc = pool->make<ObjList<PopupImpl>>(pool);
-    regionAlloc = pool->make<ObjList<RegionBox>>(pool);
-    positionerAlloc = pool->make<ObjList<Positioner>>(pool);
-    dmabufBoxAlloc = pool->make<ObjList<BufferBox>>(pool);
-    dataSourceAlloc = pool->make<ObjList<DataSource>>(pool);
-    spbAlloc = pool->make<ObjList<SpbBox>>(pool);
-    dmabufParamsAlloc = pool->make<ObjList<Params>>(pool);
-    constraintAlloc = pool->make<ObjList<ConstraintBox>>(pool);
-    iconAlloc = pool->make<ObjList<IconBox>>(pool);
-    idleAlloc = pool->make<ObjList<IdleNotif>>(pool);
-    timelineAlloc = pool->make<ObjList<TimelineBox>>(pool);
 
     output = cfg.output;
     dpmsSec = cfg.dpmsSec;
@@ -5217,7 +5213,7 @@ void WaylandImpl::run() {
 void WaylandImpl::iconsReloaded() {
     for (Toplevel* tl : scene->toplevels) {
         if (!tl->iconFromClient) {
-            tl->icon = icons->forAppId(StringView(tl->appId));
+            tl->icon = icons->forAppId(sv(tl->appId));
         }
     }
 

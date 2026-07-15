@@ -15,6 +15,7 @@
 
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
+#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -23,21 +24,14 @@ namespace {
     constexpr int kIconPx = 48;
 
     struct DesktopIcon {
-        char fileId[128] = ""; // .desktop basename == app_id per spec
-        char icon[256] = "";   // raw Icon= value
+        StringBuilder fileId; // .desktop basename == app_id per spec
+        StringBuilder icon;   // raw Icon= value
     };
 
     struct CachedIcon {
-        char key[256] = "";
+        StringBuilder key;
         Icon* icon = nullptr; // misses are cached as nullptr
     };
-
-    void setStr(char* dst, size_t cap, StringView v) {
-        size_t n = v.length() < cap - 1 ? v.length() : cap - 1;
-
-        memcpy(dst, v.data(), n);
-        dst[n] = 0;
-    }
 
     void inoCb(struct ev_loop*, ev_io* w, int);
     void reloadCb(struct ev_loop*, ev_timer* w, int);
@@ -47,14 +41,18 @@ namespace {
         IconPool* icons = nullptr;
         IconStoreListener* listener = nullptr;
 
-        Vector<DesktopIcon> index;
-        Vector<CachedIcon> cache;
+        // pool-backed: stl::Vector wants trivial elements, the strings live
+        // in the objects and recycle with them
+        ObjList<DesktopIcon> indexAlloc;
+        ObjList<CachedIcon> cacheAlloc;
+        Vector<DesktopIcon*> index;
+        Vector<CachedIcon*> cache;
 
         int inoFd = -1;
         ev_io inoIo{};
         ev_timer reloadTimer{};
 
-        IconStoreImpl(struct ev_loop* l, IconPool& p);
+        IconStoreImpl(ObjPool* pool, struct ev_loop* l, IconPool& p);
         ~IconStoreImpl() noexcept;
 
         void buildIndex();
@@ -78,9 +76,11 @@ namespace {
     }
 }
 
-IconStoreImpl::IconStoreImpl(struct ev_loop* l, IconPool& p)
+IconStoreImpl::IconStoreImpl(ObjPool* pool, struct ev_loop* l, IconPool& p)
     : loop(l)
     , icons(&p)
+    , indexAlloc(pool)
+    , cacheAlloc(pool)
 {
     buildIndex();
 
@@ -118,6 +118,10 @@ IconStoreImpl::~IconStoreImpl() noexcept {
 }
 
 void IconStoreImpl::buildIndex() {
+    for (DesktopIcon* di : index) {
+        indexAlloc.release(di);
+    }
+
     index.clear();
 
     forEachXdgDataDir([this](StringView base) {
@@ -173,9 +177,9 @@ void IconStoreImpl::addDesktop(const char* file, StringView fileId) {
 
     bool inSection = false;
     StringView rest((const u8*)data.data(), data.length());
-    DesktopIcon di;
+    DesktopIcon* di = indexAlloc.make();
 
-    setStr(di.fileId, sizeof(di.fileId), fileId);
+    di->fileId << fileId;
 
     while (!rest.empty()) {
         StringView line, tail;
@@ -201,14 +205,16 @@ void IconStoreImpl::addDesktop(const char* file, StringView fileId) {
         StringView key, val;
 
         if (line.split('=', key, val) && key == "Icon"_sv) {
-            setStr(di.icon, sizeof(di.icon), val);
+            di->icon << val;
 
             break;
         }
     }
 
-    if (di.icon[0]) {
+    if (!di->icon.empty()) {
         index.pushBack(di);
+    } else {
+        indexAlloc.release(di);
     }
 }
 
@@ -233,10 +239,12 @@ void IconStoreImpl::reload() {
     // has re-resolved everything onto fresh ones
     Vector<Icon*> old;
 
-    for (size_t i = 0; i < cache.length(); i++) {
-        if (cache[i].icon) {
-            old.pushBack(cache[i].icon);
+    for (CachedIcon* c : cache) {
+        if (c->icon) {
+            old.pushBack(c->icon);
         }
+
+        cacheAlloc.release(c);
     }
 
     cache.clear();
@@ -278,19 +286,19 @@ Icon* IconStoreImpl::loadSvgFile(const char* path) {
 
 // abbreviated function template: must precede the definitions that call it
 Icon* IconStoreImpl::cached(StringView key, auto&& load) {
-    for (size_t i = 0; i < cache.length(); i++) {
-        if (StringView(cache[i].key) == key) {
-            return cache[i].icon;
+    for (const CachedIcon* c : cache) {
+        if (sv(c->key) == key) {
+            return c->icon;
         }
     }
 
-    CachedIcon c;
+    CachedIcon* c = cacheAlloc.make();
 
-    setStr(c.key, sizeof(c.key), key);
-    c.icon = load();
+    c->key << key;
+    c->icon = load();
     cache.pushBack(c);
 
-    return c.icon;
+    return c->icon;
 }
 
 Icon* IconStoreImpl::byName(StringView name) {
@@ -349,11 +357,11 @@ Icon* IconStoreImpl::forAppId(StringView appId) {
     u8 ab[128];
     StringView al = appId.lower(ab);
 
-    for (size_t i = 0; i < index.length(); i++) {
+    for (const DesktopIcon* di : index) {
         u8 fb[128];
 
-        if (StringView(index[i].fileId).lower(fb) == al) {
-            return forIconValue(StringView(index[i].icon));
+        if (sv(di->fileId).lower(fb) == al) {
+            return forIconValue(sv(di->icon));
         }
     }
 
@@ -361,5 +369,5 @@ Icon* IconStoreImpl::forAppId(StringView appId) {
 }
 
 IconStore* IconStore::create(ObjPool* pool, struct ev_loop* loop, IconPool& icons) {
-    return pool->make<IconStoreImpl>(loop, icons);
+    return pool->make<IconStoreImpl>(pool, loop, icons);
 }

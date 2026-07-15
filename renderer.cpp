@@ -109,7 +109,7 @@ namespace {
         VkFence fence = VK_NULL_HANDLE;
         VkSampler sampler = VK_NULL_HANDLE;
 
-        ObjList<SurfaceTexture>* textureAlloc = nullptr;
+        ObjList<SurfaceTexture> textureAlloc;
         Vector<SurfaceTexture*> textures;
 
         // icon textures keyed by Icon::gen; entries the previous frame did
@@ -157,7 +157,7 @@ namespace {
         long memUsedMb = 0;
         long batPct = -2;          // -2 unprobed, -1 no battery
         bool batCharging = false;
-        char batPath[128] = "";
+        StringBuilder batPath;
 
         // calendar popup under the clock
         bool calOpen = false;
@@ -332,7 +332,7 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
     , device(vk.device)
     , queueFamily(vk.queueFamily)
     , queue(vk.queue)
-    , textureAlloc(p->make<ObjList<SurfaceTexture>>(p))
+    , textureAlloc(p)
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
@@ -521,7 +521,7 @@ u64 RendererImpl::iconTexture(const Icon* icon) {
 }
 
 SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
-    SurfaceTexture* tex = textureAlloc->make();
+    SurfaceTexture* tex = textureAlloc.make();
 
     tex->w = w;
     tex->h = h;
@@ -1056,7 +1056,7 @@ void RendererImpl::uploadSurface(Surface& s) {
     bool fresh = tex == nullptr;
 
     if (!tex) {
-        tex = textureAlloc->make();
+        tex = textureAlloc.make();
         tex->w = s.width;
         tex->h = s.height;
 
@@ -1065,7 +1065,7 @@ void RendererImpl::uploadSurface(Surface& s) {
             createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
         } catch (...) {
             sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
-            textureAlloc->release(tex);
+            textureAlloc.release(tex);
 
             return;
         }
@@ -1226,7 +1226,7 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     }
 
     removeOne(textures, tex);
-    textureAlloc->release(tex);
+    textureAlloc.release(tex);
 }
 
 bool RendererImpl::importDmabuf(Surface& s) {
@@ -1252,7 +1252,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return true;
     }
 
-    auto* tex = textureAlloc->make();
+    auto* tex = textureAlloc.make();
 
     tex->w = b->width;
     tex->h = b->height;
@@ -1301,7 +1301,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
         sysE << "imway: dmabuf vkCreateImage failed"_sv << endL;
-        textureAlloc->release(tex);
+        textureAlloc.release(tex);
 
         return false;
     }
@@ -1429,7 +1429,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
             }
         }
 
-        textureAlloc->release(tex);
+        textureAlloc.release(tex);
 
         return false;
     }
@@ -1903,10 +1903,7 @@ void RendererImpl::sampleStats() {
 
                 if (readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Battery"_sv)) {
                     p.seekAbsolute(baseLen);
-
-                    if (p.used() < sizeof(batPath)) {
-                        memcpy(batPath, p.cStr(), p.used() + 1);
-                    }
+                    batPath << sv(p);
 
                     break;
                 }
@@ -1916,13 +1913,13 @@ void RendererImpl::sampleStats() {
         }
     }
 
-    if (batPath[0]) {
+    if (!batPath.empty()) {
         auto& p = sb();
 
-        p << (const char*)batPath << "/capacity"_sv;
+        p << sv(batPath) << "/capacity"_sv;
         batPct = (long)readSmallFile(p.cStr(), buf, sizeof(buf)).stou();
         p.reset();
-        p << (const char*)batPath << "/status"_sv;
+        p << sv(batPath) << "/status"_sv;
         batCharging = readSmallFile(p.cStr(), buf, sizeof(buf)).startsWith("Charging"_sv);
     }
 }
@@ -2040,7 +2037,7 @@ void RendererImpl::inspectorUi(Scene& scene) {
         l << "frame "_sv << (i64)scene.framesDone << ", "_sv << (i64)last << "."_sv << (i64)(last * 10) % 10 << " ms, textures "_sv << (u64)textures.length() << ", dmabuf cache "_sv << (u64)dmabufCache.length();
         ImGui::TextUnformatted(l.cStr());
         l.reset();
-        l << "kb -> "_sv << (scene.kbCaptured ? "ui" : "client") << ", ptr -> "_sv << (scene.ptrCaptured ? "ui" : "client") << ", focus: "_sv << (scene.focusedToplevel ? (const char*)scene.focusedToplevel->title : "-");
+        l << "kb -> "_sv << (scene.kbCaptured ? "ui" : "client") << ", ptr -> "_sv << (scene.ptrCaptured ? "ui" : "client") << ", focus: "_sv << (scene.focusedToplevel ? sv(scene.focusedToplevel->title) : "-"_sv);
         ImGui::TextUnformatted(l.cStr());
         l.reset();
         l << "cursor shape "_sv << (i64)scene.cursorShape << ", hw kind "_sv << hwKind << (hwVisible ? ", visible"_sv : ", hidden"_sv) << (scene.pointerLocked ? ", LOCKED"_sv : ""_sv) << (scene.pointerConfined ? ", CONFINED"_sv : ""_sv);
@@ -2048,7 +2045,7 @@ void RendererImpl::inspectorUi(Scene& scene) {
         ImGui::Separator();
 
         for (Toplevel* t : scene.toplevels) {
-            StringView title(t->title);
+            StringView title = sv(t->title);
 
             l.reset();
             l << (title.length() > 200 ? title.prefix(200) : title) << "###insp"_sv << (u64)t->id;
@@ -2057,7 +2054,7 @@ void RendererImpl::inspectorUi(Scene& scene) {
                 Surface* s = t->surface;
 
                 l.reset();
-                l << "app_id "_sv << (t->appId[0] ? (const char*)t->appId : "-") << (t->mapped ? ", mapped"_sv : ""_sv) << (t->csd ? ", csd"_sv : ", ssd"_sv) << (t->fullscreen ? ", fullscreen"_sv : ""_sv);
+                l << "app_id "_sv << (!t->appId.empty() ? sv(t->appId) : "-"_sv) << (t->mapped ? ", mapped"_sv : ""_sv) << (t->csd ? ", csd"_sv : ", ssd"_sv) << (t->fullscreen ? ", fullscreen"_sv : ""_sv);
                 ImGui::TextUnformatted(l.cStr());
 
                 if (s) {
@@ -2287,7 +2284,7 @@ void RendererImpl::buildUi(Scene& scene) {
             continue;
         }
 
-        StringView title(t->title);
+        StringView title = sv(t->title);
 
         if (title.length() > 280) {
             title = title.prefix(280);
@@ -2621,7 +2618,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     dl->AddImage((ImTextureID)tabIcon, ImVec2(x + 3.f, y + 3.f), ImVec2(x + 3.f + isz, y + 3.f + isz));
                 }
 
-                StringView title(t->title);
+                StringView title = sv(t->title);
 
                 if (title.length() > 24) {
                     title = title.prefix(24);

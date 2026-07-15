@@ -1,6 +1,7 @@
 #pragma once
 
 #include <std/lib/vector.h>
+#include <std/str/builder.h>
 #include <std/sys/types.h>
 
 struct Icon;
@@ -101,8 +102,8 @@ struct Subsurface {
 struct Toplevel {
     Surface* surface = nullptr;
     u64 id = 0;
-    char title[256] = "(untitled)";
-    char appId[128] = "";
+    stl::StringBuilder title;
+    stl::StringBuilder appId;
     bool mapped = false;
 
     // per-window keyboard layout, restored on focus

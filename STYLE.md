@@ -28,3 +28,10 @@ IconStoreImpl(struct ev_loop* l, IconPool& p)
     ...
 }
 ```
+
+Strings: owned strings are `stl::StringBuilder` (pool objects may hold them —
+`ObjList::make` placement-news, `release` destructs). No fixed `char buf[N]`
+as string storage and no hand-rolled copy helpers. Fixed arrays are fine for
+what they really are: stack IO scratch, bounded wire tokens in trivial
+`stl::Vector` elements, rings/bitmaps/index tables, and imgui InputText
+buffers (its API contract).

@@ -15,6 +15,7 @@
 
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
+#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/fd.h>
 
@@ -25,17 +26,10 @@ namespace {
 
     // plain arrays: entries live in a Vector, which wants trivial types
     struct Entry {
-        char name[128] = "";
-        char exec[256] = "";
-        char icon[256] = "";
+        StringBuilder name;
+        StringBuilder exec;
+        StringBuilder icon;
     };
-
-    void setStr(char* dst, size_t cap, StringView v) {
-        size_t n = v.length() < cap - 1 ? v.length() : cap - 1;
-
-        memcpy(dst, v.data(), n);
-        dst[n] = 0;
-    }
 
     struct LauncherImpl: public Launcher {
         Scene* scene = nullptr;
@@ -43,12 +37,16 @@ namespace {
 
         bool open = false;
         bool focusField = false;
+        // raw buffer by imgui InputText contract
         char query[256] = "";
         long sel = 0;
-        Vector<Entry> entries;
+
+        // pool-backed: stl::Vector wants trivial elements
+        ObjList<Entry> entryAlloc;
+        Vector<Entry*> entries;
         Vector<u32> vis;
 
-        LauncherImpl(Scene& scn, IconStore& store);
+        LauncherImpl(ObjPool* pool, Scene& scn, IconStore& store);
 
         void toggle() override;
         bool isOpen() const override;
@@ -56,7 +54,7 @@ namespace {
         void parseDesktop(const char* file);
 
         // strip the %f/%u/... field codes from Exec
-        static void setExec(Entry& en, StringView val);
+        void setExec(Entry& en, StringView val);
 
         void refilter();
         void run(const char* cmd);
@@ -65,9 +63,10 @@ namespace {
     };
 }
 
-LauncherImpl::LauncherImpl(Scene& scn, IconStore& store)
+LauncherImpl::LauncherImpl(ObjPool* pool, Scene& scn, IconStore& store)
     : scene(&scn)
     , icons(&store)
+    , entryAlloc(pool)
 {
 }
 
@@ -89,6 +88,10 @@ bool LauncherImpl::isOpen() const {
 }
 
 void LauncherImpl::rescan() {
+    for (Entry* e : entries) {
+        entryAlloc.release(e);
+    }
+
     entries.clear();
 
     forEachXdgDataDir([this](StringView base) {
@@ -121,8 +124,8 @@ void LauncherImpl::rescan() {
         closedir(d);
     });
 
-    quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry& a, const Entry& b) {
-        return StringView(a.name) < StringView(b.name);
+    quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry* a, const Entry* b) {
+        return sv(a->name) < sv(b->name);
     });
 }
 
@@ -146,7 +149,7 @@ void LauncherImpl::parseDesktop(const char* file) {
         data.append(buf, (size_t)n);
     }
 
-    Entry en;
+    Entry* en = entryAlloc.make();
     bool inSection = false;
     bool display = true;
     bool isApp = false;
@@ -179,12 +182,12 @@ void LauncherImpl::parseDesktop(const char* file) {
             continue;
         }
 
-        if (key == "Name"_sv && !en.name[0]) {
-            setStr(en.name, sizeof(en.name), val);
-        } else if (key == "Exec"_sv && !en.exec[0]) {
-            setExec(en, val);
-        } else if (key == "Icon"_sv && !en.icon[0]) {
-            setStr(en.icon, sizeof(en.icon), val);
+        if (key == "Name"_sv && en->name.empty()) {
+            en->name << val;
+        } else if (key == "Exec"_sv && en->exec.empty()) {
+            setExec(*en, val);
+        } else if (key == "Icon"_sv && en->icon.empty()) {
+            en->icon << val;
         } else if (key == "Type"_sv) {
             isApp = val == "Application"_sv;
         } else if ((key == "NoDisplay"_sv || key == "Hidden"_sv) && val == "true"_sv) {
@@ -192,19 +195,20 @@ void LauncherImpl::parseDesktop(const char* file) {
         }
     }
 
-    if (isApp && display && en.name[0] && en.exec[0]) {
+    if (isApp && display && !en->name.empty() && !en->exec.empty()) {
         entries.pushBack(en);
+    } else {
+        entryAlloc.release(en);
     }
 }
 
 void LauncherImpl::setExec(Entry& en, StringView val) {
-    auto& out = sb();
     const u8* b = val.begin();
     const u8* seg = b;
 
     while (b < val.end()) {
         if (*b == '%' && b + 1 < val.end()) {
-            out << StringView(seg, b);
+            en.exec << StringView(seg, b);
             b += 2;
             seg = b;
         } else {
@@ -212,8 +216,7 @@ void LauncherImpl::setExec(Entry& en, StringView val) {
         }
     }
 
-    out << StringView(seg, b);
-    setStr(en.exec, sizeof(en.exec), sv(out));
+    en.exec << StringView(seg, b);
 }
 
 void LauncherImpl::refilter() {
@@ -225,7 +228,7 @@ void LauncherImpl::refilter() {
 
     for (size_t i = 0; i < entries.length(); i++) {
         u8 nbuf[128];
-        StringView nl = StringView(entries[i].name).lower(nbuf);
+        StringView nl = sv(entries[i]->name).lower(nbuf);
 
         if (ql.empty() || nl.search(ql)) {
             vis.pushBack((u32)i);
@@ -300,13 +303,13 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
         bool navved = ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow);
 
         for (long i = 0; i < n; i++) {
-            const Entry& e = entries[vis[(size_t)i]];
+            Entry& e = *entries[vis[(size_t)i]];
             bool selected = sel == i + 1;
 
             ImGui::PushID((int)vis[(size_t)i]);
 
             if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                run(e.exec);
+                run(e.exec.cStr());
                 open = false;
             }
 
@@ -316,7 +319,7 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
 
             ImGui::SameLine(ImGui::GetStyle().FramePadding.x);
 
-            if (u64 tex = texes.iconTexture(icons->forIconValue(StringView(e.icon)))) {
+            if (u64 tex = texes.iconTexture(icons->forIconValue(sv(e.icon)))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(rowH, rowH));
             } else {
                 ImGui::Dummy(ImVec2(rowH, rowH));
@@ -324,13 +327,13 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
 
             ImGui::SameLine();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (rowH - ImGui::GetFontSize()) / 2.f);
-            ImGui::TextUnformatted(e.name);
+            ImGui::TextUnformatted(e.name.cStr());
             ImGui::PopID();
         }
 
         if (enter) {
             if (sel >= 1 && sel <= n) {
-                run(entries.mut(vis[(size_t)(sel - 1)]).exec);
+                run(entries[vis[(size_t)(sel - 1)]]->exec.cStr());
             } else {
                 run(query);
             }
@@ -349,5 +352,5 @@ void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& t
 }
 
 Launcher* Launcher::create(ObjPool* pool, Scene& scene, IconStore& icons) {
-    return pool->make<LauncherImpl>(scene, icons);
+    return pool->make<LauncherImpl>(pool, scene, icons);
 }
