@@ -194,7 +194,7 @@ int main(int argc, char** argv) {
 
         if (kms) {
             try {
-                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink, *scene);
+                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink);
             } catch (...) {
                 sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }

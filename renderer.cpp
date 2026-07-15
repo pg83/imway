@@ -175,6 +175,10 @@ namespace {
         // input mastering: imgui first, leftovers to the wayland slave sink
         Keyboard* keyboard = nullptr;
         InputSink* next = nullptr;
+
+        // the cursor position lives here: sources emit raw deltas, this is
+        // the code that integrates them and applies lock/confine policy
+        double posX = 0, posY = 0;
         bool kbCapturePrev = false;
         bool chordDown[256] = {};
 
@@ -245,9 +249,10 @@ namespace {
             launcher = Launcher::create(p, scn, icons);
             setup(scn.outW, scn.outH);
 
-            // before any input arrives the cursor sits at the screen center,
-            // matching the input source's initial position
-            ImGui::GetIO().AddMousePosEvent((float)scn.outW / 2.f, (float)scn.outH / 2.f);
+            // before any input arrives the cursor sits at the screen center
+            posX = scn.outW / 2.0;
+            posY = scn.outH / 2.0;
+            ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
             if (out.vsynced()) {
                 ev_prepare_init(&prep, prepareCb);
@@ -293,21 +298,38 @@ namespace {
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
+        void clampPos() {
+            double x0 = 0, y0 = 0, x1 = width - 1, y1 = height - 1;
+
+            if (scene->pointerConfined) {
+                x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
+                y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
+                x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
+                y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
+            }
+
+            posX = posX < x0 ? x0 : posX > x1 ? x1 : posX;
+            posY = posY < y0 ? y0 : posY > y1 ? y1 : posY;
+        }
+
         // every event feeds imgui first; whatever the compositor ui did not
         // capture flows on to the wayland slave sink
         void motion(double x, double y) override {
+            posX = x;
+            posY = y;
+            clampPos();
             scene->needsFrame = true;
-            ImGui::GetIO().AddMousePosEvent((float)x, (float)y);
+            ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
             // keep the plane position fresh for the next frame commit
             if (hwCursorReady && hwVisible) {
-                output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
+                output->setCursorPos((int)posX - hwHotX, (int)posY - hwHotY, true);
             }
 
             // the slave always needs the position: it turns ui capture into
             // a proper pointer leave on its own
             if (next) {
-                next->motion(x, y);
+                next->motion(posX, posY);
             }
         }
 
@@ -338,11 +360,22 @@ namespace {
             }
         }
 
-        // relative motion and touchpad gestures are client-only streams; the
-        // slave gates them by its own pointer focus
+        // the relative stream always reaches the slave (locked-pointer
+        // clients live off it); the visible cursor only moves when no lock
+        // is active — that policy belongs here, not in the source
         void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
             if (next) {
                 next->relMotion(dx, dy, dxRaw, dyRaw);
+            }
+
+            if (!scene->pointerLocked) {
+                motion(posX + dx, posY + dy);
+            }
+        }
+
+        void absMotion(double nx, double ny) override {
+            if (!scene->pointerLocked) {
+                motion(nx * width, ny * height);
             }
         }
 

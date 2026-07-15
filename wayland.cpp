@@ -446,6 +446,10 @@ namespace {
             seat.updateModifiers();
         }
 
+        void absMotion(double, double) override {
+            // the master maps absolute positions into motion()
+        }
+
         void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
             activity();
             seat.handleRelMotion(dx, dy, dxRaw, dyRaw);

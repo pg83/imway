@@ -5,6 +5,10 @@
 struct InputSink {
     virtual void motion(double x, double y) = 0;
     virtual void relMotion(double dx, double dy, double dxRaw, double dyRaw) = 0;
+
+    // absolute device position normalized to [0..1]; whoever owns the
+    // cursor maps it to the screen
+    virtual void absMotion(double nx, double ny) = 0;
     virtual void button(u32 evdevBtn, bool pressed) = 0;
     virtual void key(u32 evdevCode, bool pressed) = 0;
     virtual void modsChanged() = 0;

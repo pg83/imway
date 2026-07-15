@@ -1,6 +1,5 @@
 #include "input.h"
 #include "input_sink.h"
-#include "scene.h"
 #include "session.h"
 #include "util.h"
 
@@ -33,10 +32,8 @@ namespace {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         InputSink* sink = nullptr;
-        Scene* scene = nullptr;
         libinput* li = nullptr;
         ev_io io{};
-        double relX = 0, relY = 0;
 
         // hotplug: inotify on /dev/input, one bit + device slot per eventN
         int inoFd = -1;
@@ -44,7 +41,7 @@ namespace {
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
 
-        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn);
+        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s);
         ~LibinputSource() noexcept;
 
         bool pathAdd(int n) {
@@ -104,20 +101,6 @@ namespace {
             libinput_suspend(li);
         }
 
-        void clampCursor() {
-            double x0 = 0, y0 = 0, x1 = scene->outW - 1, y1 = scene->outH - 1;
-
-            if (scene->pointerConfined) {
-                x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
-                y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
-                x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
-                y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
-            }
-
-            relX = relX < x0 ? x0 : relX > x1 ? x1 : relX;
-            relY = relY < y0 ? y0 : relY > y1 ? y1 : relY;
-        }
-
         void dispatch();
     };
 
@@ -147,13 +130,10 @@ namespace {
 
 // path backend only: the udev one needs a running udevd for enumeration AND
 // hotplug; a direct /dev/input scan plus inotify behaves the same either way
-LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s, Scene& scn)
+LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s)
     : loop(evLoop)
     , session(&ses)
     , sink(&s)
-    , scene(&scn)
-    , relX(scn.outW / 2.0)
-    , relY(scn.outH / 2.0)
 {
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
@@ -246,35 +226,16 @@ void LibinputSource::dispatch() {
         switch (libinput_event_get_type(ev)) {
             case LIBINPUT_EVENT_POINTER_MOTION: {
                 auto* p = libinput_event_get_pointer_event(ev);
-                double dx = libinput_event_pointer_get_dx(p);
-                double dy = libinput_event_pointer_get_dy(p);
 
-                sink->relMotion(dx, dy, libinput_event_pointer_get_dx_unaccelerated(p), libinput_event_pointer_get_dy_unaccelerated(p));
-
-                // while a lock is active the visible cursor stays put,
-                // the client works off the relative stream above
-                if (scene->pointerLocked) {
-                    break;
-                }
-
-                relX += dx;
-                relY += dy;
-                clampCursor();
-                sink->motion(relX, relY);
+                sink->relMotion(libinput_event_pointer_get_dx(p), libinput_event_pointer_get_dy(p), libinput_event_pointer_get_dx_unaccelerated(p), libinput_event_pointer_get_dy_unaccelerated(p));
 
                 break;
             }
             case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                if (scene->pointerLocked) {
-                    break;
-                }
-
-                relX = libinput_event_pointer_get_absolute_x_transformed(p, scene->outW);
-                relY = libinput_event_pointer_get_absolute_y_transformed(p, scene->outH);
-                clampCursor();
-                sink->motion(relX, relY);
+                // normalized: the cursor owner maps this to the screen
+                sink->absMotion(libinput_event_pointer_get_absolute_x_transformed(p, 1), libinput_event_pointer_get_absolute_y_transformed(p, 1));
 
                 break;
             }
@@ -386,6 +347,6 @@ void LibinputSource::dispatch() {
     }
 }
 
-InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink, Scene& scene) {
-    return pool->make<LibinputSource>(loop, session, sink, scene);
+InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink) {
+    return pool->make<LibinputSource>(loop, session, sink);
 }
