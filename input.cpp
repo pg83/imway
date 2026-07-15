@@ -44,62 +44,19 @@ namespace {
         LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s);
         ~LibinputSource() noexcept;
 
-        bool pathAdd(int n) {
-            if (n < 0 || n >= 64 || (pathBits & (1ull << n))) {
-                return false;
-            }
-
-            auto& p = sb();
-
-            p << "/dev/input/event"_sv << n;
-
-            if (!libinput_path_add_device(li, p.cStr())) {
-                return false;
-            }
-
-            pathBits |= 1ull << n;
-
-            return true;
-        }
+        bool pathAdd(int n);
 
         // the node vanished: yank the device now — libinput only notices a
         // dead fd on its next read, and a replug reusing the same number
         // must not find the slot still taken
-        void pathDrop(int n) {
-            if (n < 0 || n >= 64) {
-                return;
-            }
+        void pathDrop(int n);
 
-            if (pathDevs[n]) {
-                libinput_path_remove_device(pathDevs[n]);
-                libinput_device_unref(pathDevs[n]);
-                pathDevs[n] = nullptr;
-            }
-
-            pathBits &= ~(1ull << n);
-        }
-
-        static int sysnameIndex(libinput_device* dev) {
-            StringView sys(libinput_device_get_sysname(dev));
-
-            if (!sys.startsWith("event"_sv)) {
-                return -1;
-            }
-
-            int idx = (int)StringView(sys.begin() + 5, sys.end()).stou();
-
-            return idx >= 0 && idx < 64 ? idx : -1;
-        }
+        static int sysnameIndex(libinput_device* dev);
 
         void inotifyEvents();
 
-        void sessionEnabled() override {
-            libinput_resume(li);
-        }
-
-        void sessionDisabled() override {
-            libinput_suspend(li);
-        }
+        void sessionEnabled() override;
+        void sessionDisabled() override;
 
         void dispatch();
     };
@@ -163,6 +120,50 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
     sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }
 
+bool LibinputSource::pathAdd(int n) {
+    if (n < 0 || n >= 64 || (pathBits & (1ull << n))) {
+        return false;
+    }
+
+    auto& p = sb();
+
+    p << "/dev/input/event"_sv << n;
+
+    if (!libinput_path_add_device(li, p.cStr())) {
+        return false;
+    }
+
+    pathBits |= 1ull << n;
+
+    return true;
+}
+
+void LibinputSource::pathDrop(int n) {
+    if (n < 0 || n >= 64) {
+        return;
+    }
+
+    if (pathDevs[n]) {
+        libinput_path_remove_device(pathDevs[n]);
+        libinput_device_unref(pathDevs[n]);
+        pathDevs[n] = nullptr;
+    }
+
+    pathBits &= ~(1ull << n);
+}
+
+int LibinputSource::sysnameIndex(libinput_device* dev) {
+    StringView sys(libinput_device_get_sysname(dev));
+
+    if (!sys.startsWith("event"_sv)) {
+        return -1;
+    }
+
+    int idx = (int)StringView(sys.begin() + 5, sys.end()).stou();
+
+    return idx >= 0 && idx < 64 ? idx : -1;
+}
+
 void LibinputSource::inotifyEvents() {
     alignas(8) char buf[4096];
 
@@ -197,6 +198,14 @@ void LibinputSource::inotifyEvents() {
             }
         }
     }
+}
+
+void LibinputSource::sessionEnabled() {
+    libinput_resume(li);
+}
+
+void LibinputSource::sessionDisabled() {
+    libinput_suspend(li);
 }
 
 LibinputSource::~LibinputSource() noexcept {

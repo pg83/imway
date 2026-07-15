@@ -728,71 +728,24 @@ namespace {
         void sessionDisabled() override;
         ~KmsOutput() noexcept;
 
-        int width() const override {
-            return mode.hdisplay;
-        }
-
-        int height() const override {
-            return mode.vdisplay;
-        }
-
-        double refresh() const override {
-            return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
-        }
-
+        int width() const override;
+        int height() const override;
+        double refresh() const override;
         void pickPipe(const char* connector, const char* modeStr);
         bool setupHdr();
         void buildGammaLut();
 
-        double sdrWhiteNits() const override {
-            return hdrActive ? hdrNits : 0;
-        }
-
-        void setSdrWhite(double nits) override {
-            if (!hdrActive || nits <= 0 || nits == hdrNits) {
-                return;
-            }
-
-            hdrNits = nits;
-            buildGammaLut();
-            gammaDirty = true;
-        }
-
-        void setColorTemp(double kelvin) override {
-            double k = kelvin <= 0 || kelvin >= 6500 ? 0 : kelvin;
-
-            if (k == tempK) {
-                return;
-            }
-
-            tempK = k;
-            buildGammaLut();
-            gammaDirty = true;
-        }
-
-        bool lastFlip(u64& nsec, u32& seq) const override {
-            if (!flipNs) {
-                return false;
-            }
-
-            nsec = flipNs;
-            seq = flipSeq;
-
-            return true;
-        }
+        double sdrWhiteNits() const override;
+        void setSdrWhite(double nits) override;
+        void setColorTemp(double kelvin) override;
+        bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor);
         bool commit(u32 fbId, bool doModeset);
         void addCursorProps(drmModeAtomicReq* req);
 
-        int cursorCapW() const override {
-            return curW;
-        }
-
-        int cursorCapH() const override {
-            return curH;
-        }
-
+        int cursorCapW() const override;
+        int cursorCapH() const override;
         void setCursorImage(const u32* argb) override;
         void setCursorPos(int x, int y, bool visible) override;
         void setPowerSave(bool on) override;
@@ -801,34 +754,14 @@ namespace {
 
         bool start() override;
 
-        bool ready() const override {
-            return started && !flipPending && sessionActive && connectorConnected && powered;
-        }
-
+        bool ready() const override;
         void hotplug();
-
-        bool vsynced() const override {
-            return true;
-        }
-
-        int scanoutCount() const override {
-            return scanCount;
-        }
-
-        ScanoutBuffer* scanoutBuffer(int i) override {
-            return &scan[i].pub;
-        }
-
-        int acquire() override {
-            return scanNext;
-        }
-
+        bool vsynced() const override;
+        int scanoutCount() const override;
+        ScanoutBuffer* scanoutBuffer(int i) override;
+        int acquire() override;
         void presentImage(int i) override;
-
-        bool presentNeedsPixels() const override {
-            return scanCount == 0;
-        }
-
+        bool presentNeedsPixels() const override;
         void present(const void* pixels) override;
     };
 
@@ -867,120 +800,41 @@ namespace {
         KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, const char* devPath);
         ~KmsDevice() noexcept;
 
-        int drmFd() const override {
-            return fd;
-        }
-
-        unsigned long long renderDevice() const override {
-            return vk.renderDev;
-        }
-
-        size_t dmabufFormatCount() const override {
-            return formats.length();
-        }
-
-        DmabufFormat dmabufFormat(size_t i) const override {
-            return formats[i];
-        }
-
-        ::Output* createOutput(const char* connector, const char* modeStr, double hdrNits) override {
-            output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr, hdrNits);
-
-            return output;
-        }
-
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
-        }
+        int drmFd() const override;
+        unsigned long long renderDevice() const override;
+        size_t dmabufFormatCount() const override;
+        DmabufFormat dmabufFormat(size_t i) const override;
+        ::Output* createOutput(const char* connector, const char* modeStr, double hdrNits) override;
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override;
     };
 
     struct HeadlessOutput: public ::Output {
         int w = 0, h = 0;
         double hz = 60.0;
 
-        HeadlessOutput(int width, int height, double refresh)
-            : w(width)
-            , h(height)
-            , hz(refresh)
-        {
-        }
+        HeadlessOutput(int width, int height, double refresh);
 
-        int width() const override {
-            return w;
-        }
-
-        int height() const override {
-            return h;
-        }
-
-        double refresh() const override {
-            return hz;
-        }
-
-        int cursorCapW() const override {
-            return 0;
-        }
-
-        int cursorCapH() const override {
-            return 0;
-        }
-
-        void setCursorImage(const u32*) override {
-        }
-
-        void setCursorPos(int, int, bool) override {
-        }
-
-        void setPowerSave(bool) override {
-        }
-
-        double sdrWhiteNits() const override {
-            return 0;
-        }
-
-        void setSdrWhite(double) override {
-        }
-
-        void setColorTemp(double) override {
-        }
-
-        bool lastFlip(u64&, u32&) const override {
-            return false;
-        }
-
-        bool start() override {
-            return true;
-        }
-
-        bool ready() const override {
-            return true;
-        }
-
-        bool vsynced() const override {
-            return false;
-        }
-
-        int scanoutCount() const override {
-            return 0;
-        }
-
-        ScanoutBuffer* scanoutBuffer(int) override {
-            return nullptr;
-        }
-
-        int acquire() override {
-            return -1;
-        }
-
-        void presentImage(int) override {
-        }
-
-        bool presentNeedsPixels() const override {
-            return false;
-        }
-
-        void present(const void*) override {
-        }
+        int width() const override;
+        int height() const override;
+        double refresh() const override;
+        int cursorCapW() const override;
+        int cursorCapH() const override;
+        void setCursorImage(const u32*) override;
+        void setCursorPos(int, int, bool) override;
+        void setPowerSave(bool) override;
+        double sdrWhiteNits() const override;
+        void setSdrWhite(double) override;
+        void setColorTemp(double) override;
+        bool lastFlip(u64&, u32&) const override;
+        bool start() override;
+        bool ready() const override;
+        bool vsynced() const override;
+        int scanoutCount() const override;
+        ScanoutBuffer* scanoutBuffer(int) override;
+        int acquire() override;
+        void presentImage(int) override;
+        bool presentNeedsPixels() const override;
+        void present(const void*) override;
     };
 
     struct HeadlessDevice: public Device {
@@ -993,27 +847,12 @@ namespace {
         HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
         ~HeadlessDevice() noexcept;
 
-        int drmFd() const override {
-            return syncFd;
-        }
-
-        unsigned long long renderDevice() const override {
-            return vk.renderDev;
-        }
-
-        size_t dmabufFormatCount() const override {
-            return formats.length();
-        }
-
-        DmabufFormat dmabufFormat(size_t i) const override {
-            return formats[i];
-        }
-
+        int drmFd() const override;
+        unsigned long long renderDevice() const override;
+        size_t dmabufFormatCount() const override;
+        DmabufFormat dmabufFormat(size_t i) const override;
         ::Output* createOutput(const char*, const char* modeStr, double hdrNits) override;
-
-        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override {
-            return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
-        }
+        Renderer* createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) override;
     };
 
     int openKmsNode(Session& session, const char* devPath, StringBuilder& outPath) {
@@ -1113,6 +952,32 @@ KmsDevice::~KmsDevice() noexcept {
         session->closeDevice(fd);
         fd = -1;
     }
+}
+
+int KmsDevice::drmFd() const {
+    return fd;
+}
+
+unsigned long long KmsDevice::renderDevice() const {
+    return vk.renderDev;
+}
+
+size_t KmsDevice::dmabufFormatCount() const {
+    return formats.length();
+}
+
+DmabufFormat KmsDevice::dmabufFormat(size_t i) const {
+    return formats[i];
+}
+
+::Output* KmsDevice::createOutput(const char* connector, const char* modeStr, double hdrNits) {
+    output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr, hdrNits);
+
+    return output;
+}
+
+Renderer* KmsDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
+    return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
 }
 
 namespace {
@@ -1317,6 +1182,18 @@ KmsOutput::~KmsOutput() noexcept {
             drmModeDestroyPropertyBlob(fd, blob);
         }
     }
+}
+
+int KmsOutput::width() const {
+    return mode.hdisplay;
+}
+
+int KmsOutput::height() const {
+    return mode.vdisplay;
+}
+
+double KmsOutput::refresh() const {
+    return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
 }
 
 void KmsOutput::pickPipe(const char* connector, const char* modeStr) {
@@ -1595,6 +1472,43 @@ void KmsOutput::buildGammaLut() {
     drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamLutSize * sizeof(drm_color_lut)), &gammaBlob);
 }
 
+double KmsOutput::sdrWhiteNits() const {
+    return hdrActive ? hdrNits : 0;
+}
+
+void KmsOutput::setSdrWhite(double nits) {
+    if (!hdrActive || nits <= 0 || nits == hdrNits) {
+        return;
+    }
+
+    hdrNits = nits;
+    buildGammaLut();
+    gammaDirty = true;
+}
+
+void KmsOutput::setColorTemp(double kelvin) {
+    double k = kelvin <= 0 || kelvin >= 6500 ? 0 : kelvin;
+
+    if (k == tempK) {
+        return;
+    }
+
+    tempK = k;
+    buildGammaLut();
+    gammaDirty = true;
+}
+
+bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
+    if (!flipNs) {
+        return false;
+    }
+
+    nsec = flipNs;
+    seq = flipSeq;
+
+    return true;
+}
+
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     drm_mode_create_dumb create{};
 
@@ -1744,6 +1658,14 @@ void KmsOutput::addCursorProps(drmModeAtomicReq* req) {
     }
 }
 
+int KmsOutput::cursorCapW() const {
+    return curW;
+}
+
+int KmsOutput::cursorCapH() const {
+    return curH;
+}
+
 void KmsOutput::setCursorImage(const u32* argb) {
     if (!curW) {
         return;
@@ -1846,6 +1768,26 @@ bool KmsOutput::start() {
     return true;
 }
 
+bool KmsOutput::ready() const {
+    return started && !flipPending && sessionActive && connectorConnected && powered;
+}
+
+bool KmsOutput::vsynced() const {
+    return true;
+}
+
+int KmsOutput::scanoutCount() const {
+    return scanCount;
+}
+
+ScanoutBuffer* KmsOutput::scanoutBuffer(int i) {
+    return &scan[i].pub;
+}
+
+int KmsOutput::acquire() {
+    return scanNext;
+}
+
 void KmsOutput::presentImage(int i) {
     if (!started || flipPending || !sessionActive) {
         return;
@@ -1879,6 +1821,10 @@ void KmsOutput::sessionEnabled() {
     }
 }
 
+bool KmsOutput::presentNeedsPixels() const {
+    return scanCount == 0;
+}
+
 void KmsOutput::present(const void* pixels) {
     if (!modesetDone || flipPending || !sessionActive || !pixels) {
         return;
@@ -1899,6 +1845,90 @@ void KmsOutput::present(const void* pixels) {
     if (commit(b.fbId, false)) {
         nextBuf ^= 1;
     }
+}
+
+HeadlessOutput::HeadlessOutput(int width, int height, double refresh)
+    : w(width)
+    , h(height)
+    , hz(refresh)
+{
+}
+
+int HeadlessOutput::width() const {
+    return w;
+}
+
+int HeadlessOutput::height() const {
+    return h;
+}
+
+double HeadlessOutput::refresh() const {
+    return hz;
+}
+
+int HeadlessOutput::cursorCapW() const {
+    return 0;
+}
+
+int HeadlessOutput::cursorCapH() const {
+    return 0;
+}
+
+void HeadlessOutput::setCursorImage(const u32*) {
+}
+
+void HeadlessOutput::setCursorPos(int, int, bool) {
+}
+
+void HeadlessOutput::setPowerSave(bool) {
+}
+
+double HeadlessOutput::sdrWhiteNits() const {
+    return 0;
+}
+
+void HeadlessOutput::setSdrWhite(double) {
+}
+
+void HeadlessOutput::setColorTemp(double) {
+}
+
+bool HeadlessOutput::lastFlip(u64&, u32&) const {
+    return false;
+}
+
+bool HeadlessOutput::start() {
+    return true;
+}
+
+bool HeadlessOutput::ready() const {
+    return true;
+}
+
+bool HeadlessOutput::vsynced() const {
+    return false;
+}
+
+int HeadlessOutput::scanoutCount() const {
+    return 0;
+}
+
+ScanoutBuffer* HeadlessOutput::scanoutBuffer(int) {
+    return nullptr;
+}
+
+int HeadlessOutput::acquire() {
+    return -1;
+}
+
+void HeadlessOutput::presentImage(int) {
+}
+
+bool HeadlessOutput::presentNeedsPixels() const {
+    return false;
+}
+
+void HeadlessOutput::present(const void*) {
 }
 
 HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
@@ -1942,6 +1972,22 @@ HeadlessDevice::~HeadlessDevice() noexcept {
     }
 }
 
+int HeadlessDevice::drmFd() const {
+    return syncFd;
+}
+
+unsigned long long HeadlessDevice::renderDevice() const {
+    return vk.renderDev;
+}
+
+size_t HeadlessDevice::dmabufFormatCount() const {
+    return formats.length();
+}
+
+DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
+    return formats[i];
+}
+
 ::Output* HeadlessDevice::createOutput(const char*, const char* modeStr, double) {
     ModeSpec m{1280, 800, 60};
 
@@ -1950,6 +1996,10 @@ HeadlessDevice::~HeadlessDevice() noexcept {
     }
 
     return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
+}
+
+Renderer* HeadlessDevice::createRenderer(Scene& scene, ::Output& output, FrameListener& listener, IconStore& icons, const char* fontPath, float uiScale, int framesLimit) {
+    return Renderer::create(pool, loop, scene, output, vk, listener, icons, fontPath, uiScale, framesLimit);
 }
 
 Device* Device::createKms(ObjPool* pool, struct ev_loop* loop, Session& session, const char* devPath) {

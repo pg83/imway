@@ -23,22 +23,10 @@ using namespace stl;
 
 namespace {
     struct DirectSession: public Session {
-        const char* seatName() const override {
-            return "seat0";
-        }
-
-        int openDevice(const char* path) override {
-            int fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
-
-            return fd < 0 ? -errno : fd;
-        }
-
-        void closeDevice(int fd) override {
-            close(fd);
-        }
-
-        void addListener(SessionListener*) override {
-        }
+        const char* seatName() const override;
+        int openDevice(const char* path) override;
+        void closeDevice(int fd) override;
+        void addListener(SessionListener*) override;
     };
 
     void seatEnableCb(libseat*, void* data);
@@ -61,16 +49,12 @@ namespace {
         SeatSession(struct ev_loop* evLoop);
         ~SeatSession() noexcept;
 
-        const char* seatName() const override {
-            return libseat_seat_name(seat);
-        }
+        const char* seatName() const override;
 
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
 
-        void addListener(SessionListener* l) override {
-            listeners.pushBack(l);
-        }
+        void addListener(SessionListener* l) override;
 
         void enable();
         void disable();
@@ -92,6 +76,23 @@ namespace {
         .enable_seat = seatEnableCb,
         .disable_seat = seatDisableCb,
     };
+}
+
+const char* DirectSession::seatName() const {
+    return "seat0";
+}
+
+int DirectSession::openDevice(const char* path) {
+    int fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+
+    return fd < 0 ? -errno : fd;
+}
+
+void DirectSession::closeDevice(int fd) {
+    close(fd);
+}
+
+void DirectSession::addListener(SessionListener*) {
 }
 
 SeatSession::SeatSession(struct ev_loop* evLoop)
@@ -130,6 +131,10 @@ SeatSession::~SeatSession() noexcept {
     seat = nullptr;
 }
 
+const char* SeatSession::seatName() const {
+    return libseat_seat_name(seat);
+}
+
 int SeatSession::openDevice(const char* path) {
     int fd = -1;
     int id = libseat_open_device(seat, path, &fd);
@@ -155,6 +160,10 @@ void SeatSession::closeDevice(int fd) {
     }
 
     close(fd);
+}
+
+void SeatSession::addListener(SessionListener* l) {
+    listeners.pushBack(l);
 }
 
 void SeatSession::enable() {

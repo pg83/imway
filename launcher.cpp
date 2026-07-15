@@ -48,200 +48,212 @@ namespace {
         Vector<Entry> entries;
         Vector<u32> vis;
 
-        LauncherImpl(Scene& scn, IconStore& store)
-            : scene(&scn)
-            , icons(&store)
-        {
-        }
+        LauncherImpl(Scene& scn, IconStore& store);
 
-        void toggle() override {
-            open = !open;
-
-            if (open) {
-                query[0] = 0;
-                sel = 0;
-                focusField = true;
-                rescan();
-            }
-
-            scene->needsFrame = true;
-        }
-
-        bool isOpen() const override {
-            return open;
-        }
-
-        void rescan() {
-            entries.clear();
-
-            forEachXdgDataDir([this](StringView base) {
-                // parseDesktop formats via the shared builder underneath,
-                // the directory path lives across those calls
-                StringBuilder dir;
-
-                dir << base << "/applications"_sv;
-
-                DIR* d = opendir(dir.cStr());
-
-                if (!d) {
-                    return;
-                }
-
-                size_t mark = dir.used();
-
-                while (dirent* de = readdir(d)) {
-                    StringView n(de->d_name);
-
-                    if (!n.endsWith(".desktop"_sv)) {
-                        continue;
-                    }
-
-                    dir.seekAbsolute(mark);
-                    dir << "/"_sv << n;
-                    parseDesktop(dir.cStr());
-                }
-
-                closedir(d);
-            });
-
-            quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry& a, const Entry& b) {
-                return StringView(a.name) < StringView(b.name);
-            });
-        }
-
-        void parseDesktop(const char* file) {
-            ScopedFD fd(::open(file, O_RDONLY | O_CLOEXEC));
-
-            if (fd.get() < 0) {
-                return;
-            }
-
-            Vector<u8> data;
-            u8 buf[4096];
-
-            for (;;) {
-                ssize_t n = read(fd.get(), buf, sizeof(buf));
-
-                if (n <= 0) {
-                    break;
-                }
-
-                data.append(buf, (size_t)n);
-            }
-
-            Entry en;
-            bool inSection = false;
-            bool display = true;
-            bool isApp = false;
-            StringView rest((const u8*)data.data(), data.length());
-
-            while (!rest.empty()) {
-                StringView line, tail;
-
-                if (!rest.split('\n', line, tail)) {
-                    line = rest;
-                    tail = {};
-                }
-
-                rest = tail;
-                line = line.stripCr();
-
-                if (!line.empty() && line[0] == '[') {
-                    inSection = line == "[Desktop Entry]"_sv;
-
-                    continue;
-                }
-
-                if (!inSection) {
-                    continue;
-                }
-
-                StringView key, val;
-
-                if (!line.split('=', key, val)) {
-                    continue;
-                }
-
-                if (key == "Name"_sv && !en.name[0]) {
-                    setStr(en.name, sizeof(en.name), val);
-                } else if (key == "Exec"_sv && !en.exec[0]) {
-                    setExec(en, val);
-                } else if (key == "Icon"_sv && !en.icon[0]) {
-                    setStr(en.icon, sizeof(en.icon), val);
-                } else if (key == "Type"_sv) {
-                    isApp = val == "Application"_sv;
-                } else if ((key == "NoDisplay"_sv || key == "Hidden"_sv) && val == "true"_sv) {
-                    display = false;
-                }
-            }
-
-            if (isApp && display && en.name[0] && en.exec[0]) {
-                entries.pushBack(en);
-            }
-        }
+        void toggle() override;
+        bool isOpen() const override;
+        void rescan();
+        void parseDesktop(const char* file);
 
         // strip the %f/%u/... field codes from Exec
-        static void setExec(Entry& en, StringView val) {
-            auto& out = sb();
-            const u8* b = val.begin();
-            const u8* seg = b;
+        static void setExec(Entry& en, StringView val);
 
-            while (b < val.end()) {
-                if (*b == '%' && b + 1 < val.end()) {
-                    out << StringView(seg, b);
-                    b += 2;
-                    seg = b;
-                } else {
-                    b++;
-                }
-            }
-
-            out << StringView(seg, b);
-            setStr(en.exec, sizeof(en.exec), sv(out));
-        }
-
-        void refilter() {
-            vis.clear();
-
-            StringView q(query);
-            u8 qbuf[256];
-            StringView ql = q.lower(qbuf);
-
-            for (size_t i = 0; i < entries.length(); i++) {
-                u8 nbuf[128];
-                StringView nl = StringView(entries[i].name).lower(nbuf);
-
-                if (ql.empty() || nl.search(ql)) {
-                    vis.pushBack((u32)i);
-                }
-            }
-        }
-
-        void run(const char* cmd) {
-            if (!cmd[0] || !scene->socketName) {
-                return;
-            }
-
-            pid_t pid = fork();
-
-            if (pid == 0) {
-                // double fork: the command reparents to init, no zombies
-                if (fork() != 0) {
-                    _exit(0);
-                }
-
-                setenv("WAYLAND_DISPLAY", scene->socketName, 1);
-                execlp("sh", "sh", "-c", cmd, (char*)nullptr);
-                _exit(127);
-            }
-
-            if (pid > 0) {
-                waitpid(pid, nullptr, 0);
-            }
-        }
+        void refilter();
+        void run(const char* cmd);
 
         void draw(int screenW, int screenH, float uiScale, IconResolver& texes) override;
     };
+}
+
+LauncherImpl::LauncherImpl(Scene& scn, IconStore& store)
+    : scene(&scn)
+    , icons(&store)
+{
+}
+
+void LauncherImpl::toggle() {
+    open = !open;
+
+    if (open) {
+        query[0] = 0;
+        sel = 0;
+        focusField = true;
+        rescan();
+    }
+
+    scene->needsFrame = true;
+}
+
+bool LauncherImpl::isOpen() const {
+    return open;
+}
+
+void LauncherImpl::rescan() {
+    entries.clear();
+
+    forEachXdgDataDir([this](StringView base) {
+        // parseDesktop formats via the shared builder underneath,
+        // the directory path lives across those calls
+        StringBuilder dir;
+
+        dir << base << "/applications"_sv;
+
+        DIR* d = opendir(dir.cStr());
+
+        if (!d) {
+            return;
+        }
+
+        size_t mark = dir.used();
+
+        while (dirent* de = readdir(d)) {
+            StringView n(de->d_name);
+
+            if (!n.endsWith(".desktop"_sv)) {
+                continue;
+            }
+
+            dir.seekAbsolute(mark);
+            dir << "/"_sv << n;
+            parseDesktop(dir.cStr());
+        }
+
+        closedir(d);
+    });
+
+    quickSort(entries.mutData(), entries.mutData() + entries.length(), [](const Entry& a, const Entry& b) {
+        return StringView(a.name) < StringView(b.name);
+    });
+}
+
+void LauncherImpl::parseDesktop(const char* file) {
+    ScopedFD fd(::open(file, O_RDONLY | O_CLOEXEC));
+
+    if (fd.get() < 0) {
+        return;
+    }
+
+    Vector<u8> data;
+    u8 buf[4096];
+
+    for (;;) {
+        ssize_t n = read(fd.get(), buf, sizeof(buf));
+
+        if (n <= 0) {
+            break;
+        }
+
+        data.append(buf, (size_t)n);
+    }
+
+    Entry en;
+    bool inSection = false;
+    bool display = true;
+    bool isApp = false;
+    StringView rest((const u8*)data.data(), data.length());
+
+    while (!rest.empty()) {
+        StringView line, tail;
+
+        if (!rest.split('\n', line, tail)) {
+            line = rest;
+            tail = {};
+        }
+
+        rest = tail;
+        line = line.stripCr();
+
+        if (!line.empty() && line[0] == '[') {
+            inSection = line == "[Desktop Entry]"_sv;
+
+            continue;
+        }
+
+        if (!inSection) {
+            continue;
+        }
+
+        StringView key, val;
+
+        if (!line.split('=', key, val)) {
+            continue;
+        }
+
+        if (key == "Name"_sv && !en.name[0]) {
+            setStr(en.name, sizeof(en.name), val);
+        } else if (key == "Exec"_sv && !en.exec[0]) {
+            setExec(en, val);
+        } else if (key == "Icon"_sv && !en.icon[0]) {
+            setStr(en.icon, sizeof(en.icon), val);
+        } else if (key == "Type"_sv) {
+            isApp = val == "Application"_sv;
+        } else if ((key == "NoDisplay"_sv || key == "Hidden"_sv) && val == "true"_sv) {
+            display = false;
+        }
+    }
+
+    if (isApp && display && en.name[0] && en.exec[0]) {
+        entries.pushBack(en);
+    }
+}
+
+void LauncherImpl::setExec(Entry& en, StringView val) {
+    auto& out = sb();
+    const u8* b = val.begin();
+    const u8* seg = b;
+
+    while (b < val.end()) {
+        if (*b == '%' && b + 1 < val.end()) {
+            out << StringView(seg, b);
+            b += 2;
+            seg = b;
+        } else {
+            b++;
+        }
+    }
+
+    out << StringView(seg, b);
+    setStr(en.exec, sizeof(en.exec), sv(out));
+}
+
+void LauncherImpl::refilter() {
+    vis.clear();
+
+    StringView q(query);
+    u8 qbuf[256];
+    StringView ql = q.lower(qbuf);
+
+    for (size_t i = 0; i < entries.length(); i++) {
+        u8 nbuf[128];
+        StringView nl = StringView(entries[i].name).lower(nbuf);
+
+        if (ql.empty() || nl.search(ql)) {
+            vis.pushBack((u32)i);
+        }
+    }
+}
+
+void LauncherImpl::run(const char* cmd) {
+    if (!cmd[0] || !scene->socketName) {
+        return;
+    }
+
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        // double fork: the command reparents to init, no zombies
+        if (fork() != 0) {
+            _exit(0);
+        }
+
+        setenv("WAYLAND_DISPLAY", scene->socketName, 1);
+        execlp("sh", "sh", "-c", cmd, (char*)nullptr);
+        _exit(127);
+    }
+
+    if (pid > 0) {
+        waitpid(pid, nullptr, 0);
+    }
 }
 
 void LauncherImpl::draw(int screenW, int screenH, float uiScale, IconResolver& texes) {

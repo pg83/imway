@@ -69,15 +69,11 @@ namespace {
 
 
     struct RendererImpl: public Renderer, public InputSink, public IconResolver {
-        InputSink* sink() override { return this; }
+        InputSink* sink() override;
 
-        void attachInput(Keyboard* kb, InputSink* slave) override {
-            keyboard = kb;
-            next = slave;
-        }
+        void attachInput(Keyboard* kb, InputSink* slave) override;
 
-        void modsChanged() override {
-        }
+        void modsChanged() override;
 
         struct ev_loop* loop = nullptr;
         stl::ObjPool* pool = nullptr;
@@ -228,57 +224,9 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit)
-            : loop(evLoop)
-            , pool(p)
-            , scene(&scn)
-            , output(&out)
-            , listener(&l)
-            , framesLimit(limit)
-            , instance(vk.instance)
-            , phys(vk.phys)
-            , device(vk.device)
-            , queueFamily(vk.queueFamily)
-            , queue(vk.queue)
-            , textureAlloc(p->make<ObjList<SurfaceTexture>>(p)), hasDmabuf(vk.hasDmabuf), getMemoryFdProps(vk.getMemoryFdProps)
-        {
-            fontPath = font;
-            uiScale = scale;
-            hasSyncFd = vk.hasSyncFd;
-            drmFd = vk.drmFd;
-            launcher = Launcher::create(p, scn, icons);
-            setup(scn.outW, scn.outH);
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit);
 
-            // before any input arrives the cursor sits at the screen center
-            posX = scn.outW / 2.0;
-            posY = scn.outH / 2.0;
-            ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
-
-            if (out.vsynced()) {
-                ev_prepare_init(&prep, prepareCb);
-                prep.data = this;
-                ev_prepare_start(loop, &prep);
-            } else {
-                ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
-                frameTimer.data = this;
-                ev_timer_start(loop, &frameTimer);
-            }
-
-            ev_timer_init(&clockTimer, clockTimerCb, 2., 2.);
-            clockTimer.data = this;
-            ev_timer_start(loop, &clockTimer);
-        }
-
-        ~RendererImpl() noexcept {
-            if (output->vsynced()) {
-                ev_prepare_stop(loop, &prep);
-            } else {
-                ev_timer_stop(loop, &frameTimer);
-            }
-
-            ev_timer_stop(loop, &clockTimer);
-            shutdown();
-        }
+        ~RendererImpl() noexcept;
 
         void tick();
 
@@ -298,183 +246,32 @@ namespace {
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
-        void clampPos() {
-            double x0 = 0, y0 = 0, x1 = width - 1, y1 = height - 1;
-
-            if (scene->pointerConfined) {
-                x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
-                y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
-                x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
-                y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
-            }
-
-            posX = posX < x0 ? x0 : posX > x1 ? x1 : posX;
-            posY = posY < y0 ? y0 : posY > y1 ? y1 : posY;
-        }
+        void clampPos();
 
         // every event feeds imgui first; whatever the compositor ui did not
         // capture flows on to the wayland slave sink
-        void motion(double x, double y) override {
-            posX = x;
-            posY = y;
-            clampPos();
-            scene->needsFrame = true;
-            ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
-
-            // keep the plane position fresh for the next frame commit
-            if (hwCursorReady && hwVisible) {
-                output->setCursorPos((int)posX - hwHotX, (int)posY - hwHotY, true);
-            }
-
-            // the slave always needs the position: it turns ui capture into
-            // a proper pointer leave on its own
-            if (next) {
-                next->motion(posX, posY);
-            }
-        }
-
-        void button(u32 btn, bool pressed) override {
-            int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
-
-            scene->needsFrame = true;
-            ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
-
-            // presses over our ui stay ours; releases always go through, the
-            // slave drops the ones whose press it never saw; super+press is
-            // a compositor gesture (window move), never the client's
-            bool superChord = keyboard && (keyboard->modMask() & kModLogo);
-
-            if (next && (!pressed || (!scene->ptrCaptured && !superChord))) {
-                next->button(btn, pressed);
-            }
-        }
-
+        void motion(double x, double y) override;
+        void button(u32 btn, bool pressed) override;
         void key(u32 code, bool pressed) override;
-
-        void scroll(double dx, double dy) override {
-            scene->needsFrame = true;
-            ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
-
-            if (next && !scene->ptrCaptured) {
-                next->scroll(dx, dy);
-            }
-        }
+        void scroll(double dx, double dy) override;
 
         // the relative stream always reaches the slave (locked-pointer
         // clients live off it); the visible cursor only moves when no lock
         // is active — that policy belongs here, not in the source
-        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
-            if (next) {
-                next->relMotion(dx, dy, dxRaw, dyRaw);
-            }
-
-            if (!scene->pointerLocked) {
-                motion(posX + dx, posY + dy);
-            }
-        }
-
-        void absMotion(double nx, double ny) override {
-            if (!scene->pointerLocked) {
-                motion(nx * width, ny * height);
-            }
-        }
-
-        void swipeBegin(u32 fingers) override {
-            if (next) {
-                next->swipeBegin(fingers);
-            }
-        }
-
-        void swipeUpdate(double dx, double dy) override {
-            if (next) {
-                next->swipeUpdate(dx, dy);
-            }
-        }
-
-        void swipeEnd(bool cancelled) override {
-            if (next) {
-                next->swipeEnd(cancelled);
-            }
-        }
-
-        void pinchBegin(u32 fingers) override {
-            if (next) {
-                next->pinchBegin(fingers);
-            }
-        }
-
-        void pinchUpdate(double dx, double dy, double scale, double rotation) override {
-            if (next) {
-                next->pinchUpdate(dx, dy, scale, rotation);
-            }
-        }
-
-        void pinchEnd(bool cancelled) override {
-            if (next) {
-                next->pinchEnd(cancelled);
-            }
-        }
-
-        void holdBegin(u32 fingers) override {
-            if (next) {
-                next->holdBegin(fingers);
-            }
-        }
-
-        void holdEnd(bool cancelled) override {
-            if (next) {
-                next->holdEnd(cancelled);
-            }
-        }
+        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override;
+        void absMotion(double nx, double ny) override;
+        void swipeBegin(u32 fingers) override;
+        void swipeUpdate(double dx, double dy) override;
+        void swipeEnd(bool cancelled) override;
+        void pinchBegin(u32 fingers) override;
+        void pinchUpdate(double dx, double dy, double scale, double rotation) override;
+        void pinchEnd(bool cancelled) override;
+        void holdBegin(u32 fingers) override;
+        void holdEnd(bool cancelled) override;
 
         // IconResolver: gen -> texture, textures are born on first use
-        u64 iconTexture(const Icon* icon) override {
-            if (!icon || icon->width <= 0 || icon->argb.length() < (size_t)icon->width * icon->height) {
-                return 0;
-            }
-
-            for (size_t i = 0; i < iconTexes.length(); i++) {
-                if (iconTexes[i].gen == icon->gen) {
-                    iconTexes.mut(i).used = true;
-
-                    return (u64)(uintptr_t)iconTexes[i].tex->ds;
-                }
-            }
-
-            IconTex it;
-
-            it.gen = icon->gen;
-            it.tex = makeIconTexture(icon->argb.data(), icon->width, icon->height);
-            it.used = true;
-            iconTexes.pushBack(it);
-
-            return (u64)(uintptr_t)it.tex->ds;
-        }
-
-        SurfaceTexture* makeIconTexture(const u32* argb, int w, int h) {
-            SurfaceTexture* tex = textureAlloc->make();
-
-            tex->w = w;
-            tex->h = h;
-            createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
-            createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
-
-            VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-
-            vci.image = tex->image;
-            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            vci.format = kVkFormat;
-            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
-            tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
-            memcpy(tex->stagingMap, argb, (size_t)w * h * 4);
-            tex->uploadRect = {0, 0, w, h};
-            tex->needsUpload = true;
-            textures.pushBack(tex);
-
-            return tex;
-        }
+        u64 iconTexture(const Icon* icon) override;
+        SurfaceTexture* makeIconTexture(const u32* argb, int w, int h);
 
         bool chordAction(u32 mask, u32 sym);
         void altTabStep(long dir);
@@ -488,9 +285,7 @@ namespace {
         void releaseSurfaceTexture(Surface& s);
         void drainDead();
 
-        bool wantFrame() const {
-            return scene->needsFrame || settleFrames > 0;
-        }
+        bool wantFrame() const;
 
         void frameNow();
         void renderFrame(int scanIdx);
@@ -513,6 +308,246 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
     }
+}
+
+InputSink* RendererImpl::sink() {
+    return this;
+}
+
+void RendererImpl::attachInput(Keyboard* kb, InputSink* slave) {
+    keyboard = kb;
+    next = slave;
+}
+
+void RendererImpl::modsChanged() {
+}
+
+RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, const char* font, float scale, int limit)
+    : loop(evLoop)
+    , pool(p)
+    , scene(&scn)
+    , output(&out)
+    , listener(&l)
+    , framesLimit(limit)
+    , instance(vk.instance)
+    , phys(vk.phys)
+    , device(vk.device)
+    , queueFamily(vk.queueFamily)
+    , queue(vk.queue)
+    , textureAlloc(p->make<ObjList<SurfaceTexture>>(p))
+    , hasDmabuf(vk.hasDmabuf)
+    , getMemoryFdProps(vk.getMemoryFdProps)
+{
+    fontPath = font;
+    uiScale = scale;
+    hasSyncFd = vk.hasSyncFd;
+    drmFd = vk.drmFd;
+    launcher = Launcher::create(p, scn, icons);
+    setup(scn.outW, scn.outH);
+
+    // before any input arrives the cursor sits at the screen center
+    posX = scn.outW / 2.0;
+    posY = scn.outH / 2.0;
+    ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
+
+    if (out.vsynced()) {
+        ev_prepare_init(&prep, prepareCb);
+        prep.data = this;
+        ev_prepare_start(loop, &prep);
+    } else {
+        ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
+        frameTimer.data = this;
+        ev_timer_start(loop, &frameTimer);
+    }
+
+    ev_timer_init(&clockTimer, clockTimerCb, 2., 2.);
+    clockTimer.data = this;
+    ev_timer_start(loop, &clockTimer);
+}
+
+RendererImpl::~RendererImpl() noexcept {
+    if (output->vsynced()) {
+        ev_prepare_stop(loop, &prep);
+    } else {
+        ev_timer_stop(loop, &frameTimer);
+    }
+
+    ev_timer_stop(loop, &clockTimer);
+    shutdown();
+}
+
+void RendererImpl::clampPos() {
+    double x0 = 0, y0 = 0, x1 = width - 1, y1 = height - 1;
+
+    if (scene->pointerConfined) {
+        x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
+        y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
+        x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
+        y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
+    }
+
+    posX = posX < x0 ? x0 : posX > x1 ? x1 : posX;
+    posY = posY < y0 ? y0 : posY > y1 ? y1 : posY;
+}
+
+void RendererImpl::motion(double x, double y) {
+    posX = x;
+    posY = y;
+    clampPos();
+    scene->needsFrame = true;
+    ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
+
+    // keep the plane position fresh for the next frame commit
+    if (hwCursorReady && hwVisible) {
+        output->setCursorPos((int)posX - hwHotX, (int)posY - hwHotY, true);
+    }
+
+    // the slave always needs the position: it turns ui capture into
+    // a proper pointer leave on its own
+    if (next) {
+        next->motion(posX, posY);
+    }
+}
+
+void RendererImpl::button(u32 btn, bool pressed) {
+    int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
+
+    scene->needsFrame = true;
+    ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
+
+    // presses over our ui stay ours; releases always go through, the
+    // slave drops the ones whose press it never saw; super+press is
+    // a compositor gesture (window move), never the client's
+    bool superChord = keyboard && (keyboard->modMask() & kModLogo);
+
+    if (next && (!pressed || (!scene->ptrCaptured && !superChord))) {
+        next->button(btn, pressed);
+    }
+}
+
+void RendererImpl::scroll(double dx, double dy) {
+    scene->needsFrame = true;
+    ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
+
+    if (next && !scene->ptrCaptured) {
+        next->scroll(dx, dy);
+    }
+}
+
+void RendererImpl::relMotion(double dx, double dy, double dxRaw, double dyRaw) {
+    if (next) {
+        next->relMotion(dx, dy, dxRaw, dyRaw);
+    }
+
+    if (!scene->pointerLocked) {
+        motion(posX + dx, posY + dy);
+    }
+}
+
+void RendererImpl::absMotion(double nx, double ny) {
+    if (!scene->pointerLocked) {
+        motion(nx * width, ny * height);
+    }
+}
+
+void RendererImpl::swipeBegin(u32 fingers) {
+    if (next) {
+        next->swipeBegin(fingers);
+    }
+}
+
+void RendererImpl::swipeUpdate(double dx, double dy) {
+    if (next) {
+        next->swipeUpdate(dx, dy);
+    }
+}
+
+void RendererImpl::swipeEnd(bool cancelled) {
+    if (next) {
+        next->swipeEnd(cancelled);
+    }
+}
+
+void RendererImpl::pinchBegin(u32 fingers) {
+    if (next) {
+        next->pinchBegin(fingers);
+    }
+}
+
+void RendererImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
+    if (next) {
+        next->pinchUpdate(dx, dy, scale, rotation);
+    }
+}
+
+void RendererImpl::pinchEnd(bool cancelled) {
+    if (next) {
+        next->pinchEnd(cancelled);
+    }
+}
+
+void RendererImpl::holdBegin(u32 fingers) {
+    if (next) {
+        next->holdBegin(fingers);
+    }
+}
+
+void RendererImpl::holdEnd(bool cancelled) {
+    if (next) {
+        next->holdEnd(cancelled);
+    }
+}
+
+u64 RendererImpl::iconTexture(const Icon* icon) {
+    if (!icon || icon->width <= 0 || icon->argb.length() < (size_t)icon->width * icon->height) {
+        return 0;
+    }
+
+    for (size_t i = 0; i < iconTexes.length(); i++) {
+        if (iconTexes[i].gen == icon->gen) {
+            iconTexes.mut(i).used = true;
+
+            return (u64)(uintptr_t)iconTexes[i].tex->ds;
+        }
+    }
+
+    IconTex it;
+
+    it.gen = icon->gen;
+    it.tex = makeIconTexture(icon->argb.data(), icon->width, icon->height);
+    it.used = true;
+    iconTexes.pushBack(it);
+
+    return (u64)(uintptr_t)it.tex->ds;
+}
+
+SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
+    SurfaceTexture* tex = textureAlloc->make();
+
+    tex->w = w;
+    tex->h = h;
+    createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+    createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+    vci.image = tex->image;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = kVkFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
+    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    memcpy(tex->stagingMap, argb, (size_t)w * h * 4);
+    tex->uploadRect = {0, 0, w, h};
+    tex->needsUpload = true;
+    textures.pushBack(tex);
+
+    return tex;
+}
+
+bool RendererImpl::wantFrame() const {
+    return scene->needsFrame || settleFrames > 0;
 }
 
 namespace {

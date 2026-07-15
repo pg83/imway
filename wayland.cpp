@@ -381,114 +381,27 @@ namespace {
 
         void run() override;
 
-        // icon store reload: re-resolve every window still on a .desktop
-        // match; client-set icons are not ours to touch
-        void iconsReloaded() override {
-            for (Toplevel* tl : scene->toplevels) {
-                if (!tl->iconFromClient) {
-                    tl->icon = icons->forAppId(StringView(tl->appId));
-                }
-            }
-
-            scene->needsFrame = true;
-        }
-
-        InputSink* sink() override {
-            return this;
-        }
-
-        FrameListener* frameListener() override {
-            return this;
-        }
-
-        SessionListener* sessionListener() override {
-            return this;
-        }
-
-        void sessionEnabled() override {
-        }
-
-        void sessionDisabled() override {
-            seat.releaseAllKeys();
-        }
-
-        void motion(double x, double y) override {
-            activity();
-            seat.handleMotion(x, y);
-        }
-
-        void button(u32 btn, bool pressed) override {
-            activity();
-            seat.handleButton(btn, pressed);
-        }
-
-        void key(u32 code, bool pressed) override {
-            activity();
-            seat.handleKey(code, pressed);
-        }
-
-        void scroll(double dx, double dy) override {
-            activity();
-            seat.handleScroll(dx, dy);
-        }
-
-        // called by the renderer after every key event: keeps client-visible
-        // modifiers fresh and applies the kwin-style release-all on the
-        // rising edge of ui keyboard capture
-        void modsChanged() override {
-            bool cap = scene->kbCaptured;
-
-            if (cap && !seat.uiCaptured) {
-                seat.releaseAllKeys();
-            }
-
-            seat.uiCaptured = cap;
-            seat.updateModifiers();
-        }
-
-        void absMotion(double, double) override {
-            // the master maps absolute positions into motion()
-        }
-
-        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override {
-            activity();
-            seat.handleRelMotion(dx, dy, dxRaw, dyRaw);
-        }
-
-        void swipeBegin(u32 fingers) override {
-            activity();
-            seat.handleSwipeBegin(fingers);
-        }
-
-        void swipeUpdate(double dx, double dy) override {
-            seat.handleSwipeUpdate(dx, dy);
-        }
-
-        void swipeEnd(bool cancelled) override {
-            seat.handleSwipeEnd(cancelled);
-        }
-
-        void pinchBegin(u32 fingers) override {
-            activity();
-            seat.handlePinchBegin(fingers);
-        }
-
-        void pinchUpdate(double dx, double dy, double scale, double rotation) override {
-            seat.handlePinchUpdate(dx, dy, scale, rotation);
-        }
-
-        void pinchEnd(bool cancelled) override {
-            seat.handlePinchEnd(cancelled);
-        }
-
-        void holdBegin(u32 fingers) override {
-            activity();
-            seat.handleHoldBegin(fingers);
-        }
-
-        void holdEnd(bool cancelled) override {
-            seat.handleHoldEnd(cancelled);
-        }
+        void iconsReloaded() override;
+        InputSink* sink() override;
+        FrameListener* frameListener() override;
+        SessionListener* sessionListener() override;
+        void sessionEnabled() override;
+        void sessionDisabled() override;
+        void motion(double x, double y) override;
+        void button(u32 btn, bool pressed) override;
+        void key(u32 code, bool pressed) override;
+        void scroll(double dx, double dy) override;
+        void modsChanged() override;
+        void absMotion(double, double) override;
+        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override;
+        void swipeBegin(u32 fingers) override;
+        void swipeUpdate(double dx, double dy) override;
+        void swipeEnd(bool cancelled) override;
+        void pinchBegin(u32 fingers) override;
+        void pinchUpdate(double dx, double dy, double scale, double rotation) override;
+        void pinchEnd(bool cancelled) override;
+        void holdBegin(u32 fingers) override;
+        void holdEnd(bool cancelled) override;
 
         void frameShown(u32 msec) override;
 
@@ -5282,6 +5195,115 @@ void WaylandImpl::run() {
     wl_display_destroy_clients(display);
     wl_display_destroy(display);
     display = nullptr;
+}
+
+// icon store reload: re-resolve every window still on a .desktop
+// match; client-set icons are not ours to touch
+void WaylandImpl::iconsReloaded() {
+    for (Toplevel* tl : scene->toplevels) {
+        if (!tl->iconFromClient) {
+            tl->icon = icons->forAppId(StringView(tl->appId));
+        }
+    }
+
+    scene->needsFrame = true;
+}
+
+InputSink* WaylandImpl::sink() {
+    return this;
+}
+
+FrameListener* WaylandImpl::frameListener() {
+    return this;
+}
+
+SessionListener* WaylandImpl::sessionListener() {
+    return this;
+}
+
+void WaylandImpl::sessionEnabled() {
+}
+
+void WaylandImpl::sessionDisabled() {
+    seat.releaseAllKeys();
+}
+
+void WaylandImpl::motion(double x, double y) {
+    activity();
+    seat.handleMotion(x, y);
+}
+
+void WaylandImpl::button(u32 btn, bool pressed) {
+    activity();
+    seat.handleButton(btn, pressed);
+}
+
+void WaylandImpl::key(u32 code, bool pressed) {
+    activity();
+    seat.handleKey(code, pressed);
+}
+
+void WaylandImpl::scroll(double dx, double dy) {
+    activity();
+    seat.handleScroll(dx, dy);
+}
+
+// called by the renderer after every key event: keeps client-visible
+// modifiers fresh and applies the kwin-style release-all on the
+// rising edge of ui keyboard capture
+void WaylandImpl::modsChanged() {
+    bool cap = scene->kbCaptured;
+
+    if (cap && !seat.uiCaptured) {
+        seat.releaseAllKeys();
+    }
+
+    seat.uiCaptured = cap;
+    seat.updateModifiers();
+}
+
+void WaylandImpl::absMotion(double, double) {
+    // the master maps absolute positions into motion()
+}
+
+void WaylandImpl::relMotion(double dx, double dy, double dxRaw, double dyRaw) {
+    activity();
+    seat.handleRelMotion(dx, dy, dxRaw, dyRaw);
+}
+
+void WaylandImpl::swipeBegin(u32 fingers) {
+    activity();
+    seat.handleSwipeBegin(fingers);
+}
+
+void WaylandImpl::swipeUpdate(double dx, double dy) {
+    seat.handleSwipeUpdate(dx, dy);
+}
+
+void WaylandImpl::swipeEnd(bool cancelled) {
+    seat.handleSwipeEnd(cancelled);
+}
+
+void WaylandImpl::pinchBegin(u32 fingers) {
+    activity();
+    seat.handlePinchBegin(fingers);
+}
+
+void WaylandImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
+    seat.handlePinchUpdate(dx, dy, scale, rotation);
+}
+
+void WaylandImpl::pinchEnd(bool cancelled) {
+    seat.handlePinchEnd(cancelled);
+}
+
+void WaylandImpl::holdBegin(u32 fingers) {
+    activity();
+    seat.handleHoldBegin(fingers);
+}
+
+void WaylandImpl::holdEnd(bool cancelled) {
+    seat.handleHoldEnd(cancelled);
 }
 
 Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig& cfg) {
