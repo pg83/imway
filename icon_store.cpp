@@ -225,8 +225,8 @@ void IconStoreImpl::reload() {
     cache.clear();
     buildIndex();
 
-    if (c->iconListener) {
-        c->iconListener->iconsReloaded();
+    for (IconStoreListener* l : c->iconListeners) {
+        l->iconsReloaded();
     }
 
     for (Icon* ic : old) {

@@ -5042,7 +5042,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
     icons = comp.icons;
-    comp.iconListener = this;
+    comp.iconListeners.pushBack(this);
     drmFd = cfg.drmFd;
 
     if (output && dpmsSec > 0) {

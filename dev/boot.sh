@@ -16,7 +16,7 @@ JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
 CXXFLAGS="-std=c++23 -O2 -g -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
-LIBS="-ldbus-1 -lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
+LIBS="-ldbus-1 -lsndio -lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
 mkdir -p "$B/protocols" "$B/obj"
 
@@ -73,6 +73,8 @@ shadow.cpp
 toast.cpp
 dbus_conn.cpp
 notifications.cpp
+mixer.cpp
+osd.cpp
 icon_store.cpp
 icon_pool.cpp
 icon.cpp

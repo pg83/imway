@@ -6,6 +6,7 @@
 #include "input.h"
 #include "input_sink.h"
 #include "keyboard.h"
+#include "mixer.h"
 #include "output.h"
 #include "icon_pool.h"
 #include "icon_store.h"
@@ -199,6 +200,8 @@ int main(int argc, char** argv) {
         if (c.bus) {
             c.notes = Notifications::create(c);
         }
+
+        c.mixer = Mixer::createSndio(c);
 
         Wayland* wayland = Wayland::create(c, wcfg);
 

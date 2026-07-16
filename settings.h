@@ -6,6 +6,8 @@
 // gamma ramp) and the flags reset on the next draw
 struct Settings {
     float uiScale = 1.f;   // in: the current scale, sizes the menu items
+    float volume = -1.f;   // 0..1; < 0 = no mixer, the row is hidden
+    bool volMuted = false;
     float scaleEdit = 0.f; // slider-side scale value, 0 = seed from uiScale
     float scale = 0.f;     // committed scale, lands on slider release only —
                            // applying mid-drag would rescale the slider
@@ -14,12 +16,16 @@ struct Settings {
     bool nightOn = false;  // night light toggle + temperature
     float nightK = 3400.f;
 
+    bool open = false;     // menu visible this frame — the osd keeps quiet
+
+    bool volumeChanged = false;
+    bool muteChanged = false;
     bool scaleChanged = false;
     bool sdrChanged = false;
     bool nightChanged = false;
 
     bool changed() const {
-        return scaleChanged || sdrChanged || nightChanged;
+        return volumeChanged || muteChanged || scaleChanged || sdrChanged || nightChanged;
     }
 };
 

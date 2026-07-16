@@ -1,5 +1,7 @@
 #pragma once
 
+#include <std/lib/vector.h>
+
 namespace stl {
     class ObjPool;
 }
@@ -8,6 +10,7 @@ struct ev_loop;
 
 struct DBusConn;
 struct IconPool;
+struct MixerListener;
 struct IconStore;
 struct IconStoreListener;
 struct Keyboard;
@@ -41,8 +44,9 @@ struct Composer {
     Renderer* renderer = nullptr;
     Mixer* mixer = nullptr;
 
-    // listener slots: interfaces stay narrow, the slot solves the creation
-    // order — the producer reads it at event time, the consumer fills it
-    // whenever it comes up
-    IconStoreListener* iconListener = nullptr;
+    // listener slots: interfaces stay narrow, the slots solve the creation
+    // order — the producer walks the vector at event time, subscribers
+    // pushBack whenever they come up
+    stl::Vector<IconStoreListener*> iconListeners;
+    stl::Vector<MixerListener*> mixerListeners;
 };

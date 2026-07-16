@@ -12,7 +12,9 @@
 #include "icon_store.h"
 #include "inspector.h"
 #include "launcher.h"
+#include "mixer.h"
 #include "notifications.h"
+#include "osd.h"
 #include "settings.h"
 #include "output.h"
 #include "scene.h"
@@ -81,7 +83,7 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener {
         InputSink* sink() override;
 
 
@@ -166,6 +168,10 @@ namespace {
         bool calendarToggle = false;
 
         Notifications* notes = nullptr;
+        Composer* comp = nullptr;
+
+        // osd: armed by mixer/backlight changes, fades at the tail
+        u64 osdMs = 0;
 
         // inspector (Super+F12): opaque dialog handle owned here, state
         // lives in the widget; non-null = open
@@ -251,6 +257,7 @@ namespace {
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
         void sampleStats();
+        void volumeChanged() override;
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
@@ -326,7 +333,8 @@ void RendererImpl::modsChanged() {
 }
 
 RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
-    : loop(comp.loop)
+    : comp(&comp)
+    , loop(comp.loop)
     , keyboard(comp.kb)
     , next(comp.wayland->sink())
     , pool(comp.pool)
@@ -350,6 +358,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     nextUiScale = scale;
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
+    comp.mixerListeners.pushBack(this);
     setup(scene->outW, scene->outH);
 
     // before any input arrives the cursor sits at the screen center
@@ -620,6 +629,31 @@ void RendererImpl::key(u32 code, bool pressed) {
     io.AddKeyEvent(ImGuiMod_Alt, mask & kModAlt);
     io.AddKeyEvent(ImGuiMod_Super, mask & kModLogo);
 
+    // media keys are compositor-global regardless of focus or capture;
+    // releases fall through — the slave drops unmatched ones
+    if (pressed && comp->mixer) {
+        Mixer* mx = comp->mixer;
+
+        if (code == KEY_VOLUMEUP || code == KEY_VOLUMEDOWN) {
+            float d = code == KEY_VOLUMEUP ? 0.05f : -0.05f;
+            float v = mx->volume() + d;
+
+            mx->setVolume(v < 0.f ? 0.f : v > 1.f ? 1.f : v);
+            // the osd shows even when the value pinned at a limit: mashing
+            // volume-up at max still deserves feedback
+            volumeChanged();
+
+            return;
+        }
+
+        if (code == KEY_MUTE) {
+            mx->setMuted(!mx->muted());
+            volumeChanged();
+
+            return;
+        }
+    }
+
     if (altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
         altTabActive = false;
         altTabSel = nullptr;
@@ -692,6 +726,14 @@ void RendererImpl::key(u32 code, bool pressed) {
     }
 
     next->modsChanged();
+}
+
+void RendererImpl::volumeChanged() {
+    if (!settings.open) {
+        osdMs = nowMsec() + 1500;
+    }
+
+    scene->needsFrame = true;
 }
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
@@ -2081,7 +2123,23 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         settings.uiScale = uiScale;
+
+        if (comp->mixer) {
+            settings.volume = comp->mixer->volume();
+            settings.volMuted = comp->mixer->muted();
+        } else {
+            settings.volume = -1.f;
+        }
+
         drawSettingsMenu(settings);
+
+        if (settings.volumeChanged && comp->mixer) {
+            comp->mixer->setVolume(settings.volume);
+        }
+
+        if (settings.muteChanged && comp->mixer) {
+            comp->mixer->setMuted(settings.volMuted);
+        }
 
         if (settings.scaleChanged) {
             nextUiScale = settings.scale;
@@ -2170,6 +2228,19 @@ void RendererImpl::buildUi(Scene& scene) {
 
     if (notes) {
         drawToasts(*notes, *icons, *this, width, uiScale);
+    }
+
+    if (osdMs && comp->mixer) {
+        u64 now = nowMsec();
+
+        if (now >= osdMs) {
+            osdMs = 0;
+        } else {
+            float rem = (float)(osdMs - now) / 1000.f;
+
+            drawOsd(width, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), rem > 0.3f ? 1.f : rem / 0.3f);
+            scene.needsFrame = true;
+        }
     }
 
     {

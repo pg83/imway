@@ -3,9 +3,12 @@
 #include <imgui.h>
 
 void drawSettingsMenu(Settings& s) {
+    s.volumeChanged = false;
+    s.muteChanged = false;
     s.scaleChanged = false;
     s.sdrChanged = false;
     s.nightChanged = false;
+    s.open = false;
 
     if (s.scaleEdit == 0.f) {
         s.scaleEdit = s.uiScale;
@@ -13,6 +16,27 @@ void drawSettingsMenu(Settings& s) {
 
     if (!ImGui::BeginMenu("settings")) {
         return;
+    }
+
+    s.open = true;
+
+    if (s.volume >= 0.f) {
+        bool m = s.volMuted;
+
+        if (ImGui::Checkbox("##mute", &m)) {
+            s.volMuted = m;
+            s.muteChanged = true;
+        }
+
+        float pct = s.volume * 100.f;
+
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(180.f * s.uiScale - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
+
+        if (ImGui::SliderFloat("volume", &pct, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            s.volume = pct / 100.f;
+            s.volumeChanged = true;
+        }
     }
 
     ImGui::SetNextItemWidth(180.f * s.uiScale);
