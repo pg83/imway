@@ -4,13 +4,7 @@
 #include <std/str/builder.h>
 #include <std/sys/types.h>
 
-namespace stl {
-    class ObjPool;
-}
-
-struct ev_loop;
-struct DBusConn;
-struct Scene;
+struct Composer;
 
 // one on-screen notification; icon is the raw Icon= value from the client
 // (a name or a path), resolved through the icon store at draw time
@@ -30,5 +24,5 @@ struct Notifications {
     virtual const stl::Vector<Toast*>& active() = 0;
     virtual void dismiss(u32 id) = 0;
 
-    static Notifications* create(stl::ObjPool* pool, struct ev_loop* loop, DBusConn& bus, Scene& scene);
+    static Notifications* create(Composer& c);
 };

@@ -1,3 +1,4 @@
+#include "composer.h"
 #include "control.h"
 #include "dbus_conn.h"
 #include "notifications.h"
@@ -134,6 +135,12 @@ int main(int argc, char** argv) {
     try {
         auto* scene = pool->make<Scene>();
 
+        Composer c;
+
+        c.pool = pool.mutPtr();
+        c.loop = loop;
+        c.scene = scene;
+
         Session* session = nullptr;
 
         if (kms) {
@@ -146,9 +153,13 @@ int main(int argc, char** argv) {
             }
         }
 
+        c.session = session;
+
         Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, devicePath == "auto"_sv ? StringView{} : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(outputName, modeStr, hdrNits);
+
+        c.output = output;
 
         scene->outW = output->width();
         scene->outH = output->height();
@@ -166,10 +177,11 @@ int main(int argc, char** argv) {
 
         Keyboard* kb = Keyboard::create(pool.mutPtr(), xkbLayout, xkbOptions);
 
+        c.kb = kb;
+
         WaylandConfig wcfg;
 
         wcfg.socketName = socketName;
-        wcfg.keyboard = kb;
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
         wcfg.mainDevice = device->renderDevice();
@@ -177,43 +189,46 @@ int main(int argc, char** argv) {
         wcfg.dpmsSec = kms ? dpmsSec : 0;
         wcfg.drmFd = device->drmFd();
 
-        IconPool* iconPool = IconPool::create(pool.mutPtr());
-        IconStore* iconStore = IconStore::create(pool.mutPtr(), loop, *iconPool);
-
-        wcfg.iconPool = iconPool;
-        wcfg.iconStore = iconStore;
+        c.iconPool = IconPool::create(pool.mutPtr());
+        c.icons = IconStore::create(c);
 
         // notifications ride the session bus; no bus = no toasts, the
         // desktop works on regardless
-        DBusConn* bus = DBusConn::create(pool.mutPtr(), loop);
-        Notifications* notes = bus ? Notifications::create(pool.mutPtr(), loop, *bus, *scene) : nullptr;
+        c.bus = DBusConn::create(pool.mutPtr(), loop);
 
-        Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
+        if (c.bus) {
+            c.notes = Notifications::create(c);
+        }
 
-        if (bus) {
+        Wayland* wayland = Wayland::create(c, wcfg);
+
+        c.wayland = wayland;
+
+        if (c.bus) {
             // the socket is bound by now: dbus activation learns the real
             // name instead of a wrapper-script guess
-            bus->setActivationEnv("WAYLAND_DISPLAY"_sv, socketName);
-            bus->setActivationEnv("XDG_CURRENT_DESKTOP"_sv, "imway"_sv);
+            c.bus->setActivationEnv("WAYLAND_DISPLAY"_sv, socketName);
+            c.bus->setActivationEnv("XDG_CURRENT_DESKTOP"_sv, "imway"_sv);
         }
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, notes, *kb, *wayland->sink(), fontPath, uiScale, framesLimit);
+
+        Renderer* renderer = device->createRenderer(c, fontPath, uiScale, framesLimit);
+
+        c.renderer = renderer;
 
         if (session) {
             session->addListener(wayland->sessionListener());
         }
 
-        InputSink* sink = renderer->sink();
-
         if (kms) {
             try {
-                InputSource::createLibinput(pool.mutPtr(), loop, *session, *sink);
+                InputSource::createLibinput(c);
             } catch (...) {
                 sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }
         }
 
         if (!controlPath.empty()) {
-            Control::create(pool.mutPtr(), loop, *sink, *renderer, controlPath);
+            Control::create(c, controlPath);
         }
 
         ev_child child;

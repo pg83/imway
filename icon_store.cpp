@@ -1,4 +1,5 @@
 #include "icon.h"
+#include "composer.h"
 #include "icon_store.h"
 #include "icon_pool.h"
 #include "util.h"
@@ -38,9 +39,9 @@ namespace {
     void reloadCb(struct ev_loop*, ev_timer* w, int);
 
     struct IconStoreImpl: public IconStore {
+        Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
         IconPool* icons = nullptr;
-        IconStoreListener* listener = nullptr;
 
         // pool-backed: stl::Vector wants trivial elements, the strings live
         // in the objects and recycle with them
@@ -53,13 +54,12 @@ namespace {
         ev_io inoIo{};
         ev_timer reloadTimer{};
 
-        IconStoreImpl(ObjPool* pool, struct ev_loop* l, IconPool& p);
+        IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
 
         void buildIndex();
         void addDesktop(StringBuilder& file, StringView fileId);
         void drainInotify();
-        void setListener(IconStoreListener* l) override;
         void reload();
         Icon* loadSvgFile(StringBuilder& path);
         Icon* cached(StringView key, auto&& load);
@@ -77,11 +77,12 @@ namespace {
     }
 }
 
-IconStoreImpl::IconStoreImpl(ObjPool* pool, struct ev_loop* l, IconPool& p)
-    : loop(l)
-    , icons(&p)
-    , indexAlloc(pool)
-    , cacheAlloc(pool)
+IconStoreImpl::IconStoreImpl(Composer& comp)
+    : c(&comp)
+    , loop(comp.loop)
+    , icons(comp.iconPool)
+    , indexAlloc(comp.pool)
+    , cacheAlloc(comp.pool)
 {
     buildIndex();
 
@@ -206,10 +207,6 @@ void IconStoreImpl::drainInotify() {
     ev_timer_again(loop, &reloadTimer);
 }
 
-void IconStoreImpl::setListener(IconStoreListener* l) {
-    listener = l;
-}
-
 void IconStoreImpl::reload() {
     ev_timer_stop(loop, &reloadTimer);
 
@@ -228,8 +225,8 @@ void IconStoreImpl::reload() {
     cache.clear();
     buildIndex();
 
-    if (listener) {
-        listener->iconsReloaded();
+    if (c->iconListener) {
+        c->iconListener->iconsReloaded();
     }
 
     for (Icon* ic : old) {
@@ -346,6 +343,6 @@ Icon* IconStoreImpl::forAppId(StringView appId) {
     return nullptr;
 }
 
-IconStore* IconStore::create(ObjPool* pool, struct ev_loop* loop, IconPool& icons) {
-    return pool->make<IconStoreImpl>(pool, loop, icons);
+IconStore* IconStore::create(Composer& c) {
+    return c.pool->make<IconStoreImpl>(c);
 }

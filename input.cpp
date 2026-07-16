@@ -1,4 +1,6 @@
+#include "composer.h"
 #include "input.h"
+#include "renderer.h"
 #include "input_sink.h"
 #include "session.h"
 #include "util.h"
@@ -41,7 +43,7 @@ namespace {
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
 
-        LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s);
+        LibinputSource(Composer& c);
         ~LibinputSource() noexcept;
 
         bool pathAdd(int n);
@@ -87,10 +89,10 @@ namespace {
 
 // path backend only: the udev one needs a running udevd for enumeration AND
 // hotplug; a direct /dev/input scan plus inotify behaves the same either way
-LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& s)
-    : loop(evLoop)
-    , session(&ses)
-    , sink(&s)
+LibinputSource::LibinputSource(Composer& c)
+    : loop(c.loop)
+    , session(c.session)
+    , sink(c.renderer->sink())
 {
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
@@ -111,7 +113,7 @@ LibinputSource::LibinputSource(struct ev_loop* evLoop, Session& ses, InputSink& 
         ev_io_start(loop, &inoIo);
     }
 
-    ses.addListener(this);
+    session->addListener(this);
 
     ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
     io.data = this;
@@ -356,6 +358,6 @@ void LibinputSource::dispatch() {
     }
 }
 
-InputSource* InputSource::createLibinput(ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink) {
-    return pool->make<LibinputSource>(loop, session, sink);
+InputSource* InputSource::createLibinput(Composer& c) {
+    return c.pool->make<LibinputSource>(c);
 }

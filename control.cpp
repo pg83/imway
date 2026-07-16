@@ -1,3 +1,4 @@
+#include "composer.h"
 #include "control.h"
 #include "input_sink.h"
 #include "renderer.h"
@@ -73,7 +74,7 @@ namespace {
         char line[1024] = "";
         size_t lineLen = 0;
 
-        ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, StringView fifoPath);
+        ControlImpl(Composer& c, StringView fifoPath);
         ~ControlImpl() noexcept;
 
         void handleLine(StringView cmd);
@@ -86,10 +87,10 @@ namespace {
     }
 }
 
-ControlImpl::ControlImpl(struct ev_loop* evLoop, InputSink& s, Renderer& rnd, StringView fifoPath)
-    : loop(evLoop)
-    , sink(&s)
-    , renderer(&rnd)
+ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
+    : loop(c.loop)
+    , sink(c.renderer->sink())
+    , renderer(c.renderer)
 {
     path << fifoPath;
     unlink(path.cStr());
@@ -220,6 +221,6 @@ void ControlImpl::reopen() {
     ev_io_start(loop, &io);
 }
 
-Control* Control::create(ObjPool* pool, struct ev_loop* loop, InputSink& sink, Renderer& renderer, StringView fifoPath) {
-    return pool->make<ControlImpl>(loop, sink, renderer, fifoPath);
+Control* Control::create(Composer& c, StringView fifoPath) {
+    return c.pool->make<ControlImpl>(c, fifoPath);
 }

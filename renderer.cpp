@@ -1,4 +1,6 @@
+#include "composer.h"
 #include "renderer.h"
+#include "wayland.h"
 
 #include "calendar.h"
 #include "device_vk.h"
@@ -232,7 +234,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit);
+        RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -323,23 +325,23 @@ InputSink* RendererImpl::sink() {
 void RendererImpl::modsChanged() {
 }
 
-RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit)
-    : loop(evLoop)
-    , keyboard(&kb)
-    , next(&slave)
-    , pool(p)
-    , scene(&scn)
-    , output(&out)
-    , listener(&l)
-    , icons(&icons)
-    , notes(notes)
+RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
+    : loop(comp.loop)
+    , keyboard(comp.kb)
+    , next(comp.wayland->sink())
+    , pool(comp.pool)
+    , scene(comp.scene)
+    , output(comp.output)
+    , listener(comp.wayland->frameListener())
+    , icons(comp.icons)
+    , notes(comp.notes)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
     , device(vk.device)
     , queueFamily(vk.queueFamily)
     , queue(vk.queue)
-    , textureAlloc(p)
+    , textureAlloc(comp.pool)
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
@@ -348,19 +350,19 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
     nextUiScale = scale;
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
-    setup(scn.outW, scn.outH);
+    setup(scene->outW, scene->outH);
 
     // before any input arrives the cursor sits at the screen center
-    posX = scn.outW / 2.0;
-    posY = scn.outH / 2.0;
+    posX = scene->outW / 2.0;
+    posY = scene->outH / 2.0;
     ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
-    if (out.vsynced()) {
+    if (output->vsynced()) {
         ev_prepare_init(&prep, prepareCb);
         prep.data = this;
         ev_prepare_start(loop, &prep);
     } else {
-        ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scn.hz);
+        ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
         frameTimer.data = this;
         ev_timer_start(loop, &frameTimer);
     }
@@ -3042,6 +3044,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, notes, kb, slave, fontPath, uiScale, framesLimit);
+Renderer* Renderer::create(Composer& c, const DeviceVk& vk, StringView fontPath, float uiScale, int framesLimit) {
+    return c.pool->make<RendererImpl>(c, vk, fontPath, uiScale, framesLimit);
 }

@@ -1,3 +1,4 @@
+#include "composer.h"
 #include "notifications.h"
 #include "dbus_conn.h"
 #include "scene.h"
@@ -41,7 +42,7 @@ namespace {
         Vector<Toast*> toasts;
         u32 lastId = 0;
 
-        NotificationsImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConn& bus, Scene& scn);
+        NotificationsImpl(Composer& c);
 
         const Vector<Toast*>& active() override;
         void dismiss(u32 id) override;
@@ -57,11 +58,11 @@ namespace {
     };
 }
 
-NotificationsImpl::NotificationsImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConn& bus, Scene& scn)
-    : loop(evLoop)
-    , conn(bus.raw())
-    , scene(&scn)
-    , toastAlloc(pool)
+NotificationsImpl::NotificationsImpl(Composer& c)
+    : loop(c.loop)
+    , conn(c.bus->raw())
+    , scene(c.scene)
+    , toastAlloc(c.pool)
 {
     DBusError err;
 
@@ -325,6 +326,6 @@ namespace {
     }
 }
 
-Notifications* Notifications::create(ObjPool* pool, struct ev_loop* loop, DBusConn& bus, Scene& scene) {
-    return pool->make<NotificationsImpl>(pool, loop, bus, scene);
+Notifications* Notifications::create(Composer& c) {
+    return c.pool->make<NotificationsImpl>(c);
 }

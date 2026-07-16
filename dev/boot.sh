@@ -59,6 +59,7 @@ third_party/imgui/imgui_impl_vulkan.cpp
 
 IMWAY_SRC="
 main.cpp
+composer.cpp
 scene.cpp
 wayland.cpp
 control.cpp

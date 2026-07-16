@@ -1,4 +1,5 @@
 
+#include "composer.h"
 #include "wayland.h"
 #include "icon.h"
 #include "icon_pool.h"
@@ -385,7 +386,7 @@ namespace {
 
         void activity();
 
-        WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg);
+        WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
 
         void run() override;
@@ -5006,29 +5007,29 @@ void SeatState::toplevelGone(Toplevel* t) {
     }
 }
 
-WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const WaylandConfig& cfg)
-    : pool(p)
-    , loop(evLoop)
-    , scene(&scn)
+WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
+    : pool(comp.pool)
+    , loop(comp.loop)
+    , scene(comp.scene)
     , socketName(cfg.socketName)
-    , keyboard(cfg.keyboard)
+    , keyboard(comp.kb)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
-    , surfaceAlloc(p)
-    , subsurfaceAlloc(p)
-    , xdgSurfaceAlloc(p)
-    , toplevelAlloc(p)
-    , popupAlloc(p)
-    , regionAlloc(p)
-    , positionerAlloc(p)
-    , dmabufBoxAlloc(p)
-    , dataSourceAlloc(p)
-    , spbAlloc(p)
-    , dmabufParamsAlloc(p)
-    , constraintAlloc(p)
-    , iconAlloc(p)
-    , idleAlloc(p)
-    , timelineAlloc(p)
+    , surfaceAlloc(comp.pool)
+    , subsurfaceAlloc(comp.pool)
+    , xdgSurfaceAlloc(comp.pool)
+    , toplevelAlloc(comp.pool)
+    , popupAlloc(comp.pool)
+    , regionAlloc(comp.pool)
+    , positionerAlloc(comp.pool)
+    , dmabufBoxAlloc(comp.pool)
+    , dataSourceAlloc(comp.pool)
+    , spbAlloc(comp.pool)
+    , dmabufParamsAlloc(comp.pool)
+    , constraintAlloc(comp.pool)
+    , iconAlloc(comp.pool)
+    , idleAlloc(comp.pool)
+    , timelineAlloc(comp.pool)
 {
     formats.append(cfg.formats, cfg.formatCount);
 
@@ -5039,12 +5040,9 @@ WaylandImpl::WaylandImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, const W
 
     output = cfg.output;
     dpmsSec = cfg.dpmsSec;
-    iconPool = cfg.iconPool;
-    icons = cfg.iconStore;
-
-    if (icons) {
-        icons->setListener(this);
-    }
+    iconPool = comp.iconPool;
+    icons = comp.icons;
+    comp.iconListener = this;
     drmFd = cfg.drmFd;
 
     if (output && dpmsSec > 0) {
@@ -5342,6 +5340,6 @@ void WaylandImpl::holdEnd(bool cancelled) {
     seat.handleHoldEnd(cancelled);
 }
 
-Wayland* Wayland::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, const WaylandConfig& cfg) {
-    return pool->make<WaylandImpl>(pool, loop, scene, cfg);
+Wayland* Wayland::create(Composer& c, const WaylandConfig& cfg) {
+    return c.pool->make<WaylandImpl>(c, cfg);
 }

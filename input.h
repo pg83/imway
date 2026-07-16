@@ -9,5 +9,5 @@ struct InputSink;
 struct Session;
 
 struct InputSource {
-    static InputSource* createLibinput(stl::ObjPool* pool, struct ev_loop* loop, Session& session, InputSink& sink);
+    static InputSource* createLibinput(Composer& c);
 };

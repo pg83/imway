@@ -2,14 +2,8 @@
 
 #include <std/str/view.h>
 
-namespace stl {
-    class ObjPool;
-}
-
-struct ev_loop;
-
+struct Composer;
 struct Icon;
-struct IconPool;
 
 // fired after an inotify-driven reload: the index and cache are fresh, the
 // subscriber re-resolves whatever it mapped onto store icons
@@ -31,7 +25,5 @@ struct IconStore {
     // an Icon= value: absolute path or bare name
     virtual Icon* forIconValue(stl::StringView v) = 0;
 
-    virtual void setListener(IconStoreListener* l) = 0;
-
-    static IconStore* create(stl::ObjPool* pool, struct ev_loop* loop, IconPool& icons);
+    static IconStore* create(Composer& c);
 };
