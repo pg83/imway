@@ -1115,24 +1115,53 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView 
         }
     }
 
-    if (vk.hasDmabuf) {
-        u64 mods[64];
-        u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
+    // 10 bits for sdr too when the plane takes it: ui gradients and the
+    // night-light ramp quantize at framebuffer depth, not lut depth
+    if (!hdrActive && vk.hasDmabuf) {
+        u64 m[64];
 
-        for (auto& sb : scan) {
-            if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
-                scanCount++;
-            } else {
+        if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, m, 64) > 0) {
+            scanFourcc = DRM_FORMAT_XRGB2101010;
+            scanVk = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+        }
+    }
+
+    if (vk.hasDmabuf) {
+        for (;;) {
+            u64 mods[64];
+            u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
+
+            for (auto& sb : scan) {
+                if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
+                    scanCount++;
+                } else {
+                    break;
+                }
+            }
+
+            if (scanCount >= 2) {
+                if (scanFourcc == DRM_FORMAT_XRGB2101010) {
+                    sysO << "imway: 10-bit scanout"_sv << endL;
+                }
+
                 break;
             }
-        }
 
-        if (scanCount < 2) {
             for (auto& sb : scan) {
                 destroyScanBuf(vk, fd, sb);
             }
 
             scanCount = 0;
+
+            if (scanFourcc == DRM_FORMAT_XRGB8888) {
+                break;
+            }
+
+            // the plane advertises 2101010 but export/import did not pan
+            // out — retry plain 8-bit before falling to the dumb path
+            sysE << "imway: 10-bit scanout failed, retrying 8-bit"_sv << endL;
+            scanFourcc = DRM_FORMAT_XRGB8888;
+            scanVk = kVkFormat;
         }
     }
 
