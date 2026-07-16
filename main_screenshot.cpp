@@ -2,16 +2,17 @@
 #include "util.h"
 
 #include <fcntl.h>
-#include <unistd.h>
 #include <time.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
 #include <float.h>
+#include <signal.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 
 #include <std/ios/sys.h>
-#include <std/lib/vector.h>
+#include <std/ios/out_fd.h>
+#include <std/ios/fs_utils.h>
+#include <std/sys/fd.h>
+#include <std/sys/throw.h>
 #include <std/sys/types.h>
 
 #define GLFW_INCLUDE_NONE
@@ -37,111 +38,93 @@ using namespace stl;
 // window/context/input and imgui's glfw+vulkan backends drive the rest.
 
 namespace {
-    // ---- decoded source image (RGBA8, tightly packed) ----
+    // a screenshot-specific exception carrying a human message; raised by fail()
+    // and shown verbatim on the error panel. derives stl::Exception so
+    // Exception::current() surfaces it in a generic catch, like the rest of imway
+    struct ShotError: Exception {
+        Buffer msg;
+
+        explicit ShotError(Buffer m)
+            : msg((Buffer&&)m)
+        {
+        }
+
+        ExceptionKind kind() const noexcept override {
+            return ExceptionKind::Verify;
+        }
+
+        StringView description() override {
+            return sv(msg);
+        }
+    };
+
+    [[noreturn]] void fail(StringView m) {
+        throw ShotError(Buffer(m));
+    }
+
+    // ---- decoded source image ----
+    // the whole memfd (IMW1 header + RGBA8 rows) is read into one buffer; px
+    // points past the 12-byte header, so no separate pixel allocation
     struct Image {
+        Buffer file;
         u32 w = 0, h = 0;
-        u8* px = nullptr; // w*h*4, malloc'd
+        const u8* px = nullptr;
     };
 
     constexpr u32 kMagic = 0x31574d49u; // 'IMW1' little-endian
 
-    bool readAll(int fd, void* buf, size_t n) {
-        u8* p = (u8*)buf;
-
-        while (n) {
-            ssize_t r = read(fd, p, n);
-
-            if (r <= 0) {
-                return false;
-            }
-
-            p += r;
-            n -= (size_t)r;
-        }
-
-        return true;
-    }
-
-    bool loadImage(StringView path, Image& img) {
+    // throws (ShotError, or the Errno readFileContent raises) on any failure
+    void loadImage(StringView path, Image& img) {
         Buffer p(path);
-        int fd = open(p.cStr(), O_RDONLY | O_CLOEXEC);
 
-        if (fd < 0) {
-            sysE << "imway screenshot: cannot open "_sv << path << endL;
+        readFileContent(p, img.file);
 
-            return false;
+        if (img.file.used() < 12) {
+            fail("not an imway screenshot (too small)"_sv);
         }
 
-        struct {
-            u32 magic;
-            u32 w;
-            u32 h;
-        } hdr = {};
+        const u32* h = (const u32*)img.file.data();
 
-        bool ok = readAll(fd, &hdr, sizeof(hdr)) && hdr.magic == kMagic && hdr.w && hdr.h;
-
-        if (ok) {
-            size_t bytes = (size_t)hdr.w * hdr.h * 4;
-
-            img.w = hdr.w;
-            img.h = hdr.h;
-            img.px = (u8*)malloc(bytes);
-            ok = img.px && readAll(fd, img.px, bytes);
+        if (h[0] != kMagic || !h[1] || !h[2]) {
+            fail("not an imway screenshot (bad header)"_sv);
         }
 
-        close(fd);
+        img.w = h[1];
+        img.h = h[2];
 
-        if (!ok) {
-            sysE << "imway screenshot: bad or truncated image"_sv << endL;
-            free(img.px);
-            img.px = nullptr;
+        if (img.file.used() < 12 + (size_t)img.w * img.h * 4) {
+            fail("truncated screenshot"_sv);
         }
 
-        return ok;
+        img.px = (const u8*)img.file.data() + 12;
     }
 
     // ---- png output ----
-    void mkdirs(const char* path) {
-        // mkdir -p: walk each '/' separator and create the prefix
-        char buf[1024];
+    // mkdir -p: create each '/'-separated prefix of the path in turn
+    void mkdirs(StringView path) {
+        Buffer b(path);
+        char* s = b.cStr();
 
-        size_t n = strlen(path);
-
-        if (n >= sizeof(buf)) {
-            return;
-        }
-
-        memcpy(buf, path, n + 1);
-
-        for (char* s = buf + 1; *s; s++) {
-            if (*s == '/') {
-                *s = 0;
-                mkdir(buf, 0755);
-                *s = '/';
+        for (char* p = s + 1; *p; p++) {
+            if (*p == '/') {
+                *p = 0;
+                mkdir(s, 0755);
+                *p = '/';
             }
         }
 
-        mkdir(buf, 0755);
+        mkdir(s, 0755);
     }
 
     // libpng writes go through this into a growable buffer, so the same encode
     // path feeds both the file save and the clipboard data source
     void pngWrite(png_structp png, png_bytep data, png_size_t len) {
-        auto* out = (Vector<u8>*)png_get_io_ptr(png);
-
-        out->append((const u8*)data, (size_t)len);
+        ((Buffer*)png_get_io_ptr(png))->append(data, (size_t)len);
     }
 
     // encode the [x0,y0,x1,y1) region of img (image px, already clamped) as an
-    // RGBA png into out; returns false on failure
-    bool encodePng(const Image& img, int x0, int y0, int x1, int y1, Vector<u8>& out) {
-        int cw = x1 - x0;
-        int ch = y1 - y0;
-
-        if (cw <= 0 || ch <= 0) {
-            return false;
-        }
-
+    // RGBA png into out; throws on failure
+    void encodePng(const Image& img, int x0, int y0, int x1, int y1, Buffer& out) {
         png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
         png_infop info = png ? png_create_info_struct(png) : nullptr;
 
@@ -150,55 +133,50 @@ namespace {
                 png_destroy_write_struct(&png, info ? &info : nullptr);
             }
 
-            return false;
+            fail("png encode failed"_sv);
         }
 
         png_set_write_fn(png, &out, pngWrite, nullptr);
-        png_set_IHDR(png, info, (u32)cw, (u32)ch, 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+        png_set_IHDR(png, info, (u32)(x1 - x0), (u32)(y1 - y0), 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
         png_write_info(png, info);
 
-        for (int y = 0; y < ch; y++) {
-            png_write_row(png, (png_bytep)(img.px + ((size_t)(y0 + y) * img.w + x0) * 4));
+        for (int y = y0; y < y1; y++) {
+            png_write_row(png, (png_bytep)(img.px + ((size_t)y * img.w + x0) * 4));
         }
 
         png_write_end(png, nullptr);
         png_destroy_write_struct(&png, &info);
-
-        return true;
     }
 
-    bool savePng(const Vector<u8>& png, const char* file) {
-        FILE* f = fopen(file, "wb");
+    // stream the encoded png to a file; throws on open/write failure
+    void savePng(const Buffer& png, StringView file) {
+        ScopedFD fd(open(Buffer(file).cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
-        if (!f) {
-            sysE << "imway screenshot: cannot write file"_sv << endL;
-
-            return false;
+        if (fd.get() < 0) {
+            fail(sv(StringBuilder() << "cannot write "_sv << file));
         }
 
-        bool ok = fwrite(png.data(), 1, png.length(), f) == png.length();
+        FDRegular out(fd);
 
-        fclose(f);
-
-        return ok;
+        out.write(png.data(), png.length());
+        out.flush();
     }
 
     // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.png (fallback ~/Pictures)
-    void destPath(char* out, size_t cap) {
+    Buffer destPath() {
+        StringBuilder dir;
         const char* base = getenv("XDG_PICTURES_DIR");
-        char home[512];
 
-        if (!base || !*base) {
-            const char* h = getenv("HOME");
+        if (base && *base) {
+            dir << StringView(base);
+        } else {
+            const char* home = getenv("HOME");
 
-            snprintf(home, sizeof(home), "%s/Pictures", h ? h : ".");
-            base = home;
+            dir << StringView(home ? home : ".") << "/Pictures"_sv;
         }
 
-        char dir[768];
-
-        snprintf(dir, sizeof(dir), "%s/screenshots", base);
-        mkdirs(dir);
+        dir << "/screenshots"_sv;
+        mkdirs(sv(dir));
 
         time_t t = time(nullptr);
         struct tm tm;
@@ -208,7 +186,8 @@ namespace {
         char stamp[32];
 
         strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
-        snprintf(out, cap, "%s/imway-%s.png", dir, stamp);
+
+        return Buffer(sv(StringBuilder() << sv(dir) << "/imway-"_sv << StringView(stamp) << ".png"_sv));
     }
 
     // ---- wayland clipboard ----
@@ -221,14 +200,14 @@ namespace {
         wl_seat* seat = nullptr;
         wl_data_device_manager* ddm = nullptr;
         wl_data_source* source = nullptr;
-        Vector<u8> png;     // must outlive the source: send() can fire anytime
+        Buffer png;         // must outlive the source: send() can fire anytime
         bool cancelled = false;
     } gClip;
 
     void clipReg(void*, wl_registry* reg, u32 name, const char* iface, u32 ver) {
-        if (!strcmp(iface, "wl_seat")) {
+        if (StringView(iface) == "wl_seat"_sv) {
             gClip.seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, 1);
-        } else if (!strcmp(iface, "wl_data_device_manager")) {
+        } else if (StringView(iface) == "wl_data_device_manager"_sv) {
             gClip.ddm = (wl_data_device_manager*)wl_registry_bind(reg, name, &wl_data_device_manager_interface, ver < 3 ? ver : 3);
         }
     }
@@ -236,21 +215,15 @@ namespace {
     const wl_registry_listener clipRegListener = {clipReg, [](void*, wl_registry*, u32) {}};
 
     void clipSend(void*, wl_data_source*, const char*, int32_t fd) {
-        const u8* p = gClip.png.data();
-        size_t n = gClip.png.length();
+        ScopedFD sfd(fd);
 
-        while (n) {
-            ssize_t w = write(fd, p, n);
+        try {
+            FDPipe out(sfd);
 
-            if (w <= 0) {
-                break;
-            }
-
-            p += w;
-            n -= (size_t)w;
+            out.write(gClip.png.data(), gClip.png.length());
+        } catch (...) {
+            // the paste target may close its end early (EPIPE) — nothing to do
         }
-
-        close(fd);
     }
 
     void clipCancelled(void*, wl_data_source* src) {
@@ -269,11 +242,11 @@ namespace {
         .action = [](void*, wl_data_source*, u32) {},
     };
 
-    // put the encoded png (already moved into gClip.png) on the clipboard and
-    // block servicing wayland events until the selection is lost. the visual ui
-    // is already torn down by now, so we only hold the selection. returns false
-    // if the compositor exposes no data-device machinery.
-    bool copyToClipboard() {
+    // put the encoded png (already in gClip.png) on the clipboard and block
+    // servicing wayland events until the selection is lost. the window is
+    // hidden by now, so we only hold the selection. throws if the compositor
+    // exposes no data-device machinery.
+    void copyToClipboard() {
         wl_display* dpy = glfwGetWaylandDisplay();
         wl_registry* reg = wl_display_get_registry(dpy);
 
@@ -281,9 +254,7 @@ namespace {
         wl_display_roundtrip(dpy); // receive the globals, then their binds
 
         if (!gClip.seat || !gClip.ddm) {
-            sysE << "imway screenshot: no wayland clipboard"_sv << endL;
-
-            return false;
+            fail("no wayland clipboard"_sv);
         }
 
         wl_data_device* dd = wl_data_device_manager_get_data_device(gClip.ddm, gClip.seat);
@@ -301,8 +272,6 @@ namespace {
                 break; // compositor went away
             }
         }
-
-        return true;
     }
 
     // ---- vulkan plumbing (mirrors imgui's glfw+vulkan example) ----
@@ -317,10 +286,13 @@ namespace {
     u32 gMinImageCount = 2;
     bool gRebuild = false;
 
+    // ui scale handed down from the compositor via IMGUI_SCALE (its clients
+    // otherwise render at scale 1, so the panel/text would be tiny on hidpi)
+    float gUiScale = 1.f;
+
     void vkc(VkResult e) {
         if (e < 0) {
-            fprintf(stderr, "[vulkan] VkResult = %d\n", e);
-            abort();
+            fail(sv(StringBuilder() << "vulkan error "_sv << (i64)e));
         }
     }
 
@@ -375,8 +347,7 @@ namespace {
         vkGetPhysicalDeviceSurfaceSupportKHR(gPhys, gQueueFamily, surface, &sup);
 
         if (!sup) {
-            fprintf(stderr, "imway screenshot: no WSI support\n");
-            exit(1);
+            fail("no vulkan WSI support"_sv);
         }
 
         const VkFormat fmts[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
@@ -821,7 +792,7 @@ namespace {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if (ImGui::Begin("##shot", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings)) {
-            const float panelW = 200.f;
+            const float panelW = 200.f * gUiScale;
 
             // +/- zoom, handled before the panel so the slider reflects it
             if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) {
@@ -851,30 +822,171 @@ namespace {
 
         return result;
     }
+
+    // a full-window panel that replaces the cropper (not an overlay) when
+    // something goes wrong — reads like a message from the compositor: a
+    // heading, the error text, and a single Exit button. returns -1 on exit.
+    int drawError(StringView msg) {
+        ImGuiViewport* vp = ImGui::GetMainViewport();
+
+        ImGui::SetNextWindowPos(vp->Pos);
+        ImGui::SetNextWindowSize(vp->Size);
+
+        int result = 0;
+
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(28, 28, 32, 255));
+
+        if (ImGui::Begin("##err", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
+            float pad = 24.f * gUiScale;
+
+            ImGui::SetCursorPos(ImVec2(pad, pad));
+            ImGui::BeginGroup();
+            ImGui::TextDisabled("imway screenshot");
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(vp->Size.x - pad);
+            ImGui::TextUnformatted((const char*)msg.data(), (const char*)msg.data() + msg.length());
+            ImGui::PopTextWrapPos();
+            ImGui::Spacing();
+            ImGui::Spacing();
+
+            if (ImGui::Button("Exit", ImVec2(120.f * gUiScale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+                result = -1;
+            }
+
+            ImGui::EndGroup();
+        }
+
+        ImGui::End();
+        ImGui::PopStyleColor();
+
+        return result;
+    }
+
+    // the vulkan/imgui frame loop: pump events, resize the swapchain on demand,
+    // and call draw() each frame until it returns a nonzero action (window close
+    // counts as exit). draw() is the cropper or the error panel.
+    template <typename Draw>
+    int runLoop(GLFWwindow* window, Draw draw) {
+        int action = 0;
+
+        while (!glfwWindowShouldClose(window) && action == 0) {
+            glfwPollEvents();
+
+            int nw, nh;
+
+            glfwGetFramebufferSize(window, &nw, &nh);
+
+            if (nw > 0 && nh > 0 && (gRebuild || gWin.Width != nw || gWin.Height != nh)) {
+                ImGui_ImplVulkan_SetMinImageCount(gMinImageCount);
+                ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, &gWin, gQueueFamily, gAlloc, nw, nh, gMinImageCount, 0);
+                gWin.FrameIndex = 0;
+                gRebuild = false;
+            }
+
+            if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
+                ImGui_ImplGlfw_Sleep(10);
+
+                continue;
+            }
+
+            ImGui_ImplVulkan_NewFrame();
+            ImGui_ImplGlfw_NewFrame();
+            ImGui::NewFrame();
+
+            action = draw();
+
+            ImGui::Render();
+
+            ImDrawData* dd = ImGui::GetDrawData();
+            bool minimized = dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0;
+
+            gWin.ClearValue.color.float32[0] = 0.1f;
+            gWin.ClearValue.color.float32[1] = 0.1f;
+            gWin.ClearValue.color.float32[2] = 0.1f;
+            gWin.ClearValue.color.float32[3] = 1.0f;
+
+            if (!minimized) {
+                frameRender(dd);
+                framePresent();
+            }
+        }
+
+        return action ? action : -1; // closing the window means exit
+    }
+
+    // the crop rect in image px, with the empty-selection-is-whole-frame rule
+    void cropRegion(const Image& img, const Crop& c, int& x0, int& y0, int& x1, int& y1) {
+        x0 = (int)(clampf(c.x0, 0, (float)img.w) + 0.5f);
+        y0 = (int)(clampf(c.y0, 0, (float)img.h) + 0.5f);
+        x1 = (int)(clampf(c.x1, 0, (float)img.w) + 0.5f);
+        y1 = (int)(clampf(c.y1, 0, (float)img.h) + 0.5f);
+
+        if (x1 - x0 < 1 || y1 - y0 < 1) {
+            x0 = 0;
+            y0 = 0;
+            x1 = (int)img.w;
+            y1 = (int)img.h;
+        }
+    }
 }
 
 int mainScreenshot(StringView path) {
-    Image img;
+    signal(SIGPIPE, SIG_IGN); // a paste target closing its pipe must not kill us
 
-    if (!loadImage(path, img)) {
-        return 1;
+    if (const char* s = getenv("IMGUI_SCALE")) {
+        double v = parseFloat(StringView(s));
+
+        if (v > 0.0) {
+            gUiScale = (float)v;
+        }
+    }
+
+    // load first; any failure becomes an on-screen error panel, not a console
+    // line, so it reads like a message from the compositor
+    Image img;
+    Buffer errText;
+    bool loaded = false;
+
+    try {
+        loadImage(path, img);
+        loaded = true;
+    } catch (ShotError& e) {
+        errText = Buffer(e.description());
+    } catch (...) {
+        errText = Buffer(Exception::current());
     }
 
     glfwSetErrorCallback([](int e, const char* d) {
-        fprintf(stderr, "GLFW %d: %s\n", e, d);
+        sysE << "imway screenshot: GLFW "_sv << (i64)e << ": "_sv << StringView(d) << endL;
     });
 
     if (!glfwInit()) {
-        sysE << "imway screenshot: glfwInit failed"_sv << endL;
+        sysE << "imway screenshot: no display"_sv << endL;
 
         return 1;
     }
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    // window fits the image but never exceeds the monitor work area
-    int winW = (int)img.w;
-    int winH = (int)img.h;
+    // open at the image's on-screen size (50% zoom) plus the panel, so the
+    // window matches the viewport instead of filling the screen; a bare error
+    // panel gets a small fixed size. clamp to 90% of the monitor.
+    const float panelW = 200.f * gUiScale;
+    int winW, winH;
+
+    if (loaded) {
+        winW = (int)(panelW + img.w * 0.5f + 44.f * gUiScale);
+        winH = (int)(img.h * 0.5f + 24.f * gUiScale);
+
+        int minH = (int)(220.f * gUiScale);
+
+        if (winH < minH) {
+            winH = minH;
+        }
+    } else {
+        winW = (int)(480.f * gUiScale);
+        winH = (int)(180.f * gUiScale);
+    }
 
     if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
         if (const GLFWvidmode* vm = glfwGetVideoMode(mon)) {
@@ -894,144 +1006,121 @@ int mainScreenshot(StringView path) {
     GLFWwindow* window = glfwCreateWindow(winW, winH, "imway screenshot", nullptr, nullptr);
 
     if (!window || !glfwVulkanSupported()) {
-        sysE << "imway screenshot: no vulkan/window"_sv << endL;
+        sysE << "imway screenshot: no vulkan window"_sv << endL;
 
         return 1;
     }
 
-    u32 nexts = 0;
-    const char** exts = glfwGetRequiredInstanceExtensions(&nexts);
-
-    setupVulkan(exts, nexts);
-
-    VkSurfaceKHR surface;
-
-    vkc(glfwCreateWindowSurface(gInstance, window, gAlloc, &surface));
-
-    int fbw, fbh;
-
-    glfwGetFramebufferSize(window, &fbw, &fbh);
-    setupVulkanWindow(surface, fbw, fbh);
-
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr;
-    ImGui::StyleColorsDark();
-    ImGui_ImplGlfw_InitForVulkan(window, true);
-
-    ImGui_ImplVulkan_InitInfo ii = {};
-
-    ii.Instance = gInstance;
-    ii.PhysicalDevice = gPhys;
-    ii.Device = gDevice;
-    ii.QueueFamily = gQueueFamily;
-    ii.Queue = gQueue;
-    ii.DescriptorPool = gDescPool;
-    ii.MinImageCount = gMinImageCount;
-    ii.ImageCount = gWin.ImageCount;
-    ii.PipelineInfoMain.RenderPass = gWin.RenderPass;
-    ii.PipelineInfoMain.Subpass = 0;
-    ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
-    ImGui_ImplVulkan_Init(&ii);
-
-    Texture tex;
-
-    uploadTexture(img, tex);
-
-    Viewer view; // zoom 50%, no selection (whole frame) until the user drags
-
-    int action = 0;
-
-    while (!glfwWindowShouldClose(window) && action == 0) {
-        glfwPollEvents();
-
-        int nw, nh;
-
-        glfwGetFramebufferSize(window, &nw, &nh);
-
-        if (nw > 0 && nh > 0 && (gRebuild || gWin.Width != nw || gWin.Height != nh)) {
-            ImGui_ImplVulkan_SetMinImageCount(gMinImageCount);
-            ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, &gWin, gQueueFamily, gAlloc, nw, nh, gMinImageCount, 0);
-            gWin.FrameIndex = 0;
-            gRebuild = false;
-        }
-
-        if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
-            ImGui_ImplGlfw_Sleep(10);
-
-            continue;
-        }
-
-        ImGui_ImplVulkan_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
-        ImGui::NewFrame();
-
-        action = drawUi(img, tex, view);
-
-        ImGui::Render();
-
-        ImDrawData* dd = ImGui::GetDrawData();
-        bool minimized = dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0;
-
-        gWin.ClearValue.color.float32[0] = 0.1f;
-        gWin.ClearValue.color.float32[1] = 0.1f;
-        gWin.ClearValue.color.float32[2] = 0.1f;
-        gWin.ClearValue.color.float32[3] = 1.0f;
-
-        if (!minimized) {
-            frameRender(dd);
-            framePresent();
-        }
-    }
-
-    // tear the visual stack down first — save/copy only need the pixels, and a
-    // copy then lingers as a clipboard owner with no window on screen
-    vkDeviceWaitIdle(gDevice);
-    ImGui_ImplVulkan_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
-    ImGui::DestroyContext();
-    ImGui_ImplVulkanH_DestroyWindow(gInstance, gDevice, &gWin, gAlloc);
-    vkDestroyDescriptorPool(gDevice, gDescPool, gAlloc);
-    vkDestroyDevice(gDevice, gAlloc);
-    vkDestroyInstance(gInstance, gAlloc);
-    glfwDestroyWindow(window);
-
     int rc = 0;
 
-    if (action == 1 || action == 2) {
-        int x0 = (int)(clampf(view.crop.x0, 0, (float)img.w) + 0.5f);
-        int y0 = (int)(clampf(view.crop.y0, 0, (float)img.h) + 0.5f);
-        int x1 = (int)(clampf(view.crop.x1, 0, (float)img.w) + 0.5f);
-        int y1 = (int)(clampf(view.crop.y1, 0, (float)img.h) + 0.5f);
+    try {
+        u32 nexts = 0;
+        const char** exts = glfwGetRequiredInstanceExtensions(&nexts);
 
-        // an empty selection means the user never dragged — take the whole frame
-        if (x1 - x0 < 1 || y1 - y0 < 1) {
-            x0 = 0;
-            y0 = 0;
-            x1 = (int)img.w;
-            y1 = (int)img.h;
+        setupVulkan(exts, nexts);
+
+        VkSurfaceKHR surface;
+
+        vkc(glfwCreateWindowSurface(gInstance, window, gAlloc, &surface));
+
+        int fbw, fbh;
+
+        glfwGetFramebufferSize(window, &fbw, &fbh);
+        setupVulkanWindow(surface, fbw, fbh);
+
+        IMGUI_CHECKVERSION();
+        ImGui::CreateContext();
+        ImGui::GetIO().IniFilename = nullptr;
+        ImGui::StyleColorsDark();
+
+        if (gUiScale != 1.f) {
+            ImGuiStyle& st = ImGui::GetStyle();
+
+            st.FontScaleMain = gUiScale;
+            st.ScaleAllSizes(gUiScale);
         }
 
-        if (!encodePng(img, x0, y0, x1, y1, gClip.png)) {
-            rc = 1;
-        } else if (action == 1) {
-            char out[1024];
+        ImGui_ImplGlfw_InitForVulkan(window, true);
 
-            destPath(out, sizeof(out));
+        ImGui_ImplVulkan_InitInfo ii = {};
 
-            if (savePng(gClip.png, out)) {
-                sysO << "imway screenshot: saved "_sv << StringView(out) << endL;
-            } else {
-                rc = 1;
+        ii.Instance = gInstance;
+        ii.PhysicalDevice = gPhys;
+        ii.Device = gDevice;
+        ii.QueueFamily = gQueueFamily;
+        ii.Queue = gQueue;
+        ii.DescriptorPool = gDescPool;
+        ii.MinImageCount = gMinImageCount;
+        ii.ImageCount = gWin.ImageCount;
+        ii.PipelineInfoMain.RenderPass = gWin.RenderPass;
+        ii.PipelineInfoMain.Subpass = 0;
+        ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+        ImGui_ImplVulkan_Init(&ii);
+
+        Texture tex;
+
+        if (loaded) {
+            uploadTexture(img, tex);
+        }
+
+        Viewer view; // zoom 50%, no selection (whole frame) until the user drags
+
+        // interactive phase: the cropper, or the error panel if the load failed
+        int action = runLoop(window, [&] {
+            return errText.empty() ? drawUi(img, tex, view) : drawError(sv(errText));
+        });
+
+        // action phase: encode + save/copy; a failure switches to the error panel
+        if (loaded && errText.empty() && (action == 1 || action == 2)) {
+            try {
+                int x0, y0, x1, y1;
+
+                cropRegion(img, view.crop, x0, y0, x1, y1);
+
+                if (action == 1) {
+                    Buffer png;
+
+                    encodePng(img, x0, y0, x1, y1, png);
+
+                    Buffer dest = destPath();
+
+                    savePng(png, sv(dest));
+                    sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
+                } else {
+                    encodePng(img, x0, y0, x1, y1, gClip.png);
+                    // nothing left to show; hold the selection with no window
+                    glfwHideWindow(window);
+                    copyToClipboard();
+                }
+            } catch (ShotError& e) {
+                errText = Buffer(e.description());
+            } catch (...) {
+                errText = Buffer(Exception::current());
             }
-        } else {
-            // action == 2: hold the png on the wayland clipboard until overwritten
-            copyToClipboard();
+
+            if (!errText.empty()) {
+                glfwShowWindow(window);
+                runLoop(window, [&] { return drawError(sv(errText)); });
+            }
         }
+
+        vkDeviceWaitIdle(gDevice);
+        ImGui_ImplVulkan_Shutdown();
+        ImGui_ImplGlfw_Shutdown();
+        ImGui::DestroyContext();
+        ImGui_ImplVulkanH_DestroyWindow(gInstance, gDevice, &gWin, gAlloc);
+        vkDestroyDescriptorPool(gDevice, gDescPool, gAlloc);
+        vkDestroyDevice(gDevice, gAlloc);
+        vkDestroyInstance(gInstance, gAlloc);
+        glfwDestroyWindow(window);
+    } catch (...) {
+        // vulkan/imgui setup blew up — nothing to show it on; log and leave the
+        // rest for the OS to reclaim on exit
+        sysE << "imway screenshot: "_sv << Exception::current() << endL;
+        rc = 1;
     }
 
     glfwTerminate();
-    free(img.px);
 
     return rc;
 }

@@ -139,6 +139,15 @@ struct Toplevel {
     bool moveRequested = false;
     u32 resizeEdges = 0;
 
+    // interactive-resize position compensation (renderer): which edge/corner is
+    // being dragged (bit0 left, bit1 top, bit7 active), the window's last known
+    // top-left, and the last applied size — so when the size steps to a
+    // client-committed buffer, a left/top drag grows toward the hand instead of
+    // anchoring the top-left corner
+    u8 resizeAnchor = 0;
+    float curX = 0, curY = 0;
+    float lastApplyW = 0, lastApplyH = 0;
+
     // set by the ui (title bar close button), wayland turns it into
     // xdg_toplevel.close on the next shown frame
     bool closeRequested = false;

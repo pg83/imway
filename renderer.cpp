@@ -2128,12 +2128,16 @@ void RendererImpl::sampleStats() {
     }
 }
 
+// resizeAnchor bits: which edge stays under the hand during a drag
+enum { kResizeLeft = 1, kResizeTop = 2, kResizeActive = 0x80 };
+
 // transactional resize: a border/grip drag is a request, not a resize. the
 // callback pins the window at the client's committed size (applyW/H) and
 // records where the hand wants it (dragW/H) — that becomes a configure, and
 // the window steps only when the client commits a matching buffer. anything
 // that is not an active border/grip drag (initial sizing, our own applies)
-// passes through untouched
+// passes through untouched. it also records which edge is being dragged so the
+// draw loop can grow toward the hand for left/top drags
 static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     auto* t = (Toplevel*)d->UserData;
     ImGuiContext& g = *ImGui::GetCurrentContext();
@@ -2144,13 +2148,41 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     }
 
     bool resizing = false;
+    u8 anchor = 0;
 
-    for (int dir = 0; dir < 4 && !resizing; dir++) {
-        resizing = g.ActiveId == ImGui::GetWindowResizeBorderID(w, (ImGuiDir)dir);
+    if (g.ActiveId == ImGui::GetWindowResizeBorderID(w, ImGuiDir_Left)) {
+        resizing = true;
+        anchor |= kResizeLeft;
     }
 
-    for (int n = 0; n < 4 && !resizing; n++) {
-        resizing = g.ActiveId == ImGui::GetWindowResizeCornerID(w, n);
+    if (g.ActiveId == ImGui::GetWindowResizeBorderID(w, ImGuiDir_Up)) {
+        resizing = true;
+        anchor |= kResizeTop;
+    }
+
+    if (g.ActiveId == ImGui::GetWindowResizeBorderID(w, ImGuiDir_Right) || g.ActiveId == ImGui::GetWindowResizeBorderID(w, ImGuiDir_Down)) {
+        resizing = true;
+    }
+
+    // corner grips, in imgui's order: 0 bottom-right, 1 bottom-left, 2 top-left,
+    // 3 top-right
+    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 0)) {
+        resizing = true;
+    }
+
+    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 1)) {
+        resizing = true;
+        anchor |= kResizeLeft;
+    }
+
+    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 2)) {
+        resizing = true;
+        anchor |= kResizeLeft | kResizeTop;
+    }
+
+    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 3)) {
+        resizing = true;
+        anchor |= kResizeTop;
     }
 
     if (!resizing) {
@@ -2160,6 +2192,11 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     t->dragW = d->DesiredSize.x;
     t->dragH = d->DesiredSize.y;
     d->DesiredSize = ImVec2(t->applyW, t->applyH);
+
+    // latch the anchor for the whole transaction (drag through client commit)
+    if (!(t->resizeAnchor & kResizeActive)) {
+        t->resizeAnchor = anchor | kResizeActive;
+    }
 }
 
 static void spawnClient(StringView cmd, StringView sock) {
@@ -2525,7 +2562,27 @@ void RendererImpl::buildUi(Scene& scene) {
         t->applyW = (float)root->geomW() + chromeW;
         t->applyH = (float)root->geomH() + chromeH;
 
+        // how much the applied size steps this frame — drives both the left/top
+        // position compensation below and the end-of-transaction detection
+        float stepW = t->applyW - t->lastApplyW;
+        float stepH = t->applyH - t->lastApplyH;
+
+        t->lastApplyW = t->applyW;
+        t->lastApplyH = t->applyH;
+
         if (!t->docked && !t->fullscreen) {
+            // when the size steps to a client-committed buffer during a left/top
+            // drag, move the top-left by the same delta so the opposite edge
+            // stays put and the window grows toward the hand
+            if (t->resizeAnchor & kResizeActive) {
+                float nx = t->curX - ((t->resizeAnchor & kResizeLeft) ? stepW : 0.f);
+                float ny = t->curY - ((t->resizeAnchor & kResizeTop) ? stepH : 0.f);
+
+                if (nx != t->curX || ny != t->curY) {
+                    ImGui::SetNextWindowPos(ImVec2(nx, ny), ImGuiCond_Always);
+                }
+            }
+
             // the window is a function of the client's committed geometry:
             // a border drag never resizes it directly (the constraint
             // callback pins it), it only asks — the size steps here, when
@@ -2554,6 +2611,13 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (ImGui::Begin(label.cStr(), t->csd ? nullptr : &stayOpen, flags)) {
             t->docked = ImGui::IsWindowDocked();
+
+            // remember imgui's truth of the position, the base for next frame's
+            // left/top resize compensation
+            ImVec2 wp = ImGui::GetWindowPos();
+
+            t->curX = wp.x;
+            t->curY = wp.y;
 
             if (ImGui::IsWindowFocused()) {
                 scene.focusedToplevel = t;
@@ -2585,6 +2649,12 @@ void RendererImpl::buildUi(Scene& scene) {
                 // nothing — floating configures originate from drags only
                 t->desiredW = root->geomW();
                 t->desiredH = root->geomH();
+
+                // no active drag and the size has stopped changing: the resize
+                // transaction is done, stop compensating so a move can proceed
+                if ((t->resizeAnchor & kResizeActive) && stepW == 0.f && stepH == 0.f) {
+                    t->resizeAnchor = 0;
+                }
             }
 
             t->dragW = 0.f;
@@ -3306,6 +3376,9 @@ void RendererImpl::captureScreenshot() {
     proc << "/proc/self/fd/"_sv << mfd;
 
     Buffer arg(sv(proc)), sock(scene->socketName);
+    // hand our ui scale down: the tool is a plain client and would otherwise
+    // render its imgui at scale 1
+    Buffer scale(sv(StringBuilder() << (long double)uiScale));
     pid_t pid = fork();
 
     if (pid == 0) {
@@ -3314,6 +3387,7 @@ void RendererImpl::captureScreenshot() {
         }
 
         setenv("WAYLAND_DISPLAY", sock.cStr(), 1);
+        setenv("IMGUI_SCALE", scale.cStr(), 1);
         // re-exec this very binary as the crop tool; the memfd rides along
         execl("/proc/self/exe", "imway", "screenshot", arg.cStr(), (char*)nullptr);
         _exit(127);
