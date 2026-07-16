@@ -1,6 +1,9 @@
 #include "composer.h"
 #include "mixer.h"
 #include "mixer_sndio.h"
+
+#if __has_include(<sndio.h>)
+
 #include "scene.h"
 #include "util.h"
 
@@ -231,3 +234,11 @@ Mixer* MixerSndio::create(Composer& c) {
 
     return m;
 }
+
+#else // no sndio
+
+Mixer* MixerSndio::create(Composer&) {
+    return nullptr;
+}
+
+#endif

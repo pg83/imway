@@ -16,11 +16,15 @@ JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
 CXXFLAGS="-std=c++23 -O2 -g -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
-LIBS="-ldbus-1 -lsndio -lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
+LIBS="-ldbus-1 -lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
-# the pulse mixer compiles to a nullptr stub without libpulse (__has_include
-# gate); when the header is on the include path it pulls real symbols and
-# needs -lpulse — probe and link it only then
+# the mixer providers compile to nullptr stubs without their headers
+# (__has_include gate); each real path pulls symbols and needs its lib, so
+# probe the header and link the lib only then
+if echo '#include <sndio.h>' | $CXX $CXXFLAGS -E - >/dev/null 2>&1; then
+    LIBS="$LIBS -lsndio"
+fi
+
 if echo '#include <pulse/pulseaudio.h>' | $CXX $CXXFLAGS -E - >/dev/null 2>&1; then
     LIBS="$LIBS -lpulse"
 fi

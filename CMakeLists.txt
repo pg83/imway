@@ -15,6 +15,25 @@ pkg_check_modules(INPUT          REQUIRED IMPORTED_TARGET libinput)
 pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(SEAT           REQUIRED IMPORTED_TARGET libseat)
+pkg_check_modules(DBUS           REQUIRED IMPORTED_TARGET dbus-1)
+
+# optional mixer backends: each source self-gates on __has_include, so we
+# only expose the header (for the gate) and the lib (for linking) when it is
+# actually installed. sndio ships no pkg-config, pulse does
+find_library(SNDIO_LIBRARY sndio)
+find_path(SNDIO_INCLUDE_DIR sndio.h)
+if(SNDIO_LIBRARY AND SNDIO_INCLUDE_DIR)
+    add_library(sndio::sndio INTERFACE IMPORTED)
+    target_link_libraries(sndio::sndio INTERFACE ${SNDIO_LIBRARY})
+    target_include_directories(sndio::sndio INTERFACE ${SNDIO_INCLUDE_DIR})
+    set(HAVE_SNDIO ON)
+    message(STATUS "imway: sndio mixer enabled")
+endif()
+
+pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
+if(PULSE_FOUND)
+    message(STATUS "imway: pulse mixer enabled (pulseaudio/pipewire)")
+endif()
 
 # homegrown standard library (github.com/pg83/std)
 option(IMWAY_USE_VENDORED_STD "Build libstd from third_party/libstd; OFF = link the system-installed one with -lstd" ON)
@@ -211,14 +230,37 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 # ---- compositor ----
 add_executable(imway
     main.cpp
+    composer.cpp
     scene.cpp
     wayland.cpp
     control.cpp
     input.cpp
+    input_sink.cpp
     keyboard.cpp
     launcher.cpp
+    calendar.cpp
+    inspector.cpp
+    settings.cpp
+    shadow.cpp
+    toast.cpp
+    osd.cpp
+    dbus_conn.cpp
+    notifications.cpp
+    mixer.cpp
+    mixer_sndio.cpp
+    mixer_pulse.cpp
+    wifi.cpp
+    wifi_iwd.cpp
+    wifi_ui.cpp
+    icon.cpp
+    icon_pool.cpp
+    icon_store.cpp
+    xdg_utils.cpp
     session.cpp
     device.cpp
+    device_vk.cpp
+    device_kms.cpp
+    device_headless.cpp
     util.cpp
     output.cpp
     frame_listener.cpp
@@ -235,8 +277,17 @@ target_link_libraries(imway PRIVATE
     PkgConfig::UDEV
     PkgConfig::XKB
     PkgConfig::SEAT
+    PkgConfig::DBUS
     ev::ev
 )
+
+if(HAVE_SNDIO)
+    target_link_libraries(imway PRIVATE sndio::sndio)
+endif()
+
+if(PULSE_FOUND)
+    target_link_libraries(imway PRIVATE PkgConfig::PULSE)
+endif()
 
 enable_testing()
 add_subdirectory(dev/tests)
