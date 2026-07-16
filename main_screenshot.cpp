@@ -7,6 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <float.h>
 #include <sys/stat.h>
 
 #include <std/ios/sys.h>
@@ -633,20 +634,164 @@ namespace {
     }
 
     // ---- crop interaction ----
-    // selection in image px; starts as the whole image, redrawn by drag
+    // selection in image px; empty (zero-area) means "no selection", which the
+    // save/copy path treats as the whole frame. drawn by a left-drag, wiped by
+    // a pan or a zoom change
     struct Crop {
         float x0 = 0, y0 = 0, x1 = 0, y1 = 0;
         bool dragging = false;
         float dragOx = 0, dragOy = 0;
+
+        bool empty() const {
+            return x1 - x0 < 1 || y1 - y0 < 1;
+        }
+
+        void clear() {
+            x0 = y0 = x1 = y1 = 0;
+            dragging = false;
+        }
+    };
+
+    // view state: the on-screen zoom (percent, view-only — save/copy always use
+    // full-res image px) plus the current selection
+    struct Viewer {
+        int zoom = 50; // 50% so a full frame fits the window out of the box
+        Crop crop;
     };
 
     float clampf(float v, float lo, float hi) {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 
-    // draw the image + crop UI; returns 1 = save, 2 = copy, -1 = cancel,
+    // left control panel: zoom on top, then Save/Copy/Exit in one row, then the
+    // selection readout. writes the chosen action into result.
+    void drawPanel(Viewer& v, int& result) {
+        Crop& crop = v.crop;
+
+        ImGui::TextUnformatted("Zoom (view only)");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+
+        int z = v.zoom;
+
+        if (ImGui::SliderInt("##zoom", &z, 10, 400, "%d%%") && z != v.zoom) {
+            v.zoom = z;
+            crop.clear(); // a zoom change drops the selection, for simplicity
+        }
+
+        ImGui::Spacing();
+
+        // three equal buttons across the panel width
+        float avail = ImGui::GetContentRegionAvail().x;
+        float bw = (avail - ImGui::GetStyle().ItemSpacing.x * 2.f) / 3.f;
+
+        if (ImGui::Button("Save", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
+            result = 1;
+        }
+
+        ImGui::SameLine();
+
+        bool ctrlC = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C);
+
+        if (ImGui::Button("Copy", ImVec2(bw, 0)) || ctrlC) {
+            result = 2;
+        }
+
+        ImGui::SameLine();
+
+        if (ImGui::Button("Exit", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            result = -1;
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        if (crop.empty()) {
+            ImGui::TextDisabled("whole frame");
+        } else {
+            auto& text = sb();
+
+            text << "selection "_sv << (i64)(crop.x1 - crop.x0 + 0.5f) << " x "_sv << (i64)(crop.y1 - crop.y0 + 0.5f);
+            ImGui::TextUnformatted(text.cStr());
+        }
+
+        ImGui::TextDisabled("drag: select");
+        ImGui::TextDisabled("middle-drag: pan");
+    }
+
+    // right canvas: the image at v.zoom in a scrollable viewport. left-drag
+    // draws the crop selection; middle-drag pans and wipes the selection.
+    void drawCanvas(const Image& img, Texture& tex, Viewer& v) {
+        Crop& crop = v.crop;
+        float scale = (float)v.zoom / 100.f;
+        ImVec2 content((float)img.w * scale, (float)img.h * scale);
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+
+        // an invisible button both sizes the scroll region and captures the
+        // left-drag for selection
+        ImGui::InvisibleButton("img", content, ImGuiButtonFlags_MouseButtonLeft);
+
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+
+        dl->AddImage((ImTextureID)tex.ds, origin, ImVec2(origin.x + content.x, origin.y + content.y));
+
+        ImVec2 mouse = ImGui::GetIO().MousePos;
+        auto toScreen = [&](float px, float py) {
+            return ImVec2(origin.x + px * scale, origin.y + py * scale);
+        };
+        auto toImg = [&](ImVec2 s) {
+            return ImVec2(clampf((s.x - origin.x) / scale, 0.f, (float)img.w), clampf((s.y - origin.y) / scale, 0.f, (float)img.h));
+        };
+
+        // middle-drag pans the viewport and clears the selection
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+            ImVec2 d = ImGui::GetIO().MouseDelta;
+
+            ImGui::SetScrollX(ImGui::GetScrollX() - d.x);
+            ImGui::SetScrollY(ImGui::GetScrollY() - d.y);
+            crop.clear();
+        }
+
+        // left-drag on the image draws a fresh selection
+        if (ImGui::IsItemActivated()) {
+            ImVec2 p = toImg(mouse);
+
+            crop.dragOx = p.x;
+            crop.dragOy = p.y;
+            crop.dragging = true;
+        }
+
+        if (crop.dragging) {
+            ImVec2 p = toImg(mouse);
+
+            crop.x0 = crop.dragOx < p.x ? crop.dragOx : p.x;
+            crop.y0 = crop.dragOy < p.y ? crop.dragOy : p.y;
+            crop.x1 = crop.dragOx > p.x ? crop.dragOx : p.x;
+            crop.y1 = crop.dragOy > p.y ? crop.dragOy : p.y;
+
+            if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                crop.dragging = false;
+            }
+        }
+
+        // dim outside the selection, outline it (clipped to the child)
+        if (!crop.empty()) {
+            ImVec2 s0 = toScreen(crop.x0, crop.y0);
+            ImVec2 s1 = toScreen(crop.x1, crop.y1);
+            ImVec2 hi(origin.x + content.x, origin.y + content.y);
+            ImU32 dim = IM_COL32(0, 0, 0, 140);
+
+            dl->AddRectFilled(origin, ImVec2(hi.x, s0.y), dim);              // above
+            dl->AddRectFilled(ImVec2(origin.x, s1.y), hi, dim);             // below
+            dl->AddRectFilled(ImVec2(origin.x, s0.y), s0, dim);            // left
+            dl->AddRectFilled(ImVec2(s1.x, s0.y), ImVec2(hi.x, s1.y), dim); // right
+            dl->AddRect(s0, s1, IM_COL32(255, 255, 255, 230), 0, 0, 1.5f);
+        }
+    }
+
+    // draw the whole cropper; returns 1 = save, 2 = copy, -1 = cancel,
     // 0 = keep going
-    int drawUi(const Image& img, Texture& tex, Crop& crop) {
+    int drawUi(const Image& img, Texture& tex, Viewer& v) {
         ImGuiViewport* vp = ImGui::GetMainViewport();
 
         ImGui::SetNextWindowPos(vp->Pos);
@@ -657,95 +802,20 @@ namespace {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
         if (ImGui::Begin("##shot", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings)) {
-            const float toolbarH = ImGui::GetFrameHeightWithSpacing() + 8.f;
-            ImVec2 avail = vp->Size;
-            float areaW = avail.x;
-            float areaH = avail.y - toolbarH;
+            const float panelW = 200.f;
 
-            // fit-scale the image, centered, in the area above the toolbar
-            float scale = clampf(areaW / (float)img.w, 0.f, areaH / (float)img.h);
-            float dispW = (float)img.w * scale;
-            float dispH = (float)img.h * scale;
-            ImVec2 origin(vp->Pos.x + (areaW - dispW) * 0.5f, vp->Pos.y + (areaH - dispH) * 0.5f);
-
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-
-            dl->AddImage((ImTextureID)tex.ds, origin, ImVec2(origin.x + dispW, origin.y + dispH));
-
-            // map between screen and image px
-            auto toScreen = [&](float px, float py) {
-                return ImVec2(origin.x + px * scale, origin.y + py * scale);
-            };
-            auto toImg = [&](float sx, float sy) {
-                return ImVec2(clampf((sx - origin.x) / scale, 0.f, (float)img.w), clampf((sy - origin.y) / scale, 0.f, (float)img.h));
-            };
-
-            // drag anywhere over the image area to (re)draw the selection
-            ImVec2 mouse = ImGui::GetIO().MousePos;
-            bool overImage = mouse.x >= origin.x && mouse.x <= origin.x + dispW && mouse.y >= origin.y && mouse.y <= origin.y + dispH;
-
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && overImage) {
-                ImVec2 p = toImg(mouse.x, mouse.y);
-
-                crop.dragOx = p.x;
-                crop.dragOy = p.y;
-                crop.dragging = true;
+            if (ImGui::BeginChild("panel", ImVec2(panelW, 0), ImGuiChildFlags_Borders)) {
+                drawPanel(v, result);
             }
 
-            if (crop.dragging) {
-                ImVec2 p = toImg(mouse.x, mouse.y);
-
-                crop.x0 = crop.dragOx < p.x ? crop.dragOx : p.x;
-                crop.y0 = crop.dragOy < p.y ? crop.dragOy : p.y;
-                crop.x1 = crop.dragOx > p.x ? crop.dragOx : p.x;
-                crop.y1 = crop.dragOy > p.y ? crop.dragOy : p.y;
-
-                if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                    crop.dragging = false;
-                }
-            }
-
-            // dim the area outside the selection, outline the selection
-            ImVec2 s0 = toScreen(crop.x0, crop.y0);
-            ImVec2 s1 = toScreen(crop.x1, crop.y1);
-            ImVec2 lo(origin.x, origin.y);
-            ImVec2 hi(origin.x + dispW, origin.y + dispH);
-            ImU32 dim = IM_COL32(0, 0, 0, 140);
-
-            dl->AddRectFilled(lo, ImVec2(hi.x, s0.y), dim);            // above
-            dl->AddRectFilled(ImVec2(lo.x, s1.y), hi, dim);           // below
-            dl->AddRectFilled(ImVec2(lo.x, s0.y), s0, dim);           // left
-            dl->AddRectFilled(ImVec2(s1.x, s0.y), ImVec2(hi.x, s1.y), dim); // right
-            dl->AddRect(s0, s1, IM_COL32(255, 255, 255, 230), 0, 0, 1.5f);
-
-            // toolbar: selection size + actions
-            ImGui::SetCursorScreenPos(ImVec2(vp->Pos.x + 8.f, vp->Pos.y + areaH + 4.f));
-
-            int cw = (int)(crop.x1 - crop.x0 + 0.5f);
-            int ch = (int)(crop.y1 - crop.y0 + 0.5f);
-            auto& text = sb();
-
-            text << (i64)cw << "x"_sv << (i64)ch << "  (drag to select, Enter save, Ctrl+C copy, Esc cancel)"_sv;
-            ImGui::TextUnformatted(text.cStr());
+            ImGui::EndChild();
             ImGui::SameLine();
 
-            if (ImGui::Button("Save") || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
-                result = 1;
+            if (ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+                drawCanvas(img, tex, v);
             }
 
-            ImGui::SameLine();
-
-            bool ctrlC = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C);
-
-            if (ImGui::Button("Copy") || ctrlC) {
-                result = 2;
-            }
-
-            ImGui::SameLine();
-
-            if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                result = -1;
-            }
+            ImGui::EndChild();
         }
 
         ImGui::End();
@@ -840,10 +910,7 @@ int mainScreenshot(StringView path) {
 
     uploadTexture(img, tex);
 
-    Crop crop;
-
-    crop.x1 = (float)img.w;
-    crop.y1 = (float)img.h;
+    Viewer view; // zoom 50%, no selection (whole frame) until the user drags
 
     int action = 0;
 
@@ -871,7 +938,7 @@ int mainScreenshot(StringView path) {
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
 
-        action = drawUi(img, tex, crop);
+        action = drawUi(img, tex, view);
 
         ImGui::Render();
 
@@ -904,10 +971,10 @@ int mainScreenshot(StringView path) {
     int rc = 0;
 
     if (action == 1 || action == 2) {
-        int x0 = (int)(clampf(crop.x0, 0, (float)img.w) + 0.5f);
-        int y0 = (int)(clampf(crop.y0, 0, (float)img.h) + 0.5f);
-        int x1 = (int)(clampf(crop.x1, 0, (float)img.w) + 0.5f);
-        int y1 = (int)(clampf(crop.y1, 0, (float)img.h) + 0.5f);
+        int x0 = (int)(clampf(view.crop.x0, 0, (float)img.w) + 0.5f);
+        int y0 = (int)(clampf(view.crop.y0, 0, (float)img.h) + 0.5f);
+        int x1 = (int)(clampf(view.crop.x1, 0, (float)img.w) + 0.5f);
+        int y1 = (int)(clampf(view.crop.y1, 0, (float)img.h) + 0.5f);
 
         // an empty selection means the user never dragged — take the whole frame
         if (x1 - x0 < 1 || y1 - y0 < 1) {
