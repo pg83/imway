@@ -65,3 +65,7 @@ struct Wifi {
     // neither is running (or there is no system bus)
     static Wifi* create(Composer& c);
 };
+
+// posts a "connected to <ssid>" / "disconnected" notification on the stable
+// state edge; each provider calls it from notify(), `last` is per-provider
+void wifiNotifyTransition(Composer& c, WifiState& last, WifiState now, stl::StringView ssid);

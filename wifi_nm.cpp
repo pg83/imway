@@ -68,6 +68,7 @@ namespace {
 
         StringBuilder devicePath;
         WifiState st = WifiState::unavailable;
+        WifiState notified = WifiState::unavailable;
 
         ObjList<WifiNetwork> netAlloc;
         Vector<WifiNetwork*> nets;      // committed, ui-facing
@@ -271,6 +272,18 @@ Known* NmWifi::knownForSsid(StringView ssid) {
 }
 
 void NmWifi::notify() {
+    StringView ssid;
+
+    for (WifiNetwork* n : nets) {
+        if (n->connected) {
+            ssid = sv(n->name);
+
+            break;
+        }
+    }
+
+    wifiNotifyTransition(*c, notified, st, ssid);
+
     for (WifiListener* l : c->wifiListeners) {
         l->wifiChanged();
     }

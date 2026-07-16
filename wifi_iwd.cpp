@@ -40,6 +40,7 @@ namespace {
 
         StringBuilder stationPath;
         WifiState st = WifiState::unavailable;
+        WifiState notified = WifiState::unavailable;
 
         ObjList<NetInfo> infoAlloc;
         Vector<NetInfo*> infos;   // rebuilt on every GetManagedObjects
@@ -145,6 +146,18 @@ NetInfo* IwdWifi::infoByPath(StringView path) {
 }
 
 void IwdWifi::notify() {
+    StringView ssid;
+
+    for (WifiNetwork* n : nets) {
+        if (n->connected) {
+            ssid = sv(n->name);
+
+            break;
+        }
+    }
+
+    wifiNotifyTransition(*c, notified, st, ssid);
+
     for (WifiListener* l : c->wifiListeners) {
         l->wifiChanged();
     }
