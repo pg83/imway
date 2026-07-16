@@ -189,6 +189,13 @@ int main(int argc, char** argv) {
         Notifications* notes = bus ? Notifications::create(pool.mutPtr(), loop, *bus, *scene) : nullptr;
 
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
+
+        if (bus) {
+            // the socket is bound by now: dbus activation learns the real
+            // name instead of a wrapper-script guess
+            bus->setActivationEnv("WAYLAND_DISPLAY"_sv, socketName);
+            bus->setActivationEnv("XDG_CURRENT_DESKTOP"_sv, "imway"_sv);
+        }
         Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, notes, *kb, *wayland->sink(), fontPath, uiScale, framesLimit);
 
         if (session) {

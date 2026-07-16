@@ -50,6 +50,7 @@ namespace {
         ~DBusConnImpl() noexcept;
 
         DBusConnection* raw() override;
+        void setActivationEnv(StringView key, StringView value) override;
     };
 }
 
@@ -79,6 +80,27 @@ DBusConnImpl::~DBusConnImpl() noexcept {
 
 DBusConnection* DBusConnImpl::raw() {
     return conn;
+}
+
+void DBusConnImpl::setActivationEnv(StringView key, StringView value) {
+    DBusMessage* msg = dbus_message_new_method_call("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "UpdateActivationEnvironment");
+    DBusMessageIter it, arr, entry;
+
+    dbus_message_iter_init_append(msg, &it);
+    dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{ss}", &arr);
+    dbus_message_iter_open_container(&arr, DBUS_TYPE_DICT_ENTRY, nullptr, &entry);
+
+    // materialized at the C boundary, alive until the send
+    Buffer k(key), v(value);
+    const char* kp = k.cStr();
+    const char* vp = v.cStr();
+
+    dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &kp);
+    dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &vp);
+    dbus_message_iter_close_container(&arr, &entry);
+    dbus_message_iter_close_container(&it, &arr);
+    dbus_connection_send(conn, msg, nullptr);
+    dbus_message_unref(msg);
 }
 
 namespace {
