@@ -231,6 +231,7 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
 # ---- compositor ----
 add_executable(imway
     main.cpp
+    main_screenshot.cpp
     composer.cpp
     scene.cpp
     wayland.cpp

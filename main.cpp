@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "main_screenshot.h"
 #include "control.h"
 #include "dbus_conn.h"
 #include "notifications.h"
@@ -46,6 +47,12 @@ namespace {
 }
 
 int main(int argc, char** argv) {
+    // multi-call: `imway screenshot <path>` is the crop tool, not the
+    // compositor
+    if (argc >= 3 && StringView(argv[1]) == "screenshot"_sv) {
+        return mainScreenshot(StringView(argv[2]));
+    }
+
     StringView devicePath = "auto";
     StringView outputName;
     StringView modeStr;

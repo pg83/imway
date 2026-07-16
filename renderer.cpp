@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -325,6 +326,7 @@ namespace {
         void renderFrame(int scanIdx);
         bool screenshot(StringView path) override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
+        void captureScreenshot();
     };
 
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
@@ -784,6 +786,12 @@ void RendererImpl::volumeChanged() {
 }
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
+    if (sym == XKB_KEY_Print) {
+        captureScreenshot();
+
+        return true;
+    }
+
     if (mask == kModLogo && sym == XKB_KEY_F2) {
         launcherToggle = true;
         scene->needsFrame = true;
@@ -3213,6 +3221,109 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
     }
 
     return true;
+}
+
+// grab the composed frame into an anonymous memfd (RGBA8, self-describing
+// header) and hand it to the crop tool via /proc/self/fd — no temp file,
+// the buffer lives in ram and the kernel reclaims it when the tool exits
+void RendererImpl::captureScreenshot() {
+    if (!haveFrame) {
+        return;
+    }
+
+    if (!output->presentNeedsPixels()) {
+        vkResetCommandBuffer(cmd, 0);
+
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+
+        VkBufferImageCopy region{};
+
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
+        vkEndCommandBuffer(cmd);
+
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(queue, 1, &si, fence);
+        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(device, 1, &fence);
+    }
+
+    // non-cloexec: the memfd must survive fork+exec so the tool can read it
+    // through /proc/self/fd
+    int mfd = memfd_create("imway-shot", 0);
+
+    if (mfd < 0) {
+        return;
+    }
+
+    // self-describing header: 'IMW1' magic + width + height, then RGBA8 rows
+    struct {
+        u32 magic;
+        u32 w;
+        u32 h;
+    } hdr = {0x31574d49u, (u32)width, (u32)height};
+
+    (void)!write(mfd, &hdr, sizeof(hdr));
+
+    auto* px = (const unsigned char*)readbackMap;
+    Vector<u8> row;
+
+    row.zero((size_t)width * 4);
+
+    for (int y = 0; y < height; y++) {
+        const unsigned char* src = px + (size_t)y * width * 4;
+
+        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            const u32* p = (const u32*)src;
+
+            for (int x = 0; x < width; x++) {
+                row.mut(x * 4 + 0) = (u8)((p[x] >> 22) & 0xff);
+                row.mut(x * 4 + 1) = (u8)((p[x] >> 12) & 0xff);
+                row.mut(x * 4 + 2) = (u8)((p[x] >> 2) & 0xff);
+                row.mut(x * 4 + 3) = 0xff;
+            }
+        } else {
+            for (int x = 0; x < width; x++) {
+                row.mut(x * 4 + 0) = src[x * 4 + 2];
+                row.mut(x * 4 + 1) = src[x * 4 + 1];
+                row.mut(x * 4 + 2) = src[x * 4 + 0];
+                row.mut(x * 4 + 3) = 0xff;
+            }
+        }
+
+        (void)!write(mfd, row.data(), row.length());
+    }
+
+    auto& proc = sb();
+
+    proc << "/proc/self/fd/"_sv << mfd;
+
+    Buffer arg(sv(proc)), sock(scene->socketName);
+    pid_t pid = fork();
+
+    if (pid == 0) {
+        if (fork() != 0) {
+            _exit(0);
+        }
+
+        setenv("WAYLAND_DISPLAY", sock.cStr(), 1);
+        // re-exec this very binary as the crop tool; the memfd rides along
+        execl("/proc/self/exe", "imway", "screenshot", arg.cStr(), (char*)nullptr);
+        _exit(127);
+    }
+
+    if (pid > 0) {
+        waitpid(pid, nullptr, 0);
+    }
+
+    close(mfd);
 }
 
 void RendererImpl::shutdown() noexcept {
