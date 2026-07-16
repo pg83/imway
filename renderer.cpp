@@ -179,7 +179,10 @@ namespace {
         bool altTabActive = false;
         Toplevel* altTabSel = nullptr;
 
-        bool launcherOpen = false;
+        // launcher: opaque dialog handle owned here, state lives in the
+        // widget; non-null = open
+        void* launcherState = nullptr;
+        bool launcherToggle = false;
         IconStore* icons = nullptr;
 
         // hardware cursor plane state
@@ -669,7 +672,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
     // lives in the slave's modsChanged)
-    bool capture = launcherOpen || altTabActive || io.WantCaptureKeyboard;
+    bool capture = launcherState || altTabActive || io.WantCaptureKeyboard;
 
     scene->kbCaptured = capture;
 
@@ -685,7 +688,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
     if (mask == kModLogo && sym == XKB_KEY_F2) {
-        launcherOpen = !launcherOpen;
+        launcherToggle = true;
         scene->needsFrame = true;
 
         return true;
@@ -2417,14 +2420,20 @@ void RendererImpl::buildUi(Scene& scene) {
         altTabSel = nullptr;
     }
 
-    if (launcherOpen) {
-        StringBuilder cmd;
+    if (launcherState || launcherToggle) {
+        // the dialog is on screen this frame or flipping — one more frame
+        // settles either way
+        scene.needsFrame = true;
+    }
 
-        if (drawLauncher(width, height, uiScale, *icons, *this, launcherOpen, cmd)) {
+    {
+        Buffer cmd;
+
+        if (drawLauncher(width, height, uiScale, *icons, *this, launcherToggle, &launcherState, cmd)) {
             spawnClient(sv(cmd), scene.socketName);
         }
 
-        scene.needsFrame = true;
+        launcherToggle = false;
     }
 
     // ui owns the pointer when it is over our widgets but not over client

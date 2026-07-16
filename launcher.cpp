@@ -8,6 +8,7 @@
 #include <std/alg/qsort.h>
 #include <std/ios/fs_utils.h>
 #include <std/lib/vector.h>
+#include <std/str/builder.h>
 #include <std/sys/fs.h>
 
 using namespace stl;
@@ -21,10 +22,10 @@ namespace {
         u32 icon = 0, iconLen = 0;
     };
 
-    // dialog-scoped storage: filled when the dialog opens, dropped when it
-    // closes (capacity recycles between openings)
+    // dialog-scoped storage: one heap instance per dialog, newed on open,
+    // deleted when the dialog ends — the opaque handle behind the caller's
+    // void* slot
     struct Dialog {
-        bool active = false;
         bool focusField = false;
         // raw buffer by imgui InputText contract
         char query[256] = "";
@@ -175,28 +176,26 @@ static void refilter(Dialog& d) {
     }
 }
 
-static void drop(Dialog& d) {
-    d.active = false;
-    d.rows.clear();
-    d.vis.clear();
-    d.blob.reset();
-    d.blob.shrinkToFit();
-}
+bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run) {
+    Dialog*& dp = *(Dialog**)state;
 
-bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, StringBuilder& run) {
-    static Dialog d;
+    if (toggle) {
+        if (dp) {
+            delete dp;
+            dp = nullptr;
+        } else {
+            dp = new Dialog();
+            dp->focusField = true;
+            rescan(*dp);
+        }
+    }
 
-    if (!open) {
+    if (!dp) {
         return false;
     }
 
-    if (!d.active) {
-        d.active = true;
-        d.focusField = true;
-        d.query[0] = 0;
-        d.sel = 0;
-        rescan(d);
-    }
+    Dialog& d = *dp;
+    bool open = true;
 
     refilter(d);
 
@@ -244,7 +243,9 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
             ImGui::PushID((int)d.vis[(size_t)i]);
 
             if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                run << rowView(d, r.exec, r.execLen);
+                StringView ex = rowView(d, r.exec, r.execLen);
+
+                run.append(ex.begin(), ex.length());
                 picked = true;
                 open = false;
             }
@@ -270,12 +271,10 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
         }
 
         if (enter && !picked) {
-            if (d.sel >= 1 && d.sel <= n) {
-                run << rowView(d, d.rows[d.vis[(size_t)(d.sel - 1)]].exec, d.rows[d.vis[(size_t)(d.sel - 1)]].execLen);
-            } else {
-                run << StringView(d.query);
-            }
+            const Row* r = d.sel >= 1 && d.sel <= n ? &d.rows[d.vis[(size_t)(d.sel - 1)]] : nullptr;
+            StringView cmd = r ? rowView(d, r->exec, r->execLen) : StringView(d.query);
 
+            run.append(cmd.begin(), cmd.length());
             picked = !run.empty();
             open = false;
         }
@@ -288,7 +287,8 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     ImGui::End();
 
     if (!open) {
-        drop(d);
+        delete dp;
+        dp = nullptr;
     }
 
     return picked;
