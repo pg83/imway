@@ -175,9 +175,9 @@ int main(int argc, char** argv) {
 
         Vector<DmabufFormat> formats;
 
-        for (size_t i = 0; i < device->dmabufFormatCount(); i++) {
-            formats.pushBack(device->dmabufFormat(i));
-        }
+        device->dmabufFormats([&formats](const DmabufFormat& f) {
+            formats.pushBack(f);
+        });
 
         Keyboard* kb = Keyboard::create(pool.mutPtr(), xkbLayout, xkbOptions);
 

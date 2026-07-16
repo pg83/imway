@@ -1,5 +1,7 @@
 #pragma once
 
+#include "visitor.h"
+
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
 #include <std/sys/types.h>
@@ -35,7 +37,15 @@ enum class WifiState {
 // pending Agent call
 struct Wifi {
     virtual WifiState state() = 0;
-    virtual const stl::Vector<WifiNetwork*>& networks() = 0;
+
+    // enumerate the visible networks, signal-ordered
+    virtual void networksImpl(stl::VisitorFace&& vis) = 0;
+
+    template <typename F>
+    void networks(F f) {
+        networksImpl(visitEach<WifiNetwork>(f));
+    }
+
     virtual void scan() = 0;
     virtual void connect(stl::StringView path) = 0;
     virtual void disconnect() = 0;

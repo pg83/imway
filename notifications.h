@@ -1,6 +1,7 @@
 #pragma once
 
-#include <std/lib/vector.h>
+#include "visitor.h"
+
 #include <std/str/builder.h>
 #include <std/sys/types.h>
 
@@ -21,8 +22,14 @@ struct Toast {
 // Toast with an expiry timer, the renderer draws whatever active() holds,
 // a click comes back as dismiss(); every close emits NotificationClosed
 struct Notifications {
-    virtual const stl::Vector<Toast*>& active() = 0;
+    // enumerate the on-screen toasts, oldest first
+    virtual void activeImpl(stl::VisitorFace&& vis) = 0;
     virtual void dismiss(u32 id) = 0;
+
+    template <typename F>
+    void active(F f) {
+        activeImpl(visitEach<Toast>(f));
+    }
 
     static Notifications* create(Composer& c);
 };

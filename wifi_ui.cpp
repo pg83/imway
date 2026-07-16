@@ -91,27 +91,28 @@ void Dialog::draw(Wifi& wifi, int screenW, float uiScale, bool& open) {
             return;
         }
 
-        for (WifiNetwork* n : wifi.networks()) {
-            ImGui::PushID(n->path.cStr());
+        int shown = 0;
+
+        wifi.networks([&](WifiNetwork& n) {
+            shown++;
+            ImGui::PushID(n.path.cStr());
 
             auto& row = sb();
 
-            row << (n->connected ? "* "_sv : "  "_sv) << sv(n->name);
+            row << (n.connected ? "* "_sv : "  "_sv) << sv(n.name);
 
-            if (n->type != "open"_sv) {
-                row << "  ["_sv << sv(n->type) << "]"_sv;
+            if (n.type != "open"_sv) {
+                row << "  ["_sv << sv(n.type) << "]"_sv;
             }
 
-            if (ImGui::Selectable(row.cStr(), n->connected)) {
-                if (!n->connected) {
-                    wifi.connect(sv(n->path));
-                }
+            if (ImGui::Selectable(row.cStr(), n.connected) && !n.connected) {
+                wifi.connect(sv(n.path));
             }
 
             ImGui::PopID();
-        }
+        });
 
-        if (wifi.networks().empty()) {
+        if (!shown) {
             ImGui::TextDisabled("no networks — press scan");
         }
 

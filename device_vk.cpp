@@ -256,7 +256,7 @@ DeviceVk::~DeviceVk() noexcept {
     this->instance = VK_NULL_HANDLE;
 }
 
-void DeviceVk::queryDmabufFormats(Vector<DmabufFormat>& out) const {
+void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
     VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
     VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
 
@@ -269,6 +269,8 @@ void DeviceVk::queryDmabufFormats(Vector<DmabufFormat>& out) const {
     modList.pDrmFormatModifierProperties = mods.mutData();
     vkGetPhysicalDeviceFormatProperties2(this->phys, kVkFormat, &props);
 
+    int n = 0;
+
     for (const auto& m : mods) {
         if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes) {
             continue;
@@ -278,9 +280,13 @@ void DeviceVk::queryDmabufFormats(Vector<DmabufFormat>& out) const {
             continue;
         }
 
-        out.pushBack({kFourccArgb, m.drmFormatModifier});
-        out.pushBack({kFourccXrgb, m.drmFormatModifier});
+        DmabufFormat argb{kFourccArgb, m.drmFormatModifier};
+        DmabufFormat xrgb{kFourccXrgb, m.drmFormatModifier};
+
+        vis.visit(&argb);
+        vis.visit(&xrgb);
+        n += 2;
     }
 
-    sysO << "imway: dmabuf formats: "_sv << out.length() << " (modifiers per fourcc: "_sv << out.length() / 2 << ")"_sv << endL;
+    sysO << "imway: dmabuf formats: "_sv << n << " (modifiers per fourcc: "_sv << n / 2 << ")"_sv << endL;
 }

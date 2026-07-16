@@ -86,8 +86,7 @@ namespace {
 
         int drmFd() const override;
         unsigned long long renderDevice() const override;
-        size_t dmabufFormatCount() const override;
-        DmabufFormat dmabufFormat(size_t i) const override;
+        void dmabufFormatsImpl(VisitorFace&& vis) override;
         ::Output* createOutput(StringView, StringView modeStr, double hdrNits) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
@@ -195,7 +194,7 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
     vk = pool->make<DeviceVk>(-1);
 
     if (vk->hasDmabuf) {
-        vk->queryDmabufFormats(formats);
+        vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
 
         // a render node is enough for syncobj ioctls (explicit sync)
         for (int i = 128; i < 136 && syncFd < 0; i++) {
@@ -236,12 +235,10 @@ unsigned long long HeadlessDevice::renderDevice() const {
     return vk->renderDev;
 }
 
-size_t HeadlessDevice::dmabufFormatCount() const {
-    return formats.length();
-}
-
-DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
-    return formats[i];
+void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
+    for (const DmabufFormat& f : formats) {
+        vis.visit((void*)&f);
+    }
 }
 
 ::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double) {

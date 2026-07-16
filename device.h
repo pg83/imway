@@ -4,6 +4,8 @@
 
 #include <stddef.h>
 
+#include "visitor.h"
+
 namespace stl {
     class ObjPool;
 }
@@ -21,8 +23,13 @@ struct Device {
     virtual unsigned long long renderDevice() const = 0;
     virtual int drmFd() const = 0;
 
-    virtual size_t dmabufFormatCount() const = 0;
-    virtual DmabufFormat dmabufFormat(size_t i) const = 0;
+    // enumerate the dmabuf formats the render device can sample
+    virtual void dmabufFormatsImpl(stl::VisitorFace&& vis) = 0;
+
+    template <typename F>
+    void dmabufFormats(F f) {
+        dmabufFormatsImpl(visitEach<DmabufFormat>(f));
+    }
 
     virtual Output* createOutput(stl::StringView connector, stl::StringView mode, double hdrNits) = 0;
     virtual Renderer* createRenderer(struct Composer& c, stl::StringView fontPath, float uiScale, int framesLimit) = 0;

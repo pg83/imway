@@ -567,8 +567,7 @@ namespace {
 
         int drmFd() const override;
         unsigned long long renderDevice() const override;
-        size_t dmabufFormatCount() const override;
-        DmabufFormat dmabufFormat(size_t i) const override;
+        void dmabufFormatsImpl(VisitorFace&& vis) override;
         ::Output* createOutput(StringView connector, StringView modeStr, double hdrNits) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
@@ -627,7 +626,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
     vk = pool->make<DeviceVk>(fd);
 
     if (vk->hasDmabuf) {
-        vk->queryDmabufFormats(formats);
+        vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
     }
 
     ev_io_init(&drmIo, drmIoCb, fd, EV_READ);
@@ -678,12 +677,10 @@ unsigned long long KmsDevice::renderDevice() const {
     return vk->renderDev;
 }
 
-size_t KmsDevice::dmabufFormatCount() const {
-    return formats.length();
-}
-
-DmabufFormat KmsDevice::dmabufFormat(size_t i) const {
-    return formats[i];
+void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
+    for (const DmabufFormat& f : formats) {
+        vis.visit((void*)&f);
+    }
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {

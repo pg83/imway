@@ -44,7 +44,7 @@ namespace {
 
         NotificationsImpl(Composer& c);
 
-        const Vector<Toast*>& active() override;
+        void activeImpl(VisitorFace&& vis) override;
         void dismiss(u32 id) override;
 
         ToastImpl* byId(u32 id);
@@ -84,8 +84,10 @@ NotificationsImpl::NotificationsImpl(Composer& c)
     sysO << "imway: notifications on the session bus"_sv << endL;
 }
 
-const Vector<Toast*>& NotificationsImpl::active() {
-    return toasts;
+void NotificationsImpl::activeImpl(VisitorFace&& vis) {
+    for (Toast* t : toasts) {
+        vis.visit(t);
+    }
 }
 
 void NotificationsImpl::dismiss(u32 id) {

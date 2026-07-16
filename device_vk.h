@@ -6,6 +6,8 @@
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
+#include "visitor.h"
+
 #define VK_CHECK(x) STD_VERIFY((x) == VK_SUCCESS)
 
 inline constexpr VkFormat kVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
@@ -38,7 +40,12 @@ struct DeviceVk {
     DeviceVk(const DeviceVk&) = delete;
     DeviceVk& operator=(const DeviceVk&) = delete;
 
-    void queryDmabufFormats(stl::Vector<DmabufFormat>& out) const;
+    void queryDmabufFormatsImpl(stl::VisitorFace&& vis) const;
+
+    template <typename F>
+    void queryDmabufFormats(F f) const {
+        queryDmabufFormatsImpl(visitEach<DmabufFormat>(f));
+    }
 };
 
 struct ScanoutBuffer {

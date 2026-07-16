@@ -57,7 +57,7 @@ namespace {
         IwdWifi(Composer& comp, DBusConnection* c);
 
         WifiState state() override;
-        const Vector<WifiNetwork*>& networks() override;
+        void networksImpl(VisitorFace&& vis) override;
         void scan() override;
         void connect(StringView path) override;
         void disconnect() override;
@@ -134,8 +134,10 @@ WifiState IwdWifi::state() {
     return st;
 }
 
-const Vector<WifiNetwork*>& IwdWifi::networks() {
-    return nets;
+void IwdWifi::networksImpl(VisitorFace&& vis) {
+    for (WifiNetwork* n : nets) {
+        vis.visit(n);
+    }
 }
 
 NetInfo* IwdWifi::infoByPath(StringView path) {
