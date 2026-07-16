@@ -7338,6 +7338,16 @@ void ImGui::RenderWindowDecorations(ImGuiWindow* window, const ImRect& title_bar
     // As we highlight the title bar when want_focus is set, multiple reappearing windows will have their title bar highlighted on their reappearing frame.
     const float window_rounding = window->WindowRounding;
     const float window_border_size = window->WindowBorderSize;
+
+    // (imway) drop shadows: docked windows sit inside a host window which
+    // gets its own callback; everything else — floating windows, dock
+    // hosts, popups, tooltips — shadows itself
+    if (g.IO.WindowShadowCallback != NULL && !window->DockIsActive)
+    {
+        ImRect r = window->Collapsed ? title_bar_rect : window->Rect();
+        g.IO.WindowShadowCallback(window->DrawList, r.Min, r.GetSize(), window_rounding, flags, g.IO.WindowShadowCallbackUserData);
+    }
+
     if (window->Collapsed)
     {
         // Title bar only

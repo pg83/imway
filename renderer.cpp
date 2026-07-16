@@ -13,6 +13,7 @@
 #include "settings.h"
 #include "output.h"
 #include "scene.h"
+#include "shadow.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -143,6 +144,7 @@ namespace {
         float uiScale = 1.f;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
         Settings settings;         // menu state incl. change flags, see settings.h
+        ShadowSprite shadow;       // window drop shadows, see shadow.h
 
         // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
         // once per ~2s, the clock timer keeps frames coming
@@ -970,6 +972,13 @@ void RendererImpl::setup(int w, int h) {
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
+
+    // window drop shadows via the imway fork hook; the sprite lives in the
+    // font atlas, repacks carry its pixels along
+    bakeWindowShadow(io.Fonts, shadow);
+    shadow.scale = uiScale;
+    io.WindowShadowCallback = drawWindowShadow;
+    io.WindowShadowCallbackUserData = &shadow;
 
     // clients are imgui windows: docking gives tabs and splits of wayland
     // windows for free
@@ -2027,6 +2036,8 @@ void RendererImpl::buildUi(Scene& scene) {
         fresh.FontScaleMain = uiScale;
         fresh.ScaleAllSizes(uiScale);
         ImGui::GetStyle() = fresh;
+
+        shadow.scale = uiScale;
 
         // hw cursor bitmaps bake the scale in: drop and re-rasterize
         for (Vector<u32>& img : hwShapeCache) {

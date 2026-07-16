@@ -68,6 +68,7 @@ launcher.cpp
 calendar.cpp
 inspector.cpp
 settings.cpp
+shadow.cpp
 icon_store.cpp
 icon_pool.cpp
 icon.cpp

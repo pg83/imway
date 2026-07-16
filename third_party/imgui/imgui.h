@@ -2453,6 +2453,9 @@ struct ImGuiKeyData
     float       AnalogValue;        // 0.0f..1.0f for gamepad values
 };
 
+// (imway) drop-shadow hook, see ImGuiIO::WindowShadowCallback
+typedef void (*ImGuiWindowShadowCallback)(ImDrawList* draw_list, ImVec2 pos, ImVec2 size, float rounding, ImGuiWindowFlags flags, void* user_data);
+
 struct ImGuiIO
 {
     //------------------------------------------------------------------
@@ -2586,6 +2589,12 @@ struct ImGuiIO
     void*       BackendPlatformUserData;        // = NULL           // User data for platform backend
     void*       BackendRendererUserData;        // = NULL           // User data for renderer backend
     void*       BackendLanguageUserData;        // = NULL           // User data for non C++ programming language backend
+
+    // (imway) drop shadows: called from RenderWindowDecorations() with the
+    // window's draw list before anything of the window is drawn; docked
+    // windows are skipped (their dock host window gets its own call)
+    ImGuiWindowShadowCallback WindowShadowCallback;     // = NULL
+    void*                     WindowShadowCallbackUserData; // = NULL
 
     //------------------------------------------------------------------
     // Input - Call before calling NewFrame()
