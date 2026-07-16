@@ -12,6 +12,12 @@ inline constexpr VkFormat kVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 inline constexpr u32 kFourccArgb = 0x34325241;
 inline constexpr u32 kFourccXrgb = 0x34325258;
 
+struct DmabufFormat;
+
+namespace stl {
+    template <typename T> class Vector;
+}
+
 struct DeviceVk {
     int drmFd = -1;
     VkInstance instance = VK_NULL_HANDLE;
@@ -23,6 +29,16 @@ struct DeviceVk {
     bool hasSyncFd = false;
     u64 renderDev = 0;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
+
+    // drmFd < 0 picks any vulkan device (headless); otherwise the one that
+    // drives that drm node. pool-owned, borrowed by const pointer elsewhere
+    DeviceVk(int drmFd);
+    ~DeviceVk() noexcept;
+
+    DeviceVk(const DeviceVk&) = delete;
+    DeviceVk& operator=(const DeviceVk&) = delete;
+
+    void queryDmabufFormats(stl::Vector<DmabufFormat>& out) const;
 };
 
 struct ScanoutBuffer {
@@ -30,20 +46,10 @@ struct ScanoutBuffer {
     VkFormat format = kVkFormat;
 };
 
-struct DmabufFormat;
-
-namespace stl {
-    template <typename T> class Vector;
-}
-
-// shared vulkan/mode helpers, defined in device_vk.cpp and used by both the
-// kms and headless backends
+// display mode "WxH@Hz"; hz 0 = don't care
 struct ModeSpec {
     int w = 0, h = 0;
     double hz = 0;
-};
 
-bool parseModeSpec(stl::StringView s, ModeSpec& m);
-void initVulkan(DeviceVk& vk, int drmFd);
-void destroyVulkan(DeviceVk& vk) noexcept;
-void queryDmabufFormats(const DeviceVk& vk, stl::Vector<DmabufFormat>& out);
+    bool parse(stl::StringView s);
+};

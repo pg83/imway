@@ -428,7 +428,7 @@ namespace {
         int ttyFd = -1;
         long oldKbMode = -1;
         bool sessionActive = true;
-        DeviceVk vk{};
+        const DeviceVk* vk = nullptr;
 
         ScanBuf scan[2];
         int scanCount = 0;
@@ -482,7 +482,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
+        KmsOutput(int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -554,7 +554,7 @@ namespace {
         Session* session = nullptr;
         int fd = -1;
         StringBuilder path;
-        DeviceVk vk{};
+        DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         ev_io drmIo{};
         udev* ud = nullptr;
@@ -624,11 +624,10 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
-    initVulkan(vk, fd);
-    vk.drmFd = fd;
+    vk = pool->make<DeviceVk>(fd);
 
-    if (vk.hasDmabuf) {
-        queryDmabufFormats(vk, formats);
+    if (vk->hasDmabuf) {
+        vk->queryDmabufFormats(formats);
     }
 
     ev_io_init(&drmIo, drmIoCb, fd, EV_READ);
@@ -664,7 +663,6 @@ KmsDevice::~KmsDevice() noexcept {
     }
 
     ev_io_stop(loop, &drmIo);
-    destroyVulkan(vk);
 
     if (fd >= 0) {
         session->closeDevice(fd);
@@ -677,7 +675,7 @@ int KmsDevice::drmFd() const {
 }
 
 unsigned long long KmsDevice::renderDevice() const {
-    return vk.renderDev;
+    return vk->renderDev;
 }
 
 size_t KmsDevice::dmabufFormatCount() const {
@@ -695,7 +693,7 @@ DmabufFormat KmsDevice::dmabufFormat(size_t i) const {
 }
 
 Renderer* KmsDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(c, vk, fontPath, uiScale, framesLimit);
+    return Renderer::create(c, *vk, fontPath, uiScale, framesLimit);
 }
 
 namespace {
@@ -750,7 +748,7 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
+KmsOutput::KmsOutput(int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
     : fd(drmFd)
     , vk(v)
     , hdrNits(hdrWhiteNits)
@@ -835,7 +833,7 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView 
 
     // 10 bits for sdr too when the plane takes it: ui gradients and the
     // night-light ramp quantize at framebuffer depth, not lut depth
-    if (!hdrActive && vk.hasDmabuf) {
+    if (!hdrActive && vk->hasDmabuf) {
         u64 m[64];
 
         if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, m, 64) > 0) {
@@ -844,13 +842,13 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView 
         }
     }
 
-    if (vk.hasDmabuf) {
+    if (vk->hasDmabuf) {
         for (;;) {
             u64 mods[64];
             u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
 
             for (auto& sb : scan) {
-                if (createScanBuf(vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
+                if (createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
                     scanCount++;
                 } else {
                     break;
@@ -866,7 +864,7 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView 
             }
 
             for (auto& sb : scan) {
-                destroyScanBuf(vk, fd, sb);
+                destroyScanBuf(*vk, fd, sb);
             }
 
             scanCount = 0;
@@ -929,7 +927,7 @@ KmsOutput::~KmsOutput() noexcept {
     restoreVt();
 
     for (auto& sb : scan) {
-        destroyScanBuf(vk, fd, sb);
+        destroyScanBuf(*vk, fd, sb);
     }
 
     auto freeDumb = [&](DumbBuffer& b) {
@@ -1019,7 +1017,7 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     if (!modeStr.empty()) {
         ModeSpec want{};
 
-        STD_VERIFY(parseModeSpec(modeStr, want));
+        STD_VERIFY(want.parse(modeStr));
 
         bool found = false;
 

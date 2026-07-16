@@ -26,5 +26,4 @@ struct Device {
 
     virtual Output* createOutput(stl::StringView connector, stl::StringView mode, double hdrNits) = 0;
     virtual Renderer* createRenderer(struct Composer& c, stl::StringView fontPath, float uiScale, int framesLimit) = 0;
-
 };

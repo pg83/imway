@@ -40,7 +40,7 @@
 
 using namespace stl;
 
-bool parseModeSpec(StringView s, ModeSpec& m) {
+bool ModeSpec::parse(StringView s) {
     StringView wh = s, hz;
     StringView v = s;
 
@@ -52,14 +52,16 @@ bool parseModeSpec(StringView s, ModeSpec& m) {
         return false;
     }
 
-    m.w = (int)ws.stou();
-    m.h = (int)hs.stou();
-    m.hz = hz.empty() ? 0 : (double)hz.stou();
+    this->w = (int)ws.stou();
+    this->h = (int)hs.stou();
+    this->hz = hz.empty() ? 0 : (double)hz.stou();
 
-    return m.w > 0 && m.h > 0;
+    return this->w > 0 && this->h > 0;
 }
 
-void initVulkan(DeviceVk& vk, int drmFd) {
+DeviceVk::DeviceVk(int drmFd) {
+    this->drmFd = drmFd;
+
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
 
     app.pApplicationName = "imway";
@@ -68,17 +70,17 @@ void initVulkan(DeviceVk& vk, int drmFd) {
     VkInstanceCreateInfo instInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 
     instInfo.pApplicationInfo = &app;
-    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &vk.instance));
+    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &this->instance));
 
     u32 n = 0;
 
-    vkEnumeratePhysicalDevices(vk.instance, &n, nullptr);
+    vkEnumeratePhysicalDevices(this->instance, &n, nullptr);
     STD_VERIFY(n > 0);
 
     Vector<VkPhysicalDevice> devs;
 
     devs.zero(n);
-    vkEnumeratePhysicalDevices(vk.instance, &n, devs.mutData());
+    vkEnumeratePhysicalDevices(this->instance, &n, devs.mutData());
 
     auto hasExt = [](VkPhysicalDevice d, const char* name) {
         u32 en = 0;
@@ -99,7 +101,7 @@ void initVulkan(DeviceVk& vk, int drmFd) {
         return false;
     };
 
-    vk.phys = VK_NULL_HANDLE;
+    this->phys = VK_NULL_HANDLE;
 
     if (drmFd >= 0) {
         struct stat st{};
@@ -120,7 +122,7 @@ void initVulkan(DeviceVk& vk, int drmFd) {
                 bool renderMatch = drm.hasRender && drm.renderMajor == (i64)major(st.st_rdev) && drm.renderMinor == (i64)minor(st.st_rdev);
 
                 if (primaryMatch || renderMatch) {
-                    vk.phys = d;
+                    this->phys = d;
 
                     break;
                 }
@@ -128,8 +130,8 @@ void initVulkan(DeviceVk& vk, int drmFd) {
         }
     }
 
-    if (vk.phys == VK_NULL_HANDLE) {
-        vk.phys = devs[0];
+    if (this->phys == VK_NULL_HANDLE) {
+        this->phys = devs[0];
 
         if (drmFd >= 0) {
             sysO << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
@@ -138,80 +140,80 @@ void initVulkan(DeviceVk& vk, int drmFd) {
 
     VkPhysicalDeviceProperties props{};
 
-    vkGetPhysicalDeviceProperties(vk.phys, &props);
+    vkGetPhysicalDeviceProperties(this->phys, &props);
     sysO << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
 
-    if (hasExt(vk.phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
+    if (hasExt(this->phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
         VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
         VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 
         p2.pNext = &drm;
-        vkGetPhysicalDeviceProperties2(vk.phys, &p2);
+        vkGetPhysicalDeviceProperties2(this->phys, &p2);
 
         if (drm.hasRender) {
-            vk.renderDev = makedev((u32)drm.renderMajor, (u32)drm.renderMinor);
+            this->renderDev = makedev((u32)drm.renderMajor, (u32)drm.renderMinor);
         } else if (drm.hasPrimary) {
-            vk.renderDev = makedev((u32)drm.primaryMajor, (u32)drm.primaryMinor);
+            this->renderDev = makedev((u32)drm.primaryMajor, (u32)drm.primaryMinor);
         }
     }
 
     u32 qn = 0;
 
-    vkGetPhysicalDeviceQueueFamilyProperties(vk.phys, &qn, nullptr);
+    vkGetPhysicalDeviceQueueFamilyProperties(this->phys, &qn, nullptr);
 
     Vector<VkQueueFamilyProperties> qf;
 
     qf.zero(qn);
-    vkGetPhysicalDeviceQueueFamilyProperties(vk.phys, &qn, qf.mutData());
-    vk.queueFamily = UINT32_MAX;
+    vkGetPhysicalDeviceQueueFamilyProperties(this->phys, &qn, qf.mutData());
+    this->queueFamily = UINT32_MAX;
 
     for (u32 i = 0; i < qn; i++) {
         if (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            vk.queueFamily = i;
+            this->queueFamily = i;
 
             break;
         }
     }
 
-    STD_VERIFY(vk.queueFamily != UINT32_MAX);
+    STD_VERIFY(this->queueFamily != UINT32_MAX);
 
     Vector<const char*> devExts;
     const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
 
-    vk.hasDmabuf = true;
+    this->hasDmabuf = true;
 
     for (const char* name : need) {
-        if (!hasExt(vk.phys, name)) {
-            vk.hasDmabuf = false;
+        if (!hasExt(this->phys, name)) {
+            this->hasDmabuf = false;
             sysE << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
         }
     }
 
-    if (vk.hasDmabuf) {
+    if (this->hasDmabuf) {
         for (const char* name : need) {
             devExts.pushBack(name);
         }
 
-        if (hasExt(vk.phys, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
+        if (hasExt(this->phys, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
             devExts.pushBack(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
         }
 
-        if (hasExt(vk.phys, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
+        if (hasExt(this->phys, VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME)) {
             VkPhysicalDeviceExternalSemaphoreInfo semInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_SEMAPHORE_INFO};
 
             semInfo.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
 
             VkExternalSemaphoreProperties semProps{VK_STRUCTURE_TYPE_EXTERNAL_SEMAPHORE_PROPERTIES};
 
-            vkGetPhysicalDeviceExternalSemaphoreProperties(vk.phys, &semInfo, &semProps);
+            vkGetPhysicalDeviceExternalSemaphoreProperties(this->phys, &semInfo, &semProps);
 
             if ((semProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_EXPORTABLE_BIT) && (semProps.externalSemaphoreFeatures & VK_EXTERNAL_SEMAPHORE_FEATURE_IMPORTABLE_BIT)) {
                 devExts.pushBack(VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME);
-                vk.hasSyncFd = true;
+                this->hasSyncFd = true;
             }
         }
 
-        if (!vk.hasSyncFd) {
+        if (!this->hasSyncFd) {
             sysO << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
         }
     }
@@ -219,7 +221,7 @@ void initVulkan(DeviceVk& vk, int drmFd) {
     float prio = 1.f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
 
-    qci.queueFamilyIndex = vk.queueFamily;
+    qci.queueFamilyIndex = this->queueFamily;
     qci.queueCount = 1;
     qci.pQueuePriorities = &prio;
 
@@ -229,43 +231,43 @@ void initVulkan(DeviceVk& vk, int drmFd) {
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = (u32)devExts.length();
     dci.ppEnabledExtensionNames = devExts.data();
-    VK_CHECK(vkCreateDevice(vk.phys, &dci, nullptr, &vk.device));
-    vkGetDeviceQueue(vk.device, vk.queueFamily, 0, &vk.queue);
+    VK_CHECK(vkCreateDevice(this->phys, &dci, nullptr, &this->device));
+    vkGetDeviceQueue(this->device, this->queueFamily, 0, &this->queue);
 
-    if (vk.hasDmabuf) {
-        vk.getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(vk.device, "vkGetMemoryFdPropertiesKHR");
+    if (this->hasDmabuf) {
+        this->getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(this->device, "vkGetMemoryFdPropertiesKHR");
 
-        if (!vk.getMemoryFdProps) {
-            vk.hasDmabuf = false;
+        if (!this->getMemoryFdProps) {
+            this->hasDmabuf = false;
         }
     }
 }
 
-void destroyVulkan(DeviceVk& vk) noexcept {
-    if (vk.device) {
-        vkDestroyDevice(vk.device, nullptr);
+DeviceVk::~DeviceVk() noexcept {
+    if (this->device) {
+        vkDestroyDevice(this->device, nullptr);
     }
 
-    if (vk.instance) {
-        vkDestroyInstance(vk.instance, nullptr);
+    if (this->instance) {
+        vkDestroyInstance(this->instance, nullptr);
     }
 
-    vk.device = VK_NULL_HANDLE;
-    vk.instance = VK_NULL_HANDLE;
+    this->device = VK_NULL_HANDLE;
+    this->instance = VK_NULL_HANDLE;
 }
 
-void queryDmabufFormats(const DeviceVk& vk, Vector<DmabufFormat>& out) {
+void DeviceVk::queryDmabufFormats(Vector<DmabufFormat>& out) const {
     VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
     VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
 
     props.pNext = &modList;
-    vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &props);
+    vkGetPhysicalDeviceFormatProperties2(this->phys, kVkFormat, &props);
 
     Vector<VkDrmFormatModifierPropertiesEXT> mods;
 
     mods.zero(modList.drmFormatModifierCount);
     modList.pDrmFormatModifierProperties = mods.mutData();
-    vkGetPhysicalDeviceFormatProperties2(vk.phys, kVkFormat, &props);
+    vkGetPhysicalDeviceFormatProperties2(this->phys, kVkFormat, &props);
 
     for (const auto& m : mods) {
         if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes) {

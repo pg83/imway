@@ -77,7 +77,7 @@ namespace {
     struct HeadlessDevice: public Device {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
-        DeviceVk vk{};
+        DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         int syncFd = -1;
 
@@ -192,10 +192,10 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
     : pool(p)
     , loop(evLoop)
 {
-    initVulkan(vk, -1);
+    vk = pool->make<DeviceVk>(-1);
 
-    if (vk.hasDmabuf) {
-        queryDmabufFormats(vk, formats);
+    if (vk->hasDmabuf) {
+        vk->queryDmabufFormats(formats);
 
         // a render node is enough for syncobj ioctls (explicit sync)
         for (int i = 128; i < 136 && syncFd < 0; i++) {
@@ -213,7 +213,7 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
 
             if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
                 syncFd = fd;
-                vk.drmFd = fd;
+                vk->drmFd = fd;
             } else {
                 close(fd);
             }
@@ -222,7 +222,6 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
 }
 
 HeadlessDevice::~HeadlessDevice() noexcept {
-    destroyVulkan(vk);
 
     if (syncFd >= 0) {
         close(syncFd);
@@ -234,7 +233,7 @@ int HeadlessDevice::drmFd() const {
 }
 
 unsigned long long HeadlessDevice::renderDevice() const {
-    return vk.renderDev;
+    return vk->renderDev;
 }
 
 size_t HeadlessDevice::dmabufFormatCount() const {
@@ -249,14 +248,14 @@ DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
     ModeSpec m{1280, 800, 60};
 
     if (!modeStr.empty()) {
-        STD_VERIFY(parseModeSpec(modeStr, m));
+        STD_VERIFY(m.parse(modeStr));
     }
 
     return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
 }
 
 Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(c, vk, fontPath, uiScale, framesLimit);
+    return Renderer::create(c, *vk, fontPath, uiScale, framesLimit);
 }
 
 Device* DeviceHeadless::create(ObjPool* pool, struct ev_loop* loop) {
