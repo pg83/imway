@@ -8,7 +8,7 @@
 #include "input.h"
 #include "input_sink.h"
 #include "keyboard.h"
-#include "mixer_sndio.h"
+#include "mixer.h"
 #include "wifi_iwd.h"
 #include "output.h"
 #include "icon_pool.h"
@@ -204,7 +204,7 @@ int main(int argc, char** argv) {
             c.notes = Notifications::create(c);
         }
 
-        c.mixer = MixerSndio::create(c);
+        c.mixer = Mixer::create(c);
 
         c.sysbus = DBusConn::create(pool.mutPtr(), loop, true);
         c.wifi = c.sysbus ? WifiIwd::create(c) : nullptr;
