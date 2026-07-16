@@ -569,9 +569,18 @@ Wifi* WifiIwd::create(Composer& c) {
     }
 
     DBusConnection* conn = c.sysbus->raw();
+    DBusError err;
 
-    // iwd may be absent; the object query just comes back empty then, no
-    // reason to probe synchronously — build the entity and let it discover
+    dbus_error_init(&err);
+
+    // only claim iwd if it actually owns its name on the bus, so the
+    // factory can fall through to the next provider
+    if (!dbus_bus_name_has_owner(conn, "net.connman.iwd", &err)) {
+        dbus_error_free(&err);
+
+        return nullptr;
+    }
+
     sysO << "imway: wifi via iwd"_sv << endL;
 
     return c.pool->make<IwdWifi>(c, conn);

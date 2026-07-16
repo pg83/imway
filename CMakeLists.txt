@@ -251,6 +251,7 @@ add_executable(imway
     mixer_pulse.cpp
     wifi.cpp
     wifi_iwd.cpp
+    wifi_nm.cpp
     wifi_ui.cpp
     icon.cpp
     icon_pool.cpp

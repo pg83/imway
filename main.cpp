@@ -9,7 +9,7 @@
 #include "input_sink.h"
 #include "keyboard.h"
 #include "mixer.h"
-#include "wifi_iwd.h"
+#include "wifi.h"
 #include "output.h"
 #include "icon_pool.h"
 #include "icon_store.h"
@@ -207,7 +207,7 @@ int main(int argc, char** argv) {
         c.mixer = Mixer::create(c);
 
         c.sysbus = DBusConn::create(pool.mutPtr(), loop, true);
-        c.wifi = c.sysbus ? WifiIwd::create(c) : nullptr;
+        c.wifi = c.sysbus ? Wifi::create(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);
 

@@ -6,6 +6,8 @@
 #include <std/str/builder.h>
 #include <std/sys/types.h>
 
+struct Composer;
+
 // any state change — scan results, connection progress, a passphrase
 // request — lands here; the wifi dialog is the subscriber
 struct WifiListener {
@@ -58,4 +60,8 @@ struct Wifi {
     virtual void providePassphrase(stl::StringView pw) = 0;
     virtual void cancelPassphrase() = 0;
 
+    // tries the providers in order — iwd, then NetworkManager — picking
+    // whichever actually owns its name on the system bus; nullptr if
+    // neither is running (or there is no system bus)
+    static Wifi* create(Composer& c);
 };

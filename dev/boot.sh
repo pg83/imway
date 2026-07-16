@@ -90,6 +90,7 @@ mixer_pulse.cpp
 osd.cpp
 wifi.cpp
 wifi_iwd.cpp
+wifi_nm.cpp
 wifi_ui.cpp
 icon_store.cpp
 icon_pool.cpp
