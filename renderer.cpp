@@ -186,6 +186,14 @@ namespace {
         bool inspectorToggle = false;
         void* historyState = nullptr;
         bool historyToggle = false;
+
+        // color picker (eyedropper): armed from the view menu, the next
+        // click samples the framebuffer pixel under the cursor
+        bool pickArmed = false;
+        bool pickPending = false;
+        int pickX = 0, pickY = 0;
+        bool pickShow = false;
+        u8 pickR = 0, pickG = 0, pickB = 0;
         float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
 
@@ -315,6 +323,7 @@ namespace {
         void frameNow();
         void renderFrame(int scanIdx);
         bool screenshot(StringView path) override;
+        bool readPixel(int x, int y, u8& r, u8& g, u8& b);
     };
 
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
@@ -437,6 +446,16 @@ void RendererImpl::motion(double x, double y) {
 }
 
 void RendererImpl::button(u32 btn, bool pressed) {
+    if (pickArmed && pressed && btn == BTN_LEFT) {
+        pickArmed = false;
+        pickPending = true;
+        pickX = (int)posX;
+        pickY = (int)posY;
+        scene->needsFrame = true;
+
+        return; // the click is the sample, not a click for anyone
+    }
+
     int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
 
     scene->needsFrame = true;
@@ -2211,6 +2230,10 @@ void RendererImpl::buildUi(Scene& scene) {
                 inspectorToggle = true;
             }
 
+            if (ImGui::MenuItem("color picker", nullptr, pickArmed)) {
+                pickArmed = !pickArmed;
+            }
+
             if (notifier) {
                 ImGui::Separator();
 
@@ -2355,6 +2378,40 @@ void RendererImpl::buildUi(Scene& scene) {
     if (notifier) {
         drawHistory(*notifier, *icons, *this, width, height, uiScale, historyToggle, &historyState);
         historyToggle = false;
+    }
+
+    if (pickShow) {
+        static const char hx[] = "0123456789abcdef";
+        char h[8] = {'#', hx[pickR >> 4], hx[pickR & 15], hx[pickG >> 4], hx[pickG & 15], hx[pickB >> 4], hx[pickB & 15], 0};
+
+        ImGui::SetNextWindowPos(ImVec2((float)width / 2.f, (float)height / 2.f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+        if (ImGui::Begin("##pick", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
+            float sz = ImGui::GetFontSize() * 2.4f;
+            ImVec2 p = ImGui::GetCursorScreenPos();
+
+            ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(pickR, pickG, pickB, 255));
+            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(180, 180, 190, 255));
+            ImGui::Dummy(ImVec2(sz, sz));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::TextUnformatted(h);
+
+            if (ImGui::SmallButton("copy")) {
+                ImGui::SetClipboardText(h);
+            }
+
+            ImGui::SameLine();
+
+            if (ImGui::SmallButton("close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+                pickShow = false;
+            }
+
+            ImGui::EndGroup();
+        }
+
+        ImGui::End();
+        scene.needsFrame = true;
     }
 
     // client frames are half-width
@@ -3045,6 +3102,54 @@ bool RendererImpl::screenshot(StringView path) {
     return true;
 }
 
+// one-pixel eyedropper: reuse the screenshot readback of the last frame,
+// then decode the pixel at (x,y) per the scanout format
+bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
+    if (!haveFrame || x < 0 || y < 0 || x >= width || y >= height) {
+        return false;
+    }
+
+    if (!output->presentNeedsPixels()) {
+        vkResetCommandBuffer(cmd, 0);
+
+        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkBeginCommandBuffer(cmd, &bi);
+
+        VkBufferImageCopy region{};
+
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
+        vkEndCommandBuffer(cmd);
+
+        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+        si.commandBufferCount = 1;
+        si.pCommandBuffers = &cmd;
+        vkQueueSubmit(queue, 1, &si, fence);
+        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkResetFences(device, 1, &fence);
+    }
+
+    const unsigned char* src = (const unsigned char*)readbackMap + ((size_t)y * width + x) * 4;
+
+    if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        u32 p = *(const u32*)src;
+
+        r = (u8)((p >> 22) & 0xff);
+        g = (u8)((p >> 12) & 0xff);
+        b = (u8)((p >> 2) & 0xff);
+    } else {
+        r = src[2];
+        g = src[1];
+        b = src[0];
+    }
+
+    return true;
+}
+
 void RendererImpl::shutdown() noexcept {
     if (!device) {
         return;
@@ -3183,6 +3288,26 @@ void RendererImpl::frameNow() {
         output->presentImage(idx);
     } else {
         output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
+    }
+
+    if (pickPending) {
+        pickPending = false;
+
+        if (readPixel(pickX, pickY, pickR, pickG, pickB)) {
+            pickShow = true;
+
+            if (notifier) {
+                static const char hx[] = "0123456789abcdef";
+                char h[8] = {'#', hx[pickR >> 4], hx[pickR & 15], hx[pickG >> 4], hx[pickG & 15], hx[pickB >> 4], hx[pickB & 15], 0};
+
+                Post p;
+
+                p.app = "color picker"_sv;
+                p.summary = "color picked"_sv;
+                p.body = StringView(h); // copied by post() before h dies
+                notifier->post(p);
+            }
+        }
     }
 
     if (listener) {
