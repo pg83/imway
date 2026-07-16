@@ -1,5 +1,6 @@
 #include "renderer.h"
 
+#include "calendar.h"
 #include "device_vk.h"
 #include "frame_listener.h"
 #include "input_sink.h"
@@ -154,10 +155,10 @@ namespace {
         bool batCharging = false;
         StringBuilder batPath;
 
-        // calendar popup under the clock
-        bool calOpen = false;
-        bool calFresh = false;
-        int calYear = 0, calMon = 0;
+        // calendar: opaque dialog handle owned here, state lives in the
+        // widget; non-null = open
+        void* calendarState = nullptr;
+        bool calendarToggle = false;
 
         // inspector overlay (Super+F12)
         bool inspectorOpen = false;
@@ -241,7 +242,6 @@ namespace {
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
         void sampleStats();
-        void calendarUi();
         void inspectorUi(Scene& scene);
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
@@ -1951,106 +1951,6 @@ void RendererImpl::sampleStats() {
     }
 }
 
-void RendererImpl::calendarUi() {
-    static const char* kMonths[12] = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"};
-    static const int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
-
-    ImGui::SetNextWindowPos(ImVec2((float)width - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
-
-    if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
-        if (calFresh) {
-            ImGui::SetWindowFocus();
-            calFresh = false;
-        } else if (!ImGui::IsWindowFocused()) {
-            calOpen = false;
-        }
-
-        float cell = ImGui::GetFontSize() * 2.2f;
-
-        if (ImGui::ArrowButton("##pm", ImGuiDir_Left)) {
-            if (--calMon < 0) {
-                calMon = 11;
-                calYear--;
-            }
-        }
-
-        auto& hdr = sb();
-
-        hdr << kMonths[calMon] << " "_sv << calYear;
-
-        float hw = ImGui::CalcTextSize(hdr.cStr()).x;
-
-        ImGui::SameLine((cell * 7.f - hw) / 2.f);
-        ImGui::TextUnformatted(hdr.cStr());
-        ImGui::SameLine(cell * 7.f - ImGui::GetFrameHeight());
-
-        if (ImGui::ArrowButton("##nm", ImGuiDir_Right)) {
-            if (++calMon > 11) {
-                calMon = 0;
-                calYear++;
-            }
-        }
-
-        static const char* kWd[7] = {"mo", "tu", "we", "th", "fr", "sa", "su"};
-
-        for (int i = 0; i < 7; i++) {
-            if (i) {
-                ImGui::SameLine((float)i * cell + ImGui::GetStyle().WindowPadding.x);
-            }
-
-            ImGui::TextDisabled("%s", kWd[i]);
-        }
-
-        bool leap = calYear % 4 == 0 && (calYear % 100 != 0 || calYear % 400 == 0);
-        int days = kDays[calMon] + (calMon == 1 && leap ? 1 : 0);
-        tm f{};
-
-        f.tm_year = calYear - 1900;
-        f.tm_mon = calMon;
-        f.tm_mday = 1;
-        f.tm_hour = 12;
-        mktime(&f);
-
-        int col = (f.tm_wday + 6) % 7; // monday-based
-        time_t nowT = time(nullptr);
-        tm today{};
-
-        localtime_r(&nowT, &today);
-
-        for (int day = 1; day <= days; day++) {
-            if (col) {
-                ImGui::SameLine((float)col * cell + ImGui::GetStyle().WindowPadding.x);
-            }
-
-            auto& ds = sb();
-
-            ds << day;
-
-            bool isToday = today.tm_year + 1900 == calYear && today.tm_mon == calMon && today.tm_mday == day;
-
-            if (isToday) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 60, 255));
-            }
-
-            ImGui::TextUnformatted(ds.cStr());
-
-            if (isToday) {
-                ImGui::PopStyleColor();
-            }
-
-            if (++col == 7) {
-                col = 0;
-            }
-        }
-
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            calOpen = false;
-        }
-    }
-
-    ImGui::End();
-}
-
 void RendererImpl::inspectorUi(Scene& scene) {
     ImGui::SetNextWindowSize(ImVec2(440.f * uiScale, 400.f * uiScale), ImGuiCond_FirstUseEver);
 
@@ -2288,13 +2188,7 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::TextUnformatted(clock.cStr());
 
         if (ImGui::IsItemClicked()) {
-            calOpen = !calOpen;
-
-            if (calOpen) {
-                calFresh = true;
-                calYear = lt.tm_year + 1900;
-                calMon = lt.tm_mon;
-            }
+            calendarToggle = true;
         }
 
         float xl = x;
@@ -2330,9 +2224,8 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::EndMainMenuBar();
     }
 
-    if (calOpen) {
-        calendarUi();
-    }
+    drawCalendar(width, calendarToggle, &calendarState);
+    calendarToggle = false;
 
     if (inspectorOpen) {
         inspectorUi(scene);

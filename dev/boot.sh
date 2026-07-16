@@ -65,6 +65,7 @@ control.cpp
 input.cpp
 keyboard.cpp
 launcher.cpp
+calendar.cpp
 icon_store.cpp
 icon_pool.cpp
 icon.cpp
