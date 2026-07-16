@@ -8,7 +8,9 @@
 #include "icon.h"
 #include "icon_pool.h"
 #include "icon_store.h"
+#include "inspector.h"
 #include "launcher.h"
+#include "settings.h"
 #include "output.h"
 #include "scene.h"
 #include "util.h"
@@ -140,10 +142,7 @@ namespace {
         StringView fontPath;
         float uiScale = 1.f;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
-        float scaleEdit = 0.f;     // slider-side scale value, committed on release
-        float sdrNits = -1.f;      // menu copy of the output sdr white, -1 = unqueried
-        bool nightOn = false;      // night light toggle + temperature
-        float nightK = 3400.f;
+        Settings settings;         // menu state incl. change flags, see settings.h
 
         // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
         // once per ~2s, the clock timer keeps frames coming
@@ -160,9 +159,11 @@ namespace {
         void* calendarState = nullptr;
         bool calendarToggle = false;
 
-        // inspector overlay (Super+F12)
-        bool inspectorOpen = false;
-        float frameMs[120] = {};
+        // inspector (Super+F12): opaque dialog handle owned here, state
+        // lives in the widget; non-null = open
+        void* inspectorState = nullptr;
+        bool inspectorToggle = false;
+        float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
 
         // input mastering: imgui first, leftovers to the wayland slave sink
@@ -242,7 +243,6 @@ namespace {
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
         void sampleStats();
-        void inspectorUi(Scene& scene);
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
@@ -694,7 +694,7 @@ bool RendererImpl::chordAction(u32 mask, u32 sym) {
     }
 
     if (mask == kModLogo && sym == XKB_KEY_F12) {
-        inspectorOpen = !inspectorOpen;
+        inspectorToggle = true;
         scene->needsFrame = true;
 
         return true;
@@ -1951,62 +1951,6 @@ void RendererImpl::sampleStats() {
     }
 }
 
-void RendererImpl::inspectorUi(Scene& scene) {
-    ImGui::SetNextWindowSize(ImVec2(440.f * uiScale, 400.f * uiScale), ImGuiCond_FirstUseEver);
-
-    if (ImGui::Begin("inspector", &inspectorOpen, ImGuiWindowFlags_NoDocking)) {
-        float last = frameMs[(frameMsIdx + 119) % 120];
-
-        ImGui::PlotLines("##ft", frameMs, 120, frameMsIdx, nullptr, 0.f, 8.f, ImVec2(-1.f, 44.f * uiScale));
-
-        auto& l = sb();
-
-        l << "frame "_sv << (i64)scene.framesDone << ", "_sv << (i64)last << "."_sv << (i64)(last * 10) % 10 << " ms, textures "_sv << (u64)textures.length() << ", dmabuf cache "_sv << (u64)dmabufCache.length();
-        ImGui::TextUnformatted(l.cStr());
-        l.reset();
-        l << "kb -> "_sv << (scene.kbCaptured ? "ui" : "client") << ", ptr -> "_sv << (scene.ptrCaptured ? "ui" : "client") << ", focus: "_sv << (scene.focusedToplevel ? sv(scene.focusedToplevel->title) : "-"_sv);
-        ImGui::TextUnformatted(l.cStr());
-        l.reset();
-        l << "cursor shape "_sv << (i64)scene.cursorShape << ", hw kind "_sv << hwKind << (hwVisible ? ", visible"_sv : ", hidden"_sv) << (scene.pointerLocked ? ", LOCKED"_sv : ""_sv) << (scene.pointerConfined ? ", CONFINED"_sv : ""_sv);
-        ImGui::TextUnformatted(l.cStr());
-        ImGui::Separator();
-
-        for (Toplevel* t : scene.toplevels) {
-            StringView title = sv(t->title);
-
-            l.reset();
-            l << (title.length() > 200 ? title.prefix(200) : title) << "###insp"_sv << (u64)t->id;
-
-            if (ImGui::TreeNode(l.cStr())) {
-                Surface* s = t->surface;
-
-                l.reset();
-                l << "app_id "_sv << (!t->appId.empty() ? sv(t->appId) : "-"_sv) << (t->mapped ? ", mapped"_sv : ""_sv) << (t->csd ? ", csd"_sv : ", ssd"_sv) << (t->fullscreen ? ", fullscreen"_sv : ""_sv);
-                ImGui::TextUnformatted(l.cStr());
-
-                if (s) {
-                    l.reset();
-                    l << "buffer "_sv << s->width << "x"_sv << s->height << " @"_sv << s->bufferScale << (s->dmabuf ? " dmabuf"_sv : " shm"_sv) << ", geom "_sv << s->geomX() << ","_sv << s->geomY() << " "_sv << s->geomW() << "x"_sv << s->geomH();
-                    ImGui::TextUnformatted(l.cStr());
-                    l.reset();
-                    l << "subsurfaces "_sv << (u64)(s->stackBelow.length() + s->stackAbove.length()) << ", pos "_sv << (i64)s->imgX << ","_sv << (i64)s->imgY;
-                    ImGui::TextUnformatted(l.cStr());
-                }
-
-                ImGui::TreePop();
-            }
-        }
-
-        if (scene.popups.length()) {
-            l.reset();
-            l << (u64)scene.popups.length() << " popup(s)"_sv;
-            ImGui::TextUnformatted(l.cStr());
-        }
-    }
-
-    ImGui::End();
-}
-
 // transactional resize: a border/grip drag is a request, not a resize. the
 // callback pins the window at the client's committed size (applyW/H) and
 // records where the hand wants it (dragW/H) — that becomes a configure, and
@@ -2114,48 +2058,27 @@ void RendererImpl::buildUi(Scene& scene) {
     scene.focusedToplevel = nullptr;
 
     if (ImGui::BeginMainMenuBar()) {
-        if (sdrNits < 0.f) {
-            sdrNits = (float)output->sdrWhiteNits();
+        if (settings.sdrNits < 0.f) {
+            settings.sdrNits = (float)output->sdrWhiteNits();
         }
 
-        if (scaleEdit == 0.f) {
-            scaleEdit = uiScale;
+        settings.uiScale = uiScale;
+        drawSettingsMenu(settings);
+
+        if (settings.scaleChanged) {
+            nextUiScale = settings.scale;
         }
 
-        if (ImGui::BeginMenu("settings")) {
-            ImGui::SetNextItemWidth(180.f * uiScale);
-            ImGui::SliderFloat("scale", &scaleEdit, 1.f, 3.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        if (settings.sdrChanged) {
+            output->setSdrWhite(settings.sdrNits);
+        }
 
-            // applying mid-drag rescales the slider under the cursor and the
-            // value feedback-loops against its own widget: commit on release
-            if (ImGui::IsItemDeactivatedAfterEdit()) {
-                nextUiScale = scaleEdit;
-                scene.needsFrame = true;
-            }
+        if (settings.nightChanged) {
+            output->setColorTemp(settings.nightOn ? settings.nightK : 0);
+        }
 
-            if (sdrNits > 0.f) {
-                ImGui::SetNextItemWidth(180.f * uiScale);
-
-                if (ImGui::SliderFloat("hdr", &sdrNits, 80.f, 300.f, "%.0f nits", ImGuiSliderFlags_AlwaysClamp)) {
-                    output->setSdrWhite(sdrNits);
-                    scene.needsFrame = true;
-                }
-            } else {
-                ImGui::TextDisabled("hdr off (start with --hdr)");
-            }
-
-            bool night = ImGui::Checkbox("##nighton", &nightOn);
-
-            ImGui::SameLine();
-            ImGui::SetNextItemWidth(180.f * uiScale - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
-            night |= ImGui::SliderFloat("night", &nightK, 2500.f, 6500.f, "%.0f K", ImGuiSliderFlags_AlwaysClamp);
-
-            if (night) {
-                output->setColorTemp(nightOn ? nightK : 0);
-                scene.needsFrame = true;
-            }
-
-            ImGui::EndMenu();
+        if (settings.changed()) {
+            scene.needsFrame = true;
         }
 
         time_t now = time(nullptr);
@@ -2227,8 +2150,17 @@ void RendererImpl::buildUi(Scene& scene) {
     drawCalendar(width, calendarToggle, &calendarState);
     calendarToggle = false;
 
-    if (inspectorOpen) {
-        inspectorUi(scene);
+    {
+        InspectorInfo info;
+
+        info.frameMs = frameMs;
+        info.frameIdx = frameMsIdx;
+        info.textures = textures.length();
+        info.dmabufCache = dmabufCache.length();
+        info.hwCursorKind = hwKind;
+        info.hwCursorVisible = hwVisible;
+        drawInspector(scene, info, uiScale, inspectorToggle, &inspectorState);
+        inspectorToggle = false;
     }
 
     // client frames are half-width
@@ -3067,7 +2999,7 @@ void RendererImpl::frameNow() {
 
     clock_gettime(CLOCK_MONOTONIC, &ft1);
     frameMs[frameMsIdx] = (float)((double)(ft1.tv_sec - ft0.tv_sec) * 1e3 + (double)(ft1.tv_nsec - ft0.tv_nsec) / 1e6);
-    frameMsIdx = (frameMsIdx + 1) % 120;
+    frameMsIdx = (frameMsIdx + 1) % kFrameHistory;
 
     scene->framesDone++;
 
