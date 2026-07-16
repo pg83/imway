@@ -283,6 +283,7 @@ target_link_libraries(imway PRIVATE
     Vulkan::Vulkan
     lunasvg::lunasvg
     PkgConfig::WAYLAND_SERVER
+    PkgConfig::WAYLAND_CLIENT
     PkgConfig::DRM
     PkgConfig::INPUT
     PkgConfig::UDEV

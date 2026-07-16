@@ -10,11 +10,15 @@
 #include <sys/stat.h>
 
 #include <std/ios/sys.h>
+#include <std/lib/vector.h>
 #include <std/sys/types.h>
 
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
+#define GLFW_EXPOSE_NATIVE_WAYLAND
+#include <GLFW/glfw3native.h>
+#include <wayland-client.h>
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -119,20 +123,21 @@ namespace {
         mkdir(buf, 0755);
     }
 
-    // save the [x0,y0,x1,y1) region of img (image px, already clamped) as png.
-    bool savePng(const Image& img, int x0, int y0, int x1, int y1, const char* file) {
+    // libpng writes go through this into a growable buffer, so the same encode
+    // path feeds both the file save and the clipboard data source
+    void pngWrite(png_structp png, png_bytep data, png_size_t len) {
+        auto* out = (Vector<u8>*)png_get_io_ptr(png);
+
+        out->append((const u8*)data, (size_t)len);
+    }
+
+    // encode the [x0,y0,x1,y1) region of img (image px, already clamped) as an
+    // RGBA png into out; returns false on failure
+    bool encodePng(const Image& img, int x0, int y0, int x1, int y1, Vector<u8>& out) {
         int cw = x1 - x0;
         int ch = y1 - y0;
 
         if (cw <= 0 || ch <= 0) {
-            return false;
-        }
-
-        FILE* f = fopen(file, "wb");
-
-        if (!f) {
-            sysE << "imway screenshot: cannot write file"_sv << endL;
-
             return false;
         }
 
@@ -144,12 +149,10 @@ namespace {
                 png_destroy_write_struct(&png, info ? &info : nullptr);
             }
 
-            fclose(f);
-
             return false;
         }
 
-        png_init_io(png, f);
+        png_set_write_fn(png, &out, pngWrite, nullptr);
         png_set_IHDR(png, info, (u32)cw, (u32)ch, 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
         png_write_info(png, info);
 
@@ -159,9 +162,24 @@ namespace {
 
         png_write_end(png, nullptr);
         png_destroy_write_struct(&png, &info);
-        fclose(f);
 
         return true;
+    }
+
+    bool savePng(const Vector<u8>& png, const char* file) {
+        FILE* f = fopen(file, "wb");
+
+        if (!f) {
+            sysE << "imway screenshot: cannot write file"_sv << endL;
+
+            return false;
+        }
+
+        bool ok = fwrite(png.data(), 1, png.length(), f) == png.length();
+
+        fclose(f);
+
+        return ok;
     }
 
     // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.png (fallback ~/Pictures)
@@ -190,6 +208,100 @@ namespace {
 
         strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
         snprintf(out, cap, "%s/imway-%s.png", dir, stamp);
+    }
+
+    // ---- wayland clipboard ----
+    // glfw only speaks the text clipboard, so image/png goes on the wayland
+    // selection directly: bind wl_seat + wl_data_device_manager off glfw's own
+    // wl_display, offer a data source, and hold it alive to serve paste
+    // requests until the selection is taken over — the same "linger until
+    // overwritten" contract wl-copy honors.
+    struct Clip {
+        wl_seat* seat = nullptr;
+        wl_data_device_manager* ddm = nullptr;
+        wl_data_source* source = nullptr;
+        Vector<u8> png;     // must outlive the source: send() can fire anytime
+        bool cancelled = false;
+    } gClip;
+
+    void clipReg(void*, wl_registry* reg, u32 name, const char* iface, u32 ver) {
+        if (!strcmp(iface, "wl_seat")) {
+            gClip.seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, 1);
+        } else if (!strcmp(iface, "wl_data_device_manager")) {
+            gClip.ddm = (wl_data_device_manager*)wl_registry_bind(reg, name, &wl_data_device_manager_interface, ver < 3 ? ver : 3);
+        }
+    }
+
+    const wl_registry_listener clipRegListener = {clipReg, [](void*, wl_registry*, u32) {}};
+
+    void clipSend(void*, wl_data_source*, const char*, int32_t fd) {
+        const u8* p = gClip.png.data();
+        size_t n = gClip.png.length();
+
+        while (n) {
+            ssize_t w = write(fd, p, n);
+
+            if (w <= 0) {
+                break;
+            }
+
+            p += w;
+            n -= (size_t)w;
+        }
+
+        close(fd);
+    }
+
+    void clipCancelled(void*, wl_data_source* src) {
+        // another client took the selection — drop the source and let us exit
+        wl_data_source_destroy(src);
+        gClip.source = nullptr;
+        gClip.cancelled = true;
+    }
+
+    const wl_data_source_listener clipSourceListener = {
+        .target = [](void*, wl_data_source*, const char*) {},
+        .send = clipSend,
+        .cancelled = clipCancelled,
+        .dnd_drop_performed = [](void*, wl_data_source*) {},
+        .dnd_finished = [](void*, wl_data_source*) {},
+        .action = [](void*, wl_data_source*, u32) {},
+    };
+
+    // put the encoded png (already moved into gClip.png) on the clipboard and
+    // block servicing wayland events until the selection is lost. the visual ui
+    // is already torn down by now, so we only hold the selection. returns false
+    // if the compositor exposes no data-device machinery.
+    bool copyToClipboard() {
+        wl_display* dpy = glfwGetWaylandDisplay();
+        wl_registry* reg = wl_display_get_registry(dpy);
+
+        wl_registry_add_listener(reg, &clipRegListener, nullptr);
+        wl_display_roundtrip(dpy); // receive the globals, then their binds
+
+        if (!gClip.seat || !gClip.ddm) {
+            sysE << "imway screenshot: no wayland clipboard"_sv << endL;
+
+            return false;
+        }
+
+        wl_data_device* dd = wl_data_device_manager_get_data_device(gClip.ddm, gClip.seat);
+
+        gClip.source = wl_data_device_manager_create_data_source(gClip.ddm);
+        wl_data_source_add_listener(gClip.source, &clipSourceListener, nullptr);
+        wl_data_source_offer(gClip.source, "image/png");
+        // our compositor ignores the set_selection serial, so 0 is fine
+        wl_data_device_set_selection(dd, gClip.source, 0);
+        wl_display_flush(dpy);
+
+        // linger as the clipboard owner until another client takes over
+        while (!gClip.cancelled) {
+            if (wl_display_dispatch(dpy) < 0) {
+                break; // compositor went away
+            }
+        }
+
+        return true;
     }
 
     // ---- vulkan plumbing (mirrors imgui's glfw+vulkan example) ----
@@ -532,7 +644,8 @@ namespace {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 
-    // draw the image + crop UI; returns 1 = save, -1 = cancel, 0 = keep going
+    // draw the image + crop UI; returns 1 = save, 2 = copy, -1 = cancel,
+    // 0 = keep going
     int drawUi(const Image& img, Texture& tex, Crop& crop) {
         ImGuiViewport* vp = ImGui::GetMainViewport();
 
@@ -612,12 +725,20 @@ namespace {
             int ch = (int)(crop.y1 - crop.y0 + 0.5f);
             auto& text = sb();
 
-            text << (i64)cw << "x"_sv << (i64)ch << "  (drag to select, Enter to save, Esc to cancel)"_sv;
+            text << (i64)cw << "x"_sv << (i64)ch << "  (drag to select, Enter save, Ctrl+C copy, Esc cancel)"_sv;
             ImGui::TextUnformatted(text.cStr());
             ImGui::SameLine();
 
             if (ImGui::Button("Save") || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
                 result = 1;
+            }
+
+            ImGui::SameLine();
+
+            bool ctrlC = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C);
+
+            if (ImGui::Button("Copy") || ctrlC) {
+                result = 2;
             }
 
             ImGui::SameLine();
@@ -768,33 +889,8 @@ int mainScreenshot(StringView path) {
         }
     }
 
-    int rc = 0;
-
-    if (action == 1) {
-        int x0 = (int)(clampf(crop.x0, 0, (float)img.w) + 0.5f);
-        int y0 = (int)(clampf(crop.y0, 0, (float)img.h) + 0.5f);
-        int x1 = (int)(clampf(crop.x1, 0, (float)img.w) + 0.5f);
-        int y1 = (int)(clampf(crop.y1, 0, (float)img.h) + 0.5f);
-
-        // an empty selection means the user never dragged — save the whole frame
-        if (x1 - x0 < 1 || y1 - y0 < 1) {
-            x0 = 0;
-            y0 = 0;
-            x1 = (int)img.w;
-            y1 = (int)img.h;
-        }
-
-        char out[1024];
-
-        destPath(out, sizeof(out));
-
-        if (savePng(img, x0, y0, x1, y1, out)) {
-            sysO << "imway screenshot: saved "_sv << StringView(out) << endL;
-        } else {
-            rc = 1;
-        }
-    }
-
+    // tear the visual stack down first — save/copy only need the pixels, and a
+    // copy then lingers as a clipboard owner with no window on screen
     vkDeviceWaitIdle(gDevice);
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplGlfw_Shutdown();
@@ -804,6 +900,41 @@ int mainScreenshot(StringView path) {
     vkDestroyDevice(gDevice, gAlloc);
     vkDestroyInstance(gInstance, gAlloc);
     glfwDestroyWindow(window);
+
+    int rc = 0;
+
+    if (action == 1 || action == 2) {
+        int x0 = (int)(clampf(crop.x0, 0, (float)img.w) + 0.5f);
+        int y0 = (int)(clampf(crop.y0, 0, (float)img.h) + 0.5f);
+        int x1 = (int)(clampf(crop.x1, 0, (float)img.w) + 0.5f);
+        int y1 = (int)(clampf(crop.y1, 0, (float)img.h) + 0.5f);
+
+        // an empty selection means the user never dragged — take the whole frame
+        if (x1 - x0 < 1 || y1 - y0 < 1) {
+            x0 = 0;
+            y0 = 0;
+            x1 = (int)img.w;
+            y1 = (int)img.h;
+        }
+
+        if (!encodePng(img, x0, y0, x1, y1, gClip.png)) {
+            rc = 1;
+        } else if (action == 1) {
+            char out[1024];
+
+            destPath(out, sizeof(out));
+
+            if (savePng(gClip.png, out)) {
+                sysO << "imway screenshot: saved "_sv << StringView(out) << endL;
+            } else {
+                rc = 1;
+            }
+        } else {
+            // action == 2: hold the png on the wayland clipboard until overwritten
+            copyToClipboard();
+        }
+    }
+
     glfwTerminate();
     free(img.px);
 

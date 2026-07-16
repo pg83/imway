@@ -16,7 +16,9 @@ JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
 CXXFLAGS="-std=c++23 -O2 -g -DGLFW_INCLUDE_NONE -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
-LIBS="-ldbus-1 -lwayland-server -lpng -lglfw3 -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
+# -lwayland-client: the screenshot tool puts image/png on the clipboard via a
+# wl_data_source off glfw's wl_display (client-side wl_proxy_* + core interfaces)
+LIBS="-ldbus-1 -lwayland-server -lwayland-client -lpng -lglfw3 -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
 # the mixer providers compile to nullptr stubs without their headers
 # (__has_include gate); each real path pulls symbols and needs its lib, so
