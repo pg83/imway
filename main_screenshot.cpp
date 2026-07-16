@@ -663,6 +663,18 @@ namespace {
         return v < lo ? lo : (v > hi ? hi : v);
     }
 
+    constexpr int kZoomMin = 10, kZoomMax = 400, kZoomStep = 10;
+
+    // nudge the zoom by delta% (clamped); any change drops the selection
+    void applyZoom(Viewer& v, int delta) {
+        int z = (int)clampf((float)(v.zoom + delta), (float)kZoomMin, (float)kZoomMax);
+
+        if (z != v.zoom) {
+            v.zoom = z;
+            v.crop.clear();
+        }
+    }
+
     // left control panel: zoom on top, then Save/Copy/Exit in one row, then the
     // selection readout. writes the chosen action into result.
     void drawPanel(Viewer& v, int& result) {
@@ -673,9 +685,8 @@ namespace {
 
         int z = v.zoom;
 
-        if (ImGui::SliderInt("##zoom", &z, 10, 400, "%d%%") && z != v.zoom) {
-            v.zoom = z;
-            crop.clear(); // a zoom change drops the selection, for simplicity
+        if (ImGui::SliderInt("##zoom", &z, kZoomMin, kZoomMax, "%d%%")) {
+            applyZoom(v, z - v.zoom); // clamps + drops the selection
         }
 
         ImGui::Spacing();
@@ -717,6 +728,7 @@ namespace {
 
         ImGui::TextDisabled("drag: select");
         ImGui::TextDisabled("middle-drag: pan");
+        ImGui::TextDisabled("scroll / +-: zoom");
     }
 
     // right canvas: the image at v.zoom in a scrollable viewport. left-drag
@@ -750,6 +762,13 @@ namespace {
             ImGui::SetScrollX(ImGui::GetScrollX() - d.x);
             ImGui::SetScrollY(ImGui::GetScrollY() - d.y);
             crop.clear();
+        }
+
+        // wheel zooms (the child has NoScrollWithMouse, so the wheel is ours)
+        float wheel = ImGui::GetIO().MouseWheel;
+
+        if (wheel != 0.f && ImGui::IsWindowHovered()) {
+            applyZoom(v, wheel > 0.f ? kZoomStep : -kZoomStep);
         }
 
         // left-drag on the image draws a fresh selection
@@ -804,6 +823,15 @@ namespace {
         if (ImGui::Begin("##shot", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings)) {
             const float panelW = 200.f;
 
+            // +/- zoom, handled before the panel so the slider reflects it
+            if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) {
+                applyZoom(v, kZoomStep);
+            }
+
+            if (ImGui::IsKeyPressed(ImGuiKey_Minus) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract)) {
+                applyZoom(v, -kZoomStep);
+            }
+
             if (ImGui::BeginChild("panel", ImVec2(panelW, 0), ImGuiChildFlags_Borders)) {
                 drawPanel(v, result);
             }
@@ -811,7 +839,7 @@ namespace {
             ImGui::EndChild();
             ImGui::SameLine();
 
-            if (ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar)) {
+            if (ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
                 drawCanvas(img, tex, v);
             }
 
