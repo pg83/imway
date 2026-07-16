@@ -30,6 +30,7 @@ struct Output {
     // macOS-style "sdr white": brightness of SDR 1.0 on the HDR pipeline in
     // nits, 0 means the hdr path is off; setting takes effect on the next
     // frame commit via a GAMMA_LUT rebuild
+    virtual bool isHdr() const = 0;
     virtual double sdrWhiteNits() const = 0;
     virtual void setSdrWhite(double nits) = 0;
 

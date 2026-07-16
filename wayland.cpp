@@ -41,6 +41,7 @@
 #include <wayland-server-protocol.h>
 #include <xdg-decoration-unstable-v1-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
+#include <color-management-v1-server-protocol.h>
 #include <xf86drm.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -57,6 +58,23 @@ using namespace stl;
 namespace {
     struct PopupImpl;
     struct SurfaceImpl;
+    struct WaylandImpl;
+
+    // color-management-v1: a client image description reduced to what we act
+    // on — the parametric hdr case (st2084 PQ + BT.2020) with its luminances
+    struct CImgDesc {
+        WaylandImpl* srv = nullptr;
+        bool hdr = false;   // st2084_pq transfer
+        bool wide = false;  // bt2020 primaries
+        u32 maxCll = 0, maxLum = 0;
+    };
+
+    struct CParams {
+        WaylandImpl* srv = nullptr;
+        CImgDesc d;
+        bool tfSet = false;
+        bool primSet = false;
+    };
     struct ToplevelImpl;
     struct WaylandImpl;
     struct ConstraintBox;
@@ -367,6 +385,12 @@ namespace {
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
         ObjList<TimelineBox> timelineAlloc;
+
+        // color-management-v1 objects
+        ObjList<CImgDesc> cimgAlloc;
+        ObjList<CParams> cparAlloc;
+        u32 cimgIdentity = 0;
+
         int drmFd = -1;
 
         struct IdleNotif {
@@ -5028,6 +5052,8 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , dmabufParamsAlloc(comp.pool)
     , constraintAlloc(comp.pool)
     , iconAlloc(comp.pool)
+    , cimgAlloc(comp.pool)
+    , cparAlloc(comp.pool)
     , idleAlloc(comp.pool)
     , timelineAlloc(comp.pool)
 {
@@ -5095,6 +5121,274 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 }
 
+    // ---- color-management-v1 ----
+
+    void cmImageDescDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void cmImageDescGetInfo(wl_client* client, wl_resource*, u32 id) {
+        // minimal: the info object with just a done — clients that set
+        // descriptions rarely introspect the details
+        wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface, 1, id);
+
+        if (info) {
+            wp_image_description_info_v1_send_done(info);
+        }
+    }
+
+    const struct wp_image_description_v1_interface cmImageDescImpl = {
+        .destroy = cmImageDescDestroy,
+        .get_information = cmImageDescGetInfo,
+    };
+
+    void cmImageDescResourceDestroyed(wl_resource* res) {
+        auto* d = (CImgDesc*)wl_resource_get_user_data(res);
+
+        if (d && d->srv) {
+            d->srv->cimgAlloc.release(d);
+        }
+    }
+
+    // build an image description resource carrying `d`, sent ready
+    wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, const CImgDesc& d) {
+        wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
+        CImgDesc* obj = srv->cimgAlloc.make();
+
+        *obj = d;
+        obj->srv = srv;
+        wl_resource_set_implementation(res, &cmImageDescImpl, obj, cmImageDescResourceDestroyed);
+        wp_image_description_v1_send_ready(res, ++srv->cimgIdentity);
+
+        return res;
+    }
+
+    // params creator
+    void cmParamsSetTfNamed(wl_client*, wl_resource* res, u32 tf) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        p->d.hdr = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+        p->tfSet = true;
+    }
+
+    void cmParamsSetTfPower(wl_client*, wl_resource* res, u32) {
+        ((CParams*)wl_resource_get_user_data(res))->tfSet = true;
+    }
+
+    void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        p->d.wide = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
+        p->primSet = true;
+    }
+
+    void cmParamsSetPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
+        ((CParams*)wl_resource_get_user_data(res))->primSet = true;
+    }
+
+    void cmParamsSetLum(wl_client*, wl_resource* res, u32, u32 maxLum, u32) {
+        ((CParams*)wl_resource_get_user_data(res))->d.maxLum = maxLum;
+    }
+
+    void cmParamsSetMasteringPrim(wl_client*, wl_resource*, i32, i32, i32, i32, i32, i32, i32, i32) {
+    }
+
+    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32, u32 maxLum) {
+        ((CParams*)wl_resource_get_user_data(res))->d.maxLum = maxLum;
+    }
+
+    void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
+        ((CParams*)wl_resource_get_user_data(res))->d.maxCll = v;
+    }
+
+    void cmParamsSetMaxFall(wl_client*, wl_resource*, u32) {
+    }
+
+    void cmParamsCreate(wl_client* client, wl_resource* res, u32 id) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (!p->tfSet || !p->primSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INCOMPLETE_SET, "transfer function and primaries are required");
+
+            return;
+        }
+
+        cmMakeImageDesc(p->srv, client, wl_resource_get_version(res), id, p->d);
+        wl_resource_destroy(res); // create consumes the creator
+    }
+
+    const struct wp_image_description_creator_params_v1_interface cmParamsImpl = {
+        .create = cmParamsCreate,
+        .set_tf_named = cmParamsSetTfNamed,
+        .set_tf_power = cmParamsSetTfPower,
+        .set_primaries_named = cmParamsSetPrimNamed,
+        .set_primaries = cmParamsSetPrim,
+        .set_luminances = cmParamsSetLum,
+        .set_mastering_display_primaries = cmParamsSetMasteringPrim,
+        .set_mastering_luminance = cmParamsSetMasteringLum,
+        .set_max_cll = cmParamsSetMaxCll,
+        .set_max_fall = cmParamsSetMaxFall,
+    };
+
+    void cmParamsResourceDestroyed(wl_resource* res) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p && p->srv) {
+            p->srv->cparAlloc.release(p);
+        }
+    }
+
+    // surface color object: user_data = the SurfaceImpl
+    void cmSurfaceDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32) {
+        auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
+        auto* d = descRes ? (CImgDesc*)wl_resource_get_user_data(descRes) : nullptr;
+
+        if (!s) {
+            return;
+        }
+
+        // hdr passthrough is PQ + BT.2020; anything else is treated as sdr
+        s->hdrContent = d && d->hdr && d->wide;
+        s->hdrMaxCll = d ? d->maxCll : 0;
+        s->hdrMaxLum = d ? d->maxLum : 0;
+        s->srv->scene->needsFrame = true;
+    }
+
+    void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
+        auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
+
+        if (s) {
+            s->hdrContent = false;
+            s->srv->scene->needsFrame = true;
+        }
+    }
+
+    const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
+        .destroy = cmSurfaceDestroy,
+        .set_image_description = cmSurfaceSetImageDesc,
+        .unset_image_description = cmSurfaceUnsetImageDesc,
+    };
+
+    // output / feedback: hand back a description of the display
+    CImgDesc cmDisplayDesc(WaylandImpl* srv) {
+        CImgDesc d;
+
+        d.hdr = srv->output && srv->output->isHdr();
+        d.wide = d.hdr;
+
+        return d;
+    }
+
+    void cmOutputDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void cmOutputGetImageDesc(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        cmMakeImageDesc(srv, client, wl_resource_get_version(res), id, cmDisplayDesc(srv));
+    }
+
+    const struct wp_color_management_output_v1_interface cmOutputImpl = {
+        .destroy = cmOutputDestroy,
+        .get_image_description = cmOutputGetImageDesc,
+    };
+
+    void cmFeedbackDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void cmFeedbackGetPreferred(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        cmMakeImageDesc(srv, client, wl_resource_get_version(res), id, cmDisplayDesc(srv));
+    }
+
+    const struct wp_color_management_surface_feedback_v1_interface cmFeedbackImpl = {
+        .destroy = cmFeedbackDestroy,
+        .get_preferred = cmFeedbackGetPreferred,
+        .get_preferred_parametric = cmFeedbackGetPreferred,
+    };
+
+    // manager
+    void cmManagerDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        wl_resource* out = wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id);
+
+        wl_resource_set_implementation(out, &cmOutputImpl, wl_resource_get_user_data(res), nullptr);
+    }
+
+    void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
+
+        wl_resource_set_implementation(cs, &cmSurfaceImpl, wl_resource_get_user_data(surfaceRes), nullptr);
+    }
+
+    void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
+
+        wl_resource_set_implementation(fb, &cmFeedbackImpl, wl_resource_get_user_data(res), nullptr);
+    }
+
+    void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* pr = wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id);
+        CParams* p = srv->cparAlloc.make();
+
+        p->srv = srv;
+        p->d = {};
+        p->tfSet = false;
+        p->primSet = false;
+        wl_resource_set_implementation(pr, &cmParamsImpl, p, cmParamsResourceDestroyed);
+    }
+
+    void cmManagerCreateIccCreator(wl_client* client, wl_resource*, u32 id) {
+        // icc is not advertised; hand back an object that only errors
+        wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, 1, id);
+    }
+
+    void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* d = wl_resource_create(client, &wp_image_description_v1_interface, wl_resource_get_version(res), id);
+
+        wl_resource_set_implementation(d, &cmImageDescImpl, nullptr, nullptr);
+        wp_image_description_v1_send_failed(d, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "windows scrgb not supported");
+        (void)srv;
+    }
+
+    const struct wp_color_manager_v1_interface cmManagerImpl = {
+        .destroy = cmManagerDestroy,
+        .get_output = cmManagerGetOutput,
+        .get_surface = cmManagerGetSurface,
+        .get_surface_feedback = cmManagerGetSurfaceFeedback,
+        .create_icc_creator = cmManagerCreateIccCreator,
+        .create_parametric_creator = cmManagerCreateParamsCreator,
+        .create_windows_scrgb = cmManagerCreateWindowsScrgb,
+    };
+
+    void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_color_manager_v1_interface, version, id);
+
+        wl_resource_set_implementation(res, &cmManagerImpl, data, nullptr);
+        wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+        wp_color_manager_v1_send_done(res);
+    }
+
+
 void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
@@ -5118,6 +5412,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
+    wl_global_create(display, &wp_color_manager_v1_interface, 1, this, colorManagerBind);
 
     u64 syncCap = 0;
 

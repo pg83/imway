@@ -84,6 +84,11 @@ struct Surface {
     float imgX = 0, imgY = 0;
     bool hovered = false;
 
+    // color-management-v1: the client's declared image description. hdr =
+    // st2084 PQ + BT.2020, the passthrough case on an hdr output
+    bool hdrContent = false;
+    u32 hdrMaxCll = 0, hdrMaxLum = 0;
+
     Subsurface* sub = nullptr;
     stl::Vector<Subsurface*> stackBelow;
     stl::Vector<Subsurface*> stackAbove;

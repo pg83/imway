@@ -66,6 +66,7 @@ namespace {
         bool hasBrightness() const override;
         float brightness() const override;
         void setBrightness(float) override;
+        bool isHdr() const override;
         double sdrWhiteNits() const override;
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
@@ -149,6 +150,10 @@ void HeadlessOutput::setBrightness(float) {
 }
 
 void HeadlessOutput::setPowerSave(bool) {
+}
+
+bool HeadlessOutput::isHdr() const {
+    return false;
 }
 
 double HeadlessOutput::sdrWhiteNits() const {

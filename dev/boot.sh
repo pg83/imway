@@ -36,6 +36,7 @@ stable/xdg-shell/xdg-shell.xml
 stable/viewporter/viewporter.xml
 stable/linux-dmabuf/linux-dmabuf-v1.xml
 stable/presentation-time/presentation-time.xml
+staging/color-management/color-management-v1.xml
 unstable/xdg-decoration/xdg-decoration-unstable-v1.xml
 unstable/primary-selection/primary-selection-unstable-v1.xml
 unstable/tablet/tablet-unstable-v2.xml

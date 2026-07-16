@@ -169,6 +169,7 @@ add_custom_command(OUTPUT "${PROTO_DIR}/xdg-activation-v1-protocol.c"
     DEPENDS "${ACTIVATION_XML}")
 
 foreach(PROTO
+        "staging/color-management/color-management-v1"
         "unstable/xdg-output/xdg-output-unstable-v1"
         "staging/fractional-scale/fractional-scale-v1"
         "unstable/pointer-gestures/pointer-gestures-unstable-v1"

@@ -517,6 +517,7 @@ namespace {
         bool setupHdr();
         void buildGammaLut();
 
+        bool isHdr() const override;
         double sdrWhiteNits() const override;
         void setSdrWhite(double nits) override;
         void setColorTemp(double kelvin) override;
@@ -1286,6 +1287,10 @@ void KmsOutput::buildGammaLut() {
     }
 
     drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamLutSize * sizeof(drm_color_lut)), &gammaBlob);
+}
+
+bool KmsOutput::isHdr() const {
+    return hdrActive;
 }
 
 double KmsOutput::sdrWhiteNits() const {
