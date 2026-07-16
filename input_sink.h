@@ -22,6 +22,4 @@ struct InputSink {
     virtual void pinchEnd(bool cancelled) = 0;
     virtual void holdBegin(u32 fingers) = 0;
     virtual void holdEnd(bool cancelled) = 0;
-
 };
-

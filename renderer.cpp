@@ -10,10 +10,12 @@
 #include "icon_store.h"
 #include "inspector.h"
 #include "launcher.h"
+#include "notifications.h"
 #include "settings.h"
 #include "output.h"
 #include "scene.h"
 #include "shadow.h"
+#include "toast.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -161,6 +163,8 @@ namespace {
         void* calendarState = nullptr;
         bool calendarToggle = false;
 
+        Notifications* notes = nullptr;
+
         // inspector (Super+F12): opaque dialog handle owned here, state
         // lives in the widget; non-null = open
         void* inspectorState = nullptr;
@@ -228,7 +232,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit);
+        RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -319,7 +323,7 @@ InputSink* RendererImpl::sink() {
 void RendererImpl::modsChanged() {
 }
 
-RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit)
+RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Output& out, const DeviceVk& vk, FrameListener& l, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView font, float scale, int limit)
     : loop(evLoop)
     , keyboard(&kb)
     , next(&slave)
@@ -328,6 +332,7 @@ RendererImpl::RendererImpl(ObjPool* p, struct ev_loop* evLoop, Scene& scn, ::Out
     , output(&out)
     , listener(&l)
     , icons(&icons)
+    , notes(notes)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
@@ -2161,6 +2166,10 @@ void RendererImpl::buildUi(Scene& scene) {
     drawCalendar(width, calendarToggle, &calendarState);
     calendarToggle = false;
 
+    if (notes) {
+        drawToasts(*notes, *icons, *this, width, uiScale);
+    }
+
     {
         InspectorInfo info;
 
@@ -3033,6 +3042,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
-    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, kb, slave, fontPath, uiScale, framesLimit);
+Renderer* Renderer::create(ObjPool* pool, struct ev_loop* loop, Scene& scene, ::Output& output, const DeviceVk& vk, FrameListener& listener, IconStore& icons, Notifications* notes, Keyboard& kb, InputSink& slave, StringView fontPath, float uiScale, int framesLimit) {
+    return pool->make<RendererImpl>(pool, loop, scene, output, vk, listener, icons, notes, kb, slave, fontPath, uiScale, framesLimit);
 }

@@ -1,4 +1,6 @@
 #include "control.h"
+#include "dbus_conn.h"
+#include "notifications.h"
 #include "device.h"
 #include "input.h"
 #include "input_sink.h"
@@ -181,8 +183,13 @@ int main(int argc, char** argv) {
         wcfg.iconPool = iconPool;
         wcfg.iconStore = iconStore;
 
+        // notifications ride the session bus; no bus = no toasts, the
+        // desktop works on regardless
+        DBusConn* bus = DBusConn::create(pool.mutPtr(), loop);
+        Notifications* notes = bus ? Notifications::create(pool.mutPtr(), loop, *bus, *scene) : nullptr;
+
         Wayland* wayland = Wayland::create(pool.mutPtr(), loop, *scene, wcfg);
-        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, *kb, *wayland->sink(), fontPath, uiScale, framesLimit);
+        Renderer* renderer = device->createRenderer(*scene, *output, *wayland->frameListener(), *iconStore, notes, *kb, *wayland->sink(), fontPath, uiScale, framesLimit);
 
         if (session) {
             session->addListener(wayland->sessionListener());

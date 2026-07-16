@@ -1,0 +1,234 @@
+#include "dbus_conn.h"
+#include "util.h"
+
+#include <ev.h>
+
+#include <dbus/dbus.h>
+
+#include <std/ios/sys.h>
+#include <std/mem/obj_list.h>
+#include <std/mem/obj_pool.h>
+
+using namespace stl;
+
+namespace {
+    struct DBusConnImpl;
+
+    // one libdbus watch = one ev_io; a single fd may carry separate read
+    // and write watches, so the box wraps the watch, not the fd
+    struct WatchBox {
+        ev_io io{};
+        DBusConnImpl* conn = nullptr;
+        DBusWatch* watch = nullptr;
+    };
+
+    struct TimeoutBox {
+        ev_timer timer{};
+        DBusConnImpl* conn = nullptr;
+        DBusTimeout* timeout = nullptr;
+    };
+
+    void watchCb(struct ev_loop*, ev_io* w, int revents);
+    void timeoutCb(struct ev_loop*, ev_timer* w, int);
+    void prepareCb(struct ev_loop*, ev_prepare* w, int);
+
+    dbus_bool_t watchAdd(DBusWatch* w, void* data);
+    void watchRemove(DBusWatch* w, void* data);
+    void watchToggle(DBusWatch* w, void* data);
+    dbus_bool_t timeoutAdd(DBusTimeout* t, void* data);
+    void timeoutRemove(DBusTimeout* t, void* data);
+    void timeoutToggle(DBusTimeout* t, void* data);
+
+    struct DBusConnImpl: public DBusConn {
+        struct ev_loop* loop = nullptr;
+        DBusConnection* conn = nullptr;
+        ev_prepare prep{};
+        ObjList<WatchBox> watchAlloc;
+        ObjList<TimeoutBox> timeoutAlloc;
+
+        DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection* c);
+        ~DBusConnImpl() noexcept;
+
+        DBusConnection* raw() override;
+    };
+}
+
+DBusConnImpl::DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection* c)
+    : loop(evLoop)
+    , conn(c)
+    , watchAlloc(pool)
+    , timeoutAlloc(pool)
+{
+    dbus_connection_set_exit_on_disconnect(conn, FALSE);
+    dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
+    dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, timeoutToggle, this, nullptr);
+
+    ev_prepare_init(&prep, prepareCb);
+    prep.data = this;
+    ev_prepare_start(loop, &prep);
+}
+
+DBusConnImpl::~DBusConnImpl() noexcept {
+    ev_prepare_stop(loop, &prep);
+
+    if (conn) {
+        dbus_connection_close(conn);
+        dbus_connection_unref(conn);
+    }
+}
+
+DBusConnection* DBusConnImpl::raw() {
+    return conn;
+}
+
+namespace {
+    void watchCb(struct ev_loop*, ev_io* w, int revents) {
+        auto* box = (WatchBox*)w->data;
+        unsigned flags = 0;
+
+        if (revents & EV_READ) {
+            flags |= DBUS_WATCH_READABLE;
+        }
+
+        if (revents & EV_WRITE) {
+            flags |= DBUS_WATCH_WRITABLE;
+        }
+
+        // dispatch happens in the prepare watcher, this only moves bytes
+        dbus_watch_handle(box->watch, flags);
+    }
+
+    void timeoutCb(struct ev_loop*, ev_timer* w, int) {
+        dbus_timeout_handle(((TimeoutBox*)w->data)->timeout);
+    }
+
+    void prepareCb(struct ev_loop*, ev_prepare* w, int) {
+        auto* impl = (DBusConnImpl*)w->data;
+
+        while (dbus_connection_dispatch(impl->conn) == DBUS_DISPATCH_DATA_REMAINS) {
+        }
+    }
+
+    int watchEvents(DBusWatch* w) {
+        unsigned flags = dbus_watch_get_flags(w);
+        int ev = 0;
+
+        if (flags & DBUS_WATCH_READABLE) {
+            ev |= EV_READ;
+        }
+
+        if (flags & DBUS_WATCH_WRITABLE) {
+            ev |= EV_WRITE;
+        }
+
+        return ev;
+    }
+
+    dbus_bool_t watchAdd(DBusWatch* w, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        WatchBox* box = impl->watchAlloc.make();
+
+        box->conn = impl;
+        box->watch = w;
+        ev_io_init(&box->io, watchCb, dbus_watch_get_unix_fd(w), watchEvents(w));
+        box->io.data = box;
+        dbus_watch_set_data(w, box, nullptr);
+
+        if (dbus_watch_get_enabled(w)) {
+            ev_io_start(impl->loop, &box->io);
+        }
+
+        return TRUE;
+    }
+
+    void watchRemove(DBusWatch* w, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        auto* box = (WatchBox*)dbus_watch_get_data(w);
+
+        if (box) {
+            ev_io_stop(impl->loop, &box->io);
+            dbus_watch_set_data(w, nullptr, nullptr);
+            impl->watchAlloc.release(box);
+        }
+    }
+
+    void watchToggle(DBusWatch* w, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        auto* box = (WatchBox*)dbus_watch_get_data(w);
+
+        if (!box) {
+            return;
+        }
+
+        ev_io_stop(impl->loop, &box->io);
+        ev_io_set(&box->io, dbus_watch_get_unix_fd(w), watchEvents(w));
+
+        if (dbus_watch_get_enabled(w)) {
+            ev_io_start(impl->loop, &box->io);
+        }
+    }
+
+    dbus_bool_t timeoutAdd(DBusTimeout* t, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        TimeoutBox* box = impl->timeoutAlloc.make();
+        double sec = dbus_timeout_get_interval(t) / 1000.0;
+
+        box->conn = impl;
+        box->timeout = t;
+        ev_timer_init(&box->timer, timeoutCb, sec, sec);
+        box->timer.data = box;
+        dbus_timeout_set_data(t, box, nullptr);
+
+        if (dbus_timeout_get_enabled(t)) {
+            ev_timer_start(impl->loop, &box->timer);
+        }
+
+        return TRUE;
+    }
+
+    void timeoutRemove(DBusTimeout* t, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        auto* box = (TimeoutBox*)dbus_timeout_get_data(t);
+
+        if (box) {
+            ev_timer_stop(impl->loop, &box->timer);
+            dbus_timeout_set_data(t, nullptr, nullptr);
+            impl->timeoutAlloc.release(box);
+        }
+    }
+
+    void timeoutToggle(DBusTimeout* t, void* data) {
+        auto* impl = (DBusConnImpl*)data;
+        auto* box = (TimeoutBox*)dbus_timeout_get_data(t);
+
+        if (!box) {
+            return;
+        }
+
+        ev_timer_stop(impl->loop, &box->timer);
+
+        if (dbus_timeout_get_enabled(t)) {
+            double sec = dbus_timeout_get_interval(t) / 1000.0;
+
+            ev_timer_set(&box->timer, sec, sec);
+            ev_timer_start(impl->loop, &box->timer);
+        }
+    }
+}
+
+DBusConn* DBusConn::create(ObjPool* pool, struct ev_loop* loop) {
+    DBusError err;
+
+    dbus_error_init(&err);
+
+    DBusConnection* conn = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+
+    if (!conn) {
+        sysE << "imway: no session bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
+        dbus_error_free(&err);
+
+        return nullptr;
+    }
+
+    return pool->make<DBusConnImpl>(pool, loop, conn);
+}
