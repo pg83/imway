@@ -13,6 +13,7 @@
 #include "inspector.h"
 #include "launcher.h"
 #include "mixer.h"
+#include "history.h"
 #include "notifier.h"
 #include "osd.h"
 #include "settings.h"
@@ -183,6 +184,8 @@ namespace {
         // lives in the widget; non-null = open
         void* inspectorState = nullptr;
         bool inspectorToggle = false;
+        void* historyState = nullptr;
+        bool historyToggle = false;
         float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
 
@@ -2199,6 +2202,32 @@ void RendererImpl::buildUi(Scene& scene) {
             scene.needsFrame = true;
         }
 
+        if (ImGui::BeginMenu("view")) {
+            if (ImGui::MenuItem("notifications", nullptr, historyState != nullptr)) {
+                historyToggle = true;
+            }
+
+            if (ImGui::MenuItem("inspector", "super+f12", inspectorState != nullptr)) {
+                inspectorToggle = true;
+            }
+
+            if (notifier) {
+                ImGui::Separator();
+
+                bool d = notifier->dnd();
+
+                if (ImGui::MenuItem("do not disturb", nullptr, d)) {
+                    notifier->setDnd(!d);
+                }
+
+                if (ImGui::MenuItem("clear notifications")) {
+                    notifier->clearHistory();
+                }
+            }
+
+            ImGui::EndMenu();
+        }
+
         time_t now = time(nullptr);
         tm lt{};
 
@@ -2321,6 +2350,11 @@ void RendererImpl::buildUi(Scene& scene) {
         info.hwCursorVisible = hwVisible;
         drawInspector(scene, info, uiScale, inspectorToggle, &inspectorState);
         inspectorToggle = false;
+    }
+
+    if (notifier) {
+        drawHistory(*notifier, *icons, *this, width, height, uiScale, historyToggle, &historyState);
+        historyToggle = false;
     }
 
     // client frames are half-width

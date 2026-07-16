@@ -82,6 +82,7 @@ inspector.cpp
 settings.cpp
 shadow.cpp
 toast.cpp
+history.cpp
 dbus_conn.cpp
 notifications.cpp
 notifier.cpp
