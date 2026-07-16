@@ -84,6 +84,7 @@ shadow.cpp
 toast.cpp
 dbus_conn.cpp
 notifications.cpp
+notifier.cpp
 mixer.cpp
 mixer_sndio.cpp
 mixer_pulse.cpp

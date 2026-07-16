@@ -13,7 +13,7 @@
 #include "inspector.h"
 #include "launcher.h"
 #include "mixer.h"
-#include "notifications.h"
+#include "notifier.h"
 #include "osd.h"
 #include "settings.h"
 #include "wifi.h"
@@ -168,7 +168,7 @@ namespace {
         void* calendarState = nullptr;
         bool calendarToggle = false;
 
-        Notifications* notes = nullptr;
+        Notifier* notifier = nullptr;
         Composer* comp = nullptr;
 
         // osd: armed by mixer/backlight changes, fades at the tail
@@ -349,7 +349,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , output(comp.output)
     , listener(comp.wayland->frameListener())
     , icons(comp.icons)
-    , notes(comp.notes)
+    , notifier(comp.notifier)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
@@ -2287,8 +2287,8 @@ void RendererImpl::buildUi(Scene& scene) {
         wifiToggle = false;
     }
 
-    if (notes) {
-        drawToasts(*notes, *icons, *this, width, uiScale);
+    if (notifier) {
+        drawToasts(*notifier, *icons, *this, width, uiScale);
     }
 
     if (osdMs) {

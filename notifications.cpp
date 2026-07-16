@@ -1,15 +1,12 @@
 #include "composer.h"
 #include "notifications.h"
+#include "notifier.h"
 #include "dbus_conn.h"
-#include "scene.h"
 #include "util.h"
-
-#include <ev.h>
 
 #include <dbus/dbus.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -17,39 +14,20 @@ using namespace stl;
 namespace {
     constexpr const char* kPath = "/org/freedesktop/Notifications";
     constexpr const char* kIface = "org.freedesktop.Notifications";
-    constexpr double kDefaultExpiry = 5.0;
 
-    // close reasons per the spec
-    constexpr u32 kExpired = 1;
-    constexpr u32 kDismissed = 2;
     constexpr u32 kClosedByCall = 3;
 
     struct NotificationsImpl;
 
-    struct ToastImpl: public Toast {
-        NotificationsImpl* srv = nullptr;
-        ev_timer timer{};
-    };
-
-    void expiryCb(struct ev_loop*, ev_timer* w, int);
     DBusHandlerResult busMessage(DBusConnection* conn, DBusMessage* msg, void* data);
 
-    struct NotificationsImpl: public Notifications {
-        struct ev_loop* loop = nullptr;
+    struct NotificationsImpl: public Notifications, public NotifierListener {
         DBusConnection* conn = nullptr;
-        Scene* scene = nullptr;
-        ObjList<ToastImpl> toastAlloc;
-        Vector<Toast*> toasts;
-        u32 lastId = 0;
+        Notifier* notifier = nullptr;
 
         NotificationsImpl(Composer& c);
 
-        void activeImpl(VisitorFace&& vis) override;
-        void dismiss(u32 id) override;
-
-        ToastImpl* byId(u32 id);
-        void armTimer(ToastImpl& t, i32 expireMs);
-        void close(u32 id, u32 reason);
+        void notificationClosed(u32 id, u32 reason) override;
 
         void notify(DBusMessage* msg);
         void closeCall(DBusMessage* msg);
@@ -59,10 +37,8 @@ namespace {
 }
 
 NotificationsImpl::NotificationsImpl(Composer& c)
-    : loop(c.loop)
-    , conn(c.bus->raw())
-    , scene(c.scene)
-    , toastAlloc(c.pool)
+    : conn(c.bus->raw())
+    , notifier(c.notifier)
 {
     DBusError err;
 
@@ -71,7 +47,7 @@ NotificationsImpl::NotificationsImpl(Composer& c)
     int rc = dbus_bus_request_name(conn, kIface, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
 
     if (rc != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
-        sysE << "imway: org.freedesktop.Notifications is taken ("_sv << rc << "), notifications disabled"_sv << endL;
+        sysE << "imway: org.freedesktop.Notifications is taken ("_sv << rc << "), dbus notifications disabled"_sv << endL;
         dbus_error_free(&err);
 
         return;
@@ -81,60 +57,16 @@ NotificationsImpl::NotificationsImpl(Composer& c)
 
     vt.message_function = busMessage;
     dbus_connection_register_object_path(conn, kPath, &vt, this);
+    notifier->setListener(this);
     sysO << "imway: notifications on the session bus"_sv << endL;
 }
 
-void NotificationsImpl::activeImpl(VisitorFace&& vis) {
-    for (Toast* t : toasts) {
-        vis.visit(t);
-    }
-}
-
-void NotificationsImpl::dismiss(u32 id) {
-    close(id, kDismissed);
-}
-
-ToastImpl* NotificationsImpl::byId(u32 id) {
-    for (Toast* t : toasts) {
-        if (t->id == id) {
-            return (ToastImpl*)t;
-        }
-    }
-
-    return nullptr;
-}
-
-void NotificationsImpl::armTimer(ToastImpl& t, i32 expireMs) {
-    ev_timer_stop(loop, &t.timer);
-
-    if (t.critical || expireMs == 0) {
-        return; // sticky
-    }
-
-    double sec = expireMs > 0 ? expireMs / 1000.0 : kDefaultExpiry;
-
-    ev_timer_init(&t.timer, expiryCb, sec, 0.);
-    t.timer.data = &t;
-    ev_timer_start(loop, &t.timer);
-}
-
-void NotificationsImpl::close(u32 id, u32 reason) {
-    ToastImpl* t = byId(id);
-
-    if (!t) {
-        return;
-    }
-
-    ev_timer_stop(loop, &t->timer);
-    removeOne(toasts, (Toast*)t);
-    toastAlloc.release(t);
-
+void NotificationsImpl::notificationClosed(u32 id, u32 reason) {
     DBusMessage* sig = dbus_message_new_signal(kPath, kIface, "NotificationClosed");
 
     dbus_message_append_args(sig, DBUS_TYPE_UINT32, &id, DBUS_TYPE_UINT32, &reason, DBUS_TYPE_INVALID);
     dbus_connection_send(conn, sig, nullptr);
     dbus_message_unref(sig);
-    scene->needsFrame = true;
 }
 
 void NotificationsImpl::notify(DBusMessage* msg) {
@@ -232,30 +164,22 @@ void NotificationsImpl::notify(DBusMessage* msg) {
         dbus_message_iter_get_basic(&it, &expireMs);
     }
 
-    ToastImpl* t = replaces ? byId(replaces) : nullptr;
+    Post p;
 
-    if (!t) {
-        t = toastAlloc.make();
-        t->srv = this;
-        t->id = ++lastId;
-        toasts.pushBack(t);
-    }
+    p.app = StringView(app);
+    p.summary = StringView(summary);
+    p.body = StringView(body);
+    p.icon = StringView(icon);
+    p.critical = critical;
+    p.fromBus = true;
+    p.expireMs = expireMs;
+    p.replacesId = replaces;
 
-    t->app.reset();
-    t->app << StringView(app);
-    t->summary.reset();
-    t->summary << StringView(summary);
-    t->body.reset();
-    t->body << StringView(body);
-    t->icon.reset();
-    t->icon << StringView(icon);
-    t->critical = critical;
-    armTimer(*t, expireMs);
-    scene->needsFrame = true;
+    u32 id = notifier->post(p);
 
     DBusMessage* reply = dbus_message_new_method_return(msg);
 
-    dbus_message_append_args(reply, DBUS_TYPE_UINT32, &t->id, DBUS_TYPE_INVALID);
+    dbus_message_append_args(reply, DBUS_TYPE_UINT32, &id, DBUS_TYPE_INVALID);
     dbus_connection_send(conn, reply, nullptr);
     dbus_message_unref(reply);
 }
@@ -264,7 +188,7 @@ void NotificationsImpl::closeCall(DBusMessage* msg) {
     u32 id = 0;
 
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &id, DBUS_TYPE_INVALID)) {
-        close(id, kClosedByCall);
+        notifier->close(id, kClosedByCall);
     }
 
     DBusMessage* reply = dbus_message_new_method_return(msg);
@@ -281,8 +205,8 @@ void NotificationsImpl::capabilities(DBusMessage* msg) {
     dbus_message_iter_init_append(reply, &it);
     dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "s", &arr);
 
-    for (const char* c : caps) {
-        dbus_message_iter_append_basic(&arr, DBUS_TYPE_STRING, &c);
+    for (const char* cap : caps) {
+        dbus_message_iter_append_basic(&arr, DBUS_TYPE_STRING, &cap);
     }
 
     dbus_message_iter_close_container(&it, &arr);
@@ -303,12 +227,6 @@ void NotificationsImpl::serverInfo(DBusMessage* msg) {
 }
 
 namespace {
-    void expiryCb(struct ev_loop*, ev_timer* w, int) {
-        auto* t = (ToastImpl*)w->data;
-
-        t->srv->close(t->id, kExpired);
-    }
-
     DBusHandlerResult busMessage(DBusConnection*, DBusMessage* msg, void* data) {
         auto* impl = (NotificationsImpl*)data;
 

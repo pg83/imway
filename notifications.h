@@ -1,35 +1,12 @@
 #pragma once
 
-#include "visitor.h"
-
-#include <std/str/builder.h>
-#include <std/sys/types.h>
-
 struct Composer;
 
-// one on-screen notification; icon is the raw Icon= value from the client
-// (a name or a path), resolved through the icon store at draw time
-struct Toast {
-    u32 id = 0;
-    stl::StringBuilder app;
-    stl::StringBuilder summary;
-    stl::StringBuilder body;
-    stl::StringBuilder icon;
-    bool critical = false; // urgency 2: never expires, accented
-};
-
-// org.freedesktop.Notifications on the session bus: Notify lands here as a
-// Toast with an expiry timer, the renderer draws whatever active() holds,
-// a click comes back as dismiss(); every close emits NotificationClosed
+// the org.freedesktop.Notifications dbus service: parses Notify into the
+// shared Notifier store, answers CloseNotification/GetCapabilities/
+// GetServerInformation, and (as the store's listener) turns a bus-origin
+// toast leaving the screen into the spec's NotificationClosed signal
 struct Notifications {
-    // enumerate the on-screen toasts, oldest first
-    virtual void activeImpl(stl::VisitorFace&& vis) = 0;
-    virtual void dismiss(u32 id) = 0;
-
-    template <typename F>
-    void active(F f) {
-        activeImpl(visitEach<Toast>(f));
-    }
-
+    // nullptr when there is no session bus or the name is taken
     static Notifications* create(Composer& c);
 };

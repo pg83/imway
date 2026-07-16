@@ -246,6 +246,7 @@ add_executable(imway
     osd.cpp
     dbus_conn.cpp
     notifications.cpp
+    notifier.cpp
     mixer.cpp
     mixer_sndio.cpp
     mixer_pulse.cpp

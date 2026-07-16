@@ -2,6 +2,7 @@
 #include "control.h"
 #include "dbus_conn.h"
 #include "notifications.h"
+#include "notifier.h"
 #include "device.h"
 #include "device_headless.h"
 #include "device_kms.h"
@@ -196,8 +197,10 @@ int main(int argc, char** argv) {
         c.iconPool = IconPool::create(pool.mutPtr());
         c.icons = IconStore::create(c);
 
-        // notifications ride the session bus; no bus = no toasts, the
-        // desktop works on regardless
+        // the notifier store always exists (internal senders like wifi
+        // post to it regardless of a bus); the dbus service is layered on
+        // top only when the session bus is reachable
+        c.notifier = Notifier::create(c);
         c.bus = DBusConn::create(pool.mutPtr(), loop, false);
 
         if (c.bus) {

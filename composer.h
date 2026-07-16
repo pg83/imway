@@ -18,6 +18,7 @@ struct IconStoreListener;
 struct Keyboard;
 struct Mixer;
 struct Notifications;
+struct Notifier;
 struct Output;
 struct Renderer;
 struct Scene;
@@ -41,6 +42,7 @@ struct Composer {
     IconPool* iconPool = nullptr;
     IconStore* icons = nullptr;
     DBusConn* bus = nullptr;
+    Notifier* notifier = nullptr;
     Notifications* notes = nullptr;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;

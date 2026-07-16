@@ -1,14 +1,14 @@
 #include "toast.h"
 #include "icon_store.h"
 #include "launcher.h"
-#include "notifications.h"
+#include "notifier.h"
 #include "util.h"
 
 #include <imgui.h>
 
 using namespace stl;
 
-void drawToasts(Notifications& notes, IconStore& icons, IconResolver& texes, int screenW, float uiScale) {
+void drawToasts(Notifier& notes, IconStore& icons, IconResolver& texes, int screenW, float uiScale) {
     float w = 320.f * uiScale;
     float y = ImGui::GetFrameHeight() + 8.f;
     u32 clicked = 0;
