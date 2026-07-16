@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <drm_fourcc.h>
+#include <linux/i2c-dev.h>
 #include <linux/kd.h>
 #include <libudev.h>
 #include <xf86drm.h>
@@ -450,6 +451,17 @@ namespace {
         StringBuilder blPath;
         long blMax = 0;
 
+        // ddc/ci brightness for external monitors (VCP 0x10 over the
+        // connector's i2c bus); writes coalesce through ddcTimer because the
+        // link needs ~50ms between transactions and a slider drags faster
+        struct ev_loop* loop = nullptr;
+        int ddcFd = -1;
+        long ddcMax = 0;
+        int ddcCur = 0;
+        int ddcPending = -1;
+        bool ddcTimerOn = false;
+        ev_timer ddcTimer{};
+
         double hdrNits = 0;
         bool hdrActive = false;
         u32 connColorspace = 0, connHdrMeta = 0;
@@ -482,7 +494,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
+        KmsOutput(struct ev_loop* loop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -511,6 +523,9 @@ namespace {
         void setPowerSave(bool on) override;
 
         void initBacklight();
+        void initDdc(StringView connName);
+        bool ddcGet(u8 vcp, int& cur, int& max);
+        void ddcSet(u8 vcp, int val);
         bool hasBrightness() const override;
         float brightness() const override;
         void setBrightness(float v) override;
@@ -684,7 +699,7 @@ void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {
-    output = pool->make<KmsOutput>(fd, vk, *session, connector, modeStr, hdrNits);
+    output = pool->make<KmsOutput>(loop, fd, vk, *session, connector, modeStr, hdrNits);
 
     return output;
 }
@@ -745,8 +760,9 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
-    : fd(drmFd)
+KmsOutput::KmsOutput(struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
+    : loop(evLoop)
+    , fd(drmFd)
     , vk(v)
     , hdrNits(hdrWhiteNits)
 {
@@ -893,6 +909,14 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk* v, Session& session, StringView 
 }
 
 KmsOutput::~KmsOutput() noexcept {
+    if (ddcTimerOn) {
+        ev_timer_stop(loop, &ddcTimer);
+    }
+
+    if (ddcFd >= 0) {
+        close(ddcFd);
+    }
+
     if (modesetDone) {
         // hand the display back clean: neutral colorspace, no luts
         drmModeAtomicReq* req = drmModeAtomicAlloc();
@@ -1492,9 +1516,15 @@ void KmsOutput::initBacklight() {
 
     bool internal = conn->connector_type == DRM_MODE_CONNECTOR_eDP || conn->connector_type == DRM_MODE_CONNECTOR_LVDS || conn->connector_type == DRM_MODE_CONNECTOR_DSI;
 
+    StringBuilder connName;
+
+    connectorName(conn, connName);
     drmModeFreeConnector(conn);
 
     if (!internal) {
+        // external monitors take brightness over ddc/ci, not sysfs
+        initDdc(sv(connName));
+
         return;
     }
 
@@ -1557,11 +1587,138 @@ void KmsOutput::initBacklight() {
     sysO << "imway: backlight "_sv << sv(blPath) << ", max "_sv << blMax << endL;
 }
 
+
+namespace {
+    void ddcTimerCb(struct ev_loop*, ev_timer* w, int);
+}
+
+void KmsOutput::initDdc(StringView connName) {
+    // the connector's i2c bus: /sys/class/drm/<card>-<conn>/ddc/i2c-dev/i2c-N
+    StringBuilder busDev;
+
+    try {
+        listDir("/sys/class/drm"_sv, [this, connName, &busDev](const TPathInfo& e) {
+            if (!busDev.empty() || !e.item.endsWith(connName)) {
+                return;
+            }
+
+            StringBuilder dir;
+
+            dir << "/sys/class/drm/"_sv << e.item << "/ddc/i2c-dev"_sv;
+
+            try {
+                listDir(sv(dir), [&busDev](const TPathInfo& b) {
+                    if (busDev.empty() && b.item.startsWith("i2c-"_sv)) {
+                        busDev << "/dev/"_sv << b.item;
+                    }
+                });
+            } catch (...) {
+            }
+        });
+    } catch (...) {
+        return;
+    }
+
+    if (busDev.empty()) {
+        return;
+    }
+
+    ddcFd = open(Buffer(sv(busDev)).cStr(), O_RDWR | O_CLOEXEC);
+
+    if (ddcFd < 0) {
+        return;
+    }
+
+    if (ioctl(ddcFd, I2C_SLAVE, 0x37) < 0) {
+        close(ddcFd);
+        ddcFd = -1;
+
+        return;
+    }
+
+    int cur = 0, max = 0;
+
+    // probe: no reply means the monitor has ddc/ci disabled in its own menu
+    if (!ddcGet(0x10, cur, max) || max <= 0) {
+        close(ddcFd);
+        ddcFd = -1;
+
+        return;
+    }
+
+    ddcMax = max;
+    ddcCur = cur;
+    ev_timer_init(&ddcTimer, ddcTimerCb, 0.06, 0.);
+    ddcTimer.data = this;
+    sysO << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
+}
+
+// DDC/CI Get VCP: write the request, wait, read the 11-byte reply
+bool KmsOutput::ddcGet(u8 vcp, int& cur, int& max) {
+    u8 req[5] = {0x51, 0x82, 0x01, vcp, 0};
+
+    for (int i = 0; i < 4; i++) {
+        req[4] ^= req[i];
+    }
+
+    req[4] ^= 0x6E;
+
+    if (write(ddcFd, req, 5) != 5) {
+        return false;
+    }
+
+    usleep(50000);
+
+    u8 rep[11] = {};
+
+    if (read(ddcFd, rep, 11) != 11) {
+        return false;
+    }
+
+    // rep: xx 88 02 result vcp type maxH maxL curH curL cs
+    if (rep[2] != 0x02 || rep[4] != vcp) {
+        return false;
+    }
+
+    max = (rep[6] << 8) | rep[7];
+    cur = (rep[8] << 8) | rep[9];
+
+    return true;
+}
+
+void KmsOutput::ddcSet(u8 vcp, int val) {
+    u8 msg[7] = {0x51, 0x84, 0x03, vcp, (u8)(val >> 8), (u8)(val & 0xff), 0};
+
+    for (int i = 0; i < 6; i++) {
+        msg[6] ^= msg[i];
+    }
+
+    msg[6] ^= 0x6E;
+    (void)!write(ddcFd, msg, 7);
+}
+
+namespace {
+    void ddcTimerCb(struct ev_loop*, ev_timer* w, int) {
+        auto* o = (KmsOutput*)w->data;
+
+        o->ddcTimerOn = false;
+
+        if (o->ddcPending >= 0) {
+            o->ddcSet(0x10, o->ddcPending);
+            o->ddcPending = -1;
+        }
+    }
+}
+
 bool KmsOutput::hasBrightness() const {
-    return !blPath.empty();
+    return !blPath.empty() || ddcFd >= 0;
 }
 
 float KmsOutput::brightness() const {
+    if (ddcFd >= 0) {
+        return ddcMax ? (float)ddcCur / (float)ddcMax : 0.f;
+    }
+
     if (blPath.empty()) {
         return 0.f;
     }
@@ -1582,11 +1739,25 @@ float KmsOutput::brightness() const {
 }
 
 void KmsOutput::setBrightness(float v) {
-    if (blPath.empty()) {
+    v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+
+    if (ddcFd >= 0) {
+        // cache for the ui right away, coalesce the actual i2c write
+        ddcCur = (int)lroundf(v * (float)ddcMax);
+        ddcPending = ddcCur;
+
+        if (!ddcTimerOn) {
+            ddcTimerOn = true;
+            ev_timer_set(&ddcTimer, 0.06, 0.);
+            ev_timer_start(loop, &ddcTimer);
+        }
+
         return;
     }
 
-    v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+    if (blPath.empty()) {
+        return;
+    }
 
     // floor at one raw step: zero on an edp panel means a black screen and
     // a lost user
