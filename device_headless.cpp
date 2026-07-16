@@ -38,12 +38,19 @@
 #include <std/sys/throw.h>
 #include "device_headless.h"
 
+#include <stdlib.h>
+
 using namespace stl;
 
 namespace {
     struct HeadlessOutput: public ::Output {
         int w = 0, h = 0;
         double hz = 60.0;
+
+        // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
+        // so headless exercises the renderer's hw-cursor rasterization path
+        // (rasterizeShape) that a real headless output otherwise never hits
+        int curCap = 0;
 
         HeadlessOutput(int width, int height, double refresh);
 
@@ -97,6 +104,9 @@ HeadlessOutput::HeadlessOutput(int width, int height, double refresh)
     , h(height)
     , hz(refresh)
 {
+    if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
+        curCap = 64;
+    }
 }
 
 int HeadlessOutput::width() const {
