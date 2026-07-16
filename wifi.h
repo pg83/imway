@@ -20,7 +20,7 @@ struct WifiNetwork {
     stl::StringBuilder name;
     stl::StringBuilder path;
     stl::StringBuilder type; // "psk", "open", "8021x"
-    i16 strength = 0;        // dBm * 100, higher is stronger
+    i16 strength = 0;        // 0..100 percent (normalized by the provider)
     bool connected = false;
     bool known = false;
 };

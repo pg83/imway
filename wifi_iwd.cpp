@@ -379,7 +379,11 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
                 n->path << sv(info->path);
                 n->type.reset();
                 n->type << sv(info->type);
-                n->strength = strength;
+                // iwd gives dBm*100; map [-90,-50] dBm to 0..100 percent
+                int dbm = strength / 100;
+                int pct = (dbm + 90) * 5 / 2;
+
+                n->strength = (i16)(pct < 0 ? 0 : pct > 100 ? 100 : pct);
                 n->connected = info->connected;
                 n->known = info->known;
                 nets.pushBack(n);

@@ -105,8 +105,31 @@ void Dialog::draw(Wifi& wifi, int screenW, float uiScale, bool& open) {
                 row << "  ["_sv << sv(n.type) << "]"_sv;
             }
 
+            ImVec2 rowMin = ImGui::GetItemRectMin();
+            ImVec2 rowMax = ImGui::GetItemRectMax();
+
             if (ImGui::Selectable(row.cStr(), n.connected) && !n.connected) {
                 wifi.connect(sv(n.path));
+            }
+
+            rowMin = ImGui::GetItemRectMin();
+            rowMax = ImGui::GetItemRectMax();
+
+            // a right-aligned 4-bar signal meter; lit bars scale with strength
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            float bw = 3.f * uiScale;
+            float gap = 2.f * uiScale;
+            float x = rowMax.x - 4.f * (bw + gap);
+            float base = rowMax.y - 3.f * uiScale;
+            float unit = 4.f * uiScale;
+            int lit = (n.strength + 24) / 25; // 0..100 -> 0..4
+
+            for (int b = 0; b < 4; b++) {
+                float bh = unit * (float)(b + 1);
+                ImU32 col = b < lit ? IM_COL32(200, 200, 210, 255) : IM_COL32(90, 90, 100, 255);
+
+                dl->AddRectFilled(ImVec2(x, base - bh), ImVec2(x + bw, base), col);
+                x += bw + gap;
             }
 
             ImGui::PopID();
