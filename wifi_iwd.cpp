@@ -110,15 +110,9 @@ IwdWifi::IwdWifi(Composer& comp, DBusConnection* c)
     , infoAlloc(comp.pool)
     , netAlloc(comp.pool)
 {
-    DBusError err;
-
-    dbus_error_init(&err);
-    dbus_bus_add_match(conn, "type='signal',sender='net.connman.iwd',interface='org.freedesktop.DBus.ObjectManager'", &err);
-    dbus_error_free(&err);
-    dbus_error_init(&err);
-    dbus_bus_add_match(conn, "type='signal',sender='net.connman.iwd',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", &err);
-    dbus_error_free(&err);
-
+    // fire-and-forget match registration (NULL error = no blocking round trip)
+    dbus_bus_add_match(conn, "type='signal',sender='net.connman.iwd',interface='org.freedesktop.DBus.ObjectManager'", nullptr);
+    dbus_bus_add_match(conn, "type='signal',sender='net.connman.iwd',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
     dbus_connection_add_filter(conn, onSignal, this, nullptr);
 
     DBusObjectPathVTable vt{};

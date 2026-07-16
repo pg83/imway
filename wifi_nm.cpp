@@ -13,6 +13,15 @@
 
 using namespace stl;
 
+// NetworkManager over dbus, fully async: every read is send_with_reply +
+// a pending-call notify, never send_with_reply_and_block, so a slow or hung
+// NM can never freeze the ev loop. NM has no ObjectManager, so a refresh is
+// a tree of dependent queries with fan-out counters — Devices -> the wifi
+// device -> known connections -> access points -> per-AP properties — that
+// commits and notifies only when the last leaf lands. one refresh runs at a
+// time (inFlight); signals arriving mid-refresh set `again` and restart once
+// it finishes, the iwd pattern
+
 namespace {
     constexpr const char* kNm = "org.freedesktop.NetworkManager";
     constexpr const char* kNmPath = "/org/freedesktop/NetworkManager";
@@ -20,20 +29,38 @@ namespace {
     constexpr const char* kDev = "org.freedesktop.NetworkManager.Device";
     constexpr const char* kWireless = "org.freedesktop.NetworkManager.Device.Wireless";
     constexpr const char* kAp = "org.freedesktop.NetworkManager.AccessPoint";
+    constexpr const char* kSettings = "org.freedesktop.NetworkManager.Settings";
+    constexpr const char* kSettingsPath = "/org/freedesktop/NetworkManager/Settings";
+    constexpr const char* kConnIface = "org.freedesktop.NetworkManager.Settings.Connection";
 
     constexpr u32 kDeviceWifi = 2;
     constexpr u32 kStateActivated = 100;
     constexpr u32 kStateConfig = 40;
     constexpr u32 kStateNeedAuth = 60;
 
+    constexpr int kTimeout = 3000;
+
     struct NmWifi;
 
-    DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data);
+    // per-call context threading the object path (and owner) through an
+    // async reply, since GetAll's reply does not echo which object it was
+    struct Ctx {
+        NmWifi* w = nullptr;
+        StringBuilder path;
+    };
 
     struct Known {
         StringBuilder ssid;
-        StringBuilder path; // the Connection object path
+        StringBuilder path;
     };
+
+    DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data);
+    void devicesCb(DBusPendingCall* pc, void* data);
+    void deviceCb(DBusPendingCall* pc, void* data);
+    void connectionsCb(DBusPendingCall* pc, void* data);
+    void connectionCb(DBusPendingCall* pc, void* data);
+    void wirelessCb(DBusPendingCall* pc, void* data);
+    void apCb(DBusPendingCall* pc, void* data);
 
     struct NmWifi: public Wifi {
         Composer* c = nullptr;
@@ -43,16 +70,28 @@ namespace {
         WifiState st = WifiState::unavailable;
 
         ObjList<WifiNetwork> netAlloc;
-        Vector<WifiNetwork*> nets;
+        Vector<WifiNetwork*> nets;      // committed, ui-facing
 
         ObjList<Known> knownAlloc;
-        Vector<Known*> known;
+        Vector<Known*> known;           // committed
 
-        // NM has no agent prompt: we gather the secret up front and pass it
-        // to AddAndActivateConnection
         bool wantPass = false;
         StringBuilder passAp;
         StringBuilder passSsid;
+
+        // refresh sequencing
+        bool inFlight = false;
+        bool again = false;
+
+        // scratch for the sequence in progress
+        StringBuilder curDevice;
+        u32 curState = 0;
+        StringBuilder curActive;
+        Vector<WifiNetwork*> netBuild;
+        Vector<Known*> knownBuild;
+        int devPending = 0;
+        int knownPending = 0;
+        int apPending = 0;
 
         NmWifi(Composer& comp, DBusConnection* c);
 
@@ -67,22 +106,34 @@ namespace {
         void providePassphrase(StringView pw) override;
         void cancelPassphrase() override;
 
-        void refresh();
-        void notify();
         WifiNetwork* byPath(StringView path);
+        Known* knownBuilt(StringView ssid);
         Known* knownForSsid(StringView ssid);
+        void notify();
 
-        // blocking property reads — refresh is rare (a signal or menu open),
-        // and linear blocking calls are far easier to get right than an
-        // async fan-out for something no one can test here
-        DBusMessage* propGet(StringView path, const char* iface, const char* name);
-        u32 propU32(StringView path, const char* iface, const char* name);
-        void variantSsid(DBusMessageIter* var, StringBuilder& out);
+        // async plumbing
+        bool call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data);
+        bool getProp(StringView path, const char* iface, const char* prop, DBusPendingCallNotifyFunction cb, void* data);
+        bool getAll(StringView path, const char* iface, DBusPendingCallNotifyFunction cb, void* data);
 
-        bool findWifiDevice();
-        void loadKnown();
-        void addAccessPoint(StringView apPath, StringView activePath);
+        // sequence steps
+        void refresh();
+        void devicesReply(DBusMessage* reply);
+        void deviceReply(Ctx* cx, DBusMessage* reply);
+        void deviceItemDone();
+        void onDevicesDone();
+        void connectionsReply(DBusMessage* reply);
+        void connectionReply(Ctx* cx, DBusMessage* reply);
+        void knownItemDone();
+        void onKnownDone();
+        void wirelessReply(DBusMessage* reply);
+        void apReply(Ctx* cx, DBusMessage* reply);
+        void apItemDone();
+        void onApsDone();
+        void finishSeq();
+        void resetScratch();
 
+        // actions (async fire-and-forget)
         void activate(StringView apPath);
         void addAndActivate(StringView apPath, StringView ssid, StringView psk);
     };
@@ -100,6 +151,71 @@ namespace {
 
         return StringView(s);
     }
+
+    void readSsid(DBusMessageIter* var, StringBuilder& out) {
+        out.reset();
+
+        if (dbus_message_iter_get_arg_type(var) != DBUS_TYPE_ARRAY) {
+            return;
+        }
+
+        DBusMessageIter bytes;
+
+        dbus_message_iter_recurse(var, &bytes);
+
+        while (dbus_message_iter_get_arg_type(&bytes) == DBUS_TYPE_BYTE) {
+            u8 b = 0;
+
+            dbus_message_iter_get_basic(&bytes, &b);
+            out << StringView(&b, (size_t)1);
+            dbus_message_iter_next(&bytes);
+        }
+    }
+
+    u32 readU32(DBusMessageIter* var) {
+        u32 v = 0;
+        int t = dbus_message_iter_get_arg_type(var);
+
+        if (t == DBUS_TYPE_UINT32) {
+            dbus_message_iter_get_basic(var, &v);
+        } else if (t == DBUS_TYPE_BYTE) {
+            u8 b = 0;
+
+            dbus_message_iter_get_basic(var, &b);
+            v = b;
+        }
+
+        return v;
+    }
+
+    // GetAll returns a{sv}; walk it, handing each (key, value-iter) to f
+    template <typename F>
+    void eachProp(DBusMessage* reply, F f) {
+        DBusMessageIter it, arr;
+
+        if (!reply || !dbus_message_iter_init(reply, &it) || dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_ARRAY) {
+            return;
+        }
+
+        dbus_message_iter_recurse(&it, &arr);
+
+        while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_DICT_ENTRY) {
+            DBusMessageIter e;
+
+            dbus_message_iter_recurse(&arr, &e);
+
+            const char* key = "";
+
+            dbus_message_iter_get_basic(&e, &key);
+            dbus_message_iter_next(&e);
+
+            DBusMessageIter var;
+
+            dbus_message_iter_recurse(&e, &var);
+            f(StringView(key), &var);
+            dbus_message_iter_next(&arr);
+        }
+    }
 }
 
 NmWifi::NmWifi(Composer& comp, DBusConnection* c)
@@ -108,12 +224,8 @@ NmWifi::NmWifi(Composer& comp, DBusConnection* c)
     , netAlloc(comp.pool)
     , knownAlloc(comp.pool)
 {
-    DBusError err;
-
-    dbus_error_init(&err);
-    dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", &err);
-    dbus_error_free(&err);
-
+    // fire-and-forget match registration (NULL error = no blocking round trip)
+    dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
     dbus_connection_add_filter(conn, onSignal, this, nullptr);
     refresh();
 }
@@ -138,6 +250,16 @@ WifiNetwork* NmWifi::byPath(StringView path) {
     return nullptr;
 }
 
+Known* NmWifi::knownBuilt(StringView ssid) {
+    for (Known* k : knownBuild) {
+        if (sv(k->ssid) == ssid) {
+            return k;
+        }
+    }
+
+    return nullptr;
+}
+
 Known* NmWifi::knownForSsid(StringView ssid) {
     for (Known* k : known) {
         if (sv(k->ssid) == ssid) {
@@ -156,315 +278,438 @@ void NmWifi::notify() {
     c->scene->needsFrame = true;
 }
 
-DBusMessage* NmWifi::propGet(StringView path, const char* iface, const char* name) {
-    Buffer pb(path);
-    DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kProps, "Get");
+bool NmWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data) {
+    DBusPendingCall* pc = nullptr;
 
-    dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &name, DBUS_TYPE_INVALID);
+    if (!dbus_connection_send_with_reply(conn, msg, &pc, kTimeout) || !pc) {
+        dbus_message_unref(msg);
 
-    DBusError err;
-
-    dbus_error_init(&err);
-
-    DBusMessage* reply = dbus_connection_send_with_reply_and_block(conn, msg, 2000, &err);
-
-    dbus_message_unref(msg);
-
-    if (!reply) {
-        dbus_error_free(&err);
-    }
-
-    return reply;
-}
-
-u32 NmWifi::propU32(StringView path, const char* iface, const char* name) {
-    DBusMessage* r = propGet(path, iface, name);
-
-    if (!r) {
-        return 0;
-    }
-
-    DBusMessageIter it, var;
-
-    dbus_message_iter_init(r, &it);
-    dbus_message_iter_recurse(&it, &var);
-
-    u32 v = 0;
-    int t = dbus_message_iter_get_arg_type(&var);
-
-    if (t == DBUS_TYPE_UINT32) {
-        dbus_message_iter_get_basic(&var, &v);
-    } else if (t == DBUS_TYPE_BYTE) {
-        u8 b = 0;
-
-        dbus_message_iter_get_basic(&var, &b);
-        v = b;
-    }
-
-    dbus_message_unref(r);
-
-    return v;
-}
-
-// an ssid property is a byte array wrapped in a variant
-void NmWifi::variantSsid(DBusMessageIter* var, StringBuilder& out) {
-    out.reset();
-
-    if (dbus_message_iter_get_arg_type(var) != DBUS_TYPE_ARRAY) {
-        return;
-    }
-
-    DBusMessageIter bytes;
-
-    dbus_message_iter_recurse(var, &bytes);
-
-    while (dbus_message_iter_get_arg_type(&bytes) == DBUS_TYPE_BYTE) {
-        u8 b = 0;
-
-        dbus_message_iter_get_basic(&bytes, &b);
-        out << StringView(&b, (size_t)1);
-        dbus_message_iter_next(&bytes);
-    }
-}
-
-bool NmWifi::findWifiDevice() {
-    devicePath.reset();
-
-    DBusMessage* r = propGet(StringView(kNmPath), kNm, "Devices");
-
-    if (!r) {
         return false;
     }
 
-    DBusMessageIter it, var, arr;
+    dbus_pending_call_set_notify(pc, cb, data, nullptr);
+    dbus_message_unref(msg);
 
-    dbus_message_iter_init(r, &it);
-    dbus_message_iter_recurse(&it, &var);
-
-    if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
-        dbus_message_iter_recurse(&var, &arr);
-
-        while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH && devicePath.empty()) {
-            StringView d = iterStr(&arr);
-
-            if (propU32(d, kDev, "DeviceType") == kDeviceWifi) {
-                devicePath << d;
-            }
-
-            dbus_message_iter_next(&arr);
-        }
-    }
-
-    dbus_message_unref(r);
-
-    return !devicePath.empty();
+    return true;
 }
 
-void NmWifi::loadKnown() {
-    for (Known* k : known) {
-        knownAlloc.release(k);
-    }
+bool NmWifi::getProp(StringView path, const char* iface, const char* prop, DBusPendingCallNotifyFunction cb, void* data) {
+    Buffer pb(path);
+    DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kProps, "Get");
 
-    known.clear();
+    dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
 
-    DBusMessage* r = propGet("/org/freedesktop/NetworkManager/Settings"_sv, "org.freedesktop.NetworkManager.Settings", "Connections");
-
-    if (!r) {
-        return;
-    }
-
-    DBusMessageIter it, var, arr;
-
-    dbus_message_iter_init(r, &it);
-    dbus_message_iter_recurse(&it, &var);
-
-    if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
-        dbus_message_iter_recurse(&var, &arr);
-
-        while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-            StringView cp = iterStr(&arr);
-            Buffer cpb(cp);
-            DBusMessage* msg = dbus_message_new_method_call(kNm, cpb.cStr(), "org.freedesktop.NetworkManager.Settings.Connection", "GetSettings");
-            DBusError err;
-
-            dbus_error_init(&err);
-
-            DBusMessage* reply = dbus_connection_send_with_reply_and_block(conn, msg, 2000, &err);
-
-            dbus_message_unref(msg);
-
-            if (!reply) {
-                dbus_error_free(&err);
-                dbus_message_iter_next(&arr);
-
-                continue;
-            }
-
-            // a{sa{sv}}: 802-11-wireless -> ssid (ay)
-            DBusMessageIter rit, outer;
-
-            dbus_message_iter_init(reply, &rit);
-            dbus_message_iter_recurse(&rit, &outer);
-
-            while (dbus_message_iter_get_arg_type(&outer) == DBUS_TYPE_DICT_ENTRY) {
-                DBusMessageIter grp;
-
-                dbus_message_iter_recurse(&outer, &grp);
-
-                const char* gname = "";
-
-                dbus_message_iter_get_basic(&grp, &gname);
-                dbus_message_iter_next(&grp);
-
-                if (StringView(gname) == "802-11-wireless"_sv) {
-                    DBusMessageIter props;
-
-                    dbus_message_iter_recurse(&grp, &props);
-
-                    while (dbus_message_iter_get_arg_type(&props) == DBUS_TYPE_DICT_ENTRY) {
-                        DBusMessageIter kv;
-
-                        dbus_message_iter_recurse(&props, &kv);
-
-                        const char* key = "";
-
-                        dbus_message_iter_get_basic(&kv, &key);
-                        dbus_message_iter_next(&kv);
-
-                        if (StringView(key) == "ssid"_sv) {
-                            DBusMessageIter var2;
-
-                            dbus_message_iter_recurse(&kv, &var2);
-
-                            Known* k = knownAlloc.make();
-
-                            variantSsid(&var2, k->ssid);
-                            k->path.reset();
-                            k->path << cp;
-
-                            if (k->ssid.empty()) {
-                                knownAlloc.release(k);
-                            } else {
-                                known.pushBack(k);
-                            }
-                        }
-
-                        dbus_message_iter_next(&props);
-                    }
-                }
-
-                dbus_message_iter_next(&outer);
-            }
-
-            dbus_message_unref(reply);
-            dbus_message_iter_next(&arr);
-        }
-    }
-
-    dbus_message_unref(r);
+    return call(msg, cb, data);
 }
 
-void NmWifi::addAccessPoint(StringView apPath, StringView activePath) {
-    DBusMessage* ssidR = propGet(apPath, kAp, "Ssid");
+bool NmWifi::getAll(StringView path, const char* iface, DBusPendingCallNotifyFunction cb, void* data) {
+    Buffer pb(path);
+    DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kProps, "GetAll");
 
-    if (!ssidR) {
-        return;
-    }
+    dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID);
 
-    StringBuilder ssid;
-
-    {
-        DBusMessageIter it, var;
-
-        dbus_message_iter_init(ssidR, &it);
-        dbus_message_iter_recurse(&it, &var);
-        variantSsid(&var, ssid);
-    }
-
-    dbus_message_unref(ssidR);
-
-    if (ssid.empty()) {
-        return;
-    }
-
-    u32 strength = propU32(apPath, kAp, "Strength");
-    u32 wpa = propU32(apPath, kAp, "WpaFlags");
-    u32 rsn = propU32(apPath, kAp, "RsnFlags");
-
-    WifiNetwork* n = netAlloc.make();
-
-    n->name.reset();
-    n->name << sv(ssid);
-    n->path.reset();
-    n->path << apPath;
-    n->type.reset();
-    n->type << ((wpa || rsn) ? "psk"_sv : "open"_sv);
-    n->strength = (i16)strength; // NM reports 0..100
-    n->connected = apPath == activePath;
-    n->known = knownForSsid(sv(ssid)) != nullptr;
-    nets.pushBack(n);
+    return call(msg, cb, data);
 }
 
-void NmWifi::refresh() {
-    for (WifiNetwork* n : nets) {
+void NmWifi::resetScratch() {
+    curDevice.reset();
+    curState = 0;
+    curActive.reset();
+
+    for (WifiNetwork* n : netBuild) {
         netAlloc.release(n);
     }
 
-    nets.clear();
+    netBuild.clear();
 
-    if (!findWifiDevice()) {
-        st = WifiState::unavailable;
-        notify();
+    for (Known* k : knownBuild) {
+        knownAlloc.release(k);
+    }
+
+    knownBuild.clear();
+    devPending = 0;
+    knownPending = 0;
+    apPending = 0;
+}
+
+void NmWifi::refresh() {
+    if (inFlight) {
+        again = true;
 
         return;
     }
 
-    u32 devState = propU32(sv(devicePath), kDev, "State");
+    inFlight = true;
+    resetScratch();
 
-    st = WifiState::disconnected;
-
-    if (devState >= kStateActivated) {
-        st = WifiState::connected;
-    } else if (devState >= kStateConfig && devState <= kStateNeedAuth) {
-        st = WifiState::connecting;
+    // step 1: the device list
+    if (!getProp(StringView(kNmPath), kNm, "Devices", devicesCb, this)) {
+        finishSeq();
     }
+}
 
-    loadKnown();
+void NmWifi::devicesReply(DBusMessage* reply) {
+    Vector<StringBuilder*> paths; // transient; freed below
+    ObjList<StringBuilder> hold(c->pool);
 
-    StringBuilder active;
+    DBusMessageIter it, var, arr;
 
-    if (DBusMessage* r = propGet(sv(devicePath), kWireless, "ActiveAccessPoint")) {
-        DBusMessageIter it, var;
-
-        dbus_message_iter_init(r, &it);
-        dbus_message_iter_recurse(&it, &var);
-        active << iterStr(&var);
-        dbus_message_unref(r);
-    }
-
-    if (DBusMessage* r = propGet(sv(devicePath), kWireless, "AccessPoints")) {
-        DBusMessageIter it, var, arr;
-
-        dbus_message_iter_init(r, &it);
+    if (reply && dbus_message_iter_init(reply, &it)) {
         dbus_message_iter_recurse(&it, &var);
 
         if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                addAccessPoint(iterStr(&arr), sv(active));
+                StringBuilder* p = hold.make();
+
+                p->reset();
+                *p << iterStr(&arr);
+                paths.pushBack(p);
                 dbus_message_iter_next(&arr);
             }
         }
-
-        dbus_message_unref(r);
     }
 
+    if (paths.empty()) {
+        onDevicesDone();
+
+        return;
+    }
+
+    devPending = (int)paths.length();
+
+    for (StringBuilder* p : paths) {
+        Ctx* cx = new Ctx();
+
+        cx->w = this;
+        cx->path << sv(*p);
+
+        if (!getAll(sv(*p), kDev, deviceCb, cx)) {
+            delete cx;
+            deviceItemDone();
+        }
+    }
+
+    for (StringBuilder* p : paths) {
+        hold.release(p);
+    }
+}
+
+void NmWifi::deviceReply(Ctx* cx, DBusMessage* reply) {
+    u32 type = 0, state = 0;
+
+    eachProp(reply, [&](StringView key, DBusMessageIter* var) {
+        if (key == "DeviceType"_sv) {
+            type = readU32(var);
+        } else if (key == "State"_sv) {
+            state = readU32(var);
+        }
+    });
+
+    // first wifi device wins
+    if (type == kDeviceWifi && curDevice.empty()) {
+        curDevice << sv(cx->path);
+        curState = state;
+    }
+
+    deviceItemDone();
+}
+
+void NmWifi::deviceItemDone() {
+    if (--devPending <= 0) {
+        onDevicesDone();
+    }
+}
+
+void NmWifi::onDevicesDone() {
+    if (curDevice.empty()) {
+        st = WifiState::unavailable;
+
+        // commit an empty list
+        for (WifiNetwork* n : nets) {
+            netAlloc.release(n);
+        }
+
+        nets.clear();
+        notify();
+        finishSeq();
+
+        return;
+    }
+
+    st = WifiState::disconnected;
+
+    if (curState >= kStateActivated) {
+        st = WifiState::connected;
+    } else if (curState >= kStateConfig && curState <= kStateNeedAuth) {
+        st = WifiState::connecting;
+    }
+
+    // step 2: known connections
+    if (!getProp(StringView(kSettingsPath), kSettings, "Connections", connectionsCb, this)) {
+        onKnownDone();
+    }
+}
+
+void NmWifi::connectionsReply(DBusMessage* reply) {
+    ObjList<StringBuilder> hold(c->pool);
+    Vector<StringBuilder*> paths;
+
+    DBusMessageIter it, var, arr;
+
+    if (reply && dbus_message_iter_init(reply, &it)) {
+        dbus_message_iter_recurse(&it, &var);
+
+        if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
+            dbus_message_iter_recurse(&var, &arr);
+
+            while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
+                StringBuilder* p = hold.make();
+
+                p->reset();
+                *p << iterStr(&arr);
+                paths.pushBack(p);
+                dbus_message_iter_next(&arr);
+            }
+        }
+    }
+
+    if (paths.empty()) {
+        onKnownDone();
+
+        return;
+    }
+
+    knownPending = (int)paths.length();
+
+    for (StringBuilder* p : paths) {
+        Ctx* cx = new Ctx();
+
+        cx->w = this;
+        cx->path << sv(*p);
+
+        Buffer pb(sv(*p));
+        DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
+
+        if (!call(msg, connectionCb, cx)) {
+            delete cx;
+            knownItemDone();
+        }
+    }
+
+    for (StringBuilder* p : paths) {
+        hold.release(p);
+    }
+}
+
+void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
+    // a{sa{sv}}: 802-11-wireless -> ssid (ay)
+    DBusMessageIter it, outer;
+
+    if (reply && dbus_message_iter_init(reply, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_ARRAY) {
+        dbus_message_iter_recurse(&it, &outer);
+
+        while (dbus_message_iter_get_arg_type(&outer) == DBUS_TYPE_DICT_ENTRY) {
+            DBusMessageIter grp;
+
+            dbus_message_iter_recurse(&outer, &grp);
+
+            const char* gname = "";
+
+            dbus_message_iter_get_basic(&grp, &gname);
+            dbus_message_iter_next(&grp);
+
+            if (StringView(gname) == "802-11-wireless"_sv) {
+                DBusMessageIter props;
+
+                dbus_message_iter_recurse(&grp, &props);
+
+                while (dbus_message_iter_get_arg_type(&props) == DBUS_TYPE_DICT_ENTRY) {
+                    DBusMessageIter kv;
+
+                    dbus_message_iter_recurse(&props, &kv);
+
+                    const char* key = "";
+
+                    dbus_message_iter_get_basic(&kv, &key);
+                    dbus_message_iter_next(&kv);
+
+                    if (StringView(key) == "ssid"_sv) {
+                        DBusMessageIter var;
+
+                        dbus_message_iter_recurse(&kv, &var);
+
+                        Known* k = knownAlloc.make();
+
+                        readSsid(&var, k->ssid);
+                        k->path.reset();
+                        k->path << sv(cx->path);
+
+                        if (k->ssid.empty()) {
+                            knownAlloc.release(k);
+                        } else {
+                            knownBuild.pushBack(k);
+                        }
+                    }
+
+                    dbus_message_iter_next(&props);
+                }
+            }
+
+            dbus_message_iter_next(&outer);
+        }
+    }
+
+    knownItemDone();
+}
+
+void NmWifi::knownItemDone() {
+    if (--knownPending <= 0) {
+        onKnownDone();
+    }
+}
+
+void NmWifi::onKnownDone() {
+    // step 3: the wireless device's access points
+    if (!getAll(sv(curDevice), kWireless, wirelessCb, this)) {
+        onApsDone();
+    }
+}
+
+void NmWifi::wirelessReply(DBusMessage* reply) {
+    ObjList<StringBuilder> hold(c->pool);
+    Vector<StringBuilder*> aps;
+
+    eachProp(reply, [&](StringView key, DBusMessageIter* var) {
+        if (key == "ActiveAccessPoint"_sv) {
+            curActive.reset();
+            curActive << iterStr(var);
+        } else if (key == "AccessPoints"_sv && dbus_message_iter_get_arg_type(var) == DBUS_TYPE_ARRAY) {
+            DBusMessageIter arr;
+
+            dbus_message_iter_recurse(var, &arr);
+
+            while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
+                StringBuilder* p = hold.make();
+
+                p->reset();
+                *p << iterStr(&arr);
+                aps.pushBack(p);
+                dbus_message_iter_next(&arr);
+            }
+        }
+    });
+
+    if (aps.empty()) {
+        onApsDone();
+
+        return;
+    }
+
+    apPending = (int)aps.length();
+
+    for (StringBuilder* p : aps) {
+        Ctx* cx = new Ctx();
+
+        cx->w = this;
+        cx->path << sv(*p);
+
+        if (!getAll(sv(*p), kAp, apCb, cx)) {
+            delete cx;
+            apItemDone();
+        }
+    }
+
+    for (StringBuilder* p : aps) {
+        hold.release(p);
+    }
+}
+
+void NmWifi::apReply(Ctx* cx, DBusMessage* reply) {
+    StringBuilder ssid;
+    u32 strength = 0, wpa = 0, rsn = 0;
+
+    eachProp(reply, [&](StringView key, DBusMessageIter* var) {
+        if (key == "Ssid"_sv) {
+            readSsid(var, ssid);
+        } else if (key == "Strength"_sv) {
+            strength = readU32(var);
+        } else if (key == "WpaFlags"_sv) {
+            wpa = readU32(var);
+        } else if (key == "RsnFlags"_sv) {
+            rsn = readU32(var);
+        }
+    });
+
+    if (!ssid.empty()) {
+        WifiNetwork* n = netAlloc.make();
+
+        n->name.reset();
+        n->name << sv(ssid);
+        n->path.reset();
+        n->path << sv(cx->path);
+        n->type.reset();
+        n->type << ((wpa || rsn) ? "psk"_sv : "open"_sv);
+        n->strength = (i16)strength; // NM reports 0..100
+        n->connected = sv(cx->path) == sv(curActive);
+        n->known = knownBuilt(sv(ssid)) != nullptr;
+        netBuild.pushBack(n);
+    }
+
+    apItemDone();
+}
+
+void NmWifi::apItemDone() {
+    if (--apPending <= 0) {
+        onApsDone();
+    }
+}
+
+void NmWifi::onApsDone() {
+    // commit the freshly built lists, then notify
+    for (WifiNetwork* n : nets) {
+        netAlloc.release(n);
+    }
+
+    nets.clear();
+
+    for (WifiNetwork* n : netBuild) {
+        nets.pushBack(n);
+    }
+
+    netBuild.clear();
+
+    for (Known* k : known) {
+        knownAlloc.release(k);
+    }
+
+    known.clear();
+
+    for (Known* k : knownBuild) {
+        known.pushBack(k);
+    }
+
+    knownBuild.clear();
     notify();
+    finishSeq();
+}
+
+void NmWifi::finishSeq() {
+    inFlight = false;
+
+    if (again) {
+        again = false;
+        refresh();
+    }
 }
 
 void NmWifi::scan() {
-    Buffer db(sv(devicePath));
+    if (curDevice.empty()) {
+        return;
+    }
+
+    Buffer db(sv(curDevice));
     DBusMessage* msg = dbus_message_new_method_call(kNm, db.cStr(), kWireless, "RequestScan");
     DBusMessageIter it, arr;
 
@@ -480,7 +725,7 @@ void NmWifi::activate(StringView apPath) {
     Known* k = n ? knownForSsid(sv(n->name)) : nullptr;
 
     Buffer connBuf(k ? sv(k->path) : "/"_sv);
-    Buffer devBuf(sv(devicePath));
+    Buffer devBuf(sv(curDevice));
     Buffer apBuf(apPath);
     const char* conn_o = connBuf.cStr();
     const char* dev_o = devBuf.cStr();
@@ -514,7 +759,6 @@ void NmWifi::addAndActivate(StringView apPath, StringView ssid, StringView psk) 
     Buffer ssidBuf(ssid);
     Buffer pskBuf(psk);
 
-    // "connection": { id, type }
     {
         const char* g = "connection";
 
@@ -527,7 +771,6 @@ void NmWifi::addAndActivate(StringView apPath, StringView ssid, StringView psk) 
         dbus_message_iter_close_container(&settings, &grp);
     }
 
-    // "802-11-wireless": { ssid: ay }
     {
         const char* g = "802-11-wireless";
 
@@ -554,7 +797,6 @@ void NmWifi::addAndActivate(StringView apPath, StringView ssid, StringView psk) 
         dbus_message_iter_close_container(&settings, &grp);
     }
 
-    // "802-11-wireless-security": { key-mgmt, psk } when there is a secret
     if (!psk.empty()) {
         const char* g = "802-11-wireless-security";
 
@@ -569,7 +811,7 @@ void NmWifi::addAndActivate(StringView apPath, StringView ssid, StringView psk) 
 
     dbus_message_iter_close_container(&it, &settings);
 
-    Buffer devBuf(sv(devicePath));
+    Buffer devBuf(sv(curDevice));
     Buffer apBuf(apPath);
     const char* dev_o = devBuf.cStr();
     const char* ap_o = apBuf.cStr();
@@ -587,8 +829,6 @@ void NmWifi::connect(StringView path) {
         return;
     }
 
-    // known or open networks activate straight away; a secured unknown one
-    // needs the passphrase gathered up front (NM takes it in the settings)
     if (n->known || n->type == "open"_sv) {
         activate(path);
 
@@ -604,7 +844,11 @@ void NmWifi::connect(StringView path) {
 }
 
 void NmWifi::disconnect() {
-    Buffer db(sv(devicePath));
+    if (curDevice.empty()) {
+        return;
+    }
+
+    Buffer db(sv(curDevice));
     DBusMessage* msg = dbus_message_new_method_call(kNm, db.cStr(), kDev, "Disconnect");
 
     dbus_connection_send(conn, msg, nullptr);
@@ -612,8 +856,7 @@ void NmWifi::disconnect() {
 }
 
 void NmWifi::forget(StringView) {
-    // deleting the saved connection needs its object path; the v1 ui offers
-    // no forget button, so this stays a no-op
+    // the v1 ui offers no forget button
 }
 
 bool NmWifi::passphraseWanted() {
@@ -644,6 +887,93 @@ void NmWifi::cancelPassphrase() {
 }
 
 namespace {
+    DBusMessage* steal(DBusPendingCall* pc) {
+        DBusMessage* reply = dbus_pending_call_steal_reply(pc);
+
+        dbus_pending_call_unref(pc);
+
+        // an error reply is not a value reply; treat as empty
+        if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+            dbus_message_unref(reply);
+
+            return nullptr;
+        }
+
+        return reply;
+    }
+
+    void devicesCb(DBusPendingCall* pc, void* data) {
+        auto* w = (NmWifi*)data;
+        DBusMessage* reply = steal(pc);
+
+        w->devicesReply(reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+    }
+
+    void deviceCb(DBusPendingCall* pc, void* data) {
+        auto* cx = (Ctx*)data;
+        DBusMessage* reply = steal(pc);
+
+        cx->w->deviceReply(cx, reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+
+        delete cx;
+    }
+
+    void connectionsCb(DBusPendingCall* pc, void* data) {
+        auto* w = (NmWifi*)data;
+        DBusMessage* reply = steal(pc);
+
+        w->connectionsReply(reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+    }
+
+    void connectionCb(DBusPendingCall* pc, void* data) {
+        auto* cx = (Ctx*)data;
+        DBusMessage* reply = steal(pc);
+
+        cx->w->connectionReply(cx, reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+
+        delete cx;
+    }
+
+    void wirelessCb(DBusPendingCall* pc, void* data) {
+        auto* w = (NmWifi*)data;
+        DBusMessage* reply = steal(pc);
+
+        w->wirelessReply(reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+    }
+
+    void apCb(DBusPendingCall* pc, void* data) {
+        auto* cx = (Ctx*)data;
+        DBusMessage* reply = steal(pc);
+
+        cx->w->apReply(cx, reply);
+
+        if (reply) {
+            dbus_message_unref(reply);
+        }
+
+        delete cx;
+    }
+
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data) {
         auto* w = (NmWifi*)data;
 
