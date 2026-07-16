@@ -26,7 +26,11 @@
 #include <xf86drmMode.h>
 
 #include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
 #include <std/ios/sys.h>
+#include <std/sys/fs.h>
+#include <std/sys/fd.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
@@ -691,6 +695,10 @@ namespace {
         u32 plSrcX = 0, plSrcY = 0, plSrcW = 0, plSrcH = 0;
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
+        // sysfs backlight of the internal panel; empty path = none
+        StringBuilder blPath;
+        long blMax = 0;
+
         double hdrNits = 0;
         bool hdrActive = false;
         u32 connColorspace = 0, connHdrMeta = 0;
@@ -750,6 +758,11 @@ namespace {
         void setCursorImage(const u32* argb) override;
         void setCursorPos(int x, int y, bool visible) override;
         void setPowerSave(bool on) override;
+
+        void initBacklight();
+        bool hasBrightness() const override;
+        float brightness() const override;
+        void setBrightness(float v) override;
         void setupVt();
         void restoreVt() noexcept;
 
@@ -823,6 +836,10 @@ namespace {
         void setCursorImage(const u32*) override;
         void setCursorPos(int, int, bool) override;
         void setPowerSave(bool) override;
+
+        bool hasBrightness() const override;
+        float brightness() const override;
+        void setBrightness(float) override;
         double sdrWhiteNits() const override;
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
@@ -1176,6 +1193,7 @@ KmsOutput::KmsOutput(int drmFd, const DeviceVk& v, Session& session, StringView 
         }
     }
 
+    initBacklight();
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
 }
 
@@ -1770,6 +1788,133 @@ void KmsOutput::setCursorPos(int x, int y, bool visible) {
     cursorVisible = visible;
 }
 
+void KmsOutput::initBacklight() {
+    drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
+
+    if (!conn) {
+        return;
+    }
+
+    bool internal = conn->connector_type == DRM_MODE_CONNECTOR_eDP || conn->connector_type == DRM_MODE_CONNECTOR_LVDS || conn->connector_type == DRM_MODE_CONNECTOR_DSI;
+
+    drmModeFreeConnector(conn);
+
+    if (!internal) {
+        return;
+    }
+
+    // firmware > platform > raw, per kernel docs
+    int best = 0;
+
+    try {
+        listDir("/sys/class/backlight"_sv, [this, &best](const TPathInfo& e) {
+            StringBuilder p;
+
+            p << "/sys/class/backlight/"_sv << e.item << "/type"_sv;
+
+            Buffer t;
+
+            try {
+                readFileContent(p, t);
+            } catch (...) {
+                return;
+            }
+
+            StringView tv = sv(t).stripCr();
+            int score = tv.startsWith("firmware"_sv) ? 3 : tv.startsWith("platform"_sv) ? 2 : 1;
+
+            if (score > best) {
+                best = score;
+                blPath.reset();
+                blPath << "/sys/class/backlight/"_sv << e.item;
+            }
+        });
+    } catch (...) {
+        return;
+    }
+
+    if (blPath.empty()) {
+        return;
+    }
+
+    auto& p = sb();
+
+    p << sv(blPath) << "/max_brightness"_sv;
+
+    Buffer m;
+
+    try {
+        readFileContent(p, m);
+    } catch (...) {
+        blPath.reset();
+
+        return;
+    }
+
+    blMax = (long)sv(m).stou();
+
+    if (blMax <= 0) {
+        blPath.reset();
+
+        return;
+    }
+
+    sysO << "imway: backlight "_sv << sv(blPath) << ", max "_sv << blMax << endL;
+}
+
+bool KmsOutput::hasBrightness() const {
+    return !blPath.empty();
+}
+
+float KmsOutput::brightness() const {
+    if (blPath.empty()) {
+        return 0.f;
+    }
+
+    auto& p = sb();
+
+    p << sv(blPath) << "/brightness"_sv;
+
+    Buffer b;
+
+    try {
+        readFileContent(p, b);
+    } catch (...) {
+        return 0.f;
+    }
+
+    return (float)sv(b).stou() / (float)blMax;
+}
+
+void KmsOutput::setBrightness(float v) {
+    if (blPath.empty()) {
+        return;
+    }
+
+    v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
+
+    // floor at one raw step: zero on an edp panel means a black screen and
+    // a lost user
+    long raw = lroundf(v * (float)blMax);
+
+    raw = raw < 1 ? 1 : raw > blMax ? blMax : raw;
+
+    auto& p = sb();
+
+    p << sv(blPath) << "/brightness"_sv;
+
+    ScopedFD f(open(p.cStr(), O_WRONLY | O_CLOEXEC));
+
+    if (f.get() < 0) {
+        return;
+    }
+
+    auto& val = sb();
+
+    val << raw;
+    FDRegular(f).write(val.data(), val.used());
+}
+
 void KmsOutput::setPowerSave(bool on) {
     if (!modesetDone || !sessionActive || on == powered) {
         return;
@@ -1960,6 +2105,17 @@ void HeadlessOutput::setCursorImage(const u32*) {
 }
 
 void HeadlessOutput::setCursorPos(int, int, bool) {
+}
+
+bool HeadlessOutput::hasBrightness() const {
+    return false;
+}
+
+float HeadlessOutput::brightness() const {
+    return 0.f;
+}
+
+void HeadlessOutput::setBrightness(float) {
 }
 
 void HeadlessOutput::setPowerSave(bool) {

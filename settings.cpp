@@ -5,6 +5,7 @@
 void drawSettingsMenu(Settings& s) {
     s.volumeChanged = false;
     s.muteChanged = false;
+    s.brightnessChanged = false;
     s.scaleChanged = false;
     s.sdrChanged = false;
     s.nightChanged = false;
@@ -36,6 +37,17 @@ void drawSettingsMenu(Settings& s) {
         if (ImGui::SliderFloat("volume", &pct, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
             s.volume = pct / 100.f;
             s.volumeChanged = true;
+        }
+    }
+
+    if (s.brightness >= 0.f) {
+        float pct = s.brightness * 100.f;
+
+        ImGui::SetNextItemWidth(180.f * s.uiScale);
+
+        if (ImGui::SliderFloat("brightness", &pct, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+            s.brightness = pct / 100.f;
+            s.brightnessChanged = true;
         }
     }
 

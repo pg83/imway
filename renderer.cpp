@@ -172,6 +172,7 @@ namespace {
 
         // osd: armed by mixer/backlight changes, fades at the tail
         u64 osdMs = 0;
+        int osdKind = 0; // 1 volume, 2 brightness
 
         // inspector (Super+F12): opaque dialog handle owned here, state
         // lives in the widget; non-null = open
@@ -631,6 +632,17 @@ void RendererImpl::key(u32 code, bool pressed) {
 
     // media keys are compositor-global regardless of focus or capture;
     // releases fall through — the slave drops unmatched ones
+    if (pressed && output->hasBrightness() && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
+        float d = code == KEY_BRIGHTNESSUP ? 0.05f : -0.05f;
+
+        output->setBrightness(output->brightness() + d);
+        osdMs = nowMsec() + 1500;
+        osdKind = 2;
+        scene->needsFrame = true;
+
+        return;
+    }
+
     if (pressed && comp->mixer) {
         Mixer* mx = comp->mixer;
 
@@ -731,6 +743,7 @@ void RendererImpl::key(u32 code, bool pressed) {
 void RendererImpl::volumeChanged() {
     if (!settings.open) {
         osdMs = nowMsec() + 1500;
+        osdKind = 1;
     }
 
     scene->needsFrame = true;
@@ -2131,6 +2144,8 @@ void RendererImpl::buildUi(Scene& scene) {
             settings.volume = -1.f;
         }
 
+        settings.brightness = output->hasBrightness() ? output->brightness() : -1.f;
+
         drawSettingsMenu(settings);
 
         if (settings.volumeChanged && comp->mixer) {
@@ -2139,6 +2154,10 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (settings.muteChanged && comp->mixer) {
             comp->mixer->setMuted(settings.volMuted);
+        }
+
+        if (settings.brightnessChanged) {
+            output->setBrightness(settings.brightness);
         }
 
         if (settings.scaleChanged) {
@@ -2230,15 +2249,21 @@ void RendererImpl::buildUi(Scene& scene) {
         drawToasts(*notes, *icons, *this, width, uiScale);
     }
 
-    if (osdMs && comp->mixer) {
+    if (osdMs) {
         u64 now = nowMsec();
 
         if (now >= osdMs) {
             osdMs = 0;
         } else {
             float rem = (float)(osdMs - now) / 1000.f;
+            float alpha = rem > 0.3f ? 1.f : rem / 0.3f;
 
-            drawOsd(width, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), rem > 0.3f ? 1.f : rem / 0.3f);
+            if (osdKind == 1 && comp->mixer) {
+                drawOsd(width, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
+            } else if (osdKind == 2) {
+                drawOsd(width, uiScale, "brightness"_sv, output->brightness(), false, alpha);
+            }
+
             scene.needsFrame = true;
         }
     }

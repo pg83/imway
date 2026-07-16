@@ -8,6 +8,7 @@ struct Settings {
     float uiScale = 1.f;   // in: the current scale, sizes the menu items
     float volume = -1.f;   // 0..1; < 0 = no mixer, the row is hidden
     bool volMuted = false;
+    float brightness = -1.f; // 0..1 panel backlight; < 0 = none, row hidden
     float scaleEdit = 0.f; // slider-side scale value, 0 = seed from uiScale
     float scale = 0.f;     // committed scale, lands on slider release only —
                            // applying mid-drag would rescale the slider
@@ -20,12 +21,13 @@ struct Settings {
 
     bool volumeChanged = false;
     bool muteChanged = false;
+    bool brightnessChanged = false;
     bool scaleChanged = false;
     bool sdrChanged = false;
     bool nightChanged = false;
 
     bool changed() const {
-        return volumeChanged || muteChanged || scaleChanged || sdrChanged || nightChanged;
+        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged;
     }
 };
 

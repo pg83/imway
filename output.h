@@ -19,6 +19,13 @@ struct Output {
     // false turns the display off (DPMS), true brings it back
     virtual void setPowerSave(bool on) = 0;
 
+    // physical panel brightness 0..1 — the sysfs backlight matched to the
+    // connector. multiplies everything including hdr, unlike the sdr-white
+    // knob which rescales the signal; absent on outputs without a panel
+    virtual bool hasBrightness() const = 0;
+    virtual float brightness() const = 0;
+    virtual void setBrightness(float v) = 0;
+
     // macOS-style "sdr white": brightness of SDR 1.0 on the HDR pipeline in
     // nits, 0 means the hdr path is off; setting takes effect on the next
     // frame commit via a GAMMA_LUT rebuild
