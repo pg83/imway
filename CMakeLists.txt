@@ -16,6 +16,8 @@ pkg_check_modules(UDEV           REQUIRED IMPORTED_TARGET libudev)
 pkg_check_modules(XKB            REQUIRED IMPORTED_TARGET xkbcommon)
 pkg_check_modules(SEAT           REQUIRED IMPORTED_TARGET libseat)
 pkg_check_modules(DBUS           REQUIRED IMPORTED_TARGET dbus-1)
+pkg_check_modules(GLFW           REQUIRED IMPORTED_TARGET glfw3)
+pkg_check_modules(PNG            REQUIRED IMPORTED_TARGET libpng)
 
 # optional mixer backends: each source self-gates on __has_include, so we
 # only expose the header (for the gate) and the lib (for linking) when it is
@@ -224,9 +226,13 @@ add_library(imgui STATIC
     third_party/imgui/imgui_draw.cpp
     third_party/imgui/imgui_tables.cpp
     third_party/imgui/imgui_widgets.cpp
-    third_party/imgui/imgui_impl_vulkan.cpp)
+    third_party/imgui/imgui_impl_vulkan.cpp
+    third_party/imgui/imgui_impl_glfw.cpp)
 target_include_directories(imgui PUBLIC third_party/imgui)
-target_link_libraries(imgui PUBLIC Vulkan::Vulkan)
+# GLFW_INCLUDE_NONE keeps glfw3.h from pulling GL/X11 headers (we build glfw
+# wayland+vulkan-only); it propagates to imway so main_screenshot.cpp sees it
+target_compile_definitions(imgui PUBLIC GLFW_INCLUDE_NONE)
+target_link_libraries(imgui PUBLIC Vulkan::Vulkan PkgConfig::GLFW)
 
 # ---- compositor ----
 add_executable(imway
@@ -283,6 +289,8 @@ target_link_libraries(imway PRIVATE
     PkgConfig::XKB
     PkgConfig::SEAT
     PkgConfig::DBUS
+    PkgConfig::GLFW
+    PkgConfig::PNG
     ev::ev
 )
 

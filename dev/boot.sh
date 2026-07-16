@@ -15,8 +15,8 @@ PROTO_XML_DIR=${WL_PROTOCOL_DIR:-/usr/share/wayland-protocols}
 JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
-CXXFLAGS="-std=c++23 -O2 -g -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
-LIBS="-ldbus-1 -lwayland-server -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
+CXXFLAGS="-std=c++23 -O2 -g -DGLFW_INCLUDE_NONE -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
+LIBS="-ldbus-1 -lwayland-server -lpng -lglfw3 -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
 # the mixer providers compile to nullptr stubs without their headers
 # (__has_include gate); each real path pulls symbols and needs its lib, so
@@ -67,6 +67,7 @@ third_party/imgui/imgui_draw.cpp
 third_party/imgui/imgui_tables.cpp
 third_party/imgui/imgui_widgets.cpp
 third_party/imgui/imgui_impl_vulkan.cpp
+third_party/imgui/imgui_impl_glfw.cpp
 "
 
 IMWAY_SRC="
