@@ -238,15 +238,15 @@ namespace {
     }
 }
 
-DBusConn* DBusConn::create(ObjPool* pool, struct ev_loop* loop) {
+DBusConn* DBusConn::create(ObjPool* pool, struct ev_loop* loop, bool system) {
     DBusError err;
 
     dbus_error_init(&err);
 
-    DBusConnection* conn = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
+    DBusConnection* conn = dbus_bus_get_private(system ? DBUS_BUS_SYSTEM : DBUS_BUS_SESSION, &err);
 
     if (!conn) {
-        sysE << "imway: no session bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
+        sysE << "imway: no "_sv << (system ? "system"_sv : "session"_sv) << " bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
         dbus_error_free(&err);
 
         return nullptr;

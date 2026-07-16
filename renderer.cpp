@@ -16,6 +16,8 @@
 #include "notifications.h"
 #include "osd.h"
 #include "settings.h"
+#include "wifi.h"
+#include "wifi_ui.h"
 #include "output.h"
 #include "scene.h"
 #include "shadow.h"
@@ -83,7 +85,7 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener, public WifiListener {
         InputSink* sink() override;
 
 
@@ -174,6 +176,10 @@ namespace {
         u64 osdMs = 0;
         int osdKind = 0; // 1 volume, 2 brightness
 
+        // wifi picker: opaque dialog handle owned here
+        void* wifiState = nullptr;
+        bool wifiToggle = false;
+
         // inspector (Super+F12): opaque dialog handle owned here, state
         // lives in the widget; non-null = open
         void* inspectorState = nullptr;
@@ -259,6 +265,7 @@ namespace {
         void buildUi(Scene& scene);
         void sampleStats();
         void volumeChanged() override;
+        void wifiChanged() override;
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
@@ -360,6 +367,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.mixerListeners.pushBack(this);
+    comp.wifiListeners.pushBack(this);
     setup(scene->outW, scene->outH);
 
     // before any input arrives the cursor sits at the screen center
@@ -738,6 +746,10 @@ void RendererImpl::key(u32 code, bool pressed) {
     }
 
     next->modsChanged();
+}
+
+void RendererImpl::wifiChanged() {
+    scene->needsFrame = true;
 }
 
 void RendererImpl::volumeChanged() {
@@ -2081,6 +2093,18 @@ static void spawnClient(StringView cmd, StringView sock) {
     }
 }
 
+static StringView wifiGlyph(WifiState s) {
+    switch (s) {
+        case WifiState::connected: return "wifi"_sv;
+        case WifiState::connecting: return "wifi..."_sv;
+        case WifiState::scanning: return "wifi.."_sv;
+        case WifiState::disconnected: return "wifi off"_sv;
+        case WifiState::unavailable: return "no wifi"_sv;
+    }
+
+    return "wifi"_sv;
+}
+
 void RendererImpl::buildUi(Scene& scene) {
     ImGuiIO& io = ImGui::GetIO();
 
@@ -2239,11 +2263,30 @@ void RendererImpl::buildUi(Scene& scene) {
 
         ImGui::SameLine(xs);
         ImGui::TextUnformatted(stat.cStr());
+
+        if (comp->wifi) {
+            StringView wl = wifiGlyph(comp->wifi->state());
+            float ww = ImGui::CalcTextSize((const char*)wl.begin(), (const char*)wl.end()).x;
+            float xw = xs - ww - st.ItemSpacing.x * 2;
+
+            ImGui::SameLine(xw);
+            ImGui::TextUnformatted((const char*)wl.begin(), (const char*)wl.end());
+
+            if (ImGui::IsItemClicked()) {
+                wifiToggle = true;
+            }
+        }
+
         ImGui::EndMainMenuBar();
     }
 
     drawCalendar(width, calendarToggle, &calendarState);
     calendarToggle = false;
+
+    if (comp->wifi) {
+        drawWifi(*comp->wifi, width, uiScale, wifiToggle, &wifiState);
+        wifiToggle = false;
+    }
 
     if (notes) {
         drawToasts(*notes, *icons, *this, width, uiScale);

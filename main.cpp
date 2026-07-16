@@ -7,6 +7,7 @@
 #include "input_sink.h"
 #include "keyboard.h"
 #include "mixer.h"
+#include "wifi.h"
 #include "output.h"
 #include "icon_pool.h"
 #include "icon_store.h"
@@ -195,13 +196,16 @@ int main(int argc, char** argv) {
 
         // notifications ride the session bus; no bus = no toasts, the
         // desktop works on regardless
-        c.bus = DBusConn::create(pool.mutPtr(), loop);
+        c.bus = DBusConn::create(pool.mutPtr(), loop, false);
 
         if (c.bus) {
             c.notes = Notifications::create(c);
         }
 
         c.mixer = Mixer::createSndio(c);
+
+        c.sysbus = DBusConn::create(pool.mutPtr(), loop, true);
+        c.wifi = c.sysbus ? Wifi::createIwd(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);
 

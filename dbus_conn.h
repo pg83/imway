@@ -21,7 +21,7 @@ struct DBusConn {
     // the daemon inherited at its start
     virtual void setActivationEnv(stl::StringView key, stl::StringView value) = 0;
 
-    // nullptr when the session bus is unreachable; the desktop just runs
-    // without dbus services then
-    static DBusConn* create(stl::ObjPool* pool, struct ev_loop* loop);
+    // nullptr when the bus is unreachable; the desktop just runs without
+    // the services that ride it
+    static DBusConn* create(stl::ObjPool* pool, struct ev_loop* loop, bool system);
 };

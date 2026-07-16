@@ -75,6 +75,8 @@ dbus_conn.cpp
 notifications.cpp
 mixer.cpp
 osd.cpp
+wifi.cpp
+wifi_ui.cpp
 icon_store.cpp
 icon_pool.cpp
 icon.cpp

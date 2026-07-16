@@ -11,6 +11,8 @@ struct ev_loop;
 struct DBusConn;
 struct IconPool;
 struct MixerListener;
+struct Wifi;
+struct WifiListener;
 struct IconStore;
 struct IconStoreListener;
 struct Keyboard;
@@ -43,10 +45,13 @@ struct Composer {
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
     Mixer* mixer = nullptr;
+    DBusConn* sysbus = nullptr;
+    Wifi* wifi = nullptr;
 
     // listener slots: interfaces stay narrow, the slots solve the creation
     // order — the producer walks the vector at event time, subscribers
     // pushBack whenever they come up
     stl::Vector<IconStoreListener*> iconListeners;
     stl::Vector<MixerListener*> mixerListeners;
+    stl::Vector<WifiListener*> wifiListeners;
 };
