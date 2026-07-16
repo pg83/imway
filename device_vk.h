@@ -2,7 +2,6 @@
 
 #include <vulkan/vulkan.h>
 
-#include <std/dbg/verify.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
@@ -15,10 +14,6 @@ inline constexpr u32 kFourccArgb = 0x34325241;
 inline constexpr u32 kFourccXrgb = 0x34325258;
 
 struct DmabufFormat;
-
-namespace stl {
-    template <typename T> class Vector;
-}
 
 struct DeviceVk {
     int drmFd = -1;

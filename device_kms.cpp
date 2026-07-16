@@ -456,6 +456,16 @@ namespace {
         // link needs ~50ms between transactions and a slider drags faster
         struct ev_loop* loop = nullptr;
         int ddcFd = -1;
+
+        // imported drm framebuffers for direct-scanout client dmabufs,
+        // keyed by the DmabufBuffer pointer; freed when the buffer dies
+        struct DirectFb {
+            DmabufBuffer* buf = nullptr;
+            u32 fb = 0;
+            u32 handles[4] = {};
+            int nh = 0;
+        };
+        Vector<DirectFb> directFbs;
         long ddcMax = 0;
         int ddcCur = 0;
         int ddcPending = -1;
@@ -542,6 +552,9 @@ namespace {
         int acquire() override;
         void presentImage(int i) override;
         bool presentNeedsPixels() const override;
+        bool directScanout(DmabufBuffer*) override;
+        void dropScanoutFb(DmabufBuffer*) override;
+        u32 importDirectFb(DmabufBuffer* buf);
         void present(const void* pixels) override;
     };
 
@@ -915,6 +928,10 @@ KmsOutput::~KmsOutput() noexcept {
 
     if (ddcFd >= 0) {
         close(ddcFd);
+    }
+
+    while (!directFbs.empty()) {
+        dropScanoutFb(directFbs.back().buf);
     }
 
     if (modesetDone) {
@@ -1916,6 +1933,110 @@ void KmsOutput::sessionEnabled() {
 
 bool KmsOutput::presentNeedsPixels() const {
     return scanCount == 0;
+}
+
+// import a client dmabuf as a drm framebuffer, cached by pointer
+u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
+    for (const DirectFb& d : directFbs) {
+        if (d.buf == buf) {
+            return d.fb;
+        }
+    }
+
+    u32 handles[4] = {}, pitches[4] = {}, offs[4] = {};
+    u64 mods[4] = {};
+
+    for (int i = 0; i < buf->nplanes; i++) {
+        if (drmPrimeFDToHandle(fd, buf->fds[i], &handles[i]) != 0) {
+            // undo the handles taken so far
+            for (int j = 0; j < i; j++) {
+                drm_gem_close gc{};
+
+                gc.handle = handles[j];
+                drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+            }
+
+            return 0;
+        }
+
+        pitches[i] = buf->strides[i];
+        offs[i] = buf->offsets[i];
+        mods[i] = buf->modifier;
+    }
+
+    u32 fbId = 0;
+
+    if (drmModeAddFB2WithModifiers(fd, buf->width, buf->height, buf->format, handles, pitches, offs, mods, &fbId, DRM_MODE_FB_MODIFIERS) != 0) {
+        for (int i = 0; i < buf->nplanes; i++) {
+            drm_gem_close gc{};
+
+            gc.handle = handles[i];
+            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+        }
+
+        return 0;
+    }
+
+    DirectFb d;
+
+    d.buf = buf;
+    d.fb = fbId;
+    d.nh = buf->nplanes;
+
+    for (int i = 0; i < buf->nplanes; i++) {
+        d.handles[i] = handles[i];
+    }
+
+    directFbs.pushBack(d);
+
+    return fbId;
+}
+
+bool KmsOutput::directScanout(DmabufBuffer* buf) {
+    if (!started || flipPending || !sessionActive || !modesetDone || !buf) {
+        return false;
+    }
+
+    // only a buffer that already matches the mode goes straight to the plane
+    if (buf->width != mode.hdisplay || buf->height != mode.vdisplay) {
+        return false;
+    }
+
+    u32 fbId = importDirectFb(buf);
+
+    if (!fbId) {
+        return false;
+    }
+
+    if (commit(fbId, false)) {
+        // our own composition swapchain is now stale; the next non-direct
+        // frame re-acquires and modesets nothing, just flips back
+        return true;
+    }
+
+    return false;
+}
+
+void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
+    for (size_t i = 0; i < directFbs.length(); i++) {
+        if (directFbs[i].buf != buf) {
+            continue;
+        }
+
+        drmModeRmFB(fd, directFbs[i].fb);
+
+        for (int j = 0; j < directFbs[i].nh; j++) {
+            drm_gem_close gc{};
+
+            gc.handle = directFbs[i].handles[j];
+            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+        }
+
+        directFbs.mut(i) = directFbs.back();
+        directFbs.popBack();
+
+        return;
+    }
 }
 
 void KmsOutput::present(const void* pixels) {

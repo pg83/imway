@@ -79,6 +79,8 @@ namespace {
         void presentImage(int) override;
         bool presentNeedsPixels() const override;
         void present(const void*) override;
+        bool directScanout(DmabufBuffer*) override;
+        void dropScanoutFb(DmabufBuffer*) override;
     };
 
     struct HeadlessDevice: public Device {
@@ -267,4 +269,11 @@ Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float
 
 Device* DeviceHeadless::create(ObjPool* pool, struct ev_loop* loop) {
     return pool->make<HeadlessDevice>(pool, loop);
+}
+
+bool HeadlessOutput::directScanout(DmabufBuffer*) {
+    return false;
+}
+
+void HeadlessOutput::dropScanoutFb(DmabufBuffer*) {
 }

@@ -317,6 +317,7 @@ namespace {
         bool cacheContainsTex(const SurfaceTexture* tex) const;
         void releaseSurfaceTexture(Surface& s);
         void drainDead();
+        DmabufBuffer* scanoutCandidate();
 
         bool wantFrame() const;
 
@@ -1252,6 +1253,67 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
     destroyTexture(tex);
 }
 
+// a fullscreen client whose dmabuf can go straight to the plane, with no
+// compositor chrome that would need composition over it
+DmabufBuffer* RendererImpl::scanoutCandidate() {
+    if (!scene->popups.empty() || scene->dragIcon) {
+        return nullptr;
+    }
+
+    // any open compositor ui needs composition
+    if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || settings.open) {
+        return nullptr;
+    }
+
+    // an active toast must be composited to show
+    if (notifier) {
+        bool any = false;
+
+        notifier->active([&](Toast&) {
+            any = true;
+        });
+
+        if (any) {
+            return nullptr;
+        }
+    }
+
+    Toplevel* fs = nullptr;
+    int mapped = 0;
+
+    for (Toplevel* t : scene->toplevels) {
+        if (!t->mapped) {
+            continue;
+        }
+
+        mapped++;
+
+        if (t->fullscreen) {
+            fs = t;
+        }
+    }
+
+    if (!fs || mapped != 1) {
+        return nullptr;
+    }
+
+    Surface* s = fs->surface;
+
+    if (!s || !s->dmabuf || !s->hasContent) {
+        return nullptr;
+    }
+
+    if (!s->stackBelow.empty() || !s->stackAbove.empty()) {
+        return nullptr; // subsurfaces need composition
+    }
+
+    if (s->geomW() != scene->outW || s->geomH() != scene->outH) {
+        return nullptr;
+    }
+
+    return s->dmabuf;
+}
+
 void RendererImpl::drainDead() {
     while (!scene->orphanedTextures.empty()) {
         SurfaceTexture* t = scene->orphanedTextures.popBack();
@@ -1263,6 +1325,9 @@ void RendererImpl::drainDead() {
 
     while (!scene->deadDmabufs.empty()) {
         DmabufBuffer* b = scene->deadDmabufs.popBack();
+
+        output->dropScanoutFb(b);
+
         SurfaceTexture* tex = cacheFind(b);
 
         if (!tex) {
@@ -3280,14 +3345,19 @@ void RendererImpl::frameNow() {
         }
     }
 
-    int idx = output->scanoutCount() > 0 ? output->acquire() : -1;
+    DmabufBuffer* cand = scanoutCandidate();
+    bool direct = cand && output->directScanout(cand);
 
-    renderFrame(idx);
+    if (!direct) {
+        int idx = output->scanoutCount() > 0 ? output->acquire() : -1;
 
-    if (idx >= 0) {
-        output->presentImage(idx);
-    } else {
-        output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
+        renderFrame(idx);
+
+        if (idx >= 0) {
+            output->presentImage(idx);
+        } else {
+            output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
+        }
     }
 
     if (pickPending) {

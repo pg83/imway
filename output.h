@@ -3,6 +3,7 @@
 #include <std/sys/types.h>
 
 struct ScanoutBuffer;
+struct DmabufBuffer;
 
 struct Output {
     virtual int width() const = 0;
@@ -52,4 +53,11 @@ struct Output {
 
     virtual bool presentNeedsPixels() const = 0;
     virtual void present(const void* pixels) = 0;
+
+    // fullscreen bypass: scan a client dmabuf out directly on the primary
+    // plane, skipping composition; false when it cannot be imported or
+    // committed (wrong format, busy). dropScanoutFb releases the imported
+    // drm fb when the client buffer dies
+    virtual bool directScanout(DmabufBuffer* buf) = 0;
+    virtual void dropScanoutFb(DmabufBuffer* buf) = 0;
 };
