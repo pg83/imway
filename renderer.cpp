@@ -144,12 +144,10 @@ namespace {
         bool nightOn = false;      // night light toggle + temperature
         float nightK = 3400.f;
 
-        // bar widgets: /proc-fed cpu history, meminfo, battery; sampled at
-        // most once per ~2s, the clock timer keeps frames coming
+        // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
+        // once per ~2s, the clock timer keeps frames coming
         u64 statMs = 0;
         u64 cpuPrevBusy = 0, cpuPrevTotal = 0;
-        float cpuHist[96] = {};
-        int cpuIdx = 0;
         int cpuPct = 0;
         long memUsedMb = 0;
         long batPct = -1;          // -1 no battery
@@ -1879,8 +1877,6 @@ void RendererImpl::sampleStats() {
 
         cpuPrevBusy = busy;
         cpuPrevTotal = total;
-        cpuHist[cpuIdx] = (float)cpuPct;
-        cpuIdx = (cpuIdx + 1) % 96;
     }
 
     if (Buffer path("/proc/meminfo"_sv); !readSmallFile(path, content).empty()) {
@@ -2327,12 +2323,8 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         float sw = ImGui::CalcTextSize(stat.cStr()).x;
-        float plotW = 56.f * uiScale;
         float xs = xl - sw - st.ItemSpacing.x * 2;
-        float xp = xs - plotW - st.ItemSpacing.x;
 
-        ImGui::SameLine(xp);
-        ImGui::PlotLines("##cpu", cpuHist, 96, cpuIdx, nullptr, 0.f, 100.f, ImVec2(plotW, ImGui::GetFontSize()));
         ImGui::SameLine(xs);
         ImGui::TextUnformatted(stat.cStr());
         ImGui::EndMainMenuBar();
