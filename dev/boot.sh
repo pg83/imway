@@ -74,8 +74,10 @@ toast.cpp
 dbus_conn.cpp
 notifications.cpp
 mixer.cpp
+mixer_sndio.cpp
 osd.cpp
 wifi.cpp
+wifi_iwd.cpp
 wifi_ui.cpp
 icon_store.cpp
 icon_pool.cpp
@@ -85,6 +87,8 @@ input_sink.cpp
 xdg_utils.cpp
 session.cpp
 device.cpp
+device_kms.cpp
+device_headless.cpp
 util.cpp
 output.cpp
 frame_listener.cpp

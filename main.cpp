@@ -3,11 +3,13 @@
 #include "dbus_conn.h"
 #include "notifications.h"
 #include "device.h"
+#include "device_headless.h"
+#include "device_kms.h"
 #include "input.h"
 #include "input_sink.h"
 #include "keyboard.h"
-#include "mixer.h"
-#include "wifi.h"
+#include "mixer_sndio.h"
+#include "wifi_iwd.h"
 #include "output.h"
 #include "icon_pool.h"
 #include "icon_store.h"
@@ -113,7 +115,7 @@ int main(int argc, char** argv) {
 
             break;
         } else if (arg == "--list"_sv) {
-            Device::list();
+            DeviceKms::list();
 
             return 0;
         } else {
@@ -157,7 +159,7 @@ int main(int argc, char** argv) {
 
         c.session = session;
 
-        Device* device = kms ? Device::createKms(pool.mutPtr(), loop, *session, devicePath == "auto"_sv ? StringView{} : devicePath) : Device::createHeadless(pool.mutPtr(), loop);
+        Device* device = kms ? DeviceKms::create(pool.mutPtr(), loop, *session, devicePath == "auto"_sv ? StringView{} : devicePath) : DeviceHeadless::create(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(outputName, modeStr, hdrNits);
 
@@ -202,10 +204,10 @@ int main(int argc, char** argv) {
             c.notes = Notifications::create(c);
         }
 
-        c.mixer = Mixer::createSndio(c);
+        c.mixer = MixerSndio::create(c);
 
         c.sysbus = DBusConn::create(pool.mutPtr(), loop, true);
-        c.wifi = c.sysbus ? Wifi::createIwd(c) : nullptr;
+        c.wifi = c.sysbus ? WifiIwd::create(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);
 

@@ -77,7 +77,6 @@ struct SurfaceTexture {
     bool external = false;
 };
 
-#define VK_CHECK(x) STD_VERIFY((x) == VK_SUCCESS)
 
 namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);

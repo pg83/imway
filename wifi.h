@@ -4,8 +4,6 @@
 #include <std/str/builder.h>
 #include <std/sys/types.h>
 
-struct Composer;
-
 // any state change — scan results, connection progress, a passphrase
 // request — lands here; the wifi dialog is the subscriber
 struct WifiListener {
@@ -50,6 +48,4 @@ struct Wifi {
     virtual void providePassphrase(stl::StringView pw) = 0;
     virtual void cancelPassphrase() = 0;
 
-    // nullptr when iwd is unreachable
-    static Wifi* createIwd(Composer& c);
 };

@@ -1,0 +1,264 @@
+#include "composer.h"
+#include "device.h"
+
+#include "device_vk.h"
+#include "output.h"
+#include "renderer.h"
+#include "scene.h"
+#include "session.h"
+#include "util.h"
+
+#include <ev.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <math.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+
+#include <drm_fourcc.h>
+#include <linux/kd.h>
+#include <libudev.h>
+#include <xf86drm.h>
+#include <xf86drmMode.h>
+
+#include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
+#include <std/ios/sys.h>
+#include <std/sys/fs.h>
+#include <std/sys/fd.h>
+#include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
+#include <std/str/builder.h>
+#include <std/str/view.h>
+#include <std/sys/throw.h>
+#include "device_headless.h"
+
+using namespace stl;
+
+namespace {
+    struct HeadlessOutput: public ::Output {
+        int w = 0, h = 0;
+        double hz = 60.0;
+
+        HeadlessOutput(int width, int height, double refresh);
+
+        int width() const override;
+        int height() const override;
+        double refresh() const override;
+        int cursorCapW() const override;
+        int cursorCapH() const override;
+        void setCursorImage(const u32*) override;
+        void setCursorPos(int, int, bool) override;
+        void setPowerSave(bool) override;
+
+        bool hasBrightness() const override;
+        float brightness() const override;
+        void setBrightness(float) override;
+        double sdrWhiteNits() const override;
+        void setSdrWhite(double) override;
+        void setColorTemp(double) override;
+        bool lastFlip(u64&, u32&) const override;
+        bool start() override;
+        bool ready() const override;
+        bool vsynced() const override;
+        int scanoutCount() const override;
+        ScanoutBuffer* scanoutBuffer(int) override;
+        int acquire() override;
+        void presentImage(int) override;
+        bool presentNeedsPixels() const override;
+        void present(const void*) override;
+    };
+
+    struct HeadlessDevice: public Device {
+        ObjPool* pool = nullptr;
+        struct ev_loop* loop = nullptr;
+        DeviceVk vk{};
+        Vector<DmabufFormat> formats;
+        int syncFd = -1;
+
+        HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
+        ~HeadlessDevice() noexcept;
+
+        int drmFd() const override;
+        unsigned long long renderDevice() const override;
+        size_t dmabufFormatCount() const override;
+        DmabufFormat dmabufFormat(size_t i) const override;
+        ::Output* createOutput(StringView, StringView modeStr, double hdrNits) override;
+        Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
+    };
+}
+
+HeadlessOutput::HeadlessOutput(int width, int height, double refresh)
+    : w(width)
+    , h(height)
+    , hz(refresh)
+{
+}
+
+int HeadlessOutput::width() const {
+    return w;
+}
+
+int HeadlessOutput::height() const {
+    return h;
+}
+
+double HeadlessOutput::refresh() const {
+    return hz;
+}
+
+int HeadlessOutput::cursorCapW() const {
+    return 0;
+}
+
+int HeadlessOutput::cursorCapH() const {
+    return 0;
+}
+
+void HeadlessOutput::setCursorImage(const u32*) {
+}
+
+void HeadlessOutput::setCursorPos(int, int, bool) {
+}
+
+bool HeadlessOutput::hasBrightness() const {
+    return false;
+}
+
+float HeadlessOutput::brightness() const {
+    return 0.f;
+}
+
+void HeadlessOutput::setBrightness(float) {
+}
+
+void HeadlessOutput::setPowerSave(bool) {
+}
+
+double HeadlessOutput::sdrWhiteNits() const {
+    return 0;
+}
+
+void HeadlessOutput::setSdrWhite(double) {
+}
+
+void HeadlessOutput::setColorTemp(double) {
+}
+
+bool HeadlessOutput::lastFlip(u64&, u32&) const {
+    return false;
+}
+
+bool HeadlessOutput::start() {
+    return true;
+}
+
+bool HeadlessOutput::ready() const {
+    return true;
+}
+
+bool HeadlessOutput::vsynced() const {
+    return false;
+}
+
+int HeadlessOutput::scanoutCount() const {
+    return 0;
+}
+
+ScanoutBuffer* HeadlessOutput::scanoutBuffer(int) {
+    return nullptr;
+}
+
+int HeadlessOutput::acquire() {
+    return -1;
+}
+
+void HeadlessOutput::presentImage(int) {
+}
+
+bool HeadlessOutput::presentNeedsPixels() const {
+    return false;
+}
+
+void HeadlessOutput::present(const void*) {
+}
+
+HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
+    : pool(p)
+    , loop(evLoop)
+{
+    initVulkan(vk, -1);
+
+    if (vk.hasDmabuf) {
+        queryDmabufFormats(vk, formats);
+
+        // a render node is enough for syncobj ioctls (explicit sync)
+        for (int i = 128; i < 136 && syncFd < 0; i++) {
+            auto& pth = sb();
+
+            pth << "/dev/dri/renderD"_sv << i;
+
+            int fd = open(pth.cStr(), O_RDWR | O_CLOEXEC);
+
+            if (fd < 0) {
+                continue;
+            }
+
+            u64 cap = 0;
+
+            if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
+                syncFd = fd;
+                vk.drmFd = fd;
+            } else {
+                close(fd);
+            }
+        }
+    }
+}
+
+HeadlessDevice::~HeadlessDevice() noexcept {
+    destroyVulkan(vk);
+
+    if (syncFd >= 0) {
+        close(syncFd);
+    }
+}
+
+int HeadlessDevice::drmFd() const {
+    return syncFd;
+}
+
+unsigned long long HeadlessDevice::renderDevice() const {
+    return vk.renderDev;
+}
+
+size_t HeadlessDevice::dmabufFormatCount() const {
+    return formats.length();
+}
+
+DmabufFormat HeadlessDevice::dmabufFormat(size_t i) const {
+    return formats[i];
+}
+
+::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double) {
+    ModeSpec m{1280, 800, 60};
+
+    if (!modeStr.empty()) {
+        STD_VERIFY(parseModeSpec(modeStr, m));
+    }
+
+    return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
+}
+
+Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
+    return Renderer::create(c, vk, fontPath, uiScale, framesLimit);
+}
+
+Device* DeviceHeadless::create(ObjPool* pool, struct ev_loop* loop) {
+    return pool->make<HeadlessDevice>(pool, loop);
+}

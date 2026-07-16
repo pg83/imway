@@ -1,7 +1,5 @@
 #pragma once
 
-struct Composer;
-
 // any volume change — media keys, the settings slider, an external
 // sndioctl — lands here; the osd is the subscriber
 struct MixerListener {
@@ -15,7 +13,4 @@ struct Mixer {
     virtual void setVolume(float v) = 0;
     virtual bool muted() = 0;
     virtual void setMuted(bool m) = 0;
-
-    // nullptr when sndiod is unreachable
-    static Mixer* createSndio(Composer& c);
 };

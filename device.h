@@ -27,8 +27,4 @@ struct Device {
     virtual Output* createOutput(stl::StringView connector, stl::StringView mode, double hdrNits) = 0;
     virtual Renderer* createRenderer(struct Composer& c, stl::StringView fontPath, float uiScale, int framesLimit) = 0;
 
-    static Device* createKms(stl::ObjPool* pool, struct ev_loop* loop, Session& session, stl::StringView devPath);
-    static Device* createHeadless(stl::ObjPool* pool, struct ev_loop* loop);
-
-    static void list();
 };
