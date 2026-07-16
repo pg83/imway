@@ -75,6 +75,13 @@ namespace {
         PopupImpl* popup = nullptr;
         bool initialConfigureSent = false;
         bool acked = false;
+
+        // one configure in flight: ackedSerial follows ack_configure,
+        // committedAckSerial snapshots it on commit — a configure counts as
+        // answered once a commit lands with its serial acked
+        u32 ackedSerial = 0;
+        u32 committedAckSerial = 0;
+
         RectI pendGeom;
         bool pendGeomSet = false;
     };
@@ -145,6 +152,7 @@ namespace {
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
         int cfgW = 0, cfgH = 0;
+        u32 cfgSerial = 0;
         int prevW = 0, prevH = 0;
         bool cfgDocked = false;
 
@@ -1463,7 +1471,6 @@ namespace {
         }
 
         ti->fullscreen = false;
-        ti->winSizeSet = false;
         xdgToplevelConfigureSize(*ti, ti->prevW, ti->prevH);
         ti->srv->scene->needsFrame = true;
     }
@@ -1572,8 +1579,11 @@ namespace {
         xs->pendGeomSet = true;
     }
 
-    void xdgSurfaceAckConfigure(wl_client*, wl_resource* res, u32) {
-        ((XdgSurface*)wl_resource_get_user_data(res))->acked = true;
+    void xdgSurfaceAckConfigure(wl_client*, wl_resource* res, u32 serial) {
+        auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+
+        xs->acked = true;
+        xs->ackedSerial = serial;
     }
 
     const struct xdg_surface_interface xdgSurfaceImpl = {
@@ -1848,7 +1858,11 @@ namespace {
 
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
-        xdg_surface_send_configure(t.xdg->res, wl_display_next_serial(t.srv->display));
+
+        u32 serial = wl_display_next_serial(t.srv->display);
+
+        xdg_surface_send_configure(t.xdg->res, serial);
+        t.cfgSerial = serial;
         t.cfgW = w;
         t.cfgH = h;
         t.cfgDocked = t.docked;
@@ -1865,6 +1879,8 @@ namespace {
         if (!xs) {
             return;
         }
+
+        xs->committedAckSerial = xs->ackedSerial;
 
         if (xs->pendGeomSet) {
             s.geom = xs->pendGeom;
@@ -5196,8 +5212,14 @@ void WaylandImpl::frameShown(u32 msec) {
         bool differsView = ti->desiredW != ti->surface->geomW() || ti->desiredH != ti->surface->geomH();
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
+        // one configure in flight: during an interactive resize the desired
+        // size streams in every frame, but the next request waits until the
+        // client answered the previous one — the window steps through
+        // client-produced sizes only, at the client's own pace
+        bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
+
         // dock state changes alone need a configure: TILED comes and goes
-        if ((differsView && differsSent) || ti->docked != ti->cfgDocked) {
+        if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
         }
     }

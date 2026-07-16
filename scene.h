@@ -120,8 +120,16 @@ struct Toplevel {
     Icon* icon = nullptr;
     bool iconFromClient = false;
 
-    bool winSizeSet = false;
     int desiredW = 0, desiredH = 0;
+
+    // transactional resize (floating windows): the window is held at
+    // applyW/H — the size derived from the last committed geometry, chrome
+    // included — while dragW/H is where a border/grip drag wants it; the
+    // drag only feeds configures, the window moves when the client answers
+    // with a buffer. dragW/H written by the renderer's size-constraint
+    // callback, consumed and cleared the same frame
+    float applyW = 0, applyH = 0;
+    float dragW = 0, dragH = 0;
 
     bool moveRequested = false;
     u32 resizeEdges = 0;

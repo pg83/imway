@@ -32,6 +32,7 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
 
 #include <std/dbg/verify.h>
@@ -151,7 +152,7 @@ namespace {
         int cpuIdx = 0;
         int cpuPct = 0;
         long memUsedMb = 0;
-        long batPct = -2;          // -2 unprobed, -1 no battery
+        long batPct = -1;          // -1 no battery
         bool batCharging = false;
         StringBuilder batPath;
 
@@ -1889,11 +1890,14 @@ void RendererImpl::sampleStats() {
         memUsedMb = (total - avail) / 1024;
     }
 
-    if (batPct == -2) {
-        batPct = -1;
+    // no battery picked (startup, or the last one vanished): re-enumerate.
+    // system batteries win over scope=Device ones (hid keyboards/mice) —
+    // those ride usb hotplug, so they are a fallback, not the first choice
+    if (batPath.empty()) {
+        StringBuilder devBat;
 
         try {
-            listDir("/sys/class/power_supply"_sv, [this, &content](const TPathInfo& e) {
+            listDir("/sys/class/power_supply"_sv, [this, &content, &devBat](const TPathInfo& e) {
                 if (!batPath.empty()) {
                     return;
                 }
@@ -1902,22 +1906,52 @@ void RendererImpl::sampleStats() {
 
                 p << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
 
-                if (readSmallFile(p, content).startsWith("Battery"_sv)) {
+                if (!readSmallFile(p, content).startsWith("Battery"_sv)) {
+                    return;
+                }
+
+                bool device = false;
+
+                try {
+                    p.reset();
+                    p << "/sys/class/power_supply/"_sv << e.item << "/scope"_sv;
+                    device = readSmallFile(p, content).startsWith("Device"_sv);
+                } catch (...) {
+                    // no scope file: a system battery
+                }
+
+                if (device) {
+                    if (devBat.empty()) {
+                        devBat << "/sys/class/power_supply/"_sv << e.item;
+                    }
+                } else {
                     batPath << "/sys/class/power_supply/"_sv << e.item;
                 }
             });
         } catch (...) {
         }
+
+        if (batPath.empty() && !devBat.empty()) {
+            batPath << sv(devBat);
+        }
     }
 
-    if (!batPath.empty()) {
-        auto& p = sb();
+    batPct = -1;
 
-        p << sv(batPath) << "/capacity"_sv;
-        batPct = (long)readSmallFile(p, content).stou();
-        p.reset();
-        p << sv(batPath) << "/status"_sv;
-        batCharging = readSmallFile(p, content).startsWith("Charging"_sv);
+    if (!batPath.empty()) {
+        try {
+            auto& p = sb();
+
+            p << sv(batPath) << "/capacity"_sv;
+            batPct = (long)readSmallFile(p, content).stou();
+            p.reset();
+            p << sv(batPath) << "/status"_sv;
+            batCharging = readSmallFile(p, content).startsWith("Charging"_sv);
+        } catch (...) {
+            // the supply vanished under us (hub unplugged): forget it, the
+            // next tick re-enumerates — and finds it again on replug
+            batPath.reset();
+        }
     }
 }
 
@@ -2075,6 +2109,40 @@ void RendererImpl::inspectorUi(Scene& scene) {
     }
 
     ImGui::End();
+}
+
+// transactional resize: a border/grip drag is a request, not a resize. the
+// callback pins the window at the client's committed size (applyW/H) and
+// records where the hand wants it (dragW/H) — that becomes a configure, and
+// the window steps only when the client commits a matching buffer. anything
+// that is not an active border/grip drag (initial sizing, our own applies)
+// passes through untouched
+static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
+    auto* t = (Toplevel*)d->UserData;
+    ImGuiContext& g = *ImGui::GetCurrentContext();
+    ImGuiWindow* w = g.CurrentWindow;
+
+    if (!g.ActiveId || g.ActiveIdWindow != w) {
+        return;
+    }
+
+    bool resizing = false;
+
+    for (int dir = 0; dir < 4 && !resizing; dir++) {
+        resizing = g.ActiveId == ImGui::GetWindowResizeBorderID(w, (ImGuiDir)dir);
+    }
+
+    for (int n = 0; n < 4 && !resizing; n++) {
+        resizing = g.ActiveId == ImGui::GetWindowResizeCornerID(w, n);
+    }
+
+    if (!resizing) {
+        return;
+    }
+
+    t->dragW = d->DesiredSize.x;
+    t->dragH = d->DesiredSize.y;
+    d->DesiredSize = ImVec2(t->applyW, t->applyH);
 }
 
 static void spawnClient(StringView cmd, StringView sock) {
@@ -2308,17 +2376,22 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
 
-        if (!t->winSizeSet) {
-            // sizing a docked window would fight the node (this path also
-            // re-arms on unset_fullscreen)
-            if (!t->docked) {
-                const ImGuiStyle& st = ImGui::GetStyle();
-                float header = t->csd ? 0.f : ImGui::GetFrameHeight();
+        const ImGuiStyle& st = ImGui::GetStyle();
+        float header = t->csd ? 0.f : ImGui::GetFrameHeight();
+        float chromeW = st.WindowPadding.x * 2;
+        float chromeH = st.WindowPadding.y * 2 + header;
 
-                ImGui::SetNextWindowSize(ImVec2((float)root->geomW() + st.WindowPadding.x * 2, (float)root->geomH() + st.WindowPadding.y * 2 + header), ImGuiCond_Always);
-            }
+        t->applyW = (float)root->geomW() + chromeW;
+        t->applyH = (float)root->geomH() + chromeH;
 
-            t->winSizeSet = true;
+        if (!t->docked && !t->fullscreen) {
+            // the window is a function of the client's committed geometry:
+            // a border drag never resizes it directly (the constraint
+            // callback pins it), it only asks — the size steps here, when
+            // the geometry answers; initial map sizing and the return from
+            // fullscreen are the same rule
+            ImGui::SetNextWindowSize(ImVec2(t->applyW, t->applyH), ImGuiCond_Always);
+            ImGui::SetNextWindowSizeConstraints(ImVec2(0.f, 0.f), ImVec2(FLT_MAX, FLT_MAX), toplevelSizeCb, t);
         }
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
@@ -2356,10 +2429,25 @@ void RendererImpl::buildUi(Scene& scene) {
             t->moveRequested = false;
             t->resizeEdges = 0;
 
-            ImVec2 avail = ImGui::GetContentRegionAvail();
+            if (t->docked || t->fullscreen) {
+                // the node/screen dictates the size, the client must fill it
+                ImVec2 avail = ImGui::GetContentRegionAvail();
 
-            t->desiredW = (int)avail.x;
-            t->desiredH = (int)avail.y;
+                t->desiredW = (int)avail.x;
+                t->desiredH = (int)avail.y;
+            } else if (t->dragW > 0.f) {
+                // floating drag: the request, in client pixels
+                t->desiredW = (int)(t->dragW - chromeW);
+                t->desiredH = (int)(t->dragH - chromeH);
+            } else {
+                // steady state: ask for what the client already has, i.e.
+                // nothing — floating configures originate from drags only
+                t->desiredW = root->geomW();
+                t->desiredH = root->geomH();
+            }
+
+            t->dragW = 0.f;
+            t->dragH = 0.f;
 
             ImVec2 origin = ImGui::GetCursorScreenPos();
 
