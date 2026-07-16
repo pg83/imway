@@ -22,11 +22,11 @@ namespace {
         u32 icon = 0, iconLen = 0;
     };
 
-    // dialog-scoped storage: one heap instance per dialog, newed on open,
-    // deleted when the dialog ends — the opaque handle behind the caller's
-    // void* slot
+    // dialog-scoped state: one heap instance per dialog, newed on open
+    // (the constructor reads all .desktop entries), deleted when the dialog
+    // ends — the opaque handle behind the caller's void* slot
     struct Dialog {
-        bool focusField = false;
+        bool focusField = true;
         // raw buffer by imgui InputText contract
         char query[256] = "";
         long sel = 0;
@@ -34,11 +34,19 @@ namespace {
         StringBuilder blob;
         Vector<Row> rows;
         Vector<u32> vis;
-    };
-}
 
-static StringView rowView(const Dialog& d, u32 off, u32 len) {
-    return StringView((const u8*)d.blob.data() + off, (size_t)len);
+        Dialog();
+
+        StringView view(u32 off, u32 len) const;
+
+        void rescan();
+        void parseDesktop(StringBuilder& file);
+        void refilter();
+
+        // pure drawing: state transitions stay in drawLauncher, the only
+        // outward signs are run/picked and the open flag dropping
+        bool draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run);
+    };
 }
 
 // strip the %f/%u/... field codes from Exec
@@ -59,7 +67,42 @@ static void appendExec(StringBuilder& out, StringView val) {
     out << StringView(seg, b);
 }
 
-static void parseDesktop(Dialog& d, StringBuilder& file) {
+Dialog::Dialog() {
+    rescan();
+}
+
+StringView Dialog::view(u32 off, u32 len) const {
+    return StringView((const u8*)blob.data() + off, (size_t)len);
+}
+
+void Dialog::rescan() {
+    forEachXdgDataDir([this](StringView base) {
+        StringBuilder dir;
+
+        dir << base << "/applications"_sv;
+
+        // missing xdg dirs are normal: listDir throws, skip them
+        try {
+            listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+                if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
+                    return;
+                }
+
+                StringBuilder f;
+
+                f << sv(dir) << "/"_sv << e.item;
+                parseDesktop(f);
+            });
+        } catch (...) {
+        }
+    });
+
+    quickSort(rows.mutData(), rows.mutData() + rows.length(), [this](const Row& a, const Row& b) {
+        return view(a.name, a.nameLen) < view(b.name, b.nameLen);
+    });
+}
+
+void Dialog::parseDesktop(StringBuilder& file) {
     Buffer data;
 
     readFileContent(file, data);
@@ -120,90 +163,43 @@ static void parseDesktop(Dialog& d, StringBuilder& file) {
 
     Row r;
 
-    r.name = (u32)d.blob.used();
+    r.name = (u32)blob.used();
     r.nameLen = (u32)name.used();
-    d.blob << sv(name);
-    r.exec = (u32)d.blob.used();
+    blob << sv(name);
+    r.exec = (u32)blob.used();
     r.execLen = (u32)exec.used();
-    d.blob << sv(exec);
-    r.icon = (u32)d.blob.used();
+    blob << sv(exec);
+    r.icon = (u32)blob.used();
     r.iconLen = (u32)icon.used();
-    d.blob << sv(icon);
-    d.rows.pushBack(r);
+    blob << sv(icon);
+    rows.pushBack(r);
 }
 
-static void rescan(Dialog& d) {
-    forEachXdgDataDir([&d](StringView base) {
-        StringBuilder dir;
+void Dialog::refilter() {
+    vis.clear();
 
-        dir << base << "/applications"_sv;
-
-        // missing xdg dirs are normal: listDir throws, skip them
-        try {
-            listDir(sv(dir), [&d, &dir](const TPathInfo& e) {
-                if (e.isDir || !e.item.endsWith(".desktop"_sv)) {
-                    return;
-                }
-
-                StringBuilder f;
-
-                f << sv(dir) << "/"_sv << e.item;
-                parseDesktop(d, f);
-            });
-        } catch (...) {
-        }
-    });
-
-    quickSort(d.rows.mutData(), d.rows.mutData() + d.rows.length(), [&d](const Row& a, const Row& b) {
-        return rowView(d, a.name, a.nameLen) < rowView(d, b.name, b.nameLen);
-    });
-}
-
-static void refilter(Dialog& d) {
-    d.vis.clear();
-
-    StringView q(d.query);
+    StringView q(query);
     u8 qbuf[256];
     StringView ql = q.lower(qbuf);
 
-    for (size_t i = 0; i < d.rows.length(); i++) {
+    for (size_t i = 0; i < rows.length(); i++) {
         u8 nbuf[128];
-        StringView nl = rowView(d, d.rows[i].name, d.rows[i].nameLen).lower(nbuf);
+        StringView nl = view(rows[i].name, rows[i].nameLen).lower(nbuf);
 
         if (ql.empty() || nl.search(ql)) {
-            d.vis.pushBack((u32)i);
+            vis.pushBack((u32)i);
         }
     }
 }
 
-bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run) {
-    Dialog*& dp = *(Dialog**)state;
-
-    if (toggle) {
-        if (dp) {
-            delete dp;
-            dp = nullptr;
-        } else {
-            dp = new Dialog();
-            dp->focusField = true;
-            rescan(*dp);
-        }
-    }
-
-    if (!dp) {
-        return false;
-    }
-
-    Dialog& d = *dp;
-    bool open = true;
-
-    refilter(d);
+bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run) {
+    refilter();
 
     bool picked = false;
-    long n = (long)d.vis.length();
+    long n = (long)vis.length();
 
-    if (d.sel > n) {
-        d.sel = n;
+    if (sel > n) {
+        sel = n;
     }
 
     float lw = (float)screenW / 4.f < 320.f ? 320.f : (float)screenW / 4.f;
@@ -212,38 +208,38 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH / 2.f));
 
     if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && d.sel < n) {
-            d.sel++;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel < n) {
+            sel++;
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && d.sel > 0) {
-            d.sel--;
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && sel > 0) {
+            sel--;
         }
 
         ImGui::SetNextItemWidth(-1.f);
 
-        if (d.focusField) {
+        if (focusField) {
             ImGui::SetKeyboardFocusHere();
-            d.focusField = false;
+            focusField = false;
         }
 
-        bool enter = ImGui::InputText("##q", d.query, sizeof(d.query), ImGuiInputTextFlags_EnterReturnsTrue);
+        bool enter = ImGui::InputText("##q", query, sizeof(query), ImGuiInputTextFlags_EnterReturnsTrue);
 
         if (ImGui::IsItemEdited()) {
-            d.sel = 0;
+            sel = 0;
         }
 
         float rowH = ImGui::GetFontSize() * 1.7f;
         bool navved = ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow);
 
         for (long i = 0; i < n; i++) {
-            const Row& r = d.rows[d.vis[(size_t)i]];
-            bool selected = d.sel == i + 1;
+            const Row& r = rows[vis[(size_t)i]];
+            bool selected = sel == i + 1;
 
-            ImGui::PushID((int)d.vis[(size_t)i]);
+            ImGui::PushID((int)vis[(size_t)i]);
 
             if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                StringView ex = rowView(d, r.exec, r.execLen);
+                StringView ex = view(r.exec, r.execLen);
 
                 run.append(ex.begin(), ex.length());
                 picked = true;
@@ -256,13 +252,13 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
 
             ImGui::SameLine(ImGui::GetStyle().FramePadding.x);
 
-            if (u64 tex = texes.iconTexture(icons.forIconValue(rowView(d, r.icon, r.iconLen)))) {
+            if (u64 tex = texes.iconTexture(icons.forIconValue(view(r.icon, r.iconLen)))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(rowH, rowH));
             } else {
                 ImGui::Dummy(ImVec2(rowH, rowH));
             }
 
-            StringView name = rowView(d, r.name, r.nameLen);
+            StringView name = view(r.name, r.nameLen);
 
             ImGui::SameLine();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (rowH - ImGui::GetFontSize()) / 2.f);
@@ -271,8 +267,8 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
         }
 
         if (enter && !picked) {
-            const Row* r = d.sel >= 1 && d.sel <= n ? &d.rows[d.vis[(size_t)(d.sel - 1)]] : nullptr;
-            StringView cmd = r ? rowView(d, r->exec, r->execLen) : StringView(d.query);
+            const Row* r = sel >= 1 && sel <= n ? &rows[vis[(size_t)(sel - 1)]] : nullptr;
+            StringView cmd = r ? view(r->exec, r->execLen) : StringView(query);
 
             run.append(cmd.begin(), cmd.length());
             picked = !run.empty();
@@ -285,6 +281,28 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     }
 
     ImGui::End();
+
+    return picked;
+}
+
+bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run) {
+    Dialog*& dp = *(Dialog**)state;
+
+    if (toggle) {
+        if (dp) {
+            delete dp;
+            dp = nullptr;
+        } else {
+            dp = new Dialog();
+        }
+    }
+
+    if (!dp) {
+        return false;
+    }
+
+    bool open = true;
+    bool picked = dp->draw(screenW, screenH, uiScale, icons, texes, open, run);
 
     if (!open) {
         delete dp;
