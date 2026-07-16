@@ -17,6 +17,9 @@ struct Settings {
     bool nightOn = false;  // night light toggle + temperature
     float nightK = 3400.f;
 
+    bool hasDnd = false;   // in: a notifier exists, else the row is hidden
+    bool dnd = false;      // do-not-disturb, edited in place
+
     bool open = false;     // menu visible this frame — the osd keeps quiet
 
     bool volumeChanged = false;
@@ -25,9 +28,10 @@ struct Settings {
     bool scaleChanged = false;
     bool sdrChanged = false;
     bool nightChanged = false;
+    bool dndChanged = false;
 
     bool changed() const {
-        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged;
+        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged || dndChanged;
     }
 };
 

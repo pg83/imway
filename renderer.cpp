@@ -2301,7 +2301,18 @@ void RendererImpl::buildUi(Scene& scene) {
 
         settings.brightness = output->hasBrightness() ? output->brightness() : -1.f;
 
+        if (notifier) {
+            settings.hasDnd = true;
+            settings.dnd = notifier->dnd();
+        } else {
+            settings.hasDnd = false;
+        }
+
         drawSettingsMenu(settings);
+
+        if (settings.dndChanged && notifier) {
+            notifier->setDnd(settings.dnd);
+        }
 
         if (settings.volumeChanged && comp->mixer) {
             comp->mixer->setVolume(settings.volume);
@@ -2329,36 +2340,6 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (settings.changed()) {
             scene.needsFrame = true;
-        }
-
-        if (ImGui::BeginMenu("view")) {
-            if (ImGui::MenuItem("notifications", nullptr, historyState != nullptr)) {
-                historyToggle = true;
-            }
-
-            if (ImGui::MenuItem("inspector", "super+f12", inspectorState != nullptr)) {
-                inspectorToggle = true;
-            }
-
-            if (ImGui::MenuItem("color picker", nullptr, pickArmed)) {
-                pickArmed = !pickArmed;
-            }
-
-            if (notifier) {
-                ImGui::Separator();
-
-                bool d = notifier->dnd();
-
-                if (ImGui::MenuItem("do not disturb", nullptr, d)) {
-                    notifier->setDnd(!d);
-                }
-
-                if (ImGui::MenuItem("clear notifications")) {
-                    notifier->clearHistory();
-                }
-            }
-
-            ImGui::EndMenu();
         }
 
         time_t now = time(nullptr);
@@ -2727,9 +2708,23 @@ void RendererImpl::buildUi(Scene& scene) {
 
     {
         Buffer cmd;
+        LauncherAction act = LauncherAction::none;
 
-        if (drawLauncher(width, height, uiScale, *icons, *this, launcherToggle, &launcherState, cmd)) {
-            spawnClient(sv(cmd), scene.socketName);
+        if (drawLauncher(width, height, uiScale, *icons, *this, launcherToggle, &launcherState, cmd, act)) {
+            switch (act) {
+                case LauncherAction::notifications:
+                    historyToggle = true;
+                    break;
+                case LauncherAction::inspector:
+                    inspectorToggle = true;
+                    break;
+                case LauncherAction::colorPicker:
+                    pickArmed = true;
+                    break;
+                case LauncherAction::none:
+                    spawnClient(sv(cmd), scene.socketName);
+                    break;
+            }
         }
 
         launcherToggle = false;

@@ -14,12 +14,13 @@
 using namespace stl;
 
 namespace {
-    // one .desktop entry; the strings live in the dialog blob as offsets, so
-    // rows stay trivial for stl::Vector
+    // one launcher row — a .desktop entry or a compositor action; the strings
+    // live in the dialog blob as offsets, so rows stay trivial for stl::Vector
     struct Row {
         u32 name = 0, nameLen = 0;
         u32 exec = 0, execLen = 0;
         u32 icon = 0, iconLen = 0;
+        LauncherAction action = LauncherAction::none;
     };
 
     // dialog-scoped state: one heap instance per dialog, newed on open
@@ -40,12 +41,13 @@ namespace {
         StringView view(u32 off, u32 len) const;
 
         void rescan();
+        void addAction(StringView name, StringView icon, LauncherAction action);
         void parseDesktop(StringBuilder& file);
         void refilter();
 
         // pure drawing: state transitions stay in drawLauncher, the only
-        // outward signs are run/picked and the open flag dropping
-        bool draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run);
+        // outward signs are run/action/picked and the open flag dropping
+        bool draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run, LauncherAction& action);
     };
 }
 
@@ -75,7 +77,27 @@ StringView Dialog::view(u32 off, u32 len) const {
     return StringView((const u8*)blob.data() + off, (size_t)len);
 }
 
+// a compositor action, mixed in and sorted among the programs
+void Dialog::addAction(StringView name, StringView icon, LauncherAction action) {
+    Row r;
+
+    r.name = (u32)blob.used();
+    r.nameLen = (u32)name.length();
+    blob << name;
+    r.exec = (u32)blob.used();
+    r.execLen = 0;
+    r.icon = (u32)blob.used();
+    r.iconLen = (u32)icon.length();
+    blob << icon;
+    r.action = action;
+    rows.pushBack(r);
+}
+
 void Dialog::rescan() {
+    addAction("notifications"_sv, "preferences-system-notifications"_sv, LauncherAction::notifications);
+    addAction("inspector"_sv, "utilities-system-monitor"_sv, LauncherAction::inspector);
+    addAction("color picker"_sv, "color-select"_sv, LauncherAction::colorPicker);
+
     forEachXdgDataDir([this](StringView base) {
         StringBuilder dir;
 
@@ -192,11 +214,25 @@ void Dialog::refilter() {
     }
 }
 
-bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run) {
+bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run, LauncherAction& action) {
     refilter();
 
     bool picked = false;
     long n = (long)vis.length();
+
+    // a row is either a compositor action or a command to spawn
+    auto pick = [&](const Row& r) {
+        if (r.action != LauncherAction::none) {
+            action = r.action;
+        } else {
+            StringView ex = view(r.exec, r.execLen);
+
+            run.append(ex.begin(), ex.length());
+        }
+
+        picked = true;
+        open = false;
+    };
 
     if (sel > n) {
         sel = n;
@@ -239,11 +275,7 @@ bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, Ico
             ImGui::PushID((int)vis[(size_t)i]);
 
             if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                StringView ex = view(r.exec, r.execLen);
-
-                run.append(ex.begin(), ex.length());
-                picked = true;
-                open = false;
+                pick(r);
             }
 
             if (selected && navved) {
@@ -267,12 +299,16 @@ bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, Ico
         }
 
         if (enter && !picked) {
-            const Row* r = sel >= 1 && sel <= n ? &rows[vis[(size_t)(sel - 1)]] : nullptr;
-            StringView cmd = r ? view(r->exec, r->execLen) : StringView(query);
+            if (sel >= 1 && sel <= n) {
+                pick(rows[vis[(size_t)(sel - 1)]]);
+            } else {
+                // nothing highlighted: run the typed text as a command
+                StringView cmd(query);
 
-            run.append(cmd.begin(), cmd.length());
-            picked = !run.empty();
-            open = false;
+                run.append(cmd.begin(), cmd.length());
+                picked = !run.empty();
+                open = false;
+            }
         }
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
@@ -285,8 +321,10 @@ bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     return picked;
 }
 
-bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run) {
+bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run, LauncherAction& action) {
     Dialog*& dp = *(Dialog**)state;
+
+    action = LauncherAction::none;
 
     if (toggle) {
         if (dp) {
@@ -302,7 +340,7 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     }
 
     bool open = true;
-    bool picked = dp->draw(screenW, screenH, uiScale, icons, texes, open, run);
+    bool picked = dp->draw(screenW, screenH, uiScale, icons, texes, open, run, action);
 
     if (!open) {
         delete dp;

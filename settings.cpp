@@ -9,6 +9,7 @@ void drawSettingsMenu(Settings& s) {
     s.scaleChanged = false;
     s.sdrChanged = false;
     s.nightChanged = false;
+    s.dndChanged = false;
     s.open = false;
 
     if (s.scaleEdit == 0.f) {
@@ -71,6 +72,11 @@ void drawSettingsMenu(Settings& s) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(180.f * s.uiScale - ImGui::GetFrameHeight() - ImGui::GetStyle().ItemSpacing.x);
     s.nightChanged |= ImGui::SliderFloat("night", &s.nightK, 2500.f, 6500.f, "%.0f K", ImGuiSliderFlags_AlwaysClamp);
+
+    if (s.hasDnd) {
+        ImGui::Separator();
+        s.dndChanged = ImGui::Checkbox("do not disturb", &s.dnd);
+    }
 
     ImGui::EndMenu();
 }
