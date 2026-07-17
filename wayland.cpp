@@ -5978,8 +5978,12 @@ void SeatState::handleMotion(double x, double y) {
         return;
     }
 
-    // pointer is over the compositor's own ui: the client sees a leave
-    if (srv->scene->ptrCaptured) {
+    // pointer is over the compositor's own ui: the client sees a leave —
+    // unless a button we delivered is still held. imgui keeps WantCaptureMouse
+    // for the whole press-drag it saw start, so a drag leaving the window
+    // would read as "captured" and break the implicit grab: the client must
+    // keep its motion stream and the matching release
+    if (srv->scene->ptrCaptured && buttonsDown == 0) {
         pointerSetFocus(nullptr, 0, 0);
 
         return;
