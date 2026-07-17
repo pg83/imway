@@ -54,6 +54,7 @@ __attribute__((unused)) static int32_t wlk_repeat_rate, wlk_repeat_delay;
 
 // last pointer events
 __attribute__((unused)) static uint32_t wlp_enter_serial;  // last wl_pointer.enter
+__attribute__((unused)) static int wlp_enter_count;
 __attribute__((unused)) static uint32_t wlp_button_serial; // last wl_pointer.button
 __attribute__((unused)) static uint32_t wlp_button, wlp_button_state;
 __attribute__((unused)) static int wlp_button_count, wlp_motion_count, wlp_axis_count;
@@ -112,6 +113,7 @@ static void wlp_enter(void* d, struct wl_pointer* p, uint32_t serial, struct wl_
                       wl_fixed_t x, wl_fixed_t y) {
     (void)d; (void)p; (void)x; (void)y;
     wlp_enter_serial = serial;
+    wlp_enter_count++;
     wlp_focus = s;
 }
 static void wlp_leave(void* d, struct wl_pointer* p, uint32_t serial, struct wl_surface* s) {
