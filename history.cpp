@@ -1,5 +1,5 @@
 #include "history.h"
-#include "dialog_pool.h"
+#include "dialog.h"
 #include "icon_store.h"
 #include "launcher.h"
 #include "notifier.h"
@@ -99,29 +99,13 @@ void Dialog::draw(Notifier& notifier, IconStore& icons, IconResolver& texes, int
 void drawHistory(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    if (toggle) {
-        if (dp) {
-            dialogPoolDestroy(dp);
-        } else {
-            dp = dialogPoolCreate<Dialog>();
-        }
-    }
-
-    if (!dp) {
-        return;
-    }
-
-    bool open = true;
-
-    dp->draw(notifier, icons, texes, screenW, screenH, uiScale, open);
-
-    if (!open) {
-        dialogPoolDestroy(dp);
-    }
+    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+        d.draw(notifier, icons, texes, screenW, screenH, uiScale, open);
+    });
 }
 
 void destroyHistory(void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    dialogPoolDestroy(dp);
+    dialog(dp);
 }

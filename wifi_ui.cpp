@@ -1,5 +1,5 @@
 #include "wifi_ui.h"
-#include "dialog_pool.h"
+#include "dialog.h"
 #include "wifi.h"
 #include "util.h"
 
@@ -157,29 +157,13 @@ void Dialog::draw(Wifi& wifi, int screenW, float uiScale, bool& open) {
 void drawWifi(Wifi& wifi, int screenW, float uiScale, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    if (toggle) {
-        if (dp) {
-            dialogPoolDestroy(dp);
-        } else {
-            dp = dialogPoolCreate<Dialog>();
-        }
-    }
-
-    if (!dp) {
-        return;
-    }
-
-    bool open = true;
-
-    dp->draw(wifi, screenW, uiScale, open);
-
-    if (!open) {
-        dialogPoolDestroy(dp);
-    }
+    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+        d.draw(wifi, screenW, uiScale, open);
+    });
 }
 
 void destroyWifi(void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    dialogPoolDestroy(dp);
+    dialog(dp);
 }

@@ -1,5 +1,5 @@
 #include "launcher.h"
-#include "dialog_pool.h"
+#include "dialog.h"
 #include "icon_store.h"
 #include "util.h"
 #include "xdg_utils.h"
@@ -327,25 +327,11 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     Dialog*& dp = *(Dialog**)state;
 
     action = LauncherAction::none;
+    bool picked = false;
 
-    if (toggle) {
-        if (dp) {
-            dialogPoolDestroy(dp);
-        } else {
-            dp = dialogPoolCreate<Dialog>();
-        }
-    }
-
-    if (!dp) {
-        return false;
-    }
-
-    bool open = true;
-    bool picked = dp->draw(screenW, screenH, uiScale, icons, texes, open, run, action);
-
-    if (!open) {
-        dialogPoolDestroy(dp);
-    }
+    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+        picked = d.draw(screenW, screenH, uiScale, icons, texes, open, run, action);
+    });
 
     return picked;
 }
@@ -353,5 +339,5 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
 void destroyLauncher(void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    dialogPoolDestroy(dp);
+    dialog(dp);
 }

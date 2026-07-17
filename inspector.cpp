@@ -1,5 +1,5 @@
 #include "inspector.h"
-#include "dialog_pool.h"
+#include "dialog.h"
 #include "ilist.h"
 #include "scene.h"
 #include "util.h"
@@ -84,29 +84,13 @@ void Dialog::draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& 
 void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    if (toggle) {
-        if (dp) {
-            dialogPoolDestroy(dp);
-        } else {
-            dp = dialogPoolCreate<Dialog>();
-        }
-    }
-
-    if (!dp) {
-        return;
-    }
-
-    bool open = true;
-
-    dp->draw(scene, info, uiScale, open);
-
-    if (!open) {
-        dialogPoolDestroy(dp);
-    }
+    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+        d.draw(scene, info, uiScale, open);
+    });
 }
 
 void destroyInspector(void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    dialogPoolDestroy(dp);
+    dialog(dp);
 }

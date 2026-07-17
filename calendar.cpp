@@ -1,5 +1,5 @@
 #include "calendar.h"
-#include "dialog_pool.h"
+#include "dialog.h"
 #include "util.h"
 
 #include <time.h>
@@ -145,29 +145,13 @@ void Dialog::draw(int screenW, bool& open) {
 void drawCalendar(int screenW, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    if (toggle) {
-        if (dp) {
-            dialogPoolDestroy(dp);
-        } else {
-            dp = dialogPoolCreate<Dialog>();
-        }
-    }
-
-    if (!dp) {
-        return;
-    }
-
-    bool open = true;
-
-    dp->draw(screenW, open);
-
-    if (!open) {
-        dialogPoolDestroy(dp);
-    }
+    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+        d.draw(screenW, open);
+    });
 }
 
 void destroyCalendar(void** state) {
     Dialog*& dp = *(Dialog**)state;
 
-    dialogPoolDestroy(dp);
+    dialog(dp);
 }
