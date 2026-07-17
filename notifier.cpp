@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "ilist.h"
 #include "notifier.h"
 #include "scene.h"
 #include "util.h"
@@ -31,7 +32,7 @@ namespace {
         Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
         ObjList<ToastImpl> alloc;
-        Vector<Toast*> toasts;  // newest last
+        IntrusiveList toasts; // newest last
         u32 lastId = 0;
         bool dndOn = false;
         NotifierListener* listener = nullptr;
@@ -62,7 +63,7 @@ NotifierImpl::NotifierImpl(Composer& comp)
 }
 
 ToastImpl* NotifierImpl::byId(u32 id) {
-    for (Toast* t : toasts) {
+    for (Toast* t : each<Toast>(toasts)) {
         if (t->id == id) {
             return (ToastImpl*)t;
         }
@@ -90,7 +91,7 @@ void NotifierImpl::trim() {
     while (toasts.length() > kHistoryMax) {
         Toast* victim = nullptr;
 
-        for (Toast* t : toasts) {
+        for (Toast* t : each<Toast>(toasts)) {
             if (!t->onScreen) {
                 victim = t;
 
@@ -102,7 +103,7 @@ void NotifierImpl::trim() {
             break; // everything left is on screen
         }
 
-        removeOne(toasts, victim);
+        victim->unlink();
         alloc.release((ToastImpl*)victim);
     }
 }
@@ -164,7 +165,7 @@ void NotifierImpl::dismiss(u32 id) {
 }
 
 void NotifierImpl::activeImpl(VisitorFace&& vis) {
-    for (Toast* t : toasts) {
+    for (Toast* t : each<Toast>(toasts)) {
         if (t->onScreen) {
             vis.visit(t);
         }
@@ -173,26 +174,21 @@ void NotifierImpl::activeImpl(VisitorFace&& vis) {
 
 void NotifierImpl::historyImpl(VisitorFace&& vis) {
     // newest first
-    for (size_t i = toasts.length(); i-- > 0;) {
-        vis.visit(toasts[i]);
+    for (Toast* t : eachRev<Toast>(toasts)) {
+        vis.visit(t);
     }
 }
 
 void NotifierImpl::clearHistory() {
-    Vector<Toast*> keep;
+    for (IntrusiveNode* n = toasts.mutFront(); n != toasts.mutEnd();) {
+        auto* t = (Toast*)n;
 
-    for (Toast* t : toasts) {
-        if (t->onScreen) {
-            keep.pushBack(t);
-        } else {
+        n = n->next; // step past before the unlink
+
+        if (!t->onScreen) {
+            t->unlink();
             alloc.release((ToastImpl*)t);
         }
-    }
-
-    toasts.clear();
-
-    for (Toast* t : keep) {
-        toasts.pushBack(t);
     }
 
     c->scene->needsFrame = true;
@@ -207,7 +203,7 @@ void NotifierImpl::setDnd(bool v) {
 
     if (v) {
         // pull everything off screen, keep it in history
-        for (Toast* t : toasts) {
+        for (Toast* t : each<Toast>(toasts)) {
             if (t->onScreen) {
                 ev_timer_stop(loop, &((ToastImpl*)t)->timer);
                 t->onScreen = false;

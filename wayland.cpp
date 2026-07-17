@@ -103,7 +103,7 @@ namespace {
         PendingBufferRelease* release = nullptr;
     };
 
-    struct PendingBufferRelease {
+    struct PendingBufferRelease: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         DmabufBuffer* buffer = nullptr;
         wl_resource* res = nullptr;
@@ -118,7 +118,7 @@ namespace {
         SubsurfaceImpl* sub = nullptr;
     };
 
-    struct ActivationTokenRequest {
+    struct ActivationTokenRequest: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_client* client = nullptr;
         SurfaceImpl* surface = nullptr;
@@ -317,7 +317,7 @@ namespace {
         RectI regionBox;
     };
 
-    struct IdleInhibitor {
+    struct IdleInhibitor: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         SurfaceImpl* surface = nullptr;
         wl_resource* res = nullptr;
@@ -351,7 +351,7 @@ namespace {
         wl_resource* res = nullptr;
         bool primary = false;
         Vector<Mime> mimes;
-        struct Offer* offersHead = nullptr;
+        IntrusiveList offers;
         u32 dndActions = 0;
         bool dropPerformed = false;
         bool actionsSet = false;
@@ -359,11 +359,11 @@ namespace {
         bool usedForSelection = false;
     };
 
-    struct Offer {
+    // the node links it into its DataSource's offer list
+    struct Offer: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         DataSource* source = nullptr;
         wl_resource* res = nullptr;
-        Offer* sourceNext = nullptr;
         bool dnd = false;
         bool accepted = false;
         bool finished = false;
@@ -522,7 +522,7 @@ namespace {
         ObjList<Positioner> positionerAlloc;
         ObjList<BufferBox> dmabufBoxAlloc;
         ObjList<PendingBufferRelease> pendingReleaseAlloc;
-        Vector<PendingBufferRelease*> pendingReleases;
+        IntrusiveList pendingReleases;
         ObjList<DataSource> dataSourceAlloc;
         ObjList<Offer> offerAlloc;
         ObjList<SpbBox> spbAlloc;
@@ -530,7 +530,7 @@ namespace {
         ObjList<ConstraintBox> constraintAlloc;
         ObjList<IconBox> iconAlloc;
         ObjList<ActivationTokenRequest> activationTokenAlloc;
-        Vector<ActivationTokenRequest*> activationTokenRequests;
+        IntrusiveList activationTokenRequests;
         Vector<ActivationGrant> activationGrants;
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
@@ -544,7 +544,7 @@ namespace {
         int drmFd = -1;
         bool explicitSyncSupported = false;
 
-        struct IdleNotif {
+        struct IdleNotif: IntrusiveNode {
             WaylandImpl* srv = nullptr;
             wl_resource* res = nullptr;
             bool idled = false;
@@ -552,16 +552,16 @@ namespace {
         };
 
         ObjList<IdleNotif> idleAlloc;
-        Vector<IdleNotif*> idleNotifs;
+        IntrusiveList idleNotifs;
         ObjList<IdleInhibitor> idleInhibitorAlloc;
-        Vector<IdleInhibitor*> idleInhibitors;
+        IntrusiveList idleInhibitors;
         ::Output* output = nullptr;
         double dpmsSec = 0;
         bool dpmsOff = false;
         ev_timer dpmsTimer{};
 
         void activity();
-        bool idleBlocked() const;
+        bool idleBlocked();
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
@@ -862,13 +862,15 @@ namespace {
         }
 
         dmabufUnref(pending->buffer);
-        removeOne(pending->srv->pendingReleases, pending);
+        pending->unlink();
         pending->srv->pendingReleaseAlloc.release(pending);
     }
 
     void drainPendingReleases(WaylandImpl& srv) {
-        for (size_t i = srv.pendingReleases.length(); i > 0; i--) {
-            PendingBufferRelease* pending = srv.pendingReleases[i - 1];
+        for (IntrusiveNode* n = srv.pendingReleases.mutFront(); n != srv.pendingReleases.mutEnd();) {
+            auto* pending = (PendingBufferRelease*)n;
+
+            n = n->next; // finishing unlinks the node, step past it first
 
             if (pending->buffer->gpuUses == 0) {
                 finishPendingRelease(pending);
@@ -1710,13 +1712,13 @@ namespace {
             }
         }
 
-        for (IdleInhibitor* inhibitor : srv->idleInhibitors) {
+        for (IdleInhibitor* inhibitor : each<IdleInhibitor>(srv->idleInhibitors)) {
             if (inhibitor->surface == s) {
                 inhibitor->surface = nullptr;
             }
         }
 
-        for (ActivationTokenRequest* request : srv->activationTokenRequests) {
+        for (ActivationTokenRequest* request : each<ActivationTokenRequest>(srv->activationTokenRequests)) {
             if (request->surface == s) {
                 request->surface = nullptr;
             }
@@ -3092,11 +3094,12 @@ namespace {
             return;
         }
 
-        for (Offer* offer = src->offersHead; offer; offer = offer->sourceNext) {
+        for (Offer* offer : each<Offer>(src->offers)) {
             offer->source = nullptr;
         }
 
-        src->offersHead = nullptr;
+        // the orphans keep a valid ring among themselves for their unlinks
+        src->offers.clear();
         src->srv->seat.sourceGone(src);
         src->srv->dataSourceAlloc.release(src);
     }
@@ -3247,18 +3250,7 @@ namespace {
             return;
         }
 
-        if (DataSource* src = offer->source) {
-            Offer** link = &src->offersHead;
-
-            while (*link && *link != offer) {
-                link = &(*link)->sourceNext;
-            }
-
-            if (*link) {
-                *link = offer->sourceNext;
-            }
-        }
-
+        offer->unlink();
         offer->srv->offerAlloc.release(offer);
     }
 
@@ -3276,14 +3268,13 @@ namespace {
         offer->srv = src->srv;
         offer->source = src;
         offer->dnd = dnd;
-        offer->sourceNext = src->offersHead;
-        src->offersHead = offer;
+        src->offers.pushFront(offer);
 
         if (src->primary) {
             resource = wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0);
 
             if (!resource) {
-                src->offersHead = offer->sourceNext;
+                offer->unlink();
                 src->srv->offerAlloc.release(offer);
 
                 return nullptr;
@@ -3303,7 +3294,7 @@ namespace {
         resource = wl_resource_create(client, &wl_data_offer_interface, (int)version, 0);
 
         if (!resource) {
-            src->offersHead = offer->sourceNext;
+            offer->unlink();
             src->srv->offerAlloc.release(offer);
 
             return nullptr;
@@ -3429,7 +3420,6 @@ namespace {
         src->res = s;
         src->primary = false;
         src->mimes.clear();
-        src->offersHead = nullptr;
         src->dndActions = 0;
         src->dropPerformed = false;
         src->actionsSet = false;
@@ -3520,7 +3510,6 @@ namespace {
         src->res = s;
         src->primary = true;
         src->mimes.clear();
-        src->offersHead = nullptr;
         src->dndActions = 0;
         src->dropPerformed = false;
         src->actionsSet = false;
@@ -4235,7 +4224,7 @@ namespace {
             return;
         }
 
-        removeOne(inhibitor->srv->idleInhibitors, inhibitor);
+        inhibitor->unlink();
         inhibitor->srv->idleInhibitorAlloc.release(inhibitor);
     }
 
@@ -4299,7 +4288,7 @@ namespace {
         auto* n = (WaylandImpl::IdleNotif*)wl_resource_get_user_data(res);
 
         ev_timer_stop(n->srv->loop, &n->timer);
-        removeOne(n->srv->idleNotifs, n);
+        n->unlink();
         n->srv->idleAlloc.release(n);
     }
 
@@ -4817,7 +4806,7 @@ namespace {
     void activationTokenResourceDestroyed(wl_resource* res) {
         auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
-        removeOne(request->srv->activationTokenRequests, request);
+        request->unlink();
         request->srv->activationTokenAlloc.release(request);
     }
 
@@ -5944,7 +5933,7 @@ void SeatState::handleHoldEnd(bool cancelled) {
 }
 
 void WaylandImpl::activity() {
-    for (IdleNotif* n : idleNotifs) {
+    for (IdleNotif* n : each<IdleNotif>(idleNotifs)) {
         if (n->idled) {
             n->idled = false;
             ext_idle_notification_v1_send_resumed(n->res);
@@ -5964,8 +5953,8 @@ void WaylandImpl::activity() {
     }
 }
 
-bool WaylandImpl::idleBlocked() const {
-    for (IdleInhibitor* inhibitor : idleInhibitors) {
+bool WaylandImpl::idleBlocked() {
+    for (IdleInhibitor* inhibitor : each<IdleInhibitor>(idleInhibitors)) {
         Surface* surface = inhibitor->surface;
 
         if (!surface || !surface->hasContent) {
@@ -6574,7 +6563,7 @@ void SeatState::endDrag() {
     // unknowable — deliver the drop as before
     bool accepted = !src;
 
-    for (Offer* offer = src ? src->offersHead : nullptr; offer; offer = offer->sourceNext) {
+    for (Offer* offer : each<Offer>(src->offers)) {
         if (offer->dnd && offer->accepted) {
             accepted = true;
         }

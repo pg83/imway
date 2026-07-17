@@ -67,7 +67,8 @@
 
 using namespace stl;
 
-struct SurfaceTexture {
+// the node links it into the renderer's texture registry
+struct SurfaceTexture: stl::IntrusiveNode {
     int w = 0, h = 0;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -150,7 +151,7 @@ namespace {
         VkDescriptorPool cmDescPool = VK_NULL_HANDLE;
 
         ObjList<SurfaceTexture> textureAlloc;
-        Vector<SurfaceTexture*> textures;
+        IntrusiveList textures;
 
         // icon textures keyed by Icon::gen; entries the previous frame did
         // not touch are destroyed at the start of the next one
@@ -1798,7 +1799,7 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
         vkFreeMemory(device, tex->stagingMemory, nullptr);
     }
 
-    removeOne(textures, tex);
+    tex->unlink();
     textureAlloc.release(tex);
 }
 
@@ -3573,7 +3574,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
 
-    for (SurfaceTexture* tex : textures) {
+    for (SurfaceTexture* tex : each<SurfaceTexture>(textures)) {
         if (!tex->external || !tex->firstUse) {
             continue;
         }
@@ -3591,7 +3592,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         externalFirstUses.pushBack(tex);
     }
 
-    for (SurfaceTexture* tex : textures) {
+    for (SurfaceTexture* tex : each<SurfaceTexture>(textures)) {
         if (!tex->needsUpload) {
             continue;
         }
@@ -4074,7 +4075,7 @@ void RendererImpl::shutdown() noexcept {
     }
 
     while (!textures.empty()) {
-        destroyTexture(textures.back());
+        destroyTexture((SurfaceTexture*)textures.mutBack());
     }
 
     ImGui_ImplVulkan_Shutdown();

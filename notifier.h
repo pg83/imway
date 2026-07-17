@@ -2,6 +2,7 @@
 
 #include "visitor.h"
 
+#include <std/lib/list.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
@@ -11,7 +12,8 @@ struct Composer;
 // one notification; icon is a raw Icon= value (name or path), resolved
 // through the icon store at draw time. onScreen toasts show, the rest live
 // in history until trimmed
-struct Toast {
+// the node links it into the notifier's history list
+struct Toast: stl::IntrusiveNode {
     u32 id = 0;
     stl::StringBuilder app;
     stl::StringBuilder summary;
