@@ -2914,6 +2914,13 @@ namespace {
             }
 
             s.srv->seat.toplevelUnmapped(xs->toplevel);
+
+            // unmap returns the xdg_surface to its pre-initial-commit state:
+            // the next commit is an initial commit again and must be answered
+            // with a fresh configure, which the client must ack before it can
+            // map — without this a spec-following remap hangs forever
+            xs->initialConfigureSent = false;
+            xs->acked = false;
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
