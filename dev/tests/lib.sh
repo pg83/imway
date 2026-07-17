@@ -14,10 +14,19 @@
 # background clients die with the test
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
 
+# a stray SIGPIPE (e.g. the compositor briefly cycling the FIFO) must not kill
+# the scenario mid-run
+trap '' PIPE
+
 CLIENT_LOG="${IMWAY_CLIENT_LOG:-$XDG_RUNTIME_DIR/client.log}"
 
+# Hold one writer open on the control FIFO for the whole scenario. Opening and
+# closing it per command makes the compositor see EOF and reopen the FIFO every
+# time, and that reopen races the next write into a SIGPIPE under load.
+exec 3>"$IMWAY_CTL"
+
 ctl() {
-    echo "$1" > "$IMWAY_CTL"
+    echo "$1" >&3
 }
 
 in_log() {

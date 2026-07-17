@@ -384,8 +384,9 @@ needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and K
 Project layout (2026-07-17): sources live at the repository root — flat, no
 `src/` — one pair of files per subsystem. Everything that is not the compositor
 itself lives under `dev/`: `dev/build.sh` (the single build entry point, also
-builds the test clients), `dev/test.sh` (runs the integration suite, a fresh
-headless compositor per test), `dev/tests/` (the scenarios and their clients),
+builds the test clients), `dev/test.py` (runs the integration suite in
+parallel, a fresh headless compositor per run, three shuffled runs per test),
+`dev/tests/` (the scenarios and their clients),
 `dev/docs/` (this document). Vendored code stays in `third_party/`.
 
 Dependencies point strictly downward: `main` → `control` → {`wayland`, `renderer`} →

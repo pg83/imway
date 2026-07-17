@@ -36,12 +36,15 @@ Raw, no frameworks (no wlroots/Smithay):
 ```sh
 git submodule update --init   # vendored libstd (third_party/libstd)
 dev/build.sh                  # build-boot/imway + the test clients
-dev/test.sh                   # integration tests, a fresh headless compositor per test
+dev/test.py                   # integration tests, a fresh headless compositor per test
 ```
 
 `dev/build.sh` assumes every dependency is on the compiler's default paths (no
-cmake, no pkg-config, no detection). `dev/test.sh` only runs what `dev/build.sh`
-built; `IMWAY=path dev/test.sh` points the suite at another binary. Tests are
+cmake, no pkg-config, no detection). `dev/test.py` only runs what `dev/build.sh`
+built: it spreads every scenario across a thread pool, runs each three times
+with the schedule shuffled, and reports OK / FAIL / FLAKY (`--jobs`, `--runs`,
+`--filter`, `--keep`, `--allow-flaky`; `IMWAY=path` points at another binary).
+Tests are
 headless screenshots with pixel checks: shm, subsurfaces, viewporter, dmabuf
 (via udmabuf), popups, protocol errors, and a keyboard e2e test (typing a
 command into foot).
