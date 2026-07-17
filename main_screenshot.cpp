@@ -971,10 +971,8 @@ int mainScreenshot(StringView path) {
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
     // Prepare the exact style that drawUi will use before sizing the native
-    // window. The canvas child consumes WindowPadding around the image, and
-    // SameLine inserts ItemSpacing between it and the panel; deriving the
-    // chrome from those metrics keeps the initial viewport flush with the
-    // image at every UI scale.
+    // window. drawUi holds WindowPadding at zero while creating both children,
+    // so only SameLine's ItemSpacing separates the panel and image viewport.
     ImGuiStyle uiStyle;
 
     if (gUiScale != 1.f) {
@@ -991,8 +989,8 @@ int mainScreenshot(StringView path) {
     if (loaded) {
         float zoom = (float)kInitialZoom / 100.f;
 
-        winW = (int)ceilf(panelW + uiStyle.ItemSpacing.x + img.w * zoom + uiStyle.WindowPadding.x * 2.f);
-        winH = (int)ceilf(img.h * zoom + uiStyle.WindowPadding.y * 2.f);
+        winW = (int)ceilf(panelW + uiStyle.ItemSpacing.x + img.w * zoom);
+        winH = (int)ceilf(img.h * zoom);
 
         int minH = (int)(220.f * gUiScale);
 
