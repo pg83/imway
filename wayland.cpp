@@ -403,6 +403,11 @@ namespace {
         wl_client* pointerGrabClient = nullptr;
         Surface* pointerGrabOrigin = nullptr;
 
+        // last delivered key press: a valid xdg_popup.grab trigger too
+        // (menu key, shift+F10)
+        u32 keyGrabSerial = 0;
+        wl_client* keyGrabClient = nullptr;
+
         void releaseAllKeys();
         void rememberSerial(u32 serial, wl_client* client, Surface* surface);
         bool validSerial(wl_client* client, u32 serial) const;
@@ -462,6 +467,7 @@ namespace {
         void updateShortcutInhibit();
 
         void focusToplevel(Toplevel* t);
+        void toplevelUnmapped(Toplevel* t);
         void popupGrabStart(Popup* p);
         void popupGone(Popup* p);
         void surfaceGone(Surface* s);
@@ -2570,9 +2576,20 @@ namespace {
         auto* parentSurface = (SurfaceImpl*)p->parent;
         PopupImpl* parentPopup = parentSurface && parentSurface->xdg ? parentSurface->xdg->popup : nullptr;
 
-        if (p->mapped || !seat || seat != &p->srv->seat || seat->pointerGrabClient != client ||
-            seat->pointerGrabSerial != serial || seat->buttonsDown <= 0 || (parentPopup && !parentPopup->grab)) {
+        if (p->mapped || !seat || seat != &p->srv->seat || (parentPopup && !parentPopup->grab)) {
             wl_resource_post_error(res, XDG_POPUP_ERROR_INVALID_GRAB, "popup grab serial is not an active implicit grab");
+
+            return;
+        }
+
+        bool pointerOk = seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
+        bool keyOk = seat->keyGrabClient == client && seat->keyGrabSerial == serial;
+
+        // keyboard-opened menus (Menu key, Shift+F10) grab with a key-press
+        // serial; a stale serial is not an error per xdg-shell — dismiss the
+        // popup instead of killing the client
+        if (!pointerOk && !keyOk) {
+            xdg_popup_send_popup_done(res);
 
             return;
         }
@@ -2890,6 +2907,8 @@ namespace {
                     dismissPopupTree(*(PopupImpl*)popup);
                 }
             }
+
+            s.srv->seat.toplevelUnmapped(xs->toplevel);
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
@@ -3289,7 +3308,9 @@ namespace {
 
         if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial ||
             client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin) {
-            if (src && wl_resource_get_version(src->res) >= 3) {
+            // cancelled is a v1 event (v3 only added dnd_drop_performed and
+            // friends); gating it left old clients waiting forever
+            if (src) {
                 wl_data_source_send_cancelled(src->res);
             }
 
@@ -4152,6 +4173,11 @@ namespace {
     void kbInhibitSurfaceGone(SurfaceImpl& s) {
         if (s.kbInhibitRes) {
             wl_resource_set_user_data(s.kbInhibitRes, nullptr);
+            s.kbInhibitRes = nullptr;
+            s.kbInhibitActive = false;
+            s.srv->seat.updateShortcutInhibit();
+
+            return;
         }
 
         s.kbInhibitActive = false;
@@ -6270,6 +6296,11 @@ void SeatState::handleKey(u32 code, bool pressed) {
 
         if (delivered) {
             rememberSerial(serial, client, (Surface*)surfaceFrom(target));
+
+            if (pressed) {
+                keyGrabSerial = serial;
+                keyGrabClient = client;
+            }
         }
     }
 }
@@ -6394,6 +6425,16 @@ void SeatState::sourceGone(DataSource* src) {
     }
 
     if (dragSource == src) {
+        // tell the target the dnd session is over, or it keeps its drop zone
+        // highlighted waiting for a drop that never comes
+        if (dragTarget) {
+            for (wl_resource* d : dataDevices) {
+                if (sameClientS(d, dragTarget)) {
+                    wl_data_device_send_leave(d);
+                }
+            }
+        }
+
         dragSource = nullptr;
         dragClient = nullptr;
         dragTarget = nullptr;
@@ -6410,7 +6451,8 @@ void SeatState::sourceGone(DataSource* src) {
 
 void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon) {
     if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin) {
-        if (src && wl_resource_get_version(src->res) >= 3) {
+        // cancelled exists since v1; see deviceStartDrag
+        if (src) {
             wl_data_source_send_cancelled(src->res);
         }
 
@@ -6532,7 +6574,11 @@ void SeatState::focusToplevel(Toplevel* t) {
         }
     }
 
-    if (kbFocus && kbFocus->surface) {
+    // under an active popup grab the keyboard belongs to kbOverride: the old
+    // focus already got its leave at grab start, and the new one gets enter
+    // when the grab ends (popupGone) — sending either here would show the
+    // client two focused surfaces at once
+    if (kbFocus && kbFocus->surface && !kbOverride) {
         u32 serial = wl_display_next_serial(srv->display);
 
         for (wl_resource* k : keyboards) {
@@ -6557,12 +6603,39 @@ void SeatState::focusToplevel(Toplevel* t) {
         layoutIndicator();
     }
 
-    if (t && t->surface) {
+    if (t && t->surface && !kbOverride) {
         kbSendEnter(resOf(t->surface));
         sysO << "imway: focus -> "_sv << sv(t->title) << endL;
     }
 
     updateShortcutInhibit();
+}
+
+// unmap (null-buffer commit) hides the window but keeps it alive: without a
+// focus handoff the keyboard and pointer keep feeding an invisible surface
+void SeatState::toplevelUnmapped(Toplevel* t) {
+    if (ptrFocus && ptrFocus->rootToplevel() == t) {
+        pointerSetFocus(nullptr, 0, 0);
+        buttonsDown = 0;
+    }
+
+    if (kbFocus == t) {
+        Toplevel* next = nullptr;
+
+        for (size_t i = srv->scene->toplevels.length(); i > 0; i--) {
+            Toplevel* other = srv->scene->toplevels[i - 1];
+
+            if (other != t && other->mapped) {
+                next = other;
+
+                break;
+            }
+        }
+
+        // unlike toplevelGone the surface is still alive, so focusToplevel
+        // delivers the leave to it before entering the next window
+        focusToplevel(next);
+    }
 }
 
 void SeatState::popupGrabStart(Popup* p) {
@@ -6647,6 +6720,10 @@ void SeatState::toplevelGone(Toplevel* t) {
             }
         }
     }
+
+    // if the dying window held a shortcuts inhibitor and was the last one,
+    // no focus change recomputes the flag and hotkeys stay dead forever
+    updateShortcutInhibit();
 }
 
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
