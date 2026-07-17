@@ -33,8 +33,13 @@ grep -q "ready for grab" "$RT/client.log" || {
 # xdg_popup.grab request has been processed.
 sleep 0.5
 echo "screenshot $RT/base.ppm" > "$RT/ctl"
-for _ in $(seq 1 50); do
-    [[ -f "$RT/base.ppm" ]] && break
+# the file appears at open() and fills up afterwards: wait for the size to
+# settle, not merely for existence, or python reads a truncated ppm
+prev=-1
+for _ in $(seq 1 100); do
+    size=$(stat -c %s "$RT/base.ppm" 2>/dev/null || echo -1)
+    [[ "$size" -gt 0 && "$size" -eq "$prev" ]] && break
+    prev=$size
     sleep 0.1
 done
 read -r GRAB_X GRAB_Y < <(python3 - "$RT/base.ppm" <<'PY'
