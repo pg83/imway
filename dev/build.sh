@@ -86,6 +86,8 @@ IMWAY_SRC="
 main.cpp
 main_screenshot.cpp
 composer.cpp
+pooled.cpp
+pooled_vk.cpp
 scene.cpp
 wayland.cpp
 control.cpp
