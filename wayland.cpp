@@ -75,7 +75,8 @@ namespace {
         WaylandImpl* srv = nullptr;
         bool hdr = false;   // st2084_pq transfer
         bool wide = false;  // bt2020 primaries
-        u32 maxCll = 0, maxLum = 0;
+        bool allowInfo = false;
+        u32 maxCll = 0, refLum = 0;
     };
 
     struct CParams {
@@ -83,6 +84,16 @@ namespace {
         CImgDesc d;
         bool tfSet = false;
         bool primSet = false;
+        bool lumSet = false;
+        bool masteringPrimSet = false;
+        bool masteringLumSet = false;
+        bool maxCllSet = false;
+        bool maxFallSet = false;
+        u32 minLum = 2000;
+        u32 maxLum = 80;
+        u32 masteringMinLum = 0;
+        u32 masteringMaxLum = 0;
+        u32 maxFall = 0;
     };
     struct ToplevelImpl;
     struct WaylandImpl;
@@ -6936,7 +6947,16 @@ WaylandImpl::~WaylandImpl() noexcept {
         wl_resource_destroy(res);
     }
 
-    void cmImageDescGetInfo(wl_client* client, wl_resource*, u32 id) {
+    void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
+        auto* d = (CImgDesc*)wl_resource_get_user_data(res);
+
+        if (!d || !d->allowInfo) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION,
+                                   "this image description cannot be introspected");
+
+            return;
+        }
+
         // minimal: the info object with just a done — clients that set
         // descriptions rarely introspect the details
         wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface, 1, id);
@@ -7003,7 +7023,8 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 
     void cmParamsSetTfPower(wl_client*, wl_resource* res, u32) {
-        ((CParams*)wl_resource_get_user_data(res))->tfSet = true;
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "power transfer functions were not advertised");
     }
 
     void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
@@ -7029,25 +7050,77 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 
     void cmParamsSetPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
-        ((CParams*)wl_resource_get_user_data(res))->primSet = true;
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "custom primaries were not advertised");
     }
 
-    void cmParamsSetLum(wl_client*, wl_resource* res, u32, u32 maxLum, u32) {
-        ((CParams*)wl_resource_get_user_data(res))->d.maxLum = maxLum;
+    bool cmInvalidLumRange(u32 minLum, u32 maxLum) {
+        return (u64)maxLum * 10000 <= minLum;
     }
 
-    void cmParamsSetMasteringPrim(wl_client*, wl_resource*, i32, i32, i32, i32, i32, i32, i32, i32) {
+    void cmParamsSetLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum, u32 refLum) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p->lumSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "primary luminances are already set");
+
+            return;
+        }
+
+        if (cmInvalidLumRange(minLum, maxLum) || cmInvalidLumRange(minLum, refLum)) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
+                                   "primary max and reference luminance must exceed min luminance");
+
+            return;
+        }
+
+        p->lumSet = true;
+        p->minLum = minLum;
+        p->maxLum = maxLum;
+        p->d.refLum = refLum;
     }
 
-    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32, u32 maxLum) {
-        ((CParams*)wl_resource_get_user_data(res))->d.maxLum = maxLum;
+    void cmParamsSetMasteringPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p->masteringPrimSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "mastering display primaries are already set");
+
+            return;
+        }
+
+        p->masteringPrimSet = true;
+    }
+
+    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (cmInvalidLumRange(minLum, maxLum)) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
+                                   "mastering max luminance must exceed min luminance");
+
+            return;
+        }
+
+        p->masteringLumSet = true;
+        p->masteringMinLum = minLum;
+        p->masteringMaxLum = maxLum;
     }
 
     void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
-        ((CParams*)wl_resource_get_user_data(res))->d.maxCll = v;
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        p->d.maxCll = v;
+        p->maxCllSet = true;
     }
 
-    void cmParamsSetMaxFall(wl_client*, wl_resource*, u32) {
+    void cmParamsSetMaxFall(wl_client*, wl_resource* res, u32 v) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        p->maxFall = v;
+        p->maxFallSet = true;
     }
 
     void cmParamsCreate(wl_client* client, wl_resource* res, u32 id) {
@@ -7055,6 +7128,21 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         if (!p->tfSet || !p->primSet) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INCOMPLETE_SET, "transfer function and primaries are required");
+
+            return;
+        }
+
+        u32 minLum = p->masteringLumSet ? p->masteringMinLum : p->minLum;
+        u32 maxLum = p->masteringLumSet ? p->masteringMaxLum : p->maxLum;
+        auto levelInMasteringRange = [minLum, maxLum](u32 level) {
+            return (u64)level * 10000 > minLum && level <= maxLum;
+        };
+
+        if ((p->maxCllSet && !levelInMasteringRange(p->d.maxCll)) ||
+            (p->maxFallSet && !levelInMasteringRange(p->maxFall)) ||
+            (p->maxCllSet && p->maxFallSet && p->maxFall > p->d.maxCll)) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
+                                   "content light levels are outside the mastering luminance range");
 
             return;
         }
@@ -7128,7 +7216,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         s->pendColorWide = d->wide;
         s->pendColorManaged = d->hdr || d->wide;
         s->pendColorMaxCll = d->maxCll;
-        s->pendColorRefLum = d->maxLum;
+        s->pendColorRefLum = d->refLum;
     }
 
     void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
@@ -7167,6 +7255,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         d.hdr = srv->output && srv->output->isHdr();
         d.wide = d.hdr;
+        d.allowInfo = true;
 
         return d;
     }
@@ -7265,33 +7354,19 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         CParams* p = srv->cparAlloc.make();
 
+        *p = {};
         p->srv = srv;
-        p->d = {};
-        p->tfSet = false;
-        p->primSet = false;
         wl_resource_set_implementation(pr, &cmParamsImpl, p, cmParamsResourceDestroyed);
     }
 
-    void cmManagerCreateIccCreator(wl_client* client, wl_resource*, u32 id) {
-        // icc is not advertised; hand back an object that only errors
-        if (!wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, 1, id)) {
-            wl_client_post_no_memory(client);
-        }
+    void cmManagerCreateIccCreator(wl_client*, wl_resource* res, u32) {
+        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "ICC profiles were not advertised");
     }
 
-    void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* d = wl_resource_create(client, &wp_image_description_v1_interface, wl_resource_get_version(res), id);
-
-        if (!d) {
-            wl_client_post_no_memory(client);
-
-            return;
-        }
-
-        wl_resource_set_implementation(d, &cmImageDescImpl, nullptr, nullptr);
-        wp_image_description_v1_send_failed(d, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "windows scrgb not supported");
-        (void)srv;
+    void cmManagerCreateWindowsScrgb(wl_client*, wl_resource* res, u32) {
+        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "Windows-scRGB was not advertised");
     }
 
     const struct wp_color_manager_v1_interface cmManagerImpl = {
