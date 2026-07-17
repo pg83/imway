@@ -293,6 +293,10 @@ namespace {
         // pool icon built from client pixels (xdg-toplevel-icon); wayland
         // owns it: released on replace and on destroy
         Icon* ownIcon = nullptr;
+        Icon* pendingOwnIcon = nullptr;
+        Icon* pendingIcon = nullptr;
+        bool pendingIconFromClient = false;
+        bool pendingIconSet = false;
     };
 
     struct Positioner {
@@ -328,13 +332,31 @@ namespace {
         Vector<RectI> rects;
     };
 
-    // xdg-toplevel-icon: pixels are copied out of the wl_shm buffer right
-    // at add_buffer time, the largest reasonable size wins
+    struct IconBox;
+    struct IconBufferWatch;
+
+    struct IconBufferDestroyListener {
+        wl_listener listener{};
+        IconBufferWatch* watch = nullptr;
+    };
+
+    struct IconBufferWatch: IntrusiveNode {
+        IconBox* icon = nullptr;
+        IconBufferDestroyListener destroy;
+    };
+
+    // xdg-toplevel-icon: pixels are copied out of the wl_shm buffer at
+    // add_buffer time, while destroy listeners enforce the protocol's source
+    // buffer lifetime until the icon object itself dies.
     struct IconBox {
         WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
         StringBuilder name;
         Vector<u32> pixels;
+        IntrusiveList bufferWatches;
         int w = 0, h = 0;
+        int effectiveSize = 0;
+        bool immutable = false;
     };
 
     struct ConstraintBox {
@@ -560,6 +582,7 @@ namespace {
         ObjList<Params> dmabufParamsAlloc;
         ObjList<ConstraintBox> constraintAlloc;
         ObjList<IconBox> iconAlloc;
+        ObjList<IconBufferWatch> iconBufferWatchAlloc;
         ObjList<ActivationTokenRequest> activationTokenAlloc;
         IntrusiveList activationTokenRequests;
         Vector<ActivationGrant> activationGrants;
@@ -2283,6 +2306,11 @@ namespace {
             t->ownIcon = nullptr;
         }
 
+        if (t->pendingOwnIcon && srv->iconPool) {
+            srv->iconPool->release(t->pendingOwnIcon);
+            t->pendingOwnIcon = nullptr;
+        }
+
         t->unlink();
         sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
@@ -2855,6 +2883,23 @@ namespace {
         }
 
         xs->committedAckSerial = xs->ackedSerial;
+
+        if (xs->toplevel && xs->toplevel->pendingIconSet) {
+            ToplevelImpl& toplevel = *xs->toplevel;
+
+            if (toplevel.ownIcon && toplevel.srv->iconPool) {
+                toplevel.srv->iconPool->release(toplevel.ownIcon);
+            }
+
+            toplevel.ownIcon = toplevel.pendingOwnIcon;
+            toplevel.icon = toplevel.pendingIcon;
+            toplevel.iconFromClient = toplevel.pendingIconFromClient;
+            toplevel.pendingOwnIcon = nullptr;
+            toplevel.pendingIcon = nullptr;
+            toplevel.pendingIconFromClient = false;
+            toplevel.pendingIconSet = false;
+            toplevel.srv->scene->needsFrame = true;
+        }
 
         if (xs->popup && !xs->initialConfigureSent) {
             auto* parent = (SurfaceImpl*)xs->popup->parent;
@@ -4567,8 +4612,27 @@ namespace {
     }
 
     // ---- xdg-toplevel-icon ----
+    void iconBufferDestroyed(wl_listener* listener, void*) {
+        auto* destroy = (IconBufferDestroyListener*)listener;
+        IconBufferWatch* watch = destroy->watch;
+        IconBox* box = watch->icon;
+
+        wl_list_remove(&destroy->listener.link);
+        watch->unlink();
+        wl_resource_post_error(box->res, XDG_TOPLEVEL_ICON_V1_ERROR_NO_BUFFER,
+                               "icon buffer was destroyed before the icon object");
+        box->srv->iconBufferWatchAlloc.release(watch);
+    }
+
     void iconResourceDestroyed(wl_resource* res) {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
+
+        while (!box->bufferWatches.empty()) {
+            auto* watch = (IconBufferWatch*)box->bufferWatches.popFront();
+
+            wl_list_remove(&watch->destroy.listener.link);
+            box->srv->iconBufferWatchAlloc.release(watch);
+        }
 
         box->srv->iconAlloc.release(box);
     }
@@ -4576,34 +4640,75 @@ namespace {
     void iconSetName(wl_client*, wl_resource* res, const char* name) {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
 
+        if (box->immutable) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE,
+                                   "icon was already assigned to a toplevel");
+
+            return;
+        }
+
         box->name.reset();
         box->name << name;
     }
 
-    void iconAddBuffer(wl_client*, wl_resource* res, wl_resource* bufferRes, i32) {
+    void iconAddBuffer(wl_client*, wl_resource* res, wl_resource* bufferRes, i32 scale) {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
+
+        if (box->immutable) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE,
+                                   "icon was already assigned to a toplevel");
+
+            return;
+        }
+
         wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
 
         if (!shm) {
-            return; // dmabuf icons: not worth the plumbing
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
+                                   "icon buffer must be backed by wl_shm");
+
+            return;
         }
 
         u32 fmt = wl_shm_buffer_get_format(shm);
 
         if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
+                                   "unsupported icon buffer format");
+
             return;
         }
 
         int w = wl_shm_buffer_get_width(shm);
         int h = wl_shm_buffer_get_height(shm);
 
-        if (w <= 0 || h <= 0 || w > 256 || h > 256 || w <= box->w) {
+        if (w <= 0 || h <= 0 || w != h || scale <= 0) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
+                                   "icon buffer must be square with a positive scale");
+
             return;
         }
 
         i32 stride = wl_shm_buffer_get_stride(shm);
 
         if (stride < (i64)w * 4) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
+                                   "icon buffer stride is too small");
+
+            return;
+        }
+
+        IconBufferWatch* watch = box->srv->iconBufferWatchAlloc.make();
+
+        watch->icon = box;
+        watch->destroy.watch = watch;
+        watch->destroy.listener.notify = iconBufferDestroyed;
+        box->bufferWatches.pushBack(watch);
+        wl_resource_add_destroy_listener(bufferRes, &watch->destroy.listener);
+
+        int effectiveSize = w / scale;
+
+        if (effectiveSize < box->effectiveSize) {
             return;
         }
 
@@ -4620,6 +4725,7 @@ namespace {
         wl_shm_buffer_end_access(shm);
         box->w = w;
         box->h = h;
+        box->effectiveSize = effectiveSize;
     }
 
     const struct xdg_toplevel_icon_v1_interface iconImpl = {
@@ -4641,6 +4747,7 @@ namespace {
         IconBox* box = srv->iconAlloc.make();
 
         box->srv = srv;
+        box->res = r;
         wl_resource_set_implementation(r, &iconImpl, box, iconResourceDestroyed);
     }
 
@@ -4652,16 +4759,19 @@ namespace {
             return;
         }
 
-        if (t->ownIcon && srv->iconPool) {
-            srv->iconPool->release(t->ownIcon);
-            t->ownIcon = nullptr;
+        if (t->pendingOwnIcon && srv->iconPool) {
+            srv->iconPool->release(t->pendingOwnIcon);
         }
 
-        t->icon = nullptr;
-        t->iconFromClient = false;
+        t->pendingOwnIcon = nullptr;
+        t->pendingIcon = nullptr;
+        t->pendingIconFromClient = false;
+        t->pendingIconSet = true;
 
         if (iconRes) {
             auto* box = (IconBox*)wl_resource_get_user_data(iconRes);
+
+            box->immutable = true;
 
             if (box->pixels.length() && srv->iconPool) {
                 Icon* ic = srv->iconPool->acquire();
@@ -4669,21 +4779,19 @@ namespace {
                 ic->width = box->w;
                 ic->height = box->h;
                 ic->argb.append(box->pixels.data(), box->pixels.length());
-                t->ownIcon = ic;
-                t->icon = ic;
-                t->iconFromClient = true;
+                t->pendingOwnIcon = ic;
+                t->pendingIcon = ic;
+                t->pendingIconFromClient = true;
             } else if (!box->name.empty() && srv->icons) {
-                t->icon = srv->icons->byName(sv(box->name));
-                t->iconFromClient = t->icon != nullptr;
+                t->pendingIcon = srv->icons->byName(sv(box->name));
+                t->pendingIconFromClient = t->pendingIcon != nullptr;
             }
         }
 
-        if (!t->iconFromClient && srv->icons) {
+        if (!t->pendingIconFromClient && srv->icons) {
             // back to the .desktop match
-            t->icon = srv->icons->forAppId(sv(t->appId));
+            t->pendingIcon = srv->icons->forAppId(sv(t->appId));
         }
-
-        srv->scene->needsFrame = true;
     }
 
     const struct xdg_toplevel_icon_manager_v1_interface iconManagerImpl = {
@@ -6870,6 +6978,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , dmabufParamsAlloc(comp.pool)
     , constraintAlloc(comp.pool)
     , iconAlloc(comp.pool)
+    , iconBufferWatchAlloc(comp.pool)
     , activationTokenAlloc(comp.pool)
     , cimgAlloc(comp.pool)
     , cparAlloc(comp.pool)
