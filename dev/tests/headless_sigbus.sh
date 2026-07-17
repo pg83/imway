@@ -1,26 +1,11 @@
 #!/usr/bin/env bash
-# Robustness: client truncates the shm pool out from under the compositor; the compositor must survive.
+# Robustness: client truncates the shm pool out from under the compositor;
+# the compositor must survive (the runner also verifies the clean exit).
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
-IMWAY="$1"
-CLIENT="$2"
+"$IMWAY_CLIENT" || true
 
-RT="$(mktemp -d)"
-trap 'rm -rf "$RT"' EXIT
-export XDG_RUNTIME_DIR="$RT"
-
-"$IMWAY" --device headless --socket imway-test --frames 200 &
-IMWAY_PID=$!
-
-for _ in $(seq 1 50); do
-    [[ -S "$RT/imway-test" ]] && break
-    sleep 0.1
-done
-[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; exit 1; }
-
-WAYLAND_DISPLAY=imway-test "$CLIENT" || true
-
-wait "$IMWAY_PID"
-RC=$?
-[[ $RC -eq 0 ]] || { echo "compositor died (rc=$RC)"; exit 1; }
-echo ok
+sleep 0.5 # let the compositor render a few frames over the truncated pool
+kill -0 "$IMWAY_PID" || { echo "compositor died"; exit 1; }
+echo "OK: compositor survived the truncated pool"

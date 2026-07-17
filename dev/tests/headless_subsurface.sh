@@ -1,33 +1,15 @@
 #!/usr/bin/env bash
 # Subsurfaces: red toplevel + green sync sub + blue desync sub.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
-IMWAY="$1"
-CLIENT="$2"
+"$IMWAY_CLIENT" &
 
-RT="$(mktemp -d)"
-trap 'rm -rf "$RT"' EXIT
-export XDG_RUNTIME_DIR="$RT"
-SHOT="$RT/shot.ppm"
+await 100 in_log "mapped" || { echo "client did not map"; exit 1; }
+sleep 0.3 # let the committed buffers reach a rendered frame
+screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-"$IMWAY" --device headless --socket imway-test --frames 90 --screenshot "$SHOT" &
-IMWAY_PID=$!
-
-for _ in $(seq 1 50); do
-    [[ -S "$RT/imway-test" ]] && break
-    sleep 0.1
-done
-[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; exit 1; }
-
-WAYLAND_DISPLAY=imway-test "$CLIENT" &
-CLIENT_PID=$!
-
-wait "$IMWAY_PID"
-kill "$CLIENT_PID" 2>/dev/null || true
-
-[[ -f "$SHOT" ]] || { echo "no screenshot"; exit 1; }
-
-python3 - "$SHOT" <<'PY'
+python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'

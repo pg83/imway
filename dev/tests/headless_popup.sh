@@ -2,47 +2,20 @@
 # Popups: yellow grab popup over a red toplevel, placed by the positioner;
 # click outside → popup_done → popup disappears.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
-IMWAY="$1"
-CLIENT="$2"
+CLIENT_LOG="$XDG_RUNTIME_DIR/client.log"
 
-RT="$(mktemp -d)"
-trap 'rm -rf "$RT"' EXIT
-export XDG_RUNTIME_DIR="$RT"
+"$IMWAY_CLIENT" >"$CLIENT_LOG" 2>&1 &
 
-"$IMWAY" --device headless --socket imway-test --control "$RT/ctl" >"$RT/imway.log" 2>&1 &
-IMWAY_PID=$!
-
-for _ in $(seq 1 50); do
-    [[ -S "$RT/imway-test" && -p "$RT/ctl" ]] && break
-    sleep 0.1
-done
-[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; exit 1; }
-
-WAYLAND_DISPLAY=imway-test "$CLIENT" >"$RT/client.log" 2>&1 &
-CLIENT_PID=$!
-
-for _ in $(seq 1 50); do
-    grep -q "ready for grab" "$RT/client.log" && break
-    sleep 0.1
-done
-grep -q "ready for grab" "$RT/client.log" || {
-    echo "toplevel did not become ready"; cat "$RT/imway.log" "$RT/client.log"; exit 1; }
+await 50 grep -q "ready for grab" "$CLIENT_LOG" || {
+    echo "toplevel did not become ready"; cat "$IMWAY_LOG" "$CLIENT_LOG"; exit 1; }
 
 # Create a real implicit pointer grab and keep the button held until the
 # xdg_popup.grab request has been processed.
 sleep 0.5
-echo "screenshot $RT/base.ppm" > "$RT/ctl"
-# the file appears at open() and fills up afterwards: wait for the size to
-# settle, not merely for existence, or python reads a truncated ppm
-prev=-1
-for _ in $(seq 1 100); do
-    size=$(stat -c %s "$RT/base.ppm" 2>/dev/null || echo -1)
-    [[ "$size" -gt 0 && "$size" -eq "$prev" ]] && break
-    prev=$size
-    sleep 0.1
-done
-read -r GRAB_X GRAB_Y < <(python3 - "$RT/base.ppm" <<'PY'
+screenshot "$XDG_RUNTIME_DIR/base.ppm"
+read -r GRAB_X GRAB_Y < <(python3 - "$XDG_RUNTIME_DIR/base.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'
@@ -56,36 +29,30 @@ print((min(x for x, _ in pts) + max(x for x, _ in pts)) // 2,
       (min(y for _, y in pts) + max(y for _, y in pts)) // 2)
 PY
 )
-echo "motion $GRAB_X $GRAB_Y" > "$RT/ctl"
+ctl "motion $GRAB_X $GRAB_Y"
 sleep 0.2
-echo "button left press" > "$RT/ctl"
+ctl "button left press"
 
-for _ in $(seq 1 50); do
-    grep -q "popup mapped" "$RT/imway.log" && break
-    sleep 0.1
-done
-grep -q "popup mapped" "$RT/imway.log" || {
-    echo "popup did not map"; cat "$RT/imway.log" "$RT/client.log"; exit 1; }
-echo "button left release" > "$RT/ctl"
+await 50 in_log "popup mapped" || {
+    echo "popup did not map"; cat "$IMWAY_LOG" "$CLIENT_LOG"; exit 1; }
+ctl "button left release"
 sleep 0.5
 
-C() { echo "$1" > "$RT/ctl"; sleep 0.2; }
-C "screenshot $RT/with.ppm"
+screenshot "$XDG_RUNTIME_DIR/with.ppm"
 
 # click into an empty corner → dismiss
-C "motion 1100 700"
-C "button left press"
-C "button left release"
+ctl "motion 1100 700"
+sleep 0.2
+ctl "button left press"
+sleep 0.2
+ctl "button left release"
 sleep 0.5
-C "screenshot $RT/without.ppm"
-C "quit"
-wait "$IMWAY_PID" 2>/dev/null || true
-kill "$CLIENT_PID" 2>/dev/null || true
+screenshot "$XDG_RUNTIME_DIR/without.ppm"
 
-grep -q "popup done" "$RT/client.log" || {
-    echo "client did not receive popup_done"; cat "$RT/client.log"; exit 1; }
+await 50 grep -q "popup done" "$CLIENT_LOG" || {
+    echo "client did not receive popup_done"; cat "$CLIENT_LOG"; exit 1; }
 
-python3 - "$RT/with.ppm" "$RT/without.ppm" <<'PY'
+python3 - "$XDG_RUNTIME_DIR/with.ppm" "$XDG_RUNTIME_DIR/without.ppm" <<'PY'
 import sys
 def counts(path):
     f = open(path, 'rb')

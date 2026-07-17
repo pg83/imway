@@ -381,11 +381,12 @@ needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and K
 
 ### 14.1 Layers and files
 
-Project layout (2026-07-14): sources live at the repository root — flat, no
+Project layout (2026-07-17): sources live at the repository root — flat, no
 `src/` — one pair of files per subsystem. Everything that is not the compositor
-itself lives under `dev/`: `dev/build.sh` (the single build entry point),
-`dev/vm/` (the QEMU harness, state in `dev/vm/.state`), `dev/tests/` (ctest
-suite), `dev/docs/` (this document). Vendored code stays in `third_party/`.
+itself lives under `dev/`: `dev/build.sh` (the single build entry point, also
+builds the test clients), `dev/test.sh` (runs the integration suite, a fresh
+headless compositor per test), `dev/tests/` (the scenarios and their clients),
+`dev/docs/` (this document). Vendored code stays in `third_party/`.
 
 Dependencies point strictly downward: `main` → `control` → {`wayland`, `renderer`} →
 {`scene`, `device`, `output`, `input`, `session`} → `util`. One .h — one .cpp,

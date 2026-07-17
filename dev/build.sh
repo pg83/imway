@@ -134,3 +134,42 @@ printf '%s' "$CMDS" | xargs -d '\n' -P "$JOBS" -I{} sh -c '{}'
 
 $CXX -o "$B/imway" $OBJS $LIBS ${LDFLAGS:-} ${CTRFLAGS:-}
 echo "OK: $B/imway"
+
+# ---- test clients (dev/tests/client_*.c|cpp, run by dev/test.sh) ----
+
+mkdir -p "$B/tests"
+
+for xml in stable/xdg-shell/xdg-shell.xml stable/viewporter/viewporter.xml stable/linux-dmabuf/linux-dmabuf-v1.xml; do
+    name=$(basename "$xml" .xml)
+    wayland-scanner client-header "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-protocol.h"
+    wayland-scanner private-code  "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-code.c"
+done
+
+# a client needs the wl_interface tables of its protocols, but the default
+# link may already carry some (this dev env links libSDL3 statically, which
+# bundles xdg-shell and viewporter) — adding our own copy then is a duplicate
+# symbol error. Probe each table and compile only the missing ones.
+GLUE=""
+
+for probe in xdg_wm_base_interface:xdg-shell wp_viewporter_interface:viewporter zwp_linux_dmabuf_v1_interface:linux-dmabuf-v1; do
+    sym=${probe%%:*}
+    name=${probe##*:}
+    echo "extern const char $sym[]; int main(void) { return !$sym[0]; }" \
+        | $CC -x c - -o "$B/tests/.probe" -lwayland-client ${LDFLAGS:-} 2>/dev/null \
+        || GLUE="$GLUE $B/tests/$name-client-code.c"
+done
+
+rm -f "$B/tests/.probe"
+
+for src in dev/tests/client_*.c dev/tests/client_*.cpp; do
+    [[ -e "$src" ]] || continue
+    name=$(basename "$src")
+    name=${name%.*}
+
+    case "$src" in
+        *.cpp) $CXX $CXXFLAGS -I"$B/tests" -o "$B/tests/$name" "$src" $GLUE -lwayland-client ${LDFLAGS:-} ;;
+        *)     $CC  $CFLAGS   -I"$B/tests" -o "$B/tests/$name" "$src" $GLUE -lwayland-client ${LDFLAGS:-} ;;
+    esac
+done
+
+echo "OK: $B/tests"

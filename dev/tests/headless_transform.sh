@@ -1,25 +1,15 @@
 #!/usr/bin/env bash
+# buffer_transform 90: a 120x200 red|blue buffer shows up as ~200x120.
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
-IMWAY="$1"
-CLIENT="$2"
-RT="$(mktemp -d)"
-trap 'rm -rf "$RT"' EXIT
-export XDG_RUNTIME_DIR="$RT"
-SHOT="$RT/shot.ppm"
+"$IMWAY_CLIENT" &
 
-"$IMWAY" --device headless --socket imway-test --frames 90 --screenshot "$SHOT" &
-PID=$!
-for _ in $(seq 1 50); do
-    [[ -S "$RT/imway-test" ]] && break
-    sleep 0.1
-done
-WAYLAND_DISPLAY=imway-test "$CLIENT" &
-CLIENT_PID=$!
-wait "$PID"
-kill "$CLIENT_PID" 2>/dev/null || true
+await 100 in_log "mapped" || { echo "client did not map"; exit 1; }
+sleep 0.3 # let the committed buffer reach a rendered frame
+screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$SHOT" <<'PY'
+python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'

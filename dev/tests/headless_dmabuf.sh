@@ -1,41 +1,32 @@
 #!/usr/bin/env bash
 # dmabuf: client sends an orange buffer via udmabuf, compositor imports it
-# into Vulkan without copies. 127 = skip (no /dev/udmabuf or device lacks extensions).
+# into Vulkan without copies. Skips when /dev/udmabuf or the extensions
+# are unavailable (client exits 77).
 set -euo pipefail
+. "$(dirname "$0")/lib.sh"
 
-IMWAY="$1"
-CLIENT="$2"
+"$IMWAY_CLIENT" &
+CLIENT_PID=$!
 
-RT="$(mktemp -d)"
-trap 'rm -rf "$RT"' EXIT
-export XDG_RUNTIME_DIR="$RT"
-SHOT="$RT/shot.ppm"
-
-"$IMWAY" --device headless --socket imway-test --frames 90 --screenshot "$SHOT" >"$RT/imway.log" 2>&1 &
-IMWAY_PID=$!
-
-for _ in $(seq 1 50); do
-    [[ -S "$RT/imway-test" ]] && break
+for _ in $(seq 1 100); do
+    in_log "mapped" && break
+    kill -0 "$CLIENT_PID" 2>/dev/null || break
     sleep 0.1
 done
-[[ -S "$RT/imway-test" ]] || { echo "socket did not appear"; cat "$RT/imway.log"; exit 1; }
 
-set +e
-WAYLAND_DISPLAY=imway-test "$CLIENT" &
-CLIENT_PID=$!
-wait "$IMWAY_PID"
-wait "$CLIENT_PID" 2>/dev/null
-CLIENT_RC=$?
-set -e
-# client lives until killed; only an explicit skip (77) matters
-if [[ "$CLIENT_RC" == 77 ]]; then
-    echo "SKIP: dmabuf unavailable"
-    exit 127
+if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
+    rc=0
+    wait "$CLIENT_PID" || rc=$?
+    [[ $rc -eq 77 ]] && { echo "SKIP: dmabuf unavailable"; exit 127; }
+    echo "client died (rc=$rc)"
+    exit 1
 fi
 
-[[ -f "$SHOT" ]] || { echo "no screenshot"; cat "$RT/imway.log"; exit 1; }
+in_log "mapped" || { echo "client did not map"; exit 1; }
+sleep 0.3 # let the committed buffer reach a rendered frame
+screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$SHOT" <<'PY'
+python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'
