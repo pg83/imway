@@ -423,7 +423,11 @@ namespace {
         bool uiCaptured = false;
 
         Toplevel* kbFocus = nullptr;
+        // nested menu chains grab in a stack; kbOverride mirrors its top so
+        // dismissing the deepest popup returns the keyboard to its parent
+        // popup, not straight to the toplevel
         Surface* kbOverride = nullptr;
+        Vector<Surface*> grabStack;
         Surface* ptrFocus = nullptr;
         int buttonsDown = 0;
 
@@ -469,6 +473,7 @@ namespace {
         void focusToplevel(Toplevel* t);
         void toplevelUnmapped(Toplevel* t);
         void popupGrabStart(Popup* p);
+        void grabGone(Surface* s, bool sendLeave);
         void popupGone(Popup* p);
         void surfaceGone(Surface* s);
         void toplevelGone(Toplevel* t);
@@ -3422,6 +3427,15 @@ namespace {
 
         wl_resource_set_implementation(d, &dataDeviceImpl, &srv->seat, dataDeviceResourceDestroyed);
         srv->seat.dataDevices.pushBack(d);
+
+        // a device bound while its client already holds keyboard focus (a
+        // terminal binding on the first Ctrl+V) must learn the current
+        // selection now, not at the next focus change
+        wl_resource* target = srv->seat.kbTargetRes();
+
+        if (target && wl_resource_get_client(target) == client) {
+            wl_data_device_send_selection(d, srv->seat.clipboard ? makeOffer(d, srv->seat.clipboard, false) : nullptr);
+        }
     }
 
     const struct wl_data_device_manager_interface dataManagerImpl = {
@@ -3504,6 +3518,13 @@ namespace {
 
         wl_resource_set_implementation(d, &primaryDeviceImpl, &srv->seat, primaryDeviceResourceDestroyed);
         srv->seat.primaryDevices.pushBack(d);
+
+        // same late-bind catch-up as managerGetDataDevice
+        wl_resource* target = srv->seat.kbTargetRes();
+
+        if (target && wl_resource_get_client(target) == client) {
+            zwp_primary_selection_device_v1_send_selection(d, srv->seat.primarySel ? makeOffer(d, srv->seat.primarySel, false) : nullptr);
+        }
     }
 
     const struct zwp_primary_selection_device_manager_v1_interface primaryManagerImpl = {
@@ -6644,8 +6665,31 @@ void SeatState::popupGrabStart(Popup* p) {
     }
 
     kbSendLeave(kbTargetRes());
+    grabStack.pushBack(p->surface);
     kbOverride = p->surface;
     kbSendEnter(resOf(kbOverride));
+    updateShortcutInhibit();
+}
+
+void SeatState::grabGone(Surface* s, bool sendLeave) {
+    if (!contains(grabStack, s)) {
+        return;
+    }
+
+    bool wasTop = kbOverride == s;
+
+    removeOne(grabStack, s);
+
+    if (!wasTop) {
+        return;
+    }
+
+    if (sendLeave) {
+        kbSendLeave(resOf(s));
+    }
+
+    kbOverride = grabStack.empty() ? nullptr : grabStack.back();
+    kbSendEnter(kbTargetRes());
     updateShortcutInhibit();
 }
 
@@ -6660,11 +6704,8 @@ void SeatState::popupGone(Popup* p) {
         pointerGrabOrigin = nullptr;
     }
 
-    if (s && kbOverride == s) {
-        kbSendLeave(resOf(kbOverride));
-        kbOverride = nullptr;
-        kbSendEnter(kbTargetRes());
-        updateShortcutInhibit();
+    if (s) {
+        grabGone(s, true);
     }
 }
 
@@ -6675,12 +6716,8 @@ void SeatState::surfaceGone(Surface* s) {
     }
 
     // the wl_surface can die before its xdg_popup role: popupGone then sees
-    // p->surface == null and would leave kbOverride dangling forever
-    if (kbOverride == s) {
-        kbOverride = nullptr;
-        kbSendEnter(kbTargetRes());
-        updateShortcutInhibit();
-    }
+    // p->surface == null and would leave the grab stack dangling forever
+    grabGone(s, false);
 
     size_t keep = 0;
 

@@ -251,6 +251,7 @@ namespace {
         VkFormat fmt = kVkFormat;
         bool hasSyncFd = false;
         VkSemaphore syncOut = VK_NULL_HANDLE;
+        bool syncOutStale = false;
         Vector<VkSemaphore> syncWaitPool;
         PFN_vkImportSemaphoreFdKHR importSemFd = nullptr;
         PFN_vkGetSemaphoreFdKHR getSemFd = nullptr;
@@ -474,6 +475,16 @@ void RendererImpl::button(u32 btn, bool pressed) {
         return; // the click is the sample, not a click for anyone
     }
 
+    // side/extra buttons mean nothing to ImGui; mapping them onto MIDDLE
+    // both faked middle clicks in the ui and swallowed them under capture
+    if (btn != BTN_LEFT && btn != BTN_RIGHT && btn != BTN_MIDDLE) {
+        if (next) {
+            next->button(btn, pressed);
+        }
+
+        return;
+    }
+
     int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
 
     scene->needsFrame = true;
@@ -666,6 +677,26 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     }
 
     frameInFlight = false;
+
+    // the fence retired the frame, so a leftover signalled syncOut (failed
+    // sync-fd export) can be replaced safely now
+    if (syncOutStale) {
+        syncOutStale = false;
+
+        VkExportSemaphoreCreateInfo exp{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
+
+        exp.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+
+        VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+
+        sci.pNext = &exp;
+        vkDestroySemaphore(device, syncOut, nullptr);
+
+        if (vkCreateSemaphore(device, &sci, nullptr, &syncOut) != VK_SUCCESS) {
+            syncOut = VK_NULL_HANDLE;
+            hasSyncFd = false;
+        }
+    }
 
     for (DmabufBuffer* buffer : inFlightDmabufs) {
         buffer->gpuUses--;
@@ -1647,11 +1678,15 @@ bool RendererImpl::importDmabuf(Surface& s) {
         mai.pNext = &dedicated;
         mai.allocationSize = req.size;
         mai.memoryTypeIndex = memType;
-        bound = memType != UINT32_MAX && vkAllocateMemory(device, &mai, nullptr, &tex->memory) == VK_SUCCESS && vkBindImageMemory(device, tex->image, tex->memory, 0) == VK_SUCCESS;
+        bool allocated = memType != UINT32_MAX && vkAllocateMemory(device, &mai, nullptr, &tex->memory) == VK_SUCCESS;
 
-        if (!bound) {
+        // a successful import hands fd ownership to Vulkan: closing it after
+        // a failed bind would double-close once vkFreeMemory drops it
+        if (!allocated) {
             close(fd);
         }
+
+        bound = allocated && vkBindImageMemory(device, tex->image, tex->memory, 0) == VK_SUCCESS;
     } else {
         constexpr VkImageAspectFlagBits kPlaneAspects[kDmabufMaxPlanes] = {VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT};
         VkBindImageMemoryInfo binds[kDmabufMaxPlanes] = {};
@@ -3056,8 +3091,12 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
     bool hwCursor = hwCursorReady && output->cursorCapW() > 0;
 
     if (cs) {
-        // client-provided cursor surface: feed its pixels to the cursor plane
-        bool hwOk = hwCursor && !cs->dmabuf && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
+        // client-provided cursor surface: feed its pixels to the cursor plane.
+        // The plane copies raw buffer pixels, so a scaled/transformed/viewport
+        // cursor (HiDPI themes) must fall back to composition or it shows up
+        // double-size with a misplaced hotspot
+        bool plainBuffer = cs->bufferScale == 1 && cs->bufferTransform == 0 && !cs->vp.hasSrc && !cs->vp.hasDst;
+        bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
 
         if (hwOk) {
             if (hwSurf != cs || hwSurfStale) {
@@ -3388,6 +3427,20 @@ bool RendererImpl::renderFrame(int scanIdx) {
     lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
 
     if (output->presentNeedsPixels()) {
+        // the copy must see the finished render pass output (same barrier as
+        // rasterizeShape), otherwise the readback can catch half-drawn pixels
+        VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+        bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        bar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        bar.oldLayout = lastLayout;
+        bar.newLayout = lastLayout;
+        bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        bar.image = lastImage;
+        bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+
         VkBufferImageCopy region{};
 
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -3463,6 +3516,12 @@ bool RendererImpl::renderFrame(int scanIdx) {
             } else {
                 close(outFd);
             }
+        } else {
+            // sync-fd export is what resets a binary semaphore; when it fails
+            // the payload stays signalled and the next frame would signal it
+            // again without a wait in between. The signal op is still in
+            // flight, so recreate after the frame fence retires.
+            syncOutStale = true;
         }
     }
 

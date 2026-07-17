@@ -24,6 +24,7 @@
 #include <drm_fourcc.h>
 #include <linux/i2c-dev.h>
 #include <linux/kd.h>
+#include <linux/vt.h>
 #include <libudev.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -430,7 +431,9 @@ namespace {
     struct KmsOutput: public ::Output, public SessionListener {
         int fd = -1;
         int ttyFd = -1;
-        long oldKbMode = -1;
+        // int, not long: the kernel writes exactly 4 bytes here and a
+        // big-endian long would keep the value in the wrong half
+        int oldKbMode = -1;
         bool sessionActive = true;
         const DeviceVk* vk = nullptr;
 
@@ -907,7 +910,8 @@ KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const Dev
         }
     }
 
-    drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob);
+    // a silently failed blob would feed MODE_ID=0 into every modeset
+    STD_VERIFY(drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob) == 0);
 
     u32 scanFourcc = DRM_FORMAT_XRGB8888;
     VkFormat scanVk = kVkFormat;
@@ -1085,6 +1089,12 @@ int KmsOutput::height() const {
 }
 
 double KmsOutput::refresh() const {
+    // vrefresh is a rounded integer (59 for 59.94); derive the real rate from
+    // the pixel clock so presentation-time feedback doesn't lie by ~1.6%
+    if (mode.clock > 0 && mode.htotal > 0 && mode.vtotal > 0) {
+        return (double)mode.clock * 1000.0 / ((double)mode.htotal * mode.vtotal);
+    }
+
     return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
 }
 
@@ -1208,6 +1218,8 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
 
     drmModePlaneRes* planes = drmModeGetPlaneResources(fd);
 
+    STD_VERIFY(planes);
+
     for (u32 i = 0; i < planes->count_planes && !(planeId && cursorPlaneId); i++) {
         drmModePlane* p = drmModeGetPlane(fd, planes->planes[i]);
 
@@ -1219,7 +1231,7 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
             u32 typeProp = getPropId(fd, p->plane_id, DRM_MODE_OBJECT_PLANE, "type");
             drmModeObjectProperties* pp = drmModeObjectGetProperties(fd, p->plane_id, DRM_MODE_OBJECT_PLANE);
 
-            for (u32 j = 0; j < pp->count_props; j++) {
+            for (u32 j = 0; pp && j < pp->count_props; j++) {
                 if (pp->props[j] == typeProp) {
                     if (pp->prop_values[j] == DRM_PLANE_TYPE_PRIMARY && !planeId) {
                         planeId = p->plane_id;
@@ -1229,7 +1241,9 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
                 }
             }
 
-            drmModeFreeObjectProperties(pp);
+            if (pp) {
+                drmModeFreeObjectProperties(pp);
+            }
         }
 
         drmModeFreePlane(p);
@@ -1719,7 +1733,19 @@ void KmsOutput::initDdc(StringView connName) {
 
     try {
         listDir("/sys/class/drm"_sv, [this, connName, &busDev](const TPathInfo& e) {
-            if (!busDev.empty() || !e.item.endsWith(connName)) {
+            // exact card<N>-<conn> match: endsWith would let "DP-1" hit
+            // "eDP-1" or the other GPU's connector and poke a foreign monitor
+            StringView item = e.item;
+            size_t digits = 4;
+
+            while (digits < item.length() && item[digits] >= '0' && item[digits] <= '9') {
+                digits++;
+            }
+
+            bool exact = item.startsWith("card"_sv) && digits > 4 && digits < item.length() &&
+                         item[digits] == '-' && StringView(item.begin() + digits + 1, item.end()) == connName;
+
+            if (!busDev.empty() || !exact) {
                 return;
             }
 
@@ -1933,15 +1959,52 @@ void KmsOutput::setPowerSave(bool on) {
 }
 
 void KmsOutput::setupVt() {
-    ttyFd = open("/dev/tty1", O_RDWR | O_CLOEXEC);
+    // the session's own vt, not a hardcoded tty1: under seatd/logind the
+    // compositor often sits on tty2+ and K_OFF/KD_GRAPHICS on a foreign
+    // console would blank someone else's terminal
+    int vt = 0;
 
-    if (ttyFd < 0) {
-        sysE << "imway: /dev/tty1 unavailable, input will leak to console"_sv << endL;
+    for (const char* probe : {"/dev/tty", "/dev/tty0"}) {
+        int fd = open(probe, O_RDWR | O_CLOEXEC);
+
+        if (fd < 0) {
+            continue;
+        }
+
+        vt_stat st{};
+
+        if (ioctl(fd, VT_GETSTATE, &st) == 0) {
+            vt = st.v_active;
+        }
+
+        close(fd);
+
+        if (vt > 0) {
+            break;
+        }
+    }
+
+    if (vt <= 0) {
+        sysE << "imway: cannot find own vt, input will leak to console"_sv << endL;
 
         return;
     }
 
-    ioctl(ttyFd, KDGKBMODE, &oldKbMode);
+    auto& p = sb();
+
+    p << "/dev/tty"_sv << vt;
+    ttyFd = open(p.cStr(), O_RDWR | O_CLOEXEC);
+
+    if (ttyFd < 0) {
+        sysE << "imway: "_sv << sv(p) << " unavailable, input will leak to console"_sv << endL;
+
+        return;
+    }
+
+    if (ioctl(ttyFd, KDGKBMODE, &oldKbMode) != 0) {
+        oldKbMode = -1;
+    }
+
     ioctl(ttyFd, KDSKBMODE, K_OFF);
     ioctl(ttyFd, KDSETMODE, KD_GRAPHICS);
 }
