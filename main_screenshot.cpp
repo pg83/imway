@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <std/ios/sys.h>
 #include <std/ios/out_fd.h>
@@ -198,15 +199,111 @@ namespace {
     // overwritten" contract wl-copy honors.
     struct Clip {
         wl_seat* seat = nullptr;
+        wl_pointer* pointer = nullptr;
+        wl_keyboard* keyboard = nullptr;
         wl_data_device_manager* ddm = nullptr;
+        wl_data_device* device = nullptr;
         wl_data_source* source = nullptr;
         Buffer png;         // must outlive the source: send() can fire anytime
+        u32 serial = 0;
         bool cancelled = false;
     } gClip;
 
+    void clipPointerEnter(void*, wl_pointer*, u32 serial, wl_surface*, wl_fixed_t, wl_fixed_t) {
+        gClip.serial = serial;
+    }
+
+    void clipPointerLeave(void*, wl_pointer*, u32, wl_surface*) {
+    }
+
+    void clipPointerMotion(void*, wl_pointer*, u32, wl_fixed_t, wl_fixed_t) {
+    }
+
+    void clipPointerButton(void*, wl_pointer*, u32 serial, u32, u32, u32) {
+        gClip.serial = serial;
+    }
+
+    void clipPointerAxis(void*, wl_pointer*, u32, u32, wl_fixed_t) {
+    }
+
+    void clipPointerFrame(void*, wl_pointer*) {
+    }
+
+    void clipPointerAxisSource(void*, wl_pointer*, u32) {
+    }
+
+    void clipPointerAxisStop(void*, wl_pointer*, u32, u32) {
+    }
+
+    void clipPointerAxisDiscrete(void*, wl_pointer*, u32, i32) {
+    }
+
+    const wl_pointer_listener clipPointerListener = {
+        .enter = clipPointerEnter,
+        .leave = clipPointerLeave,
+        .motion = clipPointerMotion,
+        .button = clipPointerButton,
+        .axis = clipPointerAxis,
+        .frame = clipPointerFrame,
+        .axis_source = clipPointerAxisSource,
+        .axis_stop = clipPointerAxisStop,
+        .axis_discrete = clipPointerAxisDiscrete,
+    };
+
+    void clipKeyboardKeymap(void*, wl_keyboard*, u32, i32 fd, u32) {
+        close(fd);
+    }
+
+    void clipKeyboardEnter(void*, wl_keyboard*, u32 serial, wl_surface*, wl_array*) {
+        gClip.serial = serial;
+    }
+
+    void clipKeyboardLeave(void*, wl_keyboard*, u32, wl_surface*) {
+    }
+
+    void clipKeyboardKey(void*, wl_keyboard*, u32 serial, u32, u32, u32) {
+        gClip.serial = serial;
+    }
+
+    void clipKeyboardModifiers(void*, wl_keyboard*, u32, u32, u32, u32, u32) {
+    }
+
+    void clipKeyboardRepeatInfo(void*, wl_keyboard*, i32, i32) {
+    }
+
+    const wl_keyboard_listener clipKeyboardListener = {
+        .keymap = clipKeyboardKeymap,
+        .enter = clipKeyboardEnter,
+        .leave = clipKeyboardLeave,
+        .key = clipKeyboardKey,
+        .modifiers = clipKeyboardModifiers,
+        .repeat_info = clipKeyboardRepeatInfo,
+    };
+
+    void clipSeatCapabilities(void*, wl_seat* seat, u32 caps) {
+        if ((caps & WL_SEAT_CAPABILITY_POINTER) && !gClip.pointer) {
+            gClip.pointer = wl_seat_get_pointer(seat);
+            wl_pointer_add_listener(gClip.pointer, &clipPointerListener, nullptr);
+        }
+
+        if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !gClip.keyboard) {
+            gClip.keyboard = wl_seat_get_keyboard(seat);
+            wl_keyboard_add_listener(gClip.keyboard, &clipKeyboardListener, nullptr);
+        }
+    }
+
+    void clipSeatName(void*, wl_seat*, const char*) {
+    }
+
+    const wl_seat_listener clipSeatListener = {
+        .capabilities = clipSeatCapabilities,
+        .name = clipSeatName,
+    };
+
     void clipReg(void*, wl_registry* reg, u32 name, const char* iface, u32 ver) {
         if (StringView(iface) == "wl_seat"_sv) {
-            gClip.seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, 1);
+            gClip.seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, ver < 5 ? ver : 5);
+            wl_seat_add_listener(gClip.seat, &clipSeatListener, nullptr);
         } else if (StringView(iface) == "wl_data_device_manager"_sv) {
             gClip.ddm = (wl_data_device_manager*)wl_registry_bind(reg, name, &wl_data_device_manager_interface, ver < 3 ? ver : 3);
         }
@@ -242,29 +339,42 @@ namespace {
         .action = [](void*, wl_data_source*, u32) {},
     };
 
-    // put the encoded png (already in gClip.png) on the clipboard and block
-    // servicing wayland events until the selection is lost. the window is
-    // hidden by now, so we only hold the selection. throws if the compositor
-    // exposes no data-device machinery.
-    void copyToClipboard() {
+    void initClipboard() {
         wl_display* dpy = glfwGetWaylandDisplay();
         wl_registry* reg = wl_display_get_registry(dpy);
 
         wl_registry_add_listener(reg, &clipRegListener, nullptr);
-        wl_display_roundtrip(dpy); // receive the globals, then their binds
+        wl_display_roundtrip(dpy);
+        wl_display_roundtrip(dpy);
+        wl_registry_destroy(reg);
 
-        if (!gClip.seat || !gClip.ddm) {
+        if (gClip.seat && gClip.ddm) {
+            gClip.device = wl_data_device_manager_get_data_device(gClip.ddm, gClip.seat);
+            wl_display_roundtrip(dpy);
+        }
+    }
+
+    // put the encoded png (already in gClip.png) on the clipboard and block
+    // servicing wayland events until the selection is lost. the window is
+    // hidden by now, so we only hold the selection. throws if the compositor
+    // exposes no data-device machinery.
+    void copyToClipboard(GLFWwindow* window) {
+        wl_display* dpy = glfwGetWaylandDisplay();
+
+        if (!gClip.device || !gClip.serial) {
             fail("no wayland clipboard"_sv);
         }
-
-        wl_data_device* dd = wl_data_device_manager_get_data_device(gClip.ddm, gClip.seat);
 
         gClip.source = wl_data_device_manager_create_data_source(gClip.ddm);
         wl_data_source_add_listener(gClip.source, &clipSourceListener, nullptr);
         wl_data_source_offer(gClip.source, "image/png");
-        // our compositor ignores the set_selection serial, so 0 is fine
-        wl_data_device_set_selection(dd, gClip.source, 0);
+        gClip.cancelled = false;
+        wl_data_device_set_selection(gClip.device, gClip.source, gClip.serial);
         wl_display_flush(dpy);
+
+        // Selection serials are accepted only while their client owns keyboard
+        // focus. Publish first, then hide and hand focus to the paste target.
+        glfwHideWindow(window);
 
         // linger as the clipboard owner until another client takes over
         while (!gClip.cancelled) {
@@ -1101,6 +1211,7 @@ int mainScreenshot(StringView path) {
         ii.PipelineInfoMain.Subpass = 0;
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
         ImGui_ImplVulkan_Init(&ii);
+        initClipboard();
 
         Texture tex;
 
@@ -1134,8 +1245,7 @@ int mainScreenshot(StringView path) {
                 } else {
                     encodePng(img, x0, y0, x1, y1, gClip.png);
                     // nothing left to show; hold the selection with no window
-                    glfwHideWindow(window);
-                    copyToClipboard();
+                    copyToClipboard(window);
                 }
             } catch (ShotError& e) {
                 errText = Buffer(e.description());

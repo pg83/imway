@@ -489,17 +489,34 @@ RendererImpl::~RendererImpl() noexcept {
 }
 
 void RendererImpl::clampPos() {
-    double x0 = 0, y0 = 0, x1 = width - 1, y1 = height - 1;
+    posX = posX < 0 ? 0 : posX >= width ? width - 1 : posX;
+    posY = posY < 0 ? 0 : posY >= height ? height - 1 : posY;
 
-    if (scene->pointerConfined) {
-        x0 = scene->confineX0 > x0 ? scene->confineX0 : x0;
-        y0 = scene->confineY0 > y0 ? scene->confineY0 : y0;
-        x1 = scene->confineX1 < x1 ? scene->confineX1 : x1;
-        y1 = scene->confineY1 < y1 ? scene->confineY1 : y1;
+    if (!scene->pointerConfined || scene->confineRegion.empty()) {
+        return;
     }
 
-    posX = posX < x0 ? x0 : posX > x1 ? x1 : posX;
-    posY = posY < y0 ? y0 : posY > y1 ? y1 : posY;
+    double bestX = posX, bestY = posY;
+    double bestDist = -1;
+
+    for (const RectI& r : scene->confineRegion) {
+        double x0 = r.x, y0 = r.y;
+        double x1 = (double)r.x + r.w - 1;
+        double y1 = (double)r.y + r.h - 1;
+        double x = posX < x0 ? x0 : posX > x1 ? x1 : posX;
+        double y = posY < y0 ? y0 : posY > y1 ? y1 : posY;
+        double dx = posX - x, dy = posY - y;
+        double dist = dx * dx + dy * dy;
+
+        if (bestDist < 0 || dist < bestDist) {
+            bestDist = dist;
+            bestX = x;
+            bestY = y;
+        }
+    }
+
+    posX = bestX;
+    posY = bestY;
 }
 
 void RendererImpl::motion(double x, double y) {

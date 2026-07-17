@@ -208,6 +208,7 @@ namespace {
 
         Vector<wl_resource*> frameCbs;
         Vector<wl_resource*> presentFeedbacks;
+        Vector<wl_resource*> enteredOutputs;
 
         DmabufUse* dmabufUse = nullptr;
 
@@ -367,7 +368,10 @@ namespace {
         bool oneshot = false;
         bool dead = false;
         bool hasRegion = false;
-        RectI regionBox;
+        Vector<RectI> region;
+        bool pendingSet = false;
+        bool pendingHasRegion = false;
+        Vector<RectI> pendingRegion;
     };
 
     struct IdleInhibitor: IntrusiveNode {
@@ -434,6 +438,9 @@ namespace {
         Vector<wl_resource*> swipes;
         Vector<wl_resource*> pinches;
         Vector<wl_resource*> holds;
+        Vector<wl_resource*> activeSwipes;
+        Vector<wl_resource*> activePinches;
+        Vector<wl_resource*> activeHolds;
 
         ConstraintBox* activeConstraint = nullptr;
 
@@ -517,7 +524,7 @@ namespace {
 
         void constraintActivate();
         void constraintDeactivate();
-        void updateConfineRect();
+        bool updateConfineRegion();
 
         wl_resource* kbTargetRes();
         void kbSendLeave(wl_resource* target);
@@ -556,6 +563,7 @@ namespace {
         };
 
         Vector<WmBasePing> wmBases;
+        Vector<wl_resource*> outputResources;
         ev_timer pingTimer{};
         u32 pingSerial = 0;
 
@@ -798,6 +806,7 @@ namespace {
     void viewportSurfaceGone(SurfaceImpl&);
     void fracSurfaceGone(SurfaceImpl&);
     void constraintSurfaceGone(SurfaceImpl&);
+    void constraintApplyPending(SurfaceImpl&);
     void kbInhibitSurfaceGone(SurfaceImpl&);
     void syncSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
@@ -1196,6 +1205,8 @@ namespace {
             sub.cache.inputChanged = false;
         }
 
+        constraintApplyPending(s);
+
         for (wl_resource* cb : sub.cache.frames) {
             s.frameCbs.pushBack(cb);
         }
@@ -1472,6 +1483,10 @@ namespace {
         }
 
         s.pending.transform = -1;
+
+        if (!toCache) {
+            constraintApplyPending(s);
+        }
 
         if (toCache) {
             if (s.pendSrcSet) {
@@ -3043,6 +3058,59 @@ namespace {
 
     const struct wl_output_interface outputImpl = {.release = outputRelease};
 
+    void outputResourceDestroyed(wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        removeOne(srv->outputResources, res);
+
+        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
+            removeOne(((SurfaceImpl*)surface)->enteredOutputs, res);
+        }
+    }
+
+    bool surfaceVisibleOnOutput(SurfaceImpl& surface) {
+        if (!surface.hasContent) {
+            return false;
+        }
+
+        auto* root = (SurfaceImpl*)surface.rootSurface();
+
+        if (root->toplevel && root->toplevel->mapped) {
+            return true;
+        }
+
+        if (root->xdg && root->xdg->popup && root->xdg->popup->mapped) {
+            return true;
+        }
+
+        return surface.srv->scene->cursorSurface == root ||
+               surface.srv->scene->dragIcon == root;
+    }
+
+    void syncSurfaceOutputs(SurfaceImpl& surface) {
+        bool visible = surfaceVisibleOnOutput(surface);
+
+        if (!visible) {
+            for (wl_resource* output : surface.enteredOutputs) {
+                wl_surface_send_leave(surface.res, output);
+            }
+
+            surface.enteredOutputs.clear();
+
+            return;
+        }
+
+        wl_client* client = wl_resource_get_client(surface.res);
+
+        for (wl_resource* output : surface.srv->outputResources) {
+            if (wl_resource_get_client(output) == client &&
+                !contains(surface.enteredOutputs, output)) {
+                wl_surface_send_enter(surface.res, output);
+                surface.enteredOutputs.pushBack(output);
+            }
+        }
+    }
+
     void outputBind(wl_client* client, void* data, u32 version, u32 id) {
         auto* srv = (WaylandImpl*)data;
         wl_resource* res = wl_resource_create(client, &wl_output_interface, version, id);
@@ -3053,7 +3121,9 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(res, &outputImpl, srv, nullptr);
+        wl_resource_set_implementation(res, &outputImpl, srv, outputResourceDestroyed);
+        srv->outputResources.pushBack(res);
+        srv->scene->needsFrame = true;
 
         Buffer make(srv->output ? srv->output->make() : "imway"_sv);
         Buffer model(srv->output ? srv->output->model() : "unknown"_sv);
@@ -4003,22 +4073,25 @@ namespace {
     }
 
     // ---- pointer-gestures ----
-    void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list, wl_resource* res) {
+    void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list,
+                                  Vector<wl_resource*> SeatState::* active,
+                                  wl_resource* res) {
         if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
             removeOne(seat->*list, res);
+            removeOne(seat->*active, res);
         }
     }
 
     void swipeResourceDestroyed(wl_resource* res) {
-        gestureResourceDestroyed(&SeatState::swipes, res);
+        gestureResourceDestroyed(&SeatState::swipes, &SeatState::activeSwipes, res);
     }
 
     void pinchResourceDestroyed(wl_resource* res) {
-        gestureResourceDestroyed(&SeatState::pinches, res);
+        gestureResourceDestroyed(&SeatState::pinches, &SeatState::activePinches, res);
     }
 
     void holdResourceDestroyed(wl_resource* res) {
-        gestureResourceDestroyed(&SeatState::holds, res);
+        gestureResourceDestroyed(&SeatState::holds, &SeatState::activeHolds, res);
     }
 
     const struct zwp_pointer_gesture_swipe_v1_interface gestureSwipeImpl = {.destroy = relPointerDestroy};
@@ -4072,16 +4145,11 @@ namespace {
     }
 
     // ---- pointer-constraints ----
-    RectI regionBounds(wl_resource* regionRes) {
-        RectI box;
-
+    void regionSnapshot(wl_resource* regionRes, Vector<RectI>& out) {
+        out.clear();
         if (auto* rb = (RegionBox*)wl_resource_get_user_data(regionRes)) {
-            for (const RectI& r : rb->rects) {
-                unionRect(box, r);
-            }
+            out.append(rb->rects.begin(), rb->rects.length());
         }
-
-        return box;
     }
 
     void constraintResourceDestroyed(wl_resource* res) {
@@ -4097,6 +4165,7 @@ namespace {
             seat.activeConstraint = nullptr;
             c->srv->scene->pointerLocked = false;
             c->srv->scene->pointerConfined = false;
+            c->srv->scene->confineRegion.clear();
         }
 
         if (c->surface) {
@@ -4113,13 +4182,14 @@ namespace {
             return;
         }
 
-        c->hasRegion = regionRes != nullptr;
+        c->pendingSet = true;
+        c->pendingHasRegion = regionRes != nullptr;
 
-        if (c->hasRegion) {
-            c->regionBox = regionBounds(regionRes);
+        if (c->pendingHasRegion) {
+            regionSnapshot(regionRes, c->pendingRegion);
+        } else {
+            c->pendingRegion.clear();
         }
-
-        c->srv->seat.updateConfineRect();
     }
 
     void lockedSetCursorPositionHint(wl_client*, wl_resource*, wl_fixed_t, wl_fixed_t) {
@@ -4166,7 +4236,7 @@ namespace {
         c->hasRegion = regionRes != nullptr;
 
         if (c->hasRegion) {
-            c->regionBox = regionBounds(regionRes);
+            regionSnapshot(regionRes, c->region);
         }
 
         s->constraint = c;
@@ -4216,10 +4286,32 @@ namespace {
                 seat.activeConstraint = nullptr;
                 c->srv->scene->pointerLocked = false;
                 c->srv->scene->pointerConfined = false;
+                c->srv->scene->confineRegion.clear();
             }
 
             c->surface = nullptr;
             s.constraint = nullptr;
+        }
+    }
+
+    void constraintApplyPending(SurfaceImpl& s) {
+        ConstraintBox* c = s.constraint;
+
+        if (!c) {
+            return;
+        }
+
+        if (c->pendingSet) {
+            c->hasRegion = c->pendingHasRegion;
+            c->region.xchg(c->pendingRegion);
+            c->pendingRegion.clear();
+            c->pendingSet = false;
+        }
+
+        SeatState& seat = c->srv->seat;
+
+        if (seat.activeConstraint == c && !c->isLock && !seat.updateConfineRegion()) {
+            seat.constraintDeactivate();
         }
     }
 
@@ -5401,7 +5493,8 @@ namespace {
     void pointerSetCursor(wl_client* client, wl_resource* res, u32 serial, wl_resource* surfRes, i32 hotX, i32 hotY) {
         SeatState* seat = seatOf(res);
 
-        if (!seat || !seat->ptrFocus || !seat->validSerial(client, serial)) {
+        if (!seat || !seat->ptrFocus || seat->pointerEnterClient != client ||
+            seat->pointerEnterSerial != serial) {
             return;
         }
 
@@ -5878,7 +5971,13 @@ void SeatState::constraintActivate() {
         zwp_locked_pointer_v1_send_locked(c->res);
     } else {
         srv->scene->pointerConfined = true;
-        updateConfineRect();
+        if (!updateConfineRegion()) {
+            activeConstraint = nullptr;
+            srv->scene->pointerConfined = false;
+
+            return;
+        }
+
         zwp_confined_pointer_v1_send_confined(c->res);
     }
 }
@@ -5893,6 +5992,7 @@ void SeatState::constraintDeactivate() {
     activeConstraint = nullptr;
     srv->scene->pointerLocked = false;
     srv->scene->pointerConfined = false;
+    srv->scene->confineRegion.clear();
 
     if (c->isLock) {
         zwp_locked_pointer_v1_send_unlocked(c->res);
@@ -5905,33 +6005,60 @@ void SeatState::constraintDeactivate() {
     }
 }
 
-void SeatState::updateConfineRect() {
+bool SeatState::updateConfineRegion() {
     ConstraintBox* c = activeConstraint;
 
     if (!c || c->isLock || !ptrFocus) {
-        return;
+        return false;
     }
 
     Scene* scn = srv->scene;
-    double x0 = ptrFocus->imgX + ptrFocus->geomX(), y0 = ptrFocus->imgY + ptrFocus->geomY();
-    double x1 = x0 + ptrFocus->geomW() - 1, y1 = y0 + ptrFocus->geomH() - 1;
+    Vector<RectI> regions;
 
-    if (c->hasRegion && !c->regionBox.empty()) {
-        double rx0 = ptrFocus->imgX + c->regionBox.x;
-        double ry0 = ptrFocus->imgY + c->regionBox.y;
-        double rx1 = rx0 + c->regionBox.w - 1;
-        double ry1 = ry0 + c->regionBox.h - 1;
+    regions.pushBack({ptrFocus->geomX(), ptrFocus->geomY(), ptrFocus->geomW(), ptrFocus->geomH()});
 
-        x0 = rx0 > x0 ? rx0 : x0;
-        y0 = ry0 > y0 ? ry0 : y0;
-        x1 = rx1 < x1 ? rx1 : x1;
-        y1 = ry1 < y1 ? ry1 : y1;
+    auto intersect = [&](const Vector<RectI>& mask) {
+        Vector<RectI> next;
+
+        for (const RectI& a : regions) {
+            for (const RectI& b : mask) {
+                i64 x0 = a.x > b.x ? a.x : b.x;
+                i64 y0 = a.y > b.y ? a.y : b.y;
+                i64 ax1 = (i64)a.x + a.w, ay1 = (i64)a.y + a.h;
+                i64 bx1 = (i64)b.x + b.w, by1 = (i64)b.y + b.h;
+                i64 x1 = ax1 < bx1 ? ax1 : bx1;
+                i64 y1 = ay1 < by1 ? ay1 : by1;
+
+                if (x1 > x0 && y1 > y0) {
+                    next.pushBack({(i32)x0, (i32)y0, (i32)(x1 - x0), (i32)(y1 - y0)});
+                }
+            }
+        }
+
+        regions.xchg(next);
+    };
+
+    if (c->hasRegion) {
+        intersect(c->region);
     }
 
-    scn->confineX0 = x0;
-    scn->confineY0 = y0;
-    scn->confineX1 = x1;
-    scn->confineY1 = y1;
+    if (ptrFocus->inputRegionSet) {
+        intersect(ptrFocus->inputRegion);
+    }
+
+    scn->confineRegion.clear();
+
+    for (RectI r : regions) {
+        r.x += (i32)ptrFocus->imgX;
+        r.y += (i32)ptrFocus->imgY;
+        clipRect(r, scn->outW, scn->outH);
+
+        if (!r.empty()) {
+            scn->confineRegion.pushBack(r);
+        }
+    }
+
+    return !scn->confineRegion.empty();
 }
 
 void SeatState::handleRelMotion(double dx, double dy, double dxRaw, double dyRaw) {
@@ -5965,41 +6092,36 @@ void SeatState::handleSwipeBegin(u32 fingers) {
         return;
     }
 
+    if (!activeSwipes.empty()) {
+        handleSwipeEnd(true);
+    }
+
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
     for (wl_resource* r : swipes) {
         if (sameClientS(r, ptrFocus)) {
             zwp_pointer_gesture_swipe_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+            activeSwipes.pushBack(r);
         }
     }
 }
 
 void SeatState::handleSwipeUpdate(double dx, double dy) {
-    if (!ptrFocus) {
-        return;
-    }
-
     u32 t = nowMsec();
 
-    for (wl_resource* r : swipes) {
-        if (sameClientS(r, ptrFocus)) {
-            zwp_pointer_gesture_swipe_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy));
-        }
+    for (wl_resource* r : activeSwipes) {
+        zwp_pointer_gesture_swipe_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy));
     }
 }
 
 void SeatState::handleSwipeEnd(bool cancelled) {
-    if (!ptrFocus) {
-        return;
-    }
-
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
-    for (wl_resource* r : swipes) {
-        if (sameClientS(r, ptrFocus)) {
-            zwp_pointer_gesture_swipe_v1_send_end(r, serial, t, cancelled);
-        }
+    for (wl_resource* r : activeSwipes) {
+        zwp_pointer_gesture_swipe_v1_send_end(r, serial, t, cancelled);
     }
+
+    activeSwipes.clear();
 }
 
 void SeatState::handlePinchBegin(u32 fingers) {
@@ -6007,41 +6129,36 @@ void SeatState::handlePinchBegin(u32 fingers) {
         return;
     }
 
+    if (!activePinches.empty()) {
+        handlePinchEnd(true);
+    }
+
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
     for (wl_resource* r : pinches) {
         if (sameClientS(r, ptrFocus)) {
             zwp_pointer_gesture_pinch_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+            activePinches.pushBack(r);
         }
     }
 }
 
 void SeatState::handlePinchUpdate(double dx, double dy, double scale, double rotation) {
-    if (!ptrFocus) {
-        return;
-    }
-
     u32 t = nowMsec();
 
-    for (wl_resource* r : pinches) {
-        if (sameClientS(r, ptrFocus)) {
-            zwp_pointer_gesture_pinch_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy), wl_fixed_from_double(scale), wl_fixed_from_double(rotation));
-        }
+    for (wl_resource* r : activePinches) {
+        zwp_pointer_gesture_pinch_v1_send_update(r, t, wl_fixed_from_double(dx), wl_fixed_from_double(dy), wl_fixed_from_double(scale), wl_fixed_from_double(rotation));
     }
 }
 
 void SeatState::handlePinchEnd(bool cancelled) {
-    if (!ptrFocus) {
-        return;
-    }
-
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
-    for (wl_resource* r : pinches) {
-        if (sameClientS(r, ptrFocus)) {
-            zwp_pointer_gesture_pinch_v1_send_end(r, serial, t, cancelled);
-        }
+    for (wl_resource* r : activePinches) {
+        zwp_pointer_gesture_pinch_v1_send_end(r, serial, t, cancelled);
     }
+
+    activePinches.clear();
 }
 
 void SeatState::handleHoldBegin(u32 fingers) {
@@ -6049,27 +6166,28 @@ void SeatState::handleHoldBegin(u32 fingers) {
         return;
     }
 
+    if (!activeHolds.empty()) {
+        handleHoldEnd(true);
+    }
+
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
     for (wl_resource* r : holds) {
         if (sameClientS(r, ptrFocus)) {
             zwp_pointer_gesture_hold_v1_send_begin(r, serial, t, resOf(ptrFocus), fingers);
+            activeHolds.pushBack(r);
         }
     }
 }
 
 void SeatState::handleHoldEnd(bool cancelled) {
-    if (!ptrFocus) {
-        return;
-    }
-
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
-    for (wl_resource* r : holds) {
-        if (sameClientS(r, ptrFocus)) {
-            zwp_pointer_gesture_hold_v1_send_end(r, serial, t, cancelled);
-        }
+    for (wl_resource* r : activeHolds) {
+        zwp_pointer_gesture_hold_v1_send_end(r, serial, t, cancelled);
     }
+
+    activeHolds.clear();
 }
 
 void WaylandImpl::activity() {
@@ -6175,7 +6293,9 @@ void SeatState::handleMotion(double x, double y) {
         return;
     }
 
-    updateConfineRect();
+    if (activeConstraint && !activeConstraint->isLock) {
+        updateConfineRegion();
+    }
 
     double sx = x - ptrFocus->imgX;
     double sy = y - ptrFocus->imgY;
@@ -6725,9 +6845,11 @@ void SeatState::endDrag() {
     // unknowable — deliver the drop as before
     bool accepted = !src;
 
-    for (Offer* offer : each<Offer>(src->offers)) {
-        if (offer->dnd && offer->accepted) {
-            accepted = true;
+    if (src) {
+        for (Offer* offer : each<Offer>(src->offers)) {
+            if (offer->dnd && offer->accepted) {
+                accepted = true;
+            }
         }
     }
 
@@ -7586,6 +7708,10 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 void WaylandImpl::frameShown(u32 msec) {
     if (scene->focusedToplevel && scene->focusedToplevel != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel);
+    }
+
+    for (Surface* surface : each<Surface, SceneNode>(scene->surfaces)) {
+        syncSurfaceOutputs(*(SurfaceImpl*)surface);
     }
 
     for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
