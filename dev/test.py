@@ -51,14 +51,18 @@ class RunResult:
     artifacts: str     # kept scratch dir on failure, else ""
 
 
-def discover(tests_dir: str, bindir: str, pattern: str) -> list[Test]:
+def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], list[str]]:
     out = []
+    unbuilt = []  # scenario has a client source but no built binary
     for path in sorted(glob.glob(os.path.join(tests_dir, "headless_*.sh"))):
         name = os.path.basename(path)[:-3]
         if pattern and not glob.fnmatch.fnmatch(name, pattern):
             continue
-        client = os.path.join(bindir, "tests", name.replace("headless_", "client_", 1))
+        cname = name.replace("headless_", "client_", 1)
+        client = os.path.join(bindir, "tests", cname)
         if not (os.path.isfile(client) and os.access(client, os.X_OK)):
+            if any(os.path.exists(os.path.join(tests_dir, cname + ext)) for ext in (".c", ".cpp")):
+                unbuilt.append(name)
             client = ""
         xfail = None
         args = []
@@ -71,7 +75,7 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> list[Test]:
                 if m:
                     args = shlex.split(m.group(1))
         out.append(Test(name, path, client, xfail, args))
-    return out
+    return out, unbuilt
 
 
 def is_sock(p: str) -> bool:
@@ -174,6 +178,21 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         rc = -1
         shell_out += f"\n[runner] scenario timed out after {timeout}s\n"
 
+    # post-mortem: on a failed scenario grab a final state dump while the
+    # compositor is still alive (best effort — the FIFO write may race its
+    # reopen cycle and get dropped)
+    if rc not in (0, 127) and proc.poll() is None and is_fifo(ctl):
+        final_state = os.path.join(rt, "final-state.txt")
+        try:
+            with open(ctl, "w") as f:
+                f.write(f"dump {final_state}\n")
+            for _ in range(20):
+                if os.path.exists(final_state):
+                    break
+                time.sleep(0.05)
+        except OSError:
+            pass
+
     # teardown: clean shutdown is part of every test. SIGTERM (the compositor
     # breaks its event loop on it) rather than a FIFO "quit" — writing to the
     # control FIFO races the compositor's reopen cycle and can be silently
@@ -214,7 +233,11 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     if rc == 127:
         return finish(SKIP)
     if rc != 0:
-        return finish(FAIL, f"scenario rc={rc}: {last_line(shell_out)}")
+        detail = f"scenario rc={rc}: {last_line(shell_out)}"
+        milestone = last_line(tail(client_log, 5))
+        if milestone:
+            detail += f" [client: {milestone}]"
+        return finish(FAIL, detail)
     if died:
         return finish(FAIL, "compositor died mid-test")
     if hung:
@@ -251,14 +274,22 @@ def main() -> int:
         print(f"no {imway} — run dev/build.sh first", file=sys.stderr)
         return 2
 
-    tests = discover(os.path.join(ROOT, "dev", "tests"), bindir, args.filter)
+    tests, unbuilt = discover(os.path.join(ROOT, "dev", "tests"), bindir, args.filter)
+    if unbuilt:
+        print("client sources exist but binaries are missing (build failed?):",
+              file=sys.stderr)
+        for name in unbuilt:
+            print(f"  {name}", file=sys.stderr)
+        print("run dev/build.sh first", file=sys.stderr)
+        return 2
     if not tests:
         print("no tests matched", file=sys.stderr)
         return 2
 
     # schedule: every test, args.runs times, all shuffled together
+    seed = args.seed if args.seed is not None else random.randrange(1 << 32)
     schedule = [t for t in tests for _ in range(args.runs)]
-    random.Random(args.seed).shuffle(schedule)
+    random.Random(seed).shuffle(schedule)
 
     results: dict[str, list[RunResult]] = {t.name: [] for t in tests}
     lock = threading.Lock()
@@ -315,6 +346,7 @@ def main() -> int:
         lines.append(f"  {label:<6} {t.name} ({secs:.1f}s){note}")
 
         if agg in ("FAIL", "FLAKY"):
+            details.append(f"--- reproduce: dev/test.py --seed {seed} --filter '{t.name}'")
             for i, r in enumerate(runs):
                 if r.status == FAIL:
                     details.append(f"--- {t.name} run {i + 1}: {r.detail}")
@@ -322,6 +354,10 @@ def main() -> int:
                         details.append(f"    artifacts: {r.artifacts}")
                         details.append(indent(tail(os.path.join(r.artifacts, "scenario.out"), 12)))
                         details.append(indent(tail(os.path.join(r.artifacts, "imway.log"), 8)))
+                        state = os.path.join(r.artifacts, "final-state.txt")
+                        if os.path.exists(state):
+                            details.append("    final state dump:")
+                            details.append(indent(tail(state, 12)))
                         stacks = os.path.join(r.artifacts, "gdb-stacks.txt")
                         if os.path.exists(stacks):
                             details.append("    gdb thread stacks (shutdown hang):")
