@@ -1,4 +1,5 @@
 #include "inspector.h"
+#include "ilist.h"
 #include "scene.h"
 #include "util.h"
 
@@ -36,7 +37,7 @@ void Dialog::draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& 
         ImGui::TextUnformatted(l.cStr());
         ImGui::Separator();
 
-        for (Toplevel* t : scene.toplevels) {
+        for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
             StringView title = sv(t->title);
 
             l.reset();

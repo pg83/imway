@@ -2,6 +2,7 @@
 #include "control.h"
 #include "input_sink.h"
 #include "renderer.h"
+#include "ilist.h"
 #include "scene.h"
 #include "util.h"
 
@@ -263,7 +264,7 @@ void ControlImpl::handleLine(StringView cmd) {
 void ControlImpl::dumpState(StringView outPath) {
     StringBuilder out;
 
-    for (Toplevel* t : scene->toplevels) {
+    for (Toplevel* t : each<Toplevel>(scene->toplevels)) {
         Surface* s = t->surface;
 
         out << "toplevel id="_sv << t->id
@@ -290,7 +291,7 @@ void ControlImpl::dumpState(StringView outPath) {
             << "\n"_sv;
     }
 
-    for (Popup* p : scene->popups) {
+    for (Popup* p : each<Popup>(scene->popups)) {
         Surface* s = p->surface;
 
         out << "popup mapped="_sv << (int)p->mapped

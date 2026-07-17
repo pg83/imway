@@ -59,7 +59,17 @@ inline void dmabufUnref(DmabufBuffer* b) noexcept {
     }
 }
 
-struct Surface {
+// tagged list memberships: one entity can sit in several intrusive lists
+// at once, the tag names which link to follow
+struct SceneNode: stl::IntrusiveNode {
+};
+
+struct GrabNode: stl::IntrusiveNode {
+};
+
+// SceneNode links it into Scene::surfaces, GrabNode into the seat's popup
+// grab stack (self-linked while not grabbed)
+struct Surface: SceneNode, GrabNode {
     int width = 0, height = 0;
     int bufferScale = 1;
     int bufferTransform = 0;
@@ -142,7 +152,8 @@ struct Subsurface: stl::IntrusiveNode {
     int x = 0, y = 0;
 };
 
-struct Toplevel {
+// the node links it into Scene::toplevels
+struct Toplevel: stl::IntrusiveNode {
     Surface* surface = nullptr;
     u64 id = 0;
     stl::StringBuilder title;
@@ -203,7 +214,8 @@ struct Toplevel {
     bool docked = false;
 };
 
-struct Popup {
+// the node links it into Scene::popups (insertion order = z-order)
+struct Popup: stl::IntrusiveNode {
     Surface* surface = nullptr;
     Surface* parent = nullptr;
     int x = 0, y = 0;
@@ -228,9 +240,9 @@ enum class CursorKind {
 };
 
 struct Scene {
-    stl::Vector<Surface*> surfaces;
-    stl::Vector<Toplevel*> toplevels;
-    stl::Vector<Popup*> popups;
+    stl::IntrusiveList surfaces;
+    stl::IntrusiveList toplevels;
+    stl::IntrusiveList popups;
 
     stl::Vector<SurfaceTexture*> orphanedTextures;
     int outW = 1280, outH = 800;

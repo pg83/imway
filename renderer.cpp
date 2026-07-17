@@ -665,7 +665,7 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
         return true;
     }
 
-    for (Popup* popup : scene->popups) {
+    for (Popup* popup : each<Popup>(scene->popups)) {
         if (popup->mapped && popup->surface == root) {
             return true;
         }
@@ -986,31 +986,40 @@ bool RendererImpl::chordAction(u32 mask, u32 sym) {
 }
 
 void RendererImpl::altTabStep(long dir) {
-    auto& tls = scene->toplevels;
-    long n = (long)tls.length();
+    IntrusiveList& tls = scene->toplevels;
 
-    if (!n) {
+    if (tls.empty()) {
         return;
     }
 
-    Toplevel* base = altTabActive && contains(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
-    long cur = base ? indexOf(tls, base) : -1;
+    Toplevel* base = altTabActive && ilistContains<Toplevel>(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
+    // a circular walk over the ring; the base (or the head sentinel when
+    // there is no base) both starts and bounds it, and gets re-tested last
+    // so a lone mapped window still selects itself
+    IntrusiveNode* start = base && !base->singular() ? (IntrusiveNode*)base : tls.mutEnd();
+    IntrusiveNode* n = start;
 
-    for (long step = 1; step <= n; step++) {
-        Toplevel* t = tls[(size_t)(((cur + dir * step) % n + n) % n)];
+    do {
+        n = dir > 0 ? n->next : n->prev;
 
-        if (t->mapped) {
+        if (n == tls.mutEnd()) {
+            n = dir > 0 ? n->next : n->prev;
+        }
+
+        Toplevel* t = (Toplevel*)n;
+
+        if (n != tls.mutEnd() && t->mapped) {
             altTabActive = true;
             altTabSel = t;
             scene->needsFrame = true;
 
             return;
         }
-    }
+    } while (n != start);
 }
 
 void RendererImpl::altTabCommit() {
-    if (contains(scene->toplevels, altTabSel) && altTabSel->mapped) {
+    if (ilistContains<Toplevel>(scene->toplevels, altTabSel) && altTabSel->mapped) {
         altTabSel->raiseRequested = true;
     }
 
@@ -1675,7 +1684,7 @@ DmabufBuffer* RendererImpl::scanoutCandidate() {
     Toplevel* fs = nullptr;
     int mapped = 0;
 
-    for (Toplevel* t : scene->toplevels) {
+    for (Toplevel* t : each<Toplevel>(scene->toplevels)) {
         if (!t->mapped) {
             continue;
         }
@@ -1723,7 +1732,7 @@ void RendererImpl::drainDead() {
         SurfaceTexture* tex = dmabufCache[i - 1].tex;
         bool inUse = false;
 
-        for (Surface* s : scene->surfaces) {
+        for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
             if (s->texture == tex) {
                 inUse = true;
 
@@ -2932,7 +2941,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     int i = 0;
 
-    for (Toplevel* t : scene.toplevels) {
+    for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
         Surface* root = t->surface;
 
         if (!t->mapped || !root || !root->texture) {
@@ -3160,7 +3169,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     ImGui::PopStyleVar();
 
-    for (Popup* p : scene.popups) {
+    for (Popup* p : each<Popup>(scene.popups)) {
         Surface* ps = p->surface;
 
         if (!p->mapped || !ps || !ps->texture || !p->parent) {
@@ -3182,7 +3191,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     bool overClient = false;
 
-    for (Surface* s : scene.surfaces) {
+    for (Surface* s : each<Surface, SceneNode>(scene.surfaces)) {
         // decoration surfaces (cursor image, drag icon) ride the pointer:
         // their hover flags go stale the moment they stop being drawn and
         // would pin this true forever; contentless surfaces likewise keep
@@ -3196,7 +3205,7 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
-    if (altTabActive && !contains(scene.toplevels, altTabSel)) {
+    if (altTabActive && !ilistContains<Toplevel>(scene.toplevels, altTabSel)) {
         // the selected window died under the overlay
         altTabActive = false;
         altTabSel = nullptr;
@@ -3246,7 +3255,7 @@ void RendererImpl::buildUi(Scene& scene) {
         float total = pad;
         int count = 0;
 
-        for (Toplevel* t : scene.toplevels) {
+        for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
             if (!t->mapped || !t->surface || !t->surface->texture) {
                 continue;
             }
@@ -3267,7 +3276,7 @@ void RendererImpl::buildUi(Scene& scene) {
             dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + total, y0 + boxH), IM_COL32(18, 18, 24, 235), 8.f * uiScale);
             x += pad;
 
-            for (Toplevel* t : scene.toplevels) {
+            for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
                 if (!t->mapped || !t->surface || !t->surface->texture) {
                     continue;
                 }
@@ -3487,7 +3496,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     };
 
     if (hasSyncFd) {
-        for (Surface* s : scene->surfaces) {
+        for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
             if (!surfaceVisible(s) || !s->dmabuf || !s->texture || !s->texture->external) {
                 continue;
             }
@@ -3671,7 +3680,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
     // color-managed surfaces: convert their (now uploaded) source into the
     // sRGB composition space before ImGui samples the converted texture
-    for (Surface* s : scene->surfaces) {
+    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
         if (s->texture && s->texture->converted && surfaceVisible(s)) {
             recordConversion(cmd, s->texture, *s);
         }
@@ -3751,7 +3760,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         tex->firstUse = false;
     }
 
-    for (Surface* s : scene->surfaces) {
+    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
         DmabufBuffer* buffer = s->dmabuf;
 
         if (!surfaceVisible(s) || !buffer || contains(inFlightDmabufs, buffer)) {
@@ -4175,7 +4184,7 @@ void RendererImpl::frameNow() {
 
     drainDead();
 
-    for (Surface* s : scene->surfaces) {
+    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
         if (s->dirty && s->hasContent) {
             bool ready = true;
 
@@ -4200,7 +4209,7 @@ void RendererImpl::frameNow() {
     // point each surface's ImGui descriptor at a converted texture (or back to
     // the plain one) before buildUi captures it — runs only when the image
     // description changed, no-op for the common uncolor-managed case
-    for (Surface* s : scene->surfaces) {
+    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
         if (s->texture) {
             ensureConversion(s->texture, *s);
         }

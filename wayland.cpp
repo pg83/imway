@@ -428,7 +428,7 @@ namespace {
         // dismissing the deepest popup returns the keyboard to its parent
         // popup, not straight to the toplevel
         Surface* kbOverride = nullptr;
-        Vector<Surface*> grabStack;
+        IntrusiveList grabStack; // GrabNode links
         Surface* ptrFocus = nullptr;
         int buttonsDown = 0;
 
@@ -646,7 +646,7 @@ namespace {
     void wmBaseResourceDestroyed(wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        for (Surface* surface : srv->scene->surfaces) {
+        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
             auto* impl = (SurfaceImpl*)surface;
 
             if (impl->xdg && impl->xdg->wmBaseRes == res) {
@@ -1700,7 +1700,7 @@ namespace {
         s->stackBelow.clear();
         s->stackAbove.clear();
 
-        for (Popup* p : srv->scene->popups) {
+        for (Popup* p : each<Popup>(srv->scene->popups)) {
             if (p->parent == s) {
                 p->parent = nullptr;
 
@@ -1737,7 +1737,7 @@ namespace {
         }
 
         srv->scene->needsFrame = true;
-        removeOne(srv->scene->surfaces, (Surface*)s);
+        ((SceneNode*)s)->unlink();
         srv->surfaceAlloc.release(s);
     }
 
@@ -1836,7 +1836,7 @@ namespace {
 
         s->srv = srv;
         s->res = sres;
-        srv->scene->surfaces.pushBack(s);
+        srv->scene->surfaces.pushBack((SceneNode*)s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
     }
 
@@ -2277,7 +2277,7 @@ namespace {
             t->ownIcon = nullptr;
         }
 
-        removeOne(srv->scene->toplevels, (Toplevel*)t);
+        t->unlink();
         sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
         srv->toplevelAlloc.release(t);
@@ -2579,7 +2579,7 @@ namespace {
     void popupDestroy(wl_client*, wl_resource* res) {
         auto* popup = (PopupImpl*)wl_resource_get_user_data(res);
 
-        for (Popup* child : popup->srv->scene->popups) {
+        for (Popup* child : each<Popup>(popup->srv->scene->popups)) {
             if (child->parent == popup->surface) {
                 wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
                                        "popup has a live child popup");
@@ -2649,7 +2649,7 @@ namespace {
             p->xdg->popup = nullptr;
         }
 
-        removeOne(srv->scene->popups, (Popup*)p);
+        p->unlink();
         srv->scene->needsFrame = true;
         srv->popupAlloc.release(p);
     }
@@ -2706,7 +2706,7 @@ namespace {
     void wmBaseDestroy(wl_client*, wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        for (Surface* surface : srv->scene->surfaces) {
+        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
             auto* impl = (SurfaceImpl*)surface;
 
             if (impl->xdg && impl->xdg->wmBaseRes == res) {
@@ -2924,7 +2924,7 @@ namespace {
             s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
 
-            for (Popup* popup : s.srv->scene->popups) {
+            for (Popup* popup : each<Popup>(s.srv->scene->popups)) {
                 if (popup->parent == &s && popup->mapped) {
                     dismissPopupTree(*(PopupImpl*)popup);
                 }
@@ -2954,7 +2954,7 @@ namespace {
             xs->popup->mapped = false;
             s.srv->scene->needsFrame = true;
 
-            for (Popup* popup : s.srv->scene->popups) {
+            for (Popup* popup : each<Popup>(s.srv->scene->popups)) {
                 if (popup->parent == &s && popup->mapped) {
                     dismissPopupTree(*(PopupImpl*)popup);
                 }
@@ -2976,8 +2976,7 @@ namespace {
     }
 
     void dismissPopupTree(PopupImpl& popup) {
-        for (size_t i = popup.srv->scene->popups.length(); i > 0; i--) {
-            Popup* child = popup.srv->scene->popups[i - 1];
+        for (Popup* child : eachRev<Popup>(popup.srv->scene->popups)) {
 
             if (child != &popup && child->parent == popup.surface) {
                 dismissPopupTree(*(PopupImpl*)child);
@@ -5658,9 +5657,7 @@ Surface* SeatState::pickInTree(Surface& s) {
 }
 
 Surface* SeatState::pickPointerTarget() {
-    for (size_t i = srv->scene->popups.length(); i > 0; i--) {
-        Popup* p = srv->scene->popups[i - 1];
-
+    for (Popup* p : eachRev<Popup>(srv->scene->popups)) {
         if (!p->mapped || !p->surface) {
             continue;
         }
@@ -5670,7 +5667,7 @@ Surface* SeatState::pickPointerTarget() {
         }
     }
 
-    for (Toplevel* t : srv->scene->toplevels) {
+    for (Toplevel* t : each<Toplevel>(srv->scene->toplevels)) {
         if (!t->mapped || !t->surface) {
             continue;
         }
@@ -5981,7 +5978,7 @@ bool WaylandImpl::idleBlocked() const {
             return true;
         }
 
-        for (Popup* popup : scene->popups) {
+        for (Popup* popup : each<Popup>(scene->popups)) {
             if (popup->surface == root && popup->mapped) {
                 return true;
             }
@@ -6080,9 +6077,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
     }
 
     if (pressed) {
-        for (size_t i = srv->scene->popups.length(); i > 0; i--) {
-            Popup* p = srv->scene->popups[i - 1];
-
+        for (Popup* p : eachRev<Popup>(srv->scene->popups)) {
             if (!p->mapped || !p->grab) {
                 continue;
             }
@@ -6359,7 +6354,7 @@ void SeatState::updateShortcutInhibit() {
     Surface* root = target ? target->rootSurface() : nullptr;
     bool inhibited = false;
 
-    for (Surface* surface : srv->scene->surfaces) {
+    for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
         auto* s = (SurfaceImpl*)surface;
 
         if (!s->kbInhibitRes) {
@@ -6693,9 +6688,7 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
     if (kbFocus == t) {
         Toplevel* next = nullptr;
 
-        for (size_t i = srv->scene->toplevels.length(); i > 0; i--) {
-            Toplevel* other = srv->scene->toplevels[i - 1];
-
+        for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
             if (other != t && other->mapped) {
                 next = other;
 
@@ -6715,20 +6708,21 @@ void SeatState::popupGrabStart(Popup* p) {
     }
 
     kbSendLeave(kbTargetRes());
-    grabStack.pushBack(p->surface);
+    grabStack.pushBack((GrabNode*)p->surface);
     kbOverride = p->surface;
     kbSendEnter(resOf(kbOverride));
     updateShortcutInhibit();
 }
 
 void SeatState::grabGone(Surface* s, bool sendLeave) {
-    if (!contains(grabStack, s)) {
+    // a surface outside the stack has a self-linked grab node
+    if (((GrabNode*)s)->singular()) {
         return;
     }
 
     bool wasTop = kbOverride == s;
 
-    removeOne(grabStack, s);
+    ((GrabNode*)s)->unlink();
 
     if (!wasTop) {
         return;
@@ -6738,7 +6732,7 @@ void SeatState::grabGone(Surface* s, bool sendLeave) {
         kbSendLeave(resOf(s));
     }
 
-    kbOverride = grabStack.empty() ? nullptr : grabStack.back();
+    kbOverride = grabStack.empty() ? nullptr : (Surface*)(GrabNode*)grabStack.mutBack();
     kbSendEnter(kbTargetRes());
     updateShortcutInhibit();
 }
@@ -6797,9 +6791,7 @@ void SeatState::toplevelGone(Toplevel* t) {
     if (kbFocus == t) {
         kbFocus = nullptr;
 
-        for (size_t i = srv->scene->toplevels.length(); i > 0; i--) {
-            Toplevel* other = srv->scene->toplevels[i - 1];
-
+        for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
             if (other != t && other->mapped) {
                 focusToplevel(other);
 
@@ -7307,7 +7299,7 @@ void WaylandImpl::frameShown(u32 msec) {
         seat.focusToplevel(scene->focusedToplevel);
     }
 
-    for (Toplevel* tl : scene->toplevels) {
+    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
         auto* ti = (ToplevelImpl*)tl;
 
         if (ti->closeRequested) {
@@ -7319,7 +7311,7 @@ void WaylandImpl::frameShown(u32 msec) {
         }
     }
 
-    for (Popup* popupBase : scene->popups) {
+    for (Popup* popupBase : each<Popup>(scene->popups)) {
         auto* popup = (PopupImpl*)popupBase;
 
         if (!popup->mapped || !popup->parent || !popup->xdg || !popup->positioner.reactive) {
@@ -7339,13 +7331,13 @@ void WaylandImpl::frameShown(u32 msec) {
         }
     }
 
-    for (Toplevel* tl : scene->toplevels) {
+    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
         if (tl->mapped && tl->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
         }
     }
 
-    for (Popup* p : scene->popups) {
+    for (Popup* p : each<Popup>(scene->popups)) {
         if (p->mapped && p->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)p->surface, msec);
         }
@@ -7359,7 +7351,7 @@ void WaylandImpl::frameShown(u32 msec) {
         fireFrameCallbacks(*(SurfaceImpl*)scene->cursorSurface, msec);
     }
 
-    for (Toplevel* tl : scene->toplevels) {
+    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
         auto* ti = (ToplevelImpl*)tl;
 
         if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
@@ -7393,7 +7385,7 @@ void WaylandImpl::run() {
 // icon store reload: re-resolve every window still on a .desktop
 // match; client-set icons are not ours to touch
 void WaylandImpl::iconsReloaded() {
-    for (Toplevel* tl : scene->toplevels) {
+    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
         if (!tl->iconFromClient) {
             tl->icon = icons->forAppId(sv(tl->appId));
         }

@@ -74,3 +74,16 @@ template <typename T, typename N = T>
 IListEachRev<T, N> eachRev(stl::IntrusiveList& l) {
     return {l};
 }
+
+// membership by pointer compare — the candidate is never dereferenced, so a
+// dangling pointer is a legal input (the classic "is it still alive" probe)
+template <typename T, typename N = T>
+bool ilistContains(const stl::IntrusiveList& l, const T* p) {
+    for (const stl::IntrusiveNode* n = l.front(); n != l.end(); n = n->next) {
+        if ((const T*)(const N*)n == p) {
+            return true;
+        }
+    }
+
+    return false;
+}
