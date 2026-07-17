@@ -95,6 +95,7 @@ wayland.cpp
 control.cpp
 input.cpp
 keyboard.cpp
+dialog.cpp
 launcher.cpp
 calendar.cpp
 inspector.cpp

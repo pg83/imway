@@ -277,6 +277,7 @@ add_executable(imway
     input.cpp
     input_sink.cpp
     keyboard.cpp
+    dialog.cpp
     launcher.cpp
     calendar.cpp
     inspector.cpp
