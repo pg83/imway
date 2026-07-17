@@ -638,6 +638,38 @@ namespace {
 
     constexpr int kZoomMin = 10, kZoomMax = 400, kZoomStep = 10;
 
+    void clampWindowSize(int& w, int& h) {
+        if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
+            if (const GLFWvidmode* vm = glfwGetVideoMode(mon)) {
+                int maxW = vm->width * 9 / 10;
+                int maxH = vm->height * 9 / 10;
+
+                if (w > maxW) {
+                    w = maxW;
+                }
+
+                if (h > maxH) {
+                    h = maxH;
+                }
+            }
+        }
+    }
+
+    void initialWindowSize(const Image& img, const ImGuiStyle& style, int& w, int& h) {
+        float zoom = (float)kInitialZoom / 100.f;
+
+        w = (int)ceilf(200.f * gUiScale + style.ItemSpacing.x + img.w * zoom);
+        h = (int)ceilf(img.h * zoom);
+
+        int minH = (int)(220.f * gUiScale);
+
+        if (h < minH) {
+            h = minH;
+        }
+
+        clampWindowSize(w, h);
+    }
+
     // nudge the zoom by delta% (clamped); any change drops the selection
     void applyZoom(Viewer& v, int delta) {
         int z = (int)clampf((float)(v.zoom + delta), (float)kZoomMin, (float)kZoomMax);
@@ -648,9 +680,14 @@ namespace {
         }
     }
 
-    // left control panel: zoom on top, then Save/Copy/Exit in one row, then the
-    // selection readout. writes the chosen action into result.
-    void drawPanel(Viewer& v, int& result) {
+    void resetView(Viewer& v) {
+        v.zoom = kInitialZoom;
+        v.crop.clear();
+    }
+
+    // left control panel: zoom on top, then Save/Copy/Reset in one row, then
+    // the selection readout. writes the chosen action into result.
+    void drawPanel(Viewer& v, int& result, bool& reset) {
         Crop& crop = v.crop;
 
         ImGui::TextUnformatted("Zoom (view only)");
@@ -682,7 +719,12 @@ namespace {
 
         ImGui::SameLine();
 
-        if (ImGui::Button("Exit", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (ImGui::Button("Reset", ImVec2(bw, 0))) {
+            resetView(v);
+            reset = true;
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
             result = -1;
         }
 
@@ -701,13 +743,19 @@ namespace {
 
         ImGui::TextDisabled("drag: select");
         ImGui::TextDisabled("middle-drag: pan");
-        ImGui::TextDisabled("scroll / +-: zoom");
+        ImGui::TextDisabled("scroll / +-: zoom, 0: reset");
     }
 
     // right canvas: the image at v.zoom in a scrollable viewport. left-drag
     // draws the crop selection; middle-drag pans and wipes the selection.
-    void drawCanvas(const Image& img, Texture& tex, Viewer& v) {
+    void drawCanvas(const Image& img, Texture& tex, Viewer& v, bool reset) {
         Crop& crop = v.crop;
+
+        if (reset) {
+            ImGui::SetScrollX(0.f);
+            ImGui::SetScrollY(0.f);
+        }
+
         float scale = (float)v.zoom / 100.f;
         ImVec2 content((float)img.w * scale, (float)img.h * scale);
         ImVec2 origin = ImGui::GetCursorScreenPos();
@@ -783,13 +831,14 @@ namespace {
 
     // draw the whole cropper; returns 1 = save, 2 = copy, -1 = cancel,
     // 0 = keep going
-    int drawUi(const Image& img, Texture& tex, Viewer& v) {
+    int drawUi(GLFWwindow* window, const Image& img, Texture& tex, Viewer& v) {
         ImGuiViewport* vp = ImGui::GetMainViewport();
 
         ImGui::SetNextWindowPos(vp->Pos);
         ImGui::SetNextWindowSize(vp->Size);
 
         int result = 0;
+        bool reset = false;
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
@@ -805,15 +854,20 @@ namespace {
                 applyZoom(v, -kZoomStep);
             }
 
+            if (ImGui::IsKeyPressed(ImGuiKey_0) || ImGui::IsKeyPressed(ImGuiKey_Keypad0)) {
+                resetView(v);
+                reset = true;
+            }
+
             if (ImGui::BeginChild("panel", ImVec2(panelW, 0), ImGuiChildFlags_Borders)) {
-                drawPanel(v, result);
+                drawPanel(v, result, reset);
             }
 
             ImGui::EndChild();
             ImGui::SameLine();
 
             if (ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-                drawCanvas(img, tex, v);
+                drawCanvas(img, tex, v, reset);
             }
 
             ImGui::EndChild();
@@ -821,6 +875,13 @@ namespace {
 
         ImGui::End();
         ImGui::PopStyleVar();
+
+        if (reset) {
+            int w, h;
+
+            initialWindowSize(img, ImGui::GetStyle(), w, h);
+            glfwSetWindowSize(window, w, h);
+        }
 
         return result;
     }
@@ -983,38 +1044,15 @@ int mainScreenshot(StringView path) {
     // Open at the image's on-screen size (50% zoom) plus the actual ImGui
     // chrome. A bare error panel gets a small fixed size. Clamp to 90% of the
     // monitor.
-    const float panelW = 200.f * gUiScale;
     int winW, winH;
 
     if (loaded) {
-        float zoom = (float)kInitialZoom / 100.f;
-
-        winW = (int)ceilf(panelW + uiStyle.ItemSpacing.x + img.w * zoom);
-        winH = (int)ceilf(img.h * zoom);
-
-        int minH = (int)(220.f * gUiScale);
-
-        if (winH < minH) {
-            winH = minH;
-        }
+        initialWindowSize(img, uiStyle, winW, winH);
     } else {
         winW = (int)(480.f * gUiScale);
         winH = (int)(180.f * gUiScale);
-    }
 
-    if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
-        if (const GLFWvidmode* vm = glfwGetVideoMode(mon)) {
-            int maxW = vm->width * 9 / 10;
-            int maxH = vm->height * 9 / 10;
-
-            if (winW > maxW) {
-                winW = maxW;
-            }
-
-            if (winH > maxH) {
-                winH = maxH;
-            }
-        }
+        clampWindowSize(winW, winH);
     }
 
     GLFWwindow* window = glfwCreateWindow(winW, winH, "imway screenshot", nullptr, nullptr);
@@ -1074,7 +1112,7 @@ int mainScreenshot(StringView path) {
 
         // interactive phase: the cropper, or the error panel if the load failed
         int action = runLoop(window, [&] {
-            return errText.empty() ? drawUi(img, tex, view) : drawError(sv(errText));
+            return errText.empty() ? drawUi(window, img, tex, view) : drawError(sv(errText));
         });
 
         // action phase: encode + save/copy; a failure switches to the error panel
