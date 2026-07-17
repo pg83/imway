@@ -144,6 +144,60 @@ void ControlImpl::handleLine(StringView cmd) {
         if (args.split(' ', code, state)) {
             sink->key((u32)code.stou(), state == "press"_sv);
         }
+    } else if (verb == "relmotion"_sv) {
+        StringView dxs, dys;
+
+        if (args.split(' ', dxs, dys)) {
+            double dx = parseFloat(dxs), dy = parseFloat(dys);
+
+            sink->relMotion(dx, dy, dx, dy);
+        }
+    } else if (verb == "swipe"_sv) {
+        // swipe <begin N | update dx dy | end>
+        StringView phase, rest;
+
+        args.split(' ', phase, rest);
+
+        if (phase == "begin"_sv) {
+            sink->swipeBegin((u32)rest.stou());
+        } else if (phase == "update"_sv) {
+            StringView dxs, dys;
+
+            if (rest.split(' ', dxs, dys)) {
+                sink->swipeUpdate(parseFloat(dxs), parseFloat(dys));
+            }
+        } else if (phase == "end"_sv) {
+            sink->swipeEnd(rest == "cancel"_sv);
+        }
+    } else if (verb == "pinch"_sv) {
+        // pinch <begin N | update dx dy scale rot | end>
+        StringView phase, rest;
+
+        args.split(' ', phase, rest);
+
+        if (phase == "begin"_sv) {
+            sink->pinchBegin((u32)rest.stou());
+        } else if (phase == "update"_sv) {
+            StringView a, b, c, d, tmp;
+
+            rest.split(' ', a, tmp);
+            tmp.split(' ', b, tmp);
+            tmp.split(' ', c, d);
+            sink->pinchUpdate(parseFloat(a), parseFloat(b), parseFloat(c), parseFloat(d));
+        } else if (phase == "end"_sv) {
+            sink->pinchEnd(rest == "cancel"_sv);
+        }
+    } else if (verb == "hold"_sv) {
+        // hold <begin N | end>
+        StringView phase, rest;
+
+        args.split(' ', phase, rest);
+
+        if (phase == "begin"_sv) {
+            sink->holdBegin((u32)rest.stou());
+        } else if (phase == "end"_sv) {
+            sink->holdEnd(rest == "cancel"_sv);
+        }
     } else if (verb == "type"_sv) {
         for (u8 c : args) {
             u32 kc;

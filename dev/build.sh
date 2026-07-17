@@ -139,31 +139,45 @@ echo "OK: $B/imway"
 
 mkdir -p "$B/tests"
 
+# Every protocol a test client might speak: <xml path>|<primary interface
+# symbol>. The symbol lets us probe whether the default link already provides
+# the wl_interface table (this dev env links libSDL3 statically, which bundles
+# xdg-shell and viewporter) — compiling our own copy then is a duplicate
+# symbol error, so we only add the generated code for the tables that are
+# missing.
 CLIENT_PROTOCOLS="
-stable/xdg-shell/xdg-shell.xml
-stable/viewporter/viewporter.xml
-stable/linux-dmabuf/linux-dmabuf-v1.xml
-unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+stable/xdg-shell/xdg-shell.xml|xdg_wm_base_interface
+stable/viewporter/viewporter.xml|wp_viewporter_interface
+stable/linux-dmabuf/linux-dmabuf-v1.xml|zwp_linux_dmabuf_v1_interface
+stable/presentation-time/presentation-time.xml|wp_presentation_interface
+unstable/xdg-output/xdg-output-unstable-v1.xml|zxdg_output_manager_v1_interface
+unstable/xdg-decoration/xdg-decoration-unstable-v1.xml|zxdg_decoration_manager_v1_interface
+unstable/primary-selection/primary-selection-unstable-v1.xml|zwp_primary_selection_device_manager_v1_interface
+unstable/relative-pointer/relative-pointer-unstable-v1.xml|zwp_relative_pointer_manager_v1_interface
+unstable/pointer-constraints/pointer-constraints-unstable-v1.xml|zwp_pointer_constraints_v1_interface
+unstable/pointer-gestures/pointer-gestures-unstable-v1.xml|zwp_pointer_gestures_v1_interface
+unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml|zwp_keyboard_shortcuts_inhibit_manager_v1_interface
+unstable/idle-inhibit/idle-inhibit-unstable-v1.xml|zwp_idle_inhibit_manager_v1_interface
+unstable/tablet/tablet-unstable-v2.xml|zwp_tablet_manager_v2_interface
+staging/fractional-scale/fractional-scale-v1.xml|wp_fractional_scale_manager_v1_interface
+staging/single-pixel-buffer/single-pixel-buffer-v1.xml|wp_single_pixel_buffer_manager_v1_interface
+staging/xdg-activation/xdg-activation-v1.xml|xdg_activation_v1_interface
+staging/cursor-shape/cursor-shape-v1.xml|wp_cursor_shape_manager_v1_interface
+staging/ext-idle-notify/ext-idle-notify-v1.xml|ext_idle_notifier_v1_interface
+staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml|wp_linux_drm_syncobj_manager_v1_interface
+staging/xdg-toplevel-icon/xdg-toplevel-icon-v1.xml|xdg_toplevel_icon_manager_v1_interface
 "
 
-for xml in $CLIENT_PROTOCOLS; do
-    name=$(basename "$xml" .xml)
-    wayland-scanner client-header "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-protocol.h"
-    wayland-scanner private-code  "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-code.c"
-done
-
-# a client needs the wl_interface tables of its protocols, but the default
-# link may already carry some (this dev env links libSDL3 statically, which
-# bundles xdg-shell and viewporter) — adding our own copy then is a duplicate
-# symbol error. Probe each table and compile only the missing ones.
 GLUE=""
 
-for probe in xdg_wm_base_interface:xdg-shell \
-             wp_viewporter_interface:viewporter \
-             zwp_linux_dmabuf_v1_interface:linux-dmabuf-v1 \
-             zwp_keyboard_shortcuts_inhibit_manager_v1_interface:keyboard-shortcuts-inhibit-unstable-v1; do
-    sym=${probe%%:*}
-    name=${probe##*:}
+for entry in $CLIENT_PROTOCOLS; do
+    xml=${entry%%|*}
+    sym=${entry##*|}
+    name=$(basename "$xml" .xml)
+
+    wayland-scanner client-header "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-protocol.h"
+    wayland-scanner private-code  "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-code.c"
+
     echo "extern const char $sym[]; int main(void) { return !$sym[0]; }" \
         | $CC -x c - -o "$B/tests/.probe" -lwayland-client ${LDFLAGS:-} 2>/dev/null \
         || GLUE="$GLUE $B/tests/$name-client-code.c"
