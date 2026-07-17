@@ -110,6 +110,16 @@ struct Surface {
     bool hdrContent = false;
     u32 hdrMaxCll = 0, hdrMaxLum = 0;
 
+    // the individual transfer/gamut so the renderer can convert the surface
+    // into the sRGB composition space. colorManaged = anything not already
+    // plain sRGB, i.e. the surface needs a conversion pass.
+    bool colorManaged = false;
+    bool colorPq = false;    // st2084 PQ transfer (else sRGB)
+    bool colorWide = false;  // BT.2020 primaries (else sRGB/709)
+    u32 colorRefLum = 0;     // reference white in nits (0 = default)
+    // bumped whenever the description changes, to invalidate a cached conversion
+    u32 colorGeneration = 0;
+
     Subsurface* sub = nullptr;
     stl::Vector<Subsurface*> stackBelow;
     stl::Vector<Subsurface*> stackAbove;

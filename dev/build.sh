@@ -15,7 +15,7 @@ PROTO_XML_DIR=${WL_PROTOCOL_DIR:-/usr/share/wayland-protocols}
 JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
-CXXFLAGS="-std=c++23 -O2 -g -DGLFW_INCLUDE_NONE -I$B/protocols -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
+CXXFLAGS="-std=c++23 -O2 -g -DGLFW_INCLUDE_NONE -I$B/protocols -I$B/shaders -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
 # -lwayland-client: the screenshot tool puts image/png on the clipboard via a
 # wl_data_source off glfw's wl_display (client-side wl_proxy_* + core interfaces)
 LIBS="-ldbus-1 -lwayland-server -lwayland-client -lpng -lglfw3 -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
@@ -31,7 +31,7 @@ if echo '#include <pulse/pulseaudio.h>' | $CXX $CXXFLAGS -E - >/dev/null 2>&1; t
     LIBS="$LIBS -lpulse"
 fi
 
-mkdir -p "$B/protocols" "$B/obj"
+mkdir -p "$B/protocols" "$B/obj" "$B/shaders"
 
 PROTOCOLS="
 stable/xdg-shell/xdg-shell.xml
@@ -61,6 +61,16 @@ for xml in $PROTOCOLS; do
     name=$(basename "$xml" .xml)
     wayland-scanner server-header "$PROTO_XML_DIR/$xml" "$B/protocols/$name-server-protocol.h"
     wayland-scanner private-code  "$PROTO_XML_DIR/$xml" "$B/protocols/$name-protocol.c"
+done
+
+# GLSL compute shaders → embedded SPIR-V C arrays (glslangValidator)
+SHADERS="
+cm_convert.comp
+"
+
+for shader in $SHADERS; do
+    name=$(basename "$shader" .comp)
+    glslangValidator -V "$shader" --variable-name "${name}_spv" -o "$B/shaders/$name.spv.h"
 done
 
 IMGUI_SRC="
@@ -166,6 +176,7 @@ staging/cursor-shape/cursor-shape-v1.xml|wp_cursor_shape_manager_v1_interface
 staging/ext-idle-notify/ext-idle-notify-v1.xml|ext_idle_notifier_v1_interface
 staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml|wp_linux_drm_syncobj_manager_v1_interface
 staging/xdg-toplevel-icon/xdg-toplevel-icon-v1.xml|xdg_toplevel_icon_manager_v1_interface
+staging/color-management/color-management-v1.xml|wp_color_manager_v1_interface
 "
 
 GLUE=""

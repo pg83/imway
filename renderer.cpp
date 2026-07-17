@@ -47,6 +47,8 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xdg-shell-server-protocol.h>
 
+#include <cm_convert.spv.h> // generated SPIR-V: cm_convert_spv[]
+
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
@@ -79,6 +81,17 @@ struct SurfaceTexture {
     bool needsUpload = false;
     bool firstUse = true;
     bool external = false;
+
+    // color-management: a surface with a non-sRGB image description is
+    // converted into the sRGB composition space by a compute pass. The result
+    // lives in convImage; tex->ds then points at convView instead of view.
+    VkImage convImage = VK_NULL_HANDLE;
+    VkDeviceMemory convMemory = VK_NULL_HANDLE;
+    VkImageView convView = VK_NULL_HANDLE;
+    VkDescriptorSet convDs = VK_NULL_HANDLE; // compute src+dst binding
+    u32 convGen = 0xffffffffu;               // colorGeneration reflected by convImage
+    bool converted = false;                  // ds currently points at convView
+    bool convFresh = false;                  // convImage layout still UNDEFINED
 };
 
 
@@ -128,6 +141,12 @@ namespace {
         bool frameInFlight = false;
         Vector<DmabufBuffer*> inFlightDmabufs;
         VkSampler sampler = VK_NULL_HANDLE;
+
+        // color-management conversion compute pipeline
+        VkDescriptorSetLayout cmSetLayout = VK_NULL_HANDLE;
+        VkPipelineLayout cmPipeLayout = VK_NULL_HANDLE;
+        VkPipeline cmPipeline = VK_NULL_HANDLE;
+        VkDescriptorPool cmDescPool = VK_NULL_HANDLE;
 
         ObjList<SurfaceTexture> textureAlloc;
         Vector<SurfaceTexture*> textures;
@@ -277,6 +296,11 @@ namespace {
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
         void shutdown() noexcept;
+
+        void setupColorConvert();
+        void ensureConversion(SurfaceTexture* tex, Surface& s);
+        void recordConversion(VkCommandBuffer cb, SurfaceTexture* tex, Surface& s);
+        void freeConversion(SurfaceTexture* tex);
 
         void drawSurfaceTree(Surface& s, float x, float y);
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
@@ -1291,6 +1315,215 @@ void RendererImpl::setup(int w, int h) {
         VK_CHECK(vkCreateFence(device, &cfe, nullptr, &curFence));
         hwCursorReady = true;
     }
+
+    setupColorConvert();
+}
+
+// A compute pipeline that converts a color-managed surface (PQ and/or BT.2020)
+// into the sRGB composition space. Bindings: 0 = source sampler2D, 1 = dest
+// storage image; push constants carry the transfer/gamut flags + reference
+// white. See cm_convert.comp.
+void RendererImpl::setupColorConvert() {
+    VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+
+    smci.codeSize = sizeof(cm_convert_spv);
+    smci.pCode = cm_convert_spv;
+
+    VkShaderModule module = VK_NULL_HANDLE;
+
+    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &module));
+
+    VkDescriptorSetLayoutBinding binds[2] = {};
+
+    binds[0].binding = 0;
+    binds[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binds[0].descriptorCount = 1;
+    binds[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binds[1].binding = 1;
+    binds[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    binds[1].descriptorCount = 1;
+    binds[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+
+    dlci.bindingCount = 2;
+    dlci.pBindings = binds;
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &cmSetLayout));
+
+    VkPushConstantRange pcr{};
+
+    pcr.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    pcr.offset = 0;
+    pcr.size = 3 * sizeof(u32); // int pq, int wide, float refWhite
+
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &cmSetLayout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &pcr;
+    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &cmPipeLayout));
+
+    VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+
+    cpci.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cpci.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpci.stage.module = module;
+    cpci.stage.pName = "main";
+    cpci.layout = cmPipeLayout;
+    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpci, nullptr, &cmPipeline));
+
+    vkDestroyShaderModule(device, module, nullptr);
+
+    VkDescriptorPoolSize sizes[2] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 256},
+    };
+    VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+
+    dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    dpci.maxSets = 256;
+    dpci.poolSizeCount = 2;
+    dpci.pPoolSizes = sizes;
+    VK_CHECK(vkCreateDescriptorPool(device, &dpci, nullptr, &cmDescPool));
+}
+
+// (Re)build the converted image + compute descriptor for a color-managed
+// surface, or tear it down when the surface stopped being color-managed.
+// Repoints tex->ds so ImGui samples the converted result.
+void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
+    if (!s.colorManaged) {
+        if (tex->converted) {
+            freeConversion(tex);
+            ImGui_ImplVulkan_RemoveTexture(tex->ds);
+            tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            tex->converted = false;
+        }
+        return;
+    }
+
+    if (tex->convImage != VK_NULL_HANDLE && tex->convGen == s.colorGeneration) {
+        return; // still valid
+    }
+
+    freeConversion(tex);
+
+    createImage(tex->w, tex->h, VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, tex->convImage, tex->convMemory);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+    vci.image = tex->convImage;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->convView));
+
+    VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+
+    dsai.descriptorPool = cmDescPool;
+    dsai.descriptorSetCount = 1;
+    dsai.pSetLayouts = &cmSetLayout;
+    VK_CHECK(vkAllocateDescriptorSets(device, &dsai, &tex->convDs));
+
+    VkDescriptorImageInfo srcInfo{sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, tex->convView, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet writes[2] = {};
+
+    writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[0].dstSet = tex->convDs;
+    writes[0].dstBinding = 0;
+    writes[0].descriptorCount = 1;
+    writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writes[0].pImageInfo = &srcInfo;
+    writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[1].dstSet = tex->convDs;
+    writes[1].dstBinding = 1;
+    writes[1].descriptorCount = 1;
+    writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    writes[1].pImageInfo = &dstInfo;
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
+
+    if (tex->converted) {
+        ImGui_ImplVulkan_RemoveTexture(tex->ds);
+    }
+    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->convView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->converted = true;
+    tex->convGen = s.colorGeneration;
+    tex->convFresh = true;
+}
+
+// Record the conversion dispatch for a color-managed surface into cb. The
+// source image must already be in SHADER_READ_ONLY_OPTIMAL.
+void RendererImpl::recordConversion(VkCommandBuffer cb, SurfaceTexture* tex, Surface& s) {
+    // make the just-uploaded source pixels visible to the compute sampler; the
+    // upload barriers only published them to the fragment stage
+    VkImageMemoryBarrier srcRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+    srcRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    srcRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    srcRead.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    srcRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    srcRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    srcRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    srcRead.image = tex->image;
+    srcRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &srcRead);
+
+    // converted image: (undefined | shader-read) -> general for the compute write
+    VkImageMemoryBarrier toGeneral{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+    toGeneral.srcAccessMask = tex->convFresh ? 0 : VK_ACCESS_SHADER_READ_BIT;
+    toGeneral.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toGeneral.oldLayout = tex->convFresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    toGeneral.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toGeneral.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    toGeneral.image = tex->convImage;
+    toGeneral.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toGeneral);
+    tex->convFresh = false;
+
+    vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cmPipeline);
+    vkCmdBindDescriptorSets(cb, VK_PIPELINE_BIND_POINT_COMPUTE, cmPipeLayout, 0, 1, &tex->convDs, 0, nullptr);
+
+    struct {
+        i32 pq;
+        i32 wide;
+        float refWhite;
+    } pc = {s.colorPq ? 1 : 0, s.colorWide ? 1 : 0, s.colorRefLum > 0 ? (float)s.colorRefLum : 203.f};
+
+    vkCmdPushConstants(cb, cmPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cb, ((u32)tex->w + 7) / 8, ((u32)tex->h + 7) / 8, 1);
+
+    // converted image: general -> shader-read for ImGui to sample
+    VkImageMemoryBarrier toRead = toGeneral;
+
+    toRead.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    toRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cb, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+}
+
+void RendererImpl::freeConversion(SurfaceTexture* tex) {
+    if (tex->convDs != VK_NULL_HANDLE) {
+        vkFreeDescriptorSets(device, cmDescPool, 1, &tex->convDs);
+        tex->convDs = VK_NULL_HANDLE;
+    }
+    if (tex->convView != VK_NULL_HANDLE) {
+        vkDestroyImageView(device, tex->convView, nullptr);
+        tex->convView = VK_NULL_HANDLE;
+    }
+    if (tex->convImage != VK_NULL_HANDLE) {
+        vkDestroyImage(device, tex->convImage, nullptr);
+        tex->convImage = VK_NULL_HANDLE;
+    }
+    if (tex->convMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, tex->convMemory, nullptr);
+        tex->convMemory = VK_NULL_HANDLE;
+    }
+    tex->convGen = 0xffffffffu;
 }
 
 void RendererImpl::uploadSurface(Surface& s) {
@@ -1522,6 +1755,8 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     if (tex->ds) {
         ImGui_ImplVulkan_RemoveTexture(tex->ds);
     }
+
+    freeConversion(tex);
 
     for (VkDeviceMemory m : tex->extraMemory) {
         if (m) {
@@ -3408,6 +3643,14 @@ bool RendererImpl::renderFrame(int scanIdx) {
         tex->firstUse = false;
     }
 
+    // color-managed surfaces: convert their (now uploaded) source into the
+    // sRGB composition space before ImGui samples the converted texture
+    for (Surface* s : scene->surfaces) {
+        if (s->texture && s->texture->converted && surfaceVisible(s)) {
+            recordConversion(cmd, s->texture, *s);
+        }
+    }
+
     VkClearValue clear{};
 
     clear.color = {{0.08f, 0.08f, 0.10f, 1.f}};
@@ -3803,6 +4046,21 @@ void RendererImpl::shutdown() noexcept {
     ImGui::DestroyContext();
     vkDestroySampler(device, sampler, nullptr);
 
+    // color-management conversion pipeline (per-texture conv resources were
+    // freed by destroyTexture above, so the pool is empty now)
+    if (cmPipeline) {
+        vkDestroyPipeline(device, cmPipeline, nullptr);
+    }
+    if (cmPipeLayout) {
+        vkDestroyPipelineLayout(device, cmPipeLayout, nullptr);
+    }
+    if (cmSetLayout) {
+        vkDestroyDescriptorSetLayout(device, cmSetLayout, nullptr);
+    }
+    if (cmDescPool) {
+        vkDestroyDescriptorPool(device, cmDescPool, nullptr);
+    }
+
     if (syncOut) {
         vkDestroySemaphore(device, syncOut, nullptr);
     }
@@ -3910,6 +4168,15 @@ void RendererImpl::frameNow() {
             if (!ready) {
                 scene->needsFrame = true;
             }
+        }
+    }
+
+    // point each surface's ImGui descriptor at a converted texture (or back to
+    // the plain one) before buildUi captures it — runs only when the image
+    // description changed, no-op for the common uncolor-managed case
+    for (Surface* s : scene->surfaces) {
+        if (s->texture) {
+            ensureConversion(s->texture, *s);
         }
     }
 

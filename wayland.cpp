@@ -6999,6 +6999,13 @@ WaylandImpl::~WaylandImpl() noexcept {
         s->hdrContent = d && d->hdr && d->wide;
         s->hdrMaxCll = d ? d->maxCll : 0;
         s->hdrMaxLum = d ? d->maxLum : 0;
+
+        // per-surface transfer/gamut for the renderer's conversion pass
+        s->colorPq = d && d->hdr;
+        s->colorWide = d && d->wide;
+        s->colorRefLum = d ? d->maxLum : 0;
+        s->colorManaged = s->colorPq || s->colorWide;
+        s->colorGeneration++;
         s->srv->scene->needsFrame = true;
     }
 
@@ -7195,11 +7202,11 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
-    // Color-management is deliberately not advertised yet. The renderer can
-    // configure an HDR output, but it does not currently perform the
-    // per-surface transfer-function/primaries conversion required by the
-    // protocol. Advertising it would make clients send PQ/BT.2020 pixels that
-    // are then composited as SDR.
+    // Color-management: the renderer converts each color-managed surface (PQ
+    // and/or BT.2020) into the sRGB composition space via a compute pass
+    // (renderer.cpp, cm_convert.comp), so a client's declared image
+    // description is honored rather than composited raw.
+    wl_global_create(display, &wp_color_manager_v1_interface, 1, this, colorManagerBind);
 
     u64 syncCap = 0;
 
