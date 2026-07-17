@@ -95,6 +95,7 @@ scene.cpp
 wayland.cpp
 control.cpp
 input.cpp
+intr_list.cpp
 keyboard.cpp
 dialog.cpp
 launcher.cpp

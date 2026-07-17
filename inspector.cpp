@@ -1,7 +1,7 @@
 #include "inspector.h"
 #include "composer.h"
 #include "dialog.h"
-#include "ilist.h"
+#include "intr_list.h"
 #include "scene.h"
 #include "util.h"
 

@@ -7,7 +7,7 @@
 // names that base when T is a member of several lists at once. Iteration is
 // not removal-safe — unlink the current node only after stepping past it.
 template <typename T, typename N>
-struct IListEach {
+struct IntrListEach {
     stl::IntrusiveList& list;
 
     struct It {
@@ -36,13 +36,13 @@ struct IListEach {
 };
 
 template <typename T, typename N = T>
-IListEach<T, N> each(stl::IntrusiveList& l) {
+IntrListEach<T, N> each(stl::IntrusiveList& l) {
     return {l};
 }
 
 // the same, back to front (z-order picks walk topmost first)
 template <typename T, typename N>
-struct IListEachRev {
+struct IntrListEachRev {
     stl::IntrusiveList& list;
 
     struct It {
@@ -71,14 +71,14 @@ struct IListEachRev {
 };
 
 template <typename T, typename N = T>
-IListEachRev<T, N> eachRev(stl::IntrusiveList& l) {
+IntrListEachRev<T, N> eachRev(stl::IntrusiveList& l) {
     return {l};
 }
 
 // membership by pointer compare — the candidate is never dereferenced, so a
 // dangling pointer is a legal input (the classic "is it still alive" probe)
 template <typename T, typename N = T>
-bool ilistContains(const stl::IntrusiveList& l, const T* p) {
+bool intrListContains(const stl::IntrusiveList& l, const T* p) {
     for (const stl::IntrusiveNode* n = l.front(); n != l.end(); n = n->next) {
         if ((const T*)(const N*)n == p) {
             return true;

@@ -22,7 +22,7 @@
 #include "wifi.h"
 #include "wifi_ui.h"
 #include "output.h"
-#include "ilist.h"
+#include "intr_list.h"
 #include "scene.h"
 #include "shadow.h"
 #include "toast.h"
@@ -1001,7 +1001,7 @@ void RendererImpl::altTabStep(long dir) {
         return;
     }
 
-    Toplevel* base = altTabActive && ilistContains<Toplevel>(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
+    Toplevel* base = altTabActive && intrListContains<Toplevel>(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
     // a circular walk over the ring; the base (or the head sentinel when
     // there is no base) both starts and bounds it, and gets re-tested last
     // so a lone mapped window still selects itself
@@ -1028,7 +1028,7 @@ void RendererImpl::altTabStep(long dir) {
 }
 
 void RendererImpl::altTabCommit() {
-    if (ilistContains<Toplevel>(scene->toplevels, altTabSel) && altTabSel->mapped) {
+    if (intrListContains<Toplevel>(scene->toplevels, altTabSel) && altTabSel->mapped) {
         altTabSel->raiseRequested = true;
     }
 
@@ -3239,7 +3239,7 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
-    if (altTabActive && !ilistContains<Toplevel>(scene.toplevels, altTabSel)) {
+    if (altTabActive && !intrListContains<Toplevel>(scene.toplevels, altTabSel)) {
         // the selected window died under the overlay
         altTabActive = false;
         altTabSel = nullptr;

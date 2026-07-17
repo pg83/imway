@@ -1,5 +1,5 @@
 #include "composer.h"
-#include "ilist.h"
+#include "intr_list.h"
 #include "notifier.h"
 #include "scene.h"
 #include "util.h"

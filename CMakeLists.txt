@@ -277,6 +277,7 @@ add_executable(imway
     control.cpp
     input.cpp
     input_sink.cpp
+    intr_list.cpp
     keyboard.cpp
     dialog.cpp
     launcher.cpp

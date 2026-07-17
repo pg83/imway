@@ -9,7 +9,7 @@
 #include "frame_listener.h"
 #include "keyboard.h"
 #include "output.h"
-#include "ilist.h"
+#include "intr_list.h"
 #include "scene.h"
 #include "session.h"
 #include "util.h"
