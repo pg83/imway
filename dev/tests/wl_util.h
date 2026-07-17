@@ -150,6 +150,10 @@ static const struct wl_pointer_listener wlp_listener = {
     .axis_stop = wlp_axis_stop, .axis_discrete = wlp_axis_disc,
 };
 
+// relative-pointer deltas are recorded by wlrel_* above; the client that binds
+// the relative pointer wires it to its own listener (the protocol header must
+// be included there, after wl_util.h)
+
 // ---- seat ----
 
 static void wl_seat_caps(void* d, struct wl_seat* s, uint32_t caps) {

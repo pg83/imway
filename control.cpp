@@ -156,7 +156,9 @@ void ControlImpl::handleLine(StringView cmd) {
         // swipe <begin N | update dx dy | end>
         StringView phase, rest;
 
-        args.split(' ', phase, rest);
+        if (!args.split(' ', phase, rest)) {
+            phase = args;
+        }
 
         if (phase == "begin"_sv) {
             sink->swipeBegin((u32)rest.stou());
@@ -173,7 +175,9 @@ void ControlImpl::handleLine(StringView cmd) {
         // pinch <begin N | update dx dy scale rot | end>
         StringView phase, rest;
 
-        args.split(' ', phase, rest);
+        if (!args.split(' ', phase, rest)) {
+            phase = args;
+        }
 
         if (phase == "begin"_sv) {
             sink->pinchBegin((u32)rest.stou());
@@ -191,7 +195,9 @@ void ControlImpl::handleLine(StringView cmd) {
         // hold <begin N | end>
         StringView phase, rest;
 
-        args.split(' ', phase, rest);
+        if (!args.split(' ', phase, rest)) {
+            phase = args;
+        }
 
         if (phase == "begin"_sv) {
             sink->holdBegin((u32)rest.stou());
