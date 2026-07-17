@@ -5,8 +5,7 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-"$IMWAY_CLIENT" &
-CLIENT_PID=$!
+start_client
 
 for _ in $(seq 1 100); do
     in_log "mapped" && break
@@ -18,11 +17,10 @@ if ! kill -0 "$CLIENT_PID" 2>/dev/null; then
     rc=0
     wait "$CLIENT_PID" || rc=$?
     [[ $rc -eq 77 ]] && { echo "SKIP: dmabuf unavailable"; exit 127; }
-    echo "client died (rc=$rc)"
+    echo "client died (rc=$rc)"; cat "$CLIENT_LOG"
     exit 1
 fi
 
-in_log "mapped" || { echo "client did not map"; exit 1; }
 sleep 0.3 # let the committed buffer reach a rendered frame
 screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 

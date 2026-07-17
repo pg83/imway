@@ -3,8 +3,7 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-"$IMWAY_CLIENT" &
-
+start_client
 await 50 in_log "shm stride" || { echo "compositor did not reject the bad stride"; exit 1; }
-kill -0 "$IMWAY_PID" || { echo "compositor died on the bad stride"; exit 1; }
+expect_alive "compositor died on the bad stride"
 echo "OK: undersized shm stride rejected, compositor alive"

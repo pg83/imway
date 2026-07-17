@@ -4,11 +4,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-C="$XDG_RUNTIME_DIR/client.log"
-"$IMWAY_CLIENT" >"$C" 2>&1 &
-
-await 60 grep -q "torn down" "$C" || { echo "client did not finish teardown"; cat "$C" "$IMWAY_LOG"; exit 1; }
+start_client
+wait_client "torn down"
 sleep 0.3
-
-kill -0 "$IMWAY_PID" || { echo "compositor crashed — cache.frames use-after-free"; exit 1; }
+expect_alive "compositor crashed — cache.frames use-after-free"
 echo "OK: cached frame callbacks cleared, compositor alive"

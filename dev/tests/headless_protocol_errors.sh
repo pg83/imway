@@ -9,7 +9,7 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             incomplete-positioner unmapped-popup-parent destroy-wm-base \
             invalid-dnd-mask duplicate-dnd-actions; do
     "$IMWAY_CLIENT" "$mode"
-    kill -0 "$IMWAY_PID" || { echo "compositor died on $mode"; exit 1; }
+    expect_alive "compositor died on $mode"
 done
 
 echo "OK: malformed clients were disconnected and compositor survived"

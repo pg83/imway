@@ -25,10 +25,17 @@ for t in dev/tests/headless_*.sh; do
     XDG_RUNTIME_DIR="$RT" "$IMWAY" --device headless --socket imway-test --control "$RT/ctl" >"$log" 2>&1 &
     pid=$!
 
+    # ready = socket bound, control FIFO open, and the init-complete marker
+    # logged (it prints right before the event loop starts). The scenario can
+    # assume a fully-up compositor and never has to poll for startup itself.
     up=""
 
-    for _ in $(seq 1 50); do
-        [[ -S "$RT/imway-test" && -p "$RT/ctl" ]] && { up=1; break; }
+    for _ in $(seq 1 100); do
+        if [[ -S "$RT/imway-test" && -p "$RT/ctl" ]] && grep -q "control FIFO:" "$log" 2>/dev/null; then
+            up=1
+            break
+        fi
+        kill -0 "$pid" 2>/dev/null || break
         sleep 0.1
     done
 
@@ -47,7 +54,7 @@ for t in dev/tests/headless_*.sh; do
     rc=0
     XDG_RUNTIME_DIR="$RT" WAYLAND_DISPLAY=imway-test \
         IMWAY_CTL="$RT/ctl" IMWAY_LOG="$log" IMWAY_PID="$pid" \
-        IMWAY_CLIENT="$client" bash "$t" || rc=$?
+        IMWAY_CLIENT="$client" IMWAY_CLIENT_LOG="$RT/client.log" bash "$t" || rc=$?
 
     # clean shutdown is part of every test: quit over the FIFO, bounded wait
     died=""

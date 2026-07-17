@@ -4,32 +4,12 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-CLIENT_LOG="$XDG_RUNTIME_DIR/client.log"
-
-"$IMWAY_CLIENT" >"$CLIENT_LOG" 2>&1 &
-
-await 50 grep -q "ready for grab" "$CLIENT_LOG" || {
-    echo "toplevel did not become ready"; cat "$IMWAY_LOG" "$CLIENT_LOG"; exit 1; }
+start_client
+wait_client "ready for grab"
 
 # Create a real implicit pointer grab and keep the button held until the
 # xdg_popup.grab request has been processed.
-sleep 0.5
-screenshot "$XDG_RUNTIME_DIR/base.ppm"
-read -r GRAB_X GRAB_Y < <(python3 - "$XDG_RUNTIME_DIR/base.ppm" <<'PY'
-import sys
-f = open(sys.argv[1], 'rb')
-assert f.readline().strip() == b'P6'
-w, h = map(int, f.readline().split())
-f.readline()
-data = f.read(w*h*3)
-pts = [(x, y) for y in range(h) for x in range(w)
-       if data[(y*w+x)*3] > 200 and data[(y*w+x)*3+1] < 80 and data[(y*w+x)*3+2] < 80]
-assert pts, 'red toplevel not visible'
-print((min(x for x, _ in pts) + max(x for x, _ in pts)) // 2,
-      (min(y for _, y in pts) + max(y for _, y in pts)) // 2)
-PY
-)
-ctl "motion $GRAB_X $GRAB_Y"
+point_at_color 255 0 0 || { echo "red toplevel not visible"; exit 1; }
 sleep 0.2
 ctl "button left press"
 
@@ -49,8 +29,7 @@ ctl "button left release"
 sleep 0.5
 screenshot "$XDG_RUNTIME_DIR/without.ppm"
 
-await 50 grep -q "popup done" "$CLIENT_LOG" || {
-    echo "client did not receive popup_done"; cat "$CLIENT_LOG"; exit 1; }
+wait_client "popup done"
 
 python3 - "$XDG_RUNTIME_DIR/with.ppm" "$XDG_RUNTIME_DIR/without.ppm" <<'PY'
 import sys

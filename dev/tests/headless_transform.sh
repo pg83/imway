@@ -3,9 +3,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-"$IMWAY_CLIENT" &
-
-await 100 in_log "mapped" || { echo "client did not map"; exit 1; }
+start_client
+wait_mapped
 sleep 0.3 # let the committed buffer reach a rendered frame
 screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
@@ -32,3 +31,4 @@ print(f'colored bbox={bw}x{bh}, red={red}, blue={blue}')
 assert 190 <= bw <= 205 and 110 <= bh <= 125, '90-degree transform did not swap dimensions'
 assert red > 10000 and blue > 10000
 PY
+echo "OK: buffer_transform 90 swapped dimensions"

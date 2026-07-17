@@ -1,15 +1,20 @@
-# Sourced by every headless_*.sh. dev/test.sh provides the environment:
+# Sourced by every headless_*.sh. dev/test.sh has ALREADY brought the
+# compositor fully up (socket bound, control FIFO open, init complete) before
+# the scenario runs — tests never poll for compositor startup. The environment:
 #   XDG_RUNTIME_DIR  per-test scratch dir, removed after the test
 #   WAYLAND_DISPLAY  socket of the per-test compositor (already running)
 #   IMWAY_CTL        control FIFO of that compositor
 #   IMWAY_LOG        compositor log
 #   IMWAY_PID        compositor pid
 #   IMWAY_CLIENT     the test's client binary, empty if it has none
+#   IMWAY_CLIENT_LOG default stdout/stderr sink for the client (start_client)
 # Exit 127 = skip. The runner quits the compositor itself and fails the
 # test if it died or hung — tests only drive the scenario.
 
 # background clients die with the test
 trap 'kill $(jobs -p) 2>/dev/null || true' EXIT
+
+CLIENT_LOG="${IMWAY_CLIENT_LOG:-$XDG_RUNTIME_DIR/client.log}"
 
 ctl() {
     echo "$1" > "$IMWAY_CTL"
@@ -17,6 +22,37 @@ ctl() {
 
 in_log() {
     grep -q "$1" "$IMWAY_LOG"
+}
+
+# launch the test's client in the background; its pid lands in CLIENT_PID and
+# its output in CLIENT_LOG. Extra args are passed through.
+start_client() {
+    "$IMWAY_CLIENT" "$@" >"$CLIENT_LOG" 2>&1 &
+    CLIENT_PID=$!
+}
+
+# wait until the client's toplevel is on screen (the compositor logs "mapped")
+wait_mapped() {
+    await 100 in_log "mapped" || {
+        echo "client window did not map"; cat "$CLIENT_LOG" "$IMWAY_LOG" 2>/dev/null; exit 1; }
+}
+
+# wait for a marker line the client itself prints
+wait_client() { # <grep-pattern>
+    await 100 grep -q "$1" "$CLIENT_LOG" || {
+        echo "client did not reach: $1"; cat "$CLIENT_LOG" "$IMWAY_LOG" 2>/dev/null; exit 1; }
+}
+
+# wait for the background client to exit; fail the test on a nonzero code
+expect_client_ok() { # [message]
+    local rc=0
+    wait "$CLIENT_PID" || rc=$?
+    [[ $rc -eq 0 ]] || { echo "${1:-client failed} (rc=$rc)"; cat "$CLIENT_LOG" 2>/dev/null; exit 1; }
+}
+
+# fail unless the compositor is still alive (survival tests)
+expect_alive() { # [message]
+    kill -0 "$IMWAY_PID" 2>/dev/null || { echo "${1:-compositor died}"; cat "$IMWAY_LOG" 2>/dev/null; exit 1; }
 }
 
 # await <tries> <cmd...> — poll at 0.1s until the command succeeds

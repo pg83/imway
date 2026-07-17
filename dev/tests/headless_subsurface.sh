@@ -3,9 +3,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-"$IMWAY_CLIENT" &
-
-await 100 in_log "mapped" || { echo "client did not map"; exit 1; }
+start_client
+wait_mapped
 sleep 0.3 # let the committed buffers reach a rendered frame
 screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 

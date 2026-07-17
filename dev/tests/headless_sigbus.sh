@@ -4,8 +4,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-"$IMWAY_CLIENT" || true
+"$IMWAY_CLIENT" || true # runs to completion: commit over a truncated pool
 
-sleep 0.5 # let the compositor render a few frames over the truncated pool
-kill -0 "$IMWAY_PID" || { echo "compositor died"; exit 1; }
+sleep 0.5 # let the compositor render a few frames over it
+expect_alive "compositor died on the truncated pool"
 echo "OK: compositor survived the truncated pool"

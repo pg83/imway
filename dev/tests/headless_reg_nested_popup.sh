@@ -4,11 +4,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-C="$XDG_RUNTIME_DIR/client.log"
-"$IMWAY_CLIENT" >"$C" 2>&1 &
-cpid=$!
-
-await 50 in_log "focus ->" || { echo "toplevel did not take focus"; cat "$C"; exit 1; }
+start_client
+wait_mapped
 
 # click to arm the grab serial → the client opens two nested grab popups and
 # dismisses the deepest
@@ -16,8 +13,6 @@ point_at_color 255 0 0 || { echo "red window not found"; exit 1; }
 sleep 0.2
 ctl "button left press"
 
-rc=0
-wait "$cpid" || rc=$?
+expect_client_ok "focus did not return to the parent popup"
 ctl "button left release" 2>/dev/null || true
-[[ $rc -eq 0 ]] || { echo "focus did not return to the parent popup"; cat "$C"; exit 1; }
 echo "OK: nested grab dismiss returns focus to the parent popup"
