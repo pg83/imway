@@ -139,7 +139,14 @@ echo "OK: $B/imway"
 
 mkdir -p "$B/tests"
 
-for xml in stable/xdg-shell/xdg-shell.xml stable/viewporter/viewporter.xml stable/linux-dmabuf/linux-dmabuf-v1.xml; do
+CLIENT_PROTOCOLS="
+stable/xdg-shell/xdg-shell.xml
+stable/viewporter/viewporter.xml
+stable/linux-dmabuf/linux-dmabuf-v1.xml
+unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml
+"
+
+for xml in $CLIENT_PROTOCOLS; do
     name=$(basename "$xml" .xml)
     wayland-scanner client-header "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-protocol.h"
     wayland-scanner private-code  "$PROTO_XML_DIR/$xml" "$B/tests/$name-client-code.c"
@@ -151,7 +158,10 @@ done
 # symbol error. Probe each table and compile only the missing ones.
 GLUE=""
 
-for probe in xdg_wm_base_interface:xdg-shell wp_viewporter_interface:viewporter zwp_linux_dmabuf_v1_interface:linux-dmabuf-v1; do
+for probe in xdg_wm_base_interface:xdg-shell \
+             wp_viewporter_interface:viewporter \
+             zwp_linux_dmabuf_v1_interface:linux-dmabuf-v1 \
+             zwp_keyboard_shortcuts_inhibit_manager_v1_interface:keyboard-shortcuts-inhibit-unstable-v1; do
     sym=${probe%%:*}
     name=${probe##*:}
     echo "extern const char $sym[]; int main(void) { return !$sym[0]; }" \

@@ -39,9 +39,14 @@ __attribute__((unused)) static struct wl_pointer* wl_ptr;
 __attribute__((unused)) static int wlk_keymap_fd = -1;
 __attribute__((unused)) static uint32_t wlk_keymap_size;
 __attribute__((unused)) static uint32_t wlk_key_serial;   // last wl_keyboard.key
+__attribute__((unused)) static uint32_t wlk_last_key;     // its keycode
 __attribute__((unused)) static uint32_t wlk_enter_serial; // last wl_keyboard.enter
 __attribute__((unused)) static int wlk_enters, wlk_leaves;
 __attribute__((unused)) static struct wl_surface* wlk_focus;
+// set wlk_watch_key to a keycode and wlk_watch_hits counts its key events —
+// used to tell "the client received this key" from "a chord swallowed it"
+__attribute__((unused)) static uint32_t wlk_watch_key = 0xffffffff;
+__attribute__((unused)) static int wlk_watch_hits;
 
 // last pointer events
 __attribute__((unused)) static uint32_t wlp_enter_serial;  // last wl_pointer.enter
@@ -71,8 +76,10 @@ static void wlk_leave(void* d, struct wl_keyboard* k, uint32_t serial, struct wl
 }
 static void wlk_key(void* d, struct wl_keyboard* k, uint32_t serial, uint32_t t, uint32_t key,
                     uint32_t state) {
-    (void)d; (void)k; (void)t; (void)key; (void)state;
+    (void)d; (void)k; (void)t; (void)state;
     wlk_key_serial = serial;
+    wlk_last_key = key;
+    if (key == wlk_watch_key) wlk_watch_hits++;
 }
 static void wlk_mods(void* d, struct wl_keyboard* k, uint32_t serial, uint32_t dep, uint32_t lat,
                      uint32_t lock, uint32_t grp) {

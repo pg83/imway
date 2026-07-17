@@ -46,6 +46,27 @@ print((min(x for x, _ in pts)+max(x for x, _ in pts))//2,
 PY
 }
 
+# count pixels that differ between two ppms inside a box; echo the count
+region_diff() { # <ppm1> <ppm2> <x0> <y0> <x1> <y1>
+    python3 - "$@" <<'PY'
+import sys
+a, b = sys.argv[1], sys.argv[2]
+x0, y0, x1, y1 = map(int, sys.argv[3:7])
+def load(p):
+    f = open(p, 'rb'); assert f.readline().strip() == b'P6'
+    w, h = map(int, f.readline().split()); f.readline()
+    return w, h, f.read(w*h*3)
+w, h, da = load(a); _, _, db = load(b)
+n = 0
+for y in range(max(0, y0), min(h, y1)):
+    for x in range(max(0, x0), min(w, x1)):
+        i = (y*w+x)*3
+        if abs(da[i]-db[i]) + abs(da[i+1]-db[i+1]) + abs(da[i+2]-db[i+2]) > 40:
+            n += 1
+print(n)
+PY
+}
+
 # screenshot, find a color, and move the pointer onto its centroid. Retries:
 # the first frame may not be painted yet when the window has only just mapped.
 point_at_color() { # <r> <g> <b>
