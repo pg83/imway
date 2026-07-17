@@ -127,6 +127,21 @@ point_at_color() { # <r> <g> <b>
     return 1
 }
 
+# left-click exactly at (x,y): the pick runs on last-frame hover, so move,
+# render a frame, nudge, render again, then press. Prefer this over
+# point_at_color when windows overlap — a color-bbox centroid can land on
+# the occluding window.
+click_at() { # <x> <y>
+    ctl "motion $1 $2"
+    screenshot "$XDG_RUNTIME_DIR/_click.ppm" || return 1
+    ctl "motion $(($1 + 1)) $2"
+    screenshot "$XDG_RUNTIME_DIR/_click.ppm" || return 1
+    ctl "button left press"
+    sleep 0.1
+    ctl "button left release"
+    sleep 0.2
+}
+
 # dump compositor state (toplevels/popups/focus, see control.cpp dumpState)
 # to stdout. The compositor renames the file into place, so existence means
 # a complete read.

@@ -111,10 +111,12 @@ static const struct wl_keyboard_listener wlk_listener = {
 
 static void wlp_enter(void* d, struct wl_pointer* p, uint32_t serial, struct wl_surface* s,
                       wl_fixed_t x, wl_fixed_t y) {
-    (void)d; (void)p; (void)x; (void)y;
+    (void)d; (void)p;
     wlp_enter_serial = serial;
     wlp_enter_count++;
     wlp_focus = s;
+    wlp_x = x; // enter carries surface-local coords too
+    wlp_y = y;
 }
 static void wlp_leave(void* d, struct wl_pointer* p, uint32_t serial, struct wl_surface* s) {
     (void)d; (void)p; (void)serial; (void)s;
