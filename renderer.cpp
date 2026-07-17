@@ -704,7 +704,7 @@ bool RendererImpl::wantFrame() const {
 }
 
 bool RendererImpl::surfaceVisible(Surface* s) const {
-    if (!s || !s->hasContent) {
+    if (!s || !s->contentMappedThroughAncestors()) {
         return false;
     }
 

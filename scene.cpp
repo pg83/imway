@@ -85,6 +85,24 @@ Toplevel* Surface::rootToplevel() {
     return s->toplevel;
 }
 
+bool Surface::contentMappedThroughAncestors() const {
+    const Surface* surface = this;
+
+    while (surface) {
+        if (!surface->hasContent) {
+            return false;
+        }
+
+        if (!surface->sub || !surface->sub->parent) {
+            return true;
+        }
+
+        surface = surface->sub->parent;
+    }
+
+    return false;
+}
+
 void unionRect(RectI& a, const RectI& b) {
     if (b.empty()) {
         return;

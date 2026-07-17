@@ -143,6 +143,7 @@ struct Surface: SceneNode, GrabNode {
 
     Surface* rootSurface();
     Toplevel* rootToplevel();
+    bool contentMappedThroughAncestors() const;
 };
 
 // the node links it into the parent's stackBelow/stackAbove pile

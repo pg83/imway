@@ -463,8 +463,20 @@ namespace {
         u32 pointerGrabSerial = 0;
         wl_client* pointerGrabClient = nullptr;
         Surface* pointerGrabOrigin = nullptr;
-        u32 pointerEnterSerial = 0;
-        wl_client* pointerEnterClient = nullptr;
+
+        struct PointerEnter {
+            wl_resource* pointer = nullptr;
+            u32 serial = 0;
+        };
+
+        Vector<PointerEnter> pointerEnters;
+
+        struct CursorShapeBinding {
+            wl_resource* device = nullptr;
+            wl_resource* pointer = nullptr;
+        };
+
+        Vector<CursorShapeBinding> cursorShapeBindings;
 
         // last delivered key press: a valid xdg_popup.grab trigger too
         // (menu key, shift+F10)
@@ -474,6 +486,11 @@ namespace {
         void releaseAllKeys();
         void rememberSerial(u32 serial, wl_client* client, Surface* surface);
         bool validSerial(wl_client* client, u32 serial) const;
+        void rememberPointerEnter(wl_resource* pointer, u32 serial);
+        bool validPointerEnter(wl_resource* pointer, u32 serial) const;
+        void forgetPointer(wl_resource* pointer);
+        bool validCursorShapeEnter(wl_resource* device, u32 serial) const;
+        void forgetCursorShapeDevice(wl_resource* device);
         bool validSelectionSerial(wl_client* client, u32 serial);
         void setSelection(wl_client* client, u32 serial, DataSource* src, bool primary);
         void sendSelections(wl_client* client);
@@ -2001,8 +2018,9 @@ namespace {
 
         sub->sync = false;
 
-        if (!sub->effectiveSync() && sub->cache.valid) {
+        if (!sub->effectiveSync()) {
             applySubsurfaceCache(*sub);
+            sub->srv->scene->needsFrame = true;
         }
     }
 
@@ -3069,7 +3087,7 @@ namespace {
     }
 
     bool surfaceVisibleOnOutput(SurfaceImpl& surface) {
-        if (!surface.hasContent) {
+        if (!surface.contentMappedThroughAncestors()) {
             return false;
         }
 
@@ -5425,8 +5443,7 @@ namespace {
             return;
         }
 
-        if (!seat || !seat->ptrFocus || seat->pointerEnterClient != client ||
-            seat->pointerEnterSerial != serial) {
+        if (!seat || !seat->ptrFocus || !seat->validCursorShapeEnter(res, serial)) {
             return;
         }
 
@@ -5446,6 +5463,12 @@ namespace {
         .set_shape = cursorShapeDeviceSetShape,
     };
 
+    void cursorShapeDeviceDestroyed(wl_resource* res) {
+        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
+            seat->forgetCursorShapeDevice(res);
+        }
+    }
+
     void cursorShapeGetPointer(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
         wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
 
@@ -5455,14 +5478,17 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(d, &cursorShapeDeviceImpl, wl_resource_get_user_data(pointerRes), nullptr);
+        auto* seat = (SeatState*)wl_resource_get_user_data(pointerRes);
+
+        wl_resource_set_implementation(d, &cursorShapeDeviceImpl, seat, cursorShapeDeviceDestroyed);
+        seat->cursorShapeBindings.pushBack({d, pointerRes});
     }
 
     void cursorShapeGetTabletTool(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
 
         if (d) {
-            wl_resource_set_implementation(d, &cursorShapeDeviceImpl, nullptr, nullptr);
+            wl_resource_set_implementation(d, &cursorShapeDeviceImpl, nullptr, cursorShapeDeviceDestroyed);
         }
     }
 
@@ -5493,8 +5519,7 @@ namespace {
     void pointerSetCursor(wl_client* client, wl_resource* res, u32 serial, wl_resource* surfRes, i32 hotX, i32 hotY) {
         SeatState* seat = seatOf(res);
 
-        if (!seat || !seat->ptrFocus || seat->pointerEnterClient != client ||
-            seat->pointerEnterSerial != serial) {
+        if (!seat || !seat->ptrFocus || !seat->validPointerEnter(res, serial)) {
             return;
         }
 
@@ -5532,7 +5557,10 @@ namespace {
     const struct wl_touch_interface touchImpl = {.release = resDestroy};
 
     void pointerResourceDestroyed(wl_resource* res) {
-        removeOne(seatOf(res)->pointers, res);
+        SeatState* seat = seatOf(res);
+
+        removeOne(seat->pointers, res);
+        seat->forgetPointer(res);
     }
 
     void keyboardResourceDestroyed(wl_resource* res) {
@@ -5560,6 +5588,7 @@ namespace {
             u32 serial = wl_display_next_serial(st.srv->display);
 
             st.rememberSerial(serial, client, st.ptrFocus);
+            st.rememberPointerEnter(p, serial);
             wl_pointer_send_enter(p, serial, resOf(st.ptrFocus), wl_fixed_from_double(st.curX - st.ptrFocus->imgX), wl_fixed_from_double(st.curY - st.ptrFocus->imgY));
 
             if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
@@ -5920,8 +5949,7 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     }
 
     ptrFocus = s;
-    pointerEnterSerial = 0;
-    pointerEnterClient = nullptr;
+    pointerEnters.clear();
     srv->scene->cursorShape = CursorKind::unset;
     srv->scene->cursorSurface = nullptr;
 
@@ -5933,6 +5961,7 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
         for (wl_resource* p : pointers) {
             if (sameClientS(p, s)) {
                 wl_pointer_send_enter(p, serial, resOf(s), wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+                rememberPointerEnter(p, serial);
                 delivered = true;
 
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
@@ -5943,8 +5972,6 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 
         if (delivered) {
             rememberSerial(serial, client, s);
-            pointerEnterSerial = serial;
-            pointerEnterClient = client;
         }
     }
 
@@ -6674,6 +6701,68 @@ bool SeatState::validSerial(wl_client* client, u32 serial) const {
     }
 
     return false;
+}
+
+void SeatState::rememberPointerEnter(wl_resource* pointer, u32 serial) {
+    for (size_t i = 0; i < pointerEnters.length(); i++) {
+        PointerEnter& entry = pointerEnters.mut(i);
+
+        if (entry.pointer == pointer) {
+            entry.serial = serial;
+
+            return;
+        }
+    }
+
+    pointerEnters.pushBack({pointer, serial});
+}
+
+bool SeatState::validPointerEnter(wl_resource* pointer, u32 serial) const {
+    for (const PointerEnter& entry : pointerEnters) {
+        if (entry.pointer == pointer) {
+            return entry.serial == serial;
+        }
+    }
+
+    return false;
+}
+
+void SeatState::forgetPointer(wl_resource* pointer) {
+    for (size_t i = 0; i < pointerEnters.length(); i++) {
+        if (pointerEnters[i].pointer == pointer) {
+            pointerEnters.mut(i) = pointerEnters.back();
+            pointerEnters.popBack();
+
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < cursorShapeBindings.length(); i++) {
+        if (cursorShapeBindings[i].pointer == pointer) {
+            cursorShapeBindings.mut(i).pointer = nullptr;
+        }
+    }
+}
+
+bool SeatState::validCursorShapeEnter(wl_resource* device, u32 serial) const {
+    for (const CursorShapeBinding& binding : cursorShapeBindings) {
+        if (binding.device == device) {
+            return binding.pointer && validPointerEnter(binding.pointer, serial);
+        }
+    }
+
+    return false;
+}
+
+void SeatState::forgetCursorShapeDevice(wl_resource* device) {
+    for (size_t i = 0; i < cursorShapeBindings.length(); i++) {
+        if (cursorShapeBindings[i].device == device) {
+            cursorShapeBindings.mut(i) = cursorShapeBindings.back();
+            cursorShapeBindings.popBack();
+
+            return;
+        }
+    }
 }
 
 bool SeatState::validSelectionSerial(wl_client* client, u32 serial) {
