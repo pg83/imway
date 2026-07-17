@@ -211,9 +211,16 @@ namespace {
         bool kbInhibitActive = false;
 
         wl_resource* syncRes = nullptr;
+        wl_resource* colorRes = nullptr;
         TimelineBox* pendAcqTl = nullptr;
         TimelineBox* pendRelTl = nullptr;
         u64 pendAcqPt = 0, pendRelPt = 0;
+        bool pendColorChanged = false;
+        bool pendColorManaged = false;
+        bool pendColorPq = false;
+        bool pendColorWide = false;
+        u32 pendColorMaxCll = 0;
+        u32 pendColorRefLum = 0;
 
         XdgSurface* xdg = nullptr;
     };
@@ -248,6 +255,12 @@ namespace {
             int dw = 0, dh = 0;
             bool inputChanged = false, inputSet = false;
             Vector<RectI> inputRegion;
+            bool colorChanged = false;
+            bool colorManaged = false;
+            bool colorPq = false;
+            bool colorWide = false;
+            u32 colorMaxCll = 0;
+            u32 colorRefLum = 0;
         } cache;
 
         bool effectiveSync() const;
@@ -264,6 +277,7 @@ namespace {
         int pendingMinW = 0, pendingMinH = 0;
         int pendingMaxW = 0, pendingMaxH = 0;
         bool pendingMinSet = false, pendingMaxSet = false;
+        wl_resource* decoRes = nullptr;
 
         // pool icon built from client pixels (xdg-toplevel-icon); wayland
         // owns it: released on replace and on destroy
@@ -409,6 +423,8 @@ namespace {
         u32 pointerGrabSerial = 0;
         wl_client* pointerGrabClient = nullptr;
         Surface* pointerGrabOrigin = nullptr;
+        u32 pointerEnterSerial = 0;
+        wl_client* pointerEnterClient = nullptr;
 
         // last delivered key press: a valid xdg_popup.grab trigger too
         // (menu key, shift+F10)
@@ -1039,6 +1055,17 @@ namespace {
         }
     }
 
+    void applyColorState(Surface& s, bool managed, bool pq, bool wide, u32 maxCll, u32 refLum) {
+        s.hdrContent = pq && wide;
+        s.hdrMaxCll = maxCll;
+        s.hdrMaxLum = refLum;
+        s.colorManaged = managed;
+        s.colorPq = pq;
+        s.colorWide = wide;
+        s.colorRefLum = refLum;
+        s.colorGeneration++;
+    }
+
     void applySubsurfaceCache(SubsurfaceImpl& sub) {
         SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
 
@@ -1052,6 +1079,12 @@ namespace {
             s.bufferTransform = sub.cache.transform;
             sub.cache.transformSet = false;
             s.damageAll = true;
+        }
+
+        if (sub.cache.colorChanged) {
+            applyColorState(s, sub.cache.colorManaged, sub.cache.colorPq,
+                            sub.cache.colorWide, sub.cache.colorMaxCll, sub.cache.colorRefLum);
+            sub.cache.colorChanged = false;
         }
 
         s.bufferOffsetX += sub.cache.offsetX;
@@ -1463,6 +1496,22 @@ namespace {
             }
         }
 
+        if (s.pendColorChanged) {
+            if (toCache) {
+                sub->cache.colorChanged = true;
+                sub->cache.colorManaged = s.pendColorManaged;
+                sub->cache.colorPq = s.pendColorPq;
+                sub->cache.colorWide = s.pendColorWide;
+                sub->cache.colorMaxCll = s.pendColorMaxCll;
+                sub->cache.colorRefLum = s.pendColorRefLum;
+            } else {
+                applyColorState(s, s.pendColorManaged, s.pendColorPq,
+                                s.pendColorWide, s.pendColorMaxCll, s.pendColorRefLum);
+            }
+
+            s.pendColorChanged = false;
+        }
+
         if (s.pending.inputRegionChanged) {
             if (toCache) {
                 sub->cache.inputChanged = true;
@@ -1654,6 +1703,11 @@ namespace {
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
         syncSurfaceGone(*s);
+
+        if (s->colorRes) {
+            wl_resource_set_user_data(s->colorRes, nullptr);
+            s->colorRes = nullptr;
+        }
 
         if (s->frame) {
             FrameResource* frame = s->frame;
@@ -2018,6 +2072,15 @@ namespace {
     }
 
     void toplevelDestroy(wl_client*, wl_resource* res) {
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (t->decoRes) {
+            wl_resource_post_error(t->decoRes, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ORPHANED,
+                                   "xdg_toplevel destroyed before its decoration object");
+
+            return;
+        }
+
         wl_resource_destroy(res);
     }
 
@@ -2197,6 +2260,11 @@ namespace {
 
         if (t->surface) {
             t->surface->toplevel = nullptr;
+        }
+
+        if (t->decoRes) {
+            wl_resource_set_user_data(t->decoRes, nullptr);
+            t->decoRes = nullptr;
         }
 
         if (t->ownIcon && srv->iconPool) {
@@ -3482,7 +3550,16 @@ namespace {
         wl_resource_set_implementation(res, &primaryManagerImpl, data, nullptr);
     }
 
-    void decoSetMode(wl_client*, wl_resource* res, u32) {
+    void decoSetMode(wl_client*, wl_resource* res, u32 mode) {
+        if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res)) ||
+            (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE &&
+             mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)) {
+            wl_resource_post_error(res, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE,
+                                   "invalid decoration mode");
+
+            return;
+        }
+
         zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     }
 
@@ -3493,6 +3570,10 @@ namespace {
     void decoResourceDestroyed(wl_resource* res) {
         // the client dropped the decoration object: back to csd per spec
         if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
+            if (t->decoRes == res) {
+                t->decoRes = nullptr;
+            }
+
             t->csd = true;
             t->srv->scene->needsFrame = true;
         }
@@ -3515,9 +3596,18 @@ namespace {
 
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
 
+        if (t->decoRes) {
+            wl_resource_set_implementation(d, &decoImpl, nullptr, nullptr);
+            wl_resource_post_error(d, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ALREADY_CONSTRUCTED,
+                                   "xdg_toplevel already has a decoration object");
+
+            return;
+        }
+
         // we always answer SERVER_SIDE, so negotiating at all means our bar
         t->csd = false;
         t->srv->scene->needsFrame = true;
+        t->decoRes = d;
 
         wl_resource_set_implementation(d, &decoImpl, t, decoResourceDestroyed);
         zxdg_toplevel_decoration_v1_send_configure(d, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
@@ -5114,10 +5204,18 @@ namespace {
         }
     }
 
-    void cursorShapeDeviceSetShape(wl_client* client, wl_resource* res, u32, u32 shape) {
+    void cursorShapeDeviceSetShape(wl_client* client, wl_resource* res, u32 serial, u32 shape) {
         auto* seat = (SeatState*)wl_resource_get_user_data(res);
 
-        if (!seat || !seat->ptrFocus) {
+        if (!wp_cursor_shape_device_v1_shape_is_valid(shape, wl_resource_get_version(res))) {
+            wl_resource_post_error(res, WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE,
+                                   "invalid cursor shape");
+
+            return;
+        }
+
+        if (!seat || !seat->ptrFocus || seat->pointerEnterClient != client ||
+            seat->pointerEnterSerial != serial) {
             return;
         }
 
@@ -5610,6 +5708,8 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     }
 
     ptrFocus = s;
+    pointerEnterSerial = 0;
+    pointerEnterClient = nullptr;
     srv->scene->cursorShape = CursorKind::unset;
     srv->scene->cursorSurface = nullptr;
 
@@ -5631,6 +5731,8 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 
         if (delivered) {
             rememberSerial(serial, client, s);
+            pointerEnterSerial = serial;
+            pointerEnterClient = client;
         }
     }
 
@@ -6881,6 +6983,21 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmParamsSetTfNamed(wl_client*, wl_resource* res, u32 tf) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
+        if (p->tfSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "transfer function is already set");
+
+            return;
+        }
+
+        if (tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB &&
+            tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
+                                   "transfer function was not advertised");
+
+            return;
+        }
+
         p->d.hdr = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
         p->tfSet = true;
     }
@@ -6891,6 +7008,21 @@ WaylandImpl::~WaylandImpl() noexcept {
 
     void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p->primSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "primaries are already set");
+
+            return;
+        }
+
+        if (prim != WP_COLOR_MANAGER_V1_PRIMARIES_SRGB &&
+            prim != WP_COLOR_MANAGER_V1_PRIMARIES_BT2020) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_PRIMARIES_NAMED,
+                                   "primaries were not advertised");
+
+            return;
+        }
 
         p->d.wide = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
         p->primSet = true;
@@ -6954,38 +7086,67 @@ WaylandImpl::~WaylandImpl() noexcept {
 
     // surface color object: user_data = the SurfaceImpl
     void cmSurfaceDestroy(wl_client*, wl_resource* res) {
+        if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+            s->pendColorChanged = true;
+            s->pendColorManaged = false;
+            s->pendColorPq = false;
+            s->pendColorWide = false;
+            s->pendColorMaxCll = 0;
+            s->pendColorRefLum = 0;
+        }
+
         wl_resource_destroy(res);
     }
 
-    void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32) {
+    void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32 intent) {
         auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
         auto* d = descRes ? (CImgDesc*)wl_resource_get_user_data(descRes) : nullptr;
 
         if (!s) {
+            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+
             return;
         }
 
-        // hdr passthrough is PQ + BT.2020; anything else is treated as sdr
-        s->hdrContent = d && d->hdr && d->wide;
-        s->hdrMaxCll = d ? d->maxCll : 0;
-        s->hdrMaxLum = d ? d->maxLum : 0;
+        if (!d) {
+            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION,
+                                   "image description is not ready");
 
-        // per-surface transfer/gamut for the renderer's conversion pass
-        s->colorPq = d && d->hdr;
-        s->colorWide = d && d->wide;
-        s->colorRefLum = d ? d->maxLum : 0;
-        s->colorManaged = s->colorPq || s->colorWide;
-        s->colorGeneration++;
-        s->srv->scene->needsFrame = true;
+            return;
+        }
+
+        if (intent != WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL) {
+            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_RENDER_INTENT,
+                                   "render intent was not advertised");
+
+            return;
+        }
+
+        s->pendColorChanged = true;
+        s->pendColorPq = d->hdr;
+        s->pendColorWide = d->wide;
+        s->pendColorManaged = d->hdr || d->wide;
+        s->pendColorMaxCll = d->maxCll;
+        s->pendColorRefLum = d->maxLum;
     }
 
     void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
         auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
 
-        if (s) {
-            s->hdrContent = false;
-            s->srv->scene->needsFrame = true;
+        if (!s) {
+            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+
+            return;
         }
+
+        s->pendColorChanged = true;
+        s->pendColorManaged = false;
+        s->pendColorPq = false;
+        s->pendColorWide = false;
+        s->pendColorMaxCll = 0;
+        s->pendColorRefLum = 0;
     }
 
     const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
@@ -6993,6 +7154,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         .set_image_description = cmSurfaceSetImageDesc,
         .unset_image_description = cmSurfaceUnsetImageDesc,
     };
+
+    void cmSurfaceResourceDestroyed(wl_resource* res) {
+        if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+            s->colorRes = nullptr;
+        }
+    }
 
     // output / feedback: hand back a description of the display
     CImgDesc cmDisplayDesc(WaylandImpl* srv) {
@@ -7053,6 +7220,15 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 
     void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
+
+        if (surface->colorRes) {
+            wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_SURFACE_EXISTS,
+                                   "surface already has a color-management object");
+
+            return;
+        }
+
         wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
 
         if (!cs) {
@@ -7061,7 +7237,8 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        wl_resource_set_implementation(cs, &cmSurfaceImpl, wl_resource_get_user_data(surfaceRes), nullptr);
+        surface->colorRes = cs;
+        wl_resource_set_implementation(cs, &cmSurfaceImpl, surface, cmSurfaceResourceDestroyed);
     }
 
     void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource*) {

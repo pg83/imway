@@ -523,8 +523,8 @@ standalone.
 - **linux-dmabuf v3, not v4** (no feedback): v1 — format events, v3 —
   modifier events. **The VkImage is cached per wl_buffer** (key — the DmabufBuffer;
   clients cycle 2–4 buffers — one import per buffer, after that only a
-  descriptor swap); the death of a wl_buffer travels to the renderer as data
-  (`scene.deadDmabufs`), the cached texture lives as long as it is shown. Only
+  descriptor swap); the dmabuf's ref-counted pool owns the cached texture and
+  tears it down after the wl_buffer, all surface uses and in-flight frames die. Only
   single-plane buffers are imported;
   ARGB8888/XRGB8888 ↔ `VK_FORMAT_B8G8R8A8_UNORM`, the X variant gets alpha=1
   via a VkImageView swizzle. The buffer is held until replaced by the next one (the renderer
@@ -542,14 +542,12 @@ standalone.
 - **Commit semantics**: subsurface sync caches per the spec (the parent's commit
   applies the entire sync subtree; the sync→desync transition applies the accumulated cache;
   the position of any children — including desync — is double-buffered by the parent's
-  commit). Two simplifications: dmabuf content is applied immediately even for sync
-  children (there's one buffer, nothing to cache), the input region is applied immediately
-  (hit-testing must not wait for the parent's commit; good enough for GTK overlays). The
+  commit). Shm pixels, dmabuf uses, input regions, viewport and color-description state
+  all stay in the sync cache until the parent commit. The
   shm path snapshots the pixels right on commit — the wl_buffer returns to the client
   immediately (important for single-buffered).
-- **Input region** — no honest boolean geometry: subtract removes only
-  exactly-matching rectangles, partial intersections are ignored
-  (sufficient for real clients).
+- **Input region** — rectangle unions are stored as a list; subtract splits an
+  intersected rectangle into up to four surviving rectangles.
 - **The positioner**: anchor/gravity in full, constraint_adjustment
   (flips/slides at the edges) — no: inside an ImGui window the popup is visible anyway.
   Popup cropping by geometry isn't done. `place_above/below` with a non-sibling ref — per
