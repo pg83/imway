@@ -2987,9 +2987,18 @@ void RendererImpl::buildUi(Scene& scene) {
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 
-        // csd clients (gtk) bring their own header bar; ours would double it
+        // csd clients (gtk) bring their own header bar; ours would double it.
+        // without a title bar imgui exempts the window from
+        // move-from-titlebar-only, so any in-content drag would move the
+        // window instead of reaching the client — NoMove, lifted for the one
+        // frame that serves a client-requested move (the move persists,
+        // imgui does not re-check the flag mid-drag)
         if (t->csd) {
             flags |= ImGuiWindowFlags_NoTitleBar;
+
+            if (!t->moveRequested) {
+                flags |= ImGuiWindowFlags_NoMove;
+            }
         }
 
         if (t->fullscreen) {
@@ -2998,6 +3007,11 @@ void RendererImpl::buildUi(Scene& scene) {
             ImGui::SetNextWindowPos(ImVec2(0.f, 0.f), ImGuiCond_Always);
             ImGui::SetNextWindowSize(ImVec2((float)width, (float)height), ImGuiCond_Always);
             flags |= ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoDocking;
+
+            // the content must cover the output edge to edge: window padding
+            // would carve an 8px gutter and shrink the configured size
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
         }
 
         bool stayOpen = true;
@@ -3126,6 +3140,10 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         ImGui::End();
+
+        if (t->fullscreen) {
+            ImGui::PopStyleVar(2);
+        }
 
         if (!stayOpen) {
             t->closeRequested = true;

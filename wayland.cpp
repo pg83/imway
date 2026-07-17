@@ -2183,10 +2183,23 @@ namespace {
         ti->pendingMinSet = true;
     }
 
-    void toplevelSetMaximized(wl_client*, wl_resource*) {
+    // maximization is not a state this compositor keeps (docking covers it),
+    // but the spec requires answering with a configure either way — a silent
+    // drop leaves the client waiting forever
+    void toplevelSetMaximized(wl_client*, wl_resource* res) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (ti) {
+            xdgToplevelReconfigure(*ti);
+        }
     }
 
-    void toplevelUnsetMaximized(wl_client*, wl_resource*) {
+    void toplevelUnsetMaximized(wl_client*, wl_resource* res) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (ti) {
+            xdgToplevelReconfigure(*ti);
+        }
     }
 
     void toplevelSetFullscreen(wl_client*, wl_resource* res, wl_resource*) {
@@ -2197,8 +2210,11 @@ namespace {
         }
 
         ti->fullscreen = true;
-        ti->prevW = ti->cfgW;
-        ti->prevH = ti->cfgH;
+        // a floating window that sized itself was only ever configured 0x0;
+        // park the real geometry so unset_fullscreen can restore it — a 0x0
+        // restore configure leaves the client at the fullscreen size
+        ti->prevW = ti->cfgW ? ti->cfgW : (ti->surface ? ti->surface->geomW() : 0);
+        ti->prevH = ti->cfgH ? ti->cfgH : (ti->surface ? ti->surface->geomH() : 0);
         xdgToplevelConfigureSize(*ti, ti->srv->scene->outW, ti->srv->scene->outH);
         ti->srv->scene->needsFrame = true;
     }
