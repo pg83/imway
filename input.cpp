@@ -1,5 +1,6 @@
 #include "composer.h"
 #include "input.h"
+#include "pooled.h"
 #include "renderer.h"
 #include "input_sink.h"
 #include "session.h"
@@ -35,11 +36,9 @@ namespace {
         Session* session = nullptr;
         InputSink* sink = nullptr;
         libinput* li = nullptr;
-        ev_io io{};
 
         // hotplug: inotify on /dev/input, one bit + device slot per eventN
         int inoFd = -1;
-        ev_io inoIo{};
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
 
@@ -108,16 +107,15 @@ LibinputSource::LibinputSource(Composer& c)
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
     if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
-        ev_io_init(&inoIo, inotifyCb, inoFd, EV_READ);
-        inoIo.data = this;
-        ev_io_start(loop, &inoIo);
+        pooledFD(*c.pool, inoFd);
+        PooledEvIo::create(*c.pool)->start(loop, inotifyCb, inoFd, EV_READ, this);
+    } else if (inoFd >= 0) {
+        pooledFD(*c.pool, inoFd);
     }
 
     session->addListener(this);
 
-    ev_io_init(&io, inputIoCb, libinput_get_fd(li), EV_READ);
-    io.data = this;
-    ev_io_start(loop, &io);
+    PooledEvIo::create(*c.pool)->start(loop, inputIoCb, libinput_get_fd(li), EV_READ, this);
     dispatch();
     sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }
@@ -210,12 +208,10 @@ void LibinputSource::sessionDisabled() {
     libinput_suspend(li);
 }
 
+// churn state: devices come and go with hotplug, the context holds session
+// callbacks into this impl — both stay destructor work. The pooled watchers
+// stop after this; stopping a watcher over an already-dead fd is harmless.
 LibinputSource::~LibinputSource() noexcept {
-    if (inoFd >= 0) {
-        ev_io_stop(loop, &inoIo);
-        close(inoFd);
-    }
-
     for (libinput_device* d : pathDevs) {
         if (d) {
             libinput_device_unref(d);
@@ -223,7 +219,6 @@ LibinputSource::~LibinputSource() noexcept {
     }
 
     if (li) {
-        ev_io_stop(loop, &io);
         libinput_unref(li);
     }
 }

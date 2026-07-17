@@ -80,3 +80,11 @@ void pooledVk(ObjPool& pool, VkDevice d, VkCommandPool h) {
 void pooledVk(ObjPool& pool, VkDevice d, VkShaderModule h) {
     put<VkShaderModule, vkDestroyShaderModule>(pool, d, h);
 }
+
+void pooledVk(ObjPool& pool, VkDevice d, VkRenderPass h) {
+    put<VkRenderPass, vkDestroyRenderPass>(pool, d, h);
+}
+
+void pooledVk(ObjPool& pool, VkDevice d, VkFramebuffer h) {
+    put<VkFramebuffer, vkDestroyFramebuffer>(pool, d, h);
+}

@@ -38,6 +38,7 @@
 #include <std/str/view.h>
 #include <std/sys/throw.h>
 #include "device_headless.h"
+#include "pooled.h"
 
 #include <stdlib.h>
 
@@ -101,8 +102,6 @@ namespace {
         int syncFd = -1;
 
         HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
-        ~HeadlessDevice() noexcept;
-
         int drmFd() const override;
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
@@ -257,17 +256,11 @@ HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
             if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
                 syncFd = fd;
                 vk->drmFd = fd;
+                pooledFD(*pool, fd);
             } else {
                 close(fd);
             }
         }
-    }
-}
-
-HeadlessDevice::~HeadlessDevice() noexcept {
-
-    if (syncFd >= 0) {
-        close(syncFd);
     }
 }
 

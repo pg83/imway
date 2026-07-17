@@ -24,3 +24,5 @@ void pooledVk(stl::ObjPool& pool, VkDevice d, VkDescriptorSetLayout h);
 void pooledVk(stl::ObjPool& pool, VkDevice d, VkDescriptorPool h);
 void pooledVk(stl::ObjPool& pool, VkDevice d, VkCommandPool h);
 void pooledVk(stl::ObjPool& pool, VkDevice d, VkShaderModule h);
+void pooledVk(stl::ObjPool& pool, VkDevice d, VkRenderPass h);
+void pooledVk(stl::ObjPool& pool, VkDevice d, VkFramebuffer h);

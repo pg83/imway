@@ -16,6 +16,8 @@
 #include "history.h"
 #include "notifier.h"
 #include "osd.h"
+#include "pooled.h"
+#include "pooled_vk.h"
 #include "settings.h"
 #include "wifi.h"
 #include "wifi_ui.h"
@@ -114,8 +116,6 @@ namespace {
         Scene* scene = nullptr;
         ::Output* output = nullptr;
         FrameListener* listener = nullptr;
-        ev_timer frameTimer{};
-        ev_timer clockTimer{};
         int framesLimit = 0;
         int settleFrames = 0;
 
@@ -279,7 +279,6 @@ namespace {
         Vector<int> frameSyncFds;
         int presentFenceFd = -1;
 
-        ev_prepare prep{};
         bool haveFrame = false;
         VkImage lastImage = VK_NULL_HANDLE;
         VkImageLayout lastLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -297,7 +296,6 @@ namespace {
         void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
-        void shutdown() noexcept;
 
         void setupColorConvert();
         void ensureConversion(SurfaceTexture* tex, Surface& s);
@@ -430,31 +428,39 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
     if (output->vsynced()) {
-        ev_prepare_init(&prep, prepareCb);
-        prep.data = this;
-        ev_prepare_start(loop, &prep);
+        PooledEvPrepare::create(*pool)->start(loop, prepareCb, this);
     } else {
-        ev_timer_init(&frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
-        frameTimer.data = this;
-        ev_timer_start(loop, &frameTimer);
+        PooledEvTimer::create(*pool)->start(loop, frameTimerCb, 0., 1.0 / scene->hz, this);
     }
 
-    ev_timer_init(&clockTimer, clockTimerCb, 2., 2.);
-    clockTimer.data = this;
-    ev_timer_start(loop, &clockTimer);
+    PooledEvTimer::create(*pool)->start(loop, clockTimerCb, 2., 2., this);
 }
 
 RendererImpl::~RendererImpl() noexcept {
     output->setFrameListener(nullptr);
 
-    if (output->vsynced()) {
-        ev_prepare_stop(loop, &prep);
-    } else {
-        ev_timer_stop(loop, &frameTimer);
+    // the device must be idle before the pooled handles unwind (they die
+    // right after this destructor); imgui and the churn-class resources
+    // (textures, the recreatable syncOut, the present fence) are tied to
+    // the impl and go here, everything setup-once sits in the pool
+    vkDeviceWaitIdle(device);
+    finishGpuFrame(false);
+
+    if (presentFenceFd >= 0) {
+        close(presentFenceFd);
+        presentFenceFd = -1;
     }
 
-    ev_timer_stop(loop, &clockTimer);
-    shutdown();
+    while (!textures.empty()) {
+        destroyTexture((SurfaceTexture*)textures.mutBack());
+    }
+
+    ImGui_ImplVulkan_Shutdown();
+    ImGui::DestroyContext();
+
+    if (syncOut) {
+        vkDestroySemaphore(device, syncOut, nullptr);
+    }
 }
 
 void RendererImpl::clampPos() {
@@ -1332,6 +1338,50 @@ void RendererImpl::setup(int w, int h) {
     }
 
     setupColorConvert();
+
+    // pool-owned for the renderer's whole life (setup runs once): the pool
+    // unwinds these after ~RendererImpl has waited the device idle and shut
+    // imgui down, and before DeviceVk dies. LIFO — dependents last.
+    pooledVk(*pool, device, renderPass);
+    pooledVk(*pool, device, targetMemory);
+    pooledVk(*pool, device, target);
+    pooledVk(*pool, device, targetView);
+    pooledVk(*pool, device, framebuffer);
+
+    for (VkImageView v : scanViews) {
+        pooledVk(*pool, device, v);
+    }
+
+    for (VkFramebuffer fb : scanFbs) {
+        pooledVk(*pool, device, fb);
+    }
+
+    pooledVk(*pool, device, readbackMemory);
+    pooledVk(*pool, device, readback);
+    pooledVk(*pool, device, cmdPool);
+    pooledVk(*pool, device, fence);
+    pooledVk(*pool, device, sampler);
+
+    for (VkSemaphore sem : syncWaitPool) {
+        if (sem) {
+            pooledVk(*pool, device, sem);
+        }
+    }
+
+    if (curImg) {
+        pooledVk(*pool, device, curImgMem);
+        pooledVk(*pool, device, curImg);
+        pooledVk(*pool, device, curView);
+        pooledVk(*pool, device, curFb);
+        pooledVk(*pool, device, curReadbackMem);
+        pooledVk(*pool, device, curReadback);
+        pooledVk(*pool, device, curFence);
+    }
+
+    pooledVk(*pool, device, cmSetLayout);
+    pooledVk(*pool, device, cmPipeLayout);
+    pooledVk(*pool, device, cmPipeline);
+    pooledVk(*pool, device, cmDescPool);
 }
 
 // A compute pipeline that converts a color-managed surface (PQ and/or BT.2020)
@@ -4059,110 +4109,6 @@ void RendererImpl::captureScreenshot() {
     }
 
     close(mfd);
-}
-
-void RendererImpl::shutdown() noexcept {
-    if (!device) {
-        return;
-    }
-
-    vkDeviceWaitIdle(device);
-    finishGpuFrame(false);
-
-    if (presentFenceFd >= 0) {
-        close(presentFenceFd);
-        presentFenceFd = -1;
-    }
-
-    while (!textures.empty()) {
-        destroyTexture((SurfaceTexture*)textures.mutBack());
-    }
-
-    ImGui_ImplVulkan_Shutdown();
-    ImGui::DestroyContext();
-    vkDestroySampler(device, sampler, nullptr);
-
-    // color-management conversion pipeline (per-texture conv resources were
-    // freed by destroyTexture above, so the pool is empty now)
-    if (cmPipeline) {
-        vkDestroyPipeline(device, cmPipeline, nullptr);
-    }
-    if (cmPipeLayout) {
-        vkDestroyPipelineLayout(device, cmPipeLayout, nullptr);
-    }
-    if (cmSetLayout) {
-        vkDestroyDescriptorSetLayout(device, cmSetLayout, nullptr);
-    }
-    if (cmDescPool) {
-        vkDestroyDescriptorPool(device, cmDescPool, nullptr);
-    }
-
-    if (syncOut) {
-        vkDestroySemaphore(device, syncOut, nullptr);
-    }
-
-    for (VkSemaphore sem : syncWaitPool) {
-        if (sem) {
-            vkDestroySemaphore(device, sem, nullptr);
-        }
-    }
-
-    if (curFence) {
-        vkDestroyFence(device, curFence, nullptr);
-    }
-
-    if (curFb) {
-        vkDestroyFramebuffer(device, curFb, nullptr);
-    }
-
-    if (curView) {
-        vkDestroyImageView(device, curView, nullptr);
-    }
-
-    if (curImg) {
-        vkDestroyImage(device, curImg, nullptr);
-    }
-
-    if (curImgMem) {
-        vkFreeMemory(device, curImgMem, nullptr);
-    }
-
-    if (curReadbackMap) {
-        vkUnmapMemory(device, curReadbackMem);
-    }
-
-    if (curReadback) {
-        vkDestroyBuffer(device, curReadback, nullptr);
-    }
-
-    if (curReadbackMem) {
-        vkFreeMemory(device, curReadbackMem, nullptr);
-    }
-
-    vkDestroyFence(device, fence, nullptr);
-    vkDestroyCommandPool(device, cmdPool, nullptr);
-    vkDestroyFramebuffer(device, framebuffer, nullptr);
-
-    for (VkFramebuffer fb : scanFbs) {
-        vkDestroyFramebuffer(device, fb, nullptr);
-    }
-
-    for (VkImageView v : scanViews) {
-        vkDestroyImageView(device, v, nullptr);
-    }
-
-    vkDestroyRenderPass(device, renderPass, nullptr);
-
-    if (readbackMap) {
-        vkUnmapMemory(device, readbackMemory);
-    }
-
-    vkDestroyBuffer(device, readback, nullptr);
-    vkFreeMemory(device, readbackMemory, nullptr);
-    vkDestroyImageView(device, targetView, nullptr);
-    vkDestroyImage(device, target, nullptr);
-    vkFreeMemory(device, targetMemory, nullptr);
-    device = VK_NULL_HANDLE;
 }
 
 void RendererImpl::frameNow() {

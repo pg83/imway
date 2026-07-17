@@ -42,6 +42,7 @@
 #include <std/sym/i_map.h>
 #include <std/sys/throw.h>
 #include "device_kms.h"
+#include "pooled.h"
 
 using namespace stl;
 
@@ -463,6 +464,7 @@ namespace {
         // ddc/ci brightness for external monitors (VCP 0x10 over the
         // connector's i2c bus); writes coalesce through ddcTimer because the
         // link needs ~50ms between transactions and a slider drags faster
+        ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         int ddcFd = -1;
 
@@ -487,7 +489,7 @@ namespace {
         int ddcCur = 0;
         int ddcPending = -1;
         bool ddcTimerOn = false;
-        ev_timer ddcTimer{};
+        PooledEvTimer* ddcTimer = nullptr;
 
         double hdrNits = 0;
         bool hdrActive = false;
@@ -623,14 +625,11 @@ namespace {
         StringBuilder path;
         DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
-        ev_io drmIo{};
         udev* ud = nullptr;
         udev_monitor* mon = nullptr;
-        ev_io udevIo{};
         KmsOutput* output = nullptr;
 
         KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView devPath);
-        ~KmsDevice() noexcept;
 
         int drmFd() const override;
         bool explicitSyncSupported() const override;
@@ -687,6 +686,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
     , session(&s)
 {
     fd = openKmsNode(s, devPath, path);
+    pooledSessionFD(*pool, s, fd);
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
@@ -697,44 +697,33 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
         vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
     }
 
-    ev_io_init(&drmIo, drmIoCb, fd, EV_READ);
-    drmIo.data = (void*)(intptr_t)fd;
-    ev_io_start(loop, &drmIo);
+    PooledEvIo::create(*pool)->start(loop, drmIoCb, fd, EV_READ, (void*)(intptr_t)fd);
 
     ud = udev_new();
 
     if (ud) {
+        udev* held = ud;
+
+        pooledGuard(*pool, [held] {
+            udev_unref(held);
+        });
+
         // "kernel" = raw uevents, works with or without a running udevd
         mon = udev_monitor_new_from_netlink(ud, "kernel");
     }
 
     if (mon) {
+        udev_monitor* held = mon;
+
+        pooledGuard(*pool, [held] {
+            udev_monitor_unref(held);
+        });
         udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
         udev_monitor_enable_receiving(mon);
-        ev_io_init(&udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
-        udevIo.data = this;
-        ev_io_start(loop, &udevIo);
+        PooledEvIo::create(*pool)->start(loop, udevIoCb, udev_monitor_get_fd(mon), EV_READ, this);
     }
 
     sysO << "imway: device "_sv << sv(path) << endL;
-}
-
-KmsDevice::~KmsDevice() noexcept {
-    if (mon) {
-        ev_io_stop(loop, &udevIo);
-        udev_monitor_unref(mon);
-    }
-
-    if (ud) {
-        udev_unref(ud);
-    }
-
-    ev_io_stop(loop, &drmIo);
-
-    if (fd >= 0) {
-        session->closeDevice(fd);
-        fd = -1;
-    }
 }
 
 int KmsDevice::drmFd() const {
@@ -842,7 +831,8 @@ void KmsOutput::hotplug() {
 }
 
 KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
-    : loop(evLoop)
+    : pool(pool)
+    , loop(evLoop)
     , fd(drmFd)
     , vk(v)
     , gemHandles(pool)
@@ -993,14 +983,6 @@ KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const Dev
 }
 
 KmsOutput::~KmsOutput() noexcept {
-    if (ddcTimerOn) {
-        ev_timer_stop(loop, &ddcTimer);
-    }
-
-    if (ddcFd >= 0) {
-        close(ddcFd);
-    }
-
     releaseDirectUse(queuedDirect);
     releaseDirectUse(currentDirect);
 
@@ -1795,8 +1777,8 @@ void KmsOutput::initDdc(StringView connName) {
 
     ddcMax = max;
     ddcCur = cur;
-    ev_timer_init(&ddcTimer, ddcTimerCb, 0.06, 0.);
-    ddcTimer.data = this;
+    pooledFD(*pool, ddcFd);
+    ddcTimer = PooledEvTimer::create(*pool);
     sysO << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
 
@@ -1895,8 +1877,7 @@ void KmsOutput::setBrightness(float v) {
 
         if (!ddcTimerOn) {
             ddcTimerOn = true;
-            ev_timer_set(&ddcTimer, 0.06, 0.);
-            ev_timer_start(loop, &ddcTimer);
+            ddcTimer->start(loop, ddcTimerCb, 0.06, 0., this);
         }
 
         return;
