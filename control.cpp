@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "control.h"
 #include "input_sink.h"
+#include "pooled.h"
 #include "renderer.h"
 #include "ilist.h"
 #include "scene.h"
@@ -69,19 +70,20 @@ namespace {
 
     void controlIoCb(struct ev_loop*, ev_io* w, int);
 
+    // no destructor: the subobjects registered after this in the caller's
+    // pool die first — watcher stop, fd close, fifo unlink, then the impl
     struct ControlImpl: public Control {
         struct ev_loop* loop = nullptr;
         InputSink* sink = nullptr;
         Renderer* renderer = nullptr;
         Scene* scene = nullptr;
-        int fd = -1;
-        ev_io io{};
+        PooledFD* fd = nullptr;
+        PooledEvIo* io = nullptr;
         StringBuilder path;
         char line[1024] = "";
         size_t lineLen = 0;
 
         ControlImpl(Composer& c, StringView fifoPath);
-        ~ControlImpl() noexcept;
 
         void handleLine(StringView cmd);
         void handleInput();
@@ -104,24 +106,22 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     unlink(path.cStr());
     STD_VERIFY(mkfifo(path.cStr(), 0600) == 0);
 
-    fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-    STD_VERIFY(fd >= 0);
+    // registered first, runs last: the fd is closed before the fifo leaves
+    // the filesystem
+    ObjPool& pool = *c.pool;
+    StringView stored = pool.intern(sv(path));
 
-    ev_io_init(&io, controlIoCb, fd, EV_READ);
-    io.data = this;
-    ev_io_start(loop, &io);
+    pooledGuard(pool, [stored] {
+        unlink(Buffer(stored).cStr());
+    });
+
+    fd = PooledFD::create(pool, -1);
+    io = PooledEvIo::create(pool);
+    fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
+    STD_VERIFY(fd->get() >= 0);
+
+    io->start(loop, controlIoCb, fd->get(), EV_READ, this);
     sysO << "imway: control FIFO: "_sv << sv(path) << endL;
-}
-
-ControlImpl::~ControlImpl() noexcept {
-    if (fd >= 0) {
-        ev_io_stop(loop, &io);
-        close(fd);
-    }
-
-    if (!sv(path).empty()) {
-        unlink(path.cStr());
-    }
 }
 
 void ControlImpl::handleLine(StringView cmd) {
@@ -336,7 +336,7 @@ void ControlImpl::handleInput() {
     char tmp[512];
 
     for (;;) {
-        ssize_t n = read(fd, tmp, sizeof tmp);
+        ssize_t n = read(fd->get(), tmp, sizeof tmp);
 
         if (n > 0) {
             for (ssize_t i = 0; i < n; i++) {
@@ -361,18 +361,14 @@ void ControlImpl::handleInput() {
 }
 
 void ControlImpl::reopen() {
-    ev_io_stop(loop, &io);
-    close(fd);
+    io->stop();
+    fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
 
-    fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-
-    if (fd < 0) {
+    if (fd->get() < 0) {
         return;
     }
 
-    ev_io_init(&io, controlIoCb, fd, EV_READ);
-    io.data = this;
-    ev_io_start(loop, &io);
+    io->start(loop, controlIoCb, fd->get(), EV_READ, this);
 }
 
 Control* Control::create(Composer& c, StringView fifoPath) {

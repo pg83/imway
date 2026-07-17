@@ -1,6 +1,7 @@
 #include "icon.h"
 #include "composer.h"
 #include "icon_store.h"
+#include "pooled.h"
 #include "icon_pool.h"
 #include "util.h"
 #include "xdg_utils.h"
@@ -51,11 +52,12 @@ namespace {
         Vector<CachedIcon*> cache;
 
         int inoFd = -1;
-        ev_io inoIo{};
-        ev_timer reloadTimer{};
+        PooledEvTimer* reloadTimer = nullptr;
 
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
+
+        void clearCaches();
 
         void buildIndex();
         void addDesktop(StringBuilder& file, StringView fileId);
@@ -104,20 +106,19 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
         inotify_add_watch(inoFd, p.cStr(), mask);
     });
 
-    ev_io_init(&inoIo, inoCb, inoFd, EV_READ);
-    inoIo.data = this;
-    ev_io_start(loop, &inoIo);
-    ev_timer_init(&reloadTimer, reloadCb, 0.5, 0.5);
-    reloadTimer.data = this;
+    pooledFD(*c->pool, inoFd);
+    PooledEvIo::create(*c->pool)->start(loop, inoCb, inoFd, EV_READ, this);
+    reloadTimer = PooledEvTimer::create(*c->pool);
+    reloadTimer->set(loop, reloadCb, 0.5, 0.5, this);
 }
 
+// the caches walk the impl's own members, so their teardown lives in the
+// destructor — pool-registered cleanups run after the impl is gone
 IconStoreImpl::~IconStoreImpl() noexcept {
-    if (inoFd >= 0) {
-        ev_io_stop(loop, &inoIo);
-        ev_timer_stop(loop, &reloadTimer);
-        close(inoFd);
-    }
+    clearCaches();
+}
 
+void IconStoreImpl::clearCaches() {
     for (CachedIcon* cached : cache) {
         if (cached->icon) {
             icons->release(cached->icon);
@@ -220,11 +221,11 @@ void IconStoreImpl::drainInotify() {
     }
 
     // installs come in bursts: reload once things settle
-    ev_timer_again(loop, &reloadTimer);
+    reloadTimer->again();
 }
 
 void IconStoreImpl::reload() {
-    ev_timer_stop(loop, &reloadTimer);
+    reloadTimer->stop();
 
     // the old icons go back to the pool only after the subscriber
     // has re-resolved everything onto fresh ones

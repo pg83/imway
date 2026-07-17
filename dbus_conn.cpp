@@ -1,4 +1,5 @@
 #include "dbus_conn.h"
+#include "pooled.h"
 #include "util.h"
 
 #include <ev.h>
@@ -42,11 +43,13 @@ namespace {
     struct DBusConnImpl: public DBusConn {
         struct ev_loop* loop = nullptr;
         DBusConnection* conn = nullptr;
-        ev_prepare prep{};
         ObjList<WatchBox> watchAlloc;
         ObjList<TimeoutBox> timeoutAlloc;
 
         DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection* c);
+        // closing walks the watch/timeout callbacks back into this impl, so
+        // it must happen in the destructor, while the impl is still alive;
+        // the pooled prepare hook stops afterwards, which is harmless
         ~DBusConnImpl() noexcept;
 
         DBusConnection* raw() override;
@@ -64,18 +67,12 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection
     dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
     dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, timeoutToggle, this, nullptr);
 
-    ev_prepare_init(&prep, prepareCb);
-    prep.data = this;
-    ev_prepare_start(loop, &prep);
+    PooledEvPrepare::create(*pool)->start(loop, prepareCb, this);
 }
 
 DBusConnImpl::~DBusConnImpl() noexcept {
-    ev_prepare_stop(loop, &prep);
-
-    if (conn) {
-        dbus_connection_close(conn);
-        dbus_connection_unref(conn);
-    }
+    dbus_connection_close(conn);
+    dbus_connection_unref(conn);
 }
 
 DBusConnection* DBusConnImpl::raw() {

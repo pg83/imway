@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "mixer.h"
 #include "mixer_sndio.h"
+#include "pooled.h"
 
 #if __has_include(<sndio.h>)
 
@@ -30,8 +31,7 @@ namespace {
     struct SndioMixer: public Mixer {
         Composer* c = nullptr;
         struct sioctl_hdl* hdl = nullptr;
-        ev_io io{};
-        bool ioActive = false;
+        PooledEvIo* io = nullptr;
 
         int levelAddr = -1;
         int muteAddr = -1;
@@ -41,7 +41,6 @@ namespace {
         float softSaved = 0.f; // soft-mute stash when there is no mute control
 
         SndioMixer(Composer& comp, struct sioctl_hdl* h);
-        ~SndioMixer() noexcept;
 
         float volume() override;
         void setVolume(float v) override;
@@ -59,17 +58,14 @@ SndioMixer::SndioMixer(Composer& comp, struct sioctl_hdl* h)
     : c(&comp)
     , hdl(h)
 {
+    // handle guard first: LIFO stops the watcher before sioctl_close
+    pooledGuard(*comp.pool, [h] {
+        sioctl_close(h);
+    });
+    io = PooledEvIo::create(*comp.pool);
     sioctl_ondesc(hdl, onDesc, this);
     sioctl_onval(hdl, onVal, this);
     rearm();
-}
-
-SndioMixer::~SndioMixer() noexcept {
-    if (ioActive) {
-        ev_io_stop(c->loop, &io);
-    }
-
-    sioctl_close(hdl);
 }
 
 float SndioMixer::volume() {
@@ -134,14 +130,7 @@ void SndioMixer::rearm() {
 
     int ev = (pfd.events & POLLIN ? EV_READ : 0) | (pfd.events & POLLOUT ? EV_WRITE : 0);
 
-    if (ioActive) {
-        ev_io_stop(c->loop, &io);
-    }
-
-    ev_io_init(&io, ioCb, pfd.fd, ev);
-    io.data = this;
-    ev_io_start(c->loop, &io);
-    ioActive = true;
+    io->start(c->loop, ioCb, pfd.fd, ev, this);
 }
 
 void SndioMixer::notify() {
@@ -199,8 +188,7 @@ namespace {
 
         if (sioctl_eof(m->hdl)) {
             sysE << "imway: sndiod went away, volume control disabled"_sv << endL;
-            ev_io_stop(m->c->loop, &m->io);
-            m->ioActive = false;
+            m->io->stop();
             m->levelAddr = -1;
             m->muteAddr = -1;
 

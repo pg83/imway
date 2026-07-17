@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "mixer.h"
 #include "mixer_pulse.h"
+#include "pooled.h"
 
 #if __has_include(<pulse/pulseaudio.h>)
 
@@ -266,7 +267,6 @@ namespace {
         bool mute = false;
 
         PulseMixer(Composer& comp);
-        ~PulseMixer() noexcept;
 
         float volume() override;
         void setVolume(float v) override;
@@ -284,15 +284,18 @@ PulseMixer::PulseMixer(Composer& comp)
 {
     fillApi(api, comp.loop);
     ctx = pa_context_new(&api, "imway");
+
+    pa_context* held = ctx;
+
+    pooledGuard(*comp.pool, [held] {
+        // the impl is gone by now: silence the state callback before the
+        // disconnect would fire it
+        pa_context_set_state_callback(held, nullptr, nullptr);
+        pa_context_disconnect(held);
+        pa_context_unref(held);
+    });
     pa_context_set_state_callback(ctx, stateCb, this);
     pa_context_connect(ctx, nullptr, PA_CONTEXT_NOFLAGS, nullptr);
-}
-
-PulseMixer::~PulseMixer() noexcept {
-    if (ctx) {
-        pa_context_disconnect(ctx);
-        pa_context_unref(ctx);
-    }
 }
 
 float PulseMixer::volume() {
