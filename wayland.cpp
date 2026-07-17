@@ -89,11 +89,15 @@ namespace {
     struct ConstraintBox;
     struct IdleInhibitor;
 
+    // refcounted drm syncobj: the resource holds one ref, every commit
+    // holding an acquire/release point holds another; the destructor drops
+    // the kernel handle when the last one goes
     struct TimelineBox {
         WaylandImpl* srv = nullptr;
         u32 handle = 0;
         int refs = 0;
-        bool resAlive = true;
+
+        ~TimelineBox() noexcept;
     };
 
     struct PendingBufferRelease;
@@ -773,13 +777,14 @@ namespace {
         wl_list_remove(&s->pending.bufferDestroy.listener.link);
     }
 
-    void tlUnref(TimelineBox* t) {
-        if (!t) {
-            return;
+    void tlRef(TimelineBox* t) {
+        if (t) {
+            t->refs++;
         }
+    }
 
-        if (--t->refs == 0 && !t->resAlive) {
-            drmSyncobjDestroy(t->srv->drmFd, t->handle);
+    void tlUnref(TimelineBox* t) {
+        if (t && --t->refs == 0) {
             t->srv->timelineAlloc.release(t);
         }
     }
@@ -4338,14 +4343,7 @@ namespace {
 
     // ---- linux-drm-syncobj ----
     void syncTimelineResourceDestroyed(wl_resource* res) {
-        auto* t = (TimelineBox*)wl_resource_get_user_data(res);
-
-        t->resAlive = false;
-
-        if (t->refs == 0) {
-            drmSyncobjDestroy(t->srv->drmFd, t->handle);
-            t->srv->timelineAlloc.release(t);
-        }
+        tlUnref((TimelineBox*)wl_resource_get_user_data(res));
     }
 
     const struct wp_linux_drm_syncobj_timeline_v1_interface syncTimelineImpl = {.destroy = relPointerDestroy};
@@ -4374,7 +4372,7 @@ namespace {
 
         auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
 
-        t->refs++;
+        tlRef(t);
         tlUnref(s->pendAcqTl);
         s->pendAcqTl = t;
         s->pendAcqPt = ((u64)hi << 32) | lo;
@@ -4391,7 +4389,7 @@ namespace {
 
         auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
 
-        t->refs++;
+        tlRef(t);
         tlUnref(s->pendRelTl);
         s->pendRelTl = t;
         s->pendRelPt = ((u64)hi << 32) | lo;
@@ -4450,6 +4448,7 @@ namespace {
 
         t->srv = srv;
         t->handle = handle;
+        t->refs = 1; // the resource's own ref
         wl_resource_set_implementation(r, &syncTimelineImpl, t, syncTimelineResourceDestroyed);
     }
 
@@ -5950,6 +5949,12 @@ void WaylandImpl::activity() {
             output->setPowerSave(true);
             scene->needsFrame = true;
         }
+    }
+}
+
+TimelineBox::~TimelineBox() noexcept {
+    if (handle) {
+        drmSyncobjDestroy(srv->drmFd, handle);
     }
 }
 
