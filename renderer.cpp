@@ -2101,7 +2101,10 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 
         s.imgX = x - gx;
         s.imgY = y - gy;
-        s.hovered = ImGui::IsItemHovered();
+        // AllowWhenBlockedByActiveItem: during a held drag imgui parks
+        // ActiveId on the pressed window's MoveId and plain hover then fails
+        // for every OTHER window — dnd could never re-target across windows
+        s.hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     }
 
     for (Subsurface* c : s.stackAbove) {
