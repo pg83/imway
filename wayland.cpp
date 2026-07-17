@@ -9,6 +9,7 @@
 #include "frame_listener.h"
 #include "keyboard.h"
 #include "output.h"
+#include "ilist.h"
 #include "scene.h"
 #include "session.h"
 #include "util.h"
@@ -719,13 +720,13 @@ namespace {
             }
         }
 
-        for (Subsurface* c : s.stackBelow) {
+        for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
             if (c->surface) {
                 fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
             }
         }
 
-        for (Subsurface* c : s.stackAbove) {
+        for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
             if (c->surface) {
                 fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
             }
@@ -1089,10 +1090,10 @@ namespace {
     }
 
     void applyChildrenCaches(SurfaceImpl& s) {
-        Vector<Subsurface*>* stacks[] = {&s.stackBelow, &s.stackAbove};
+        IntrusiveList* stacks[] = {&s.stackBelow, &s.stackAbove};
 
         for (auto* stack : stacks) {
-            for (Subsurface* c : *stack) {
+            for (Subsurface* c : each<Subsurface>(*stack)) {
                 SubsurfaceImpl& sub = impl(c);
 
                 if (sub.pendingPos) {
@@ -1217,13 +1218,13 @@ namespace {
             sub.pendingPos = false;
         }
 
-        for (Subsurface* c : sub.surface->stackBelow) {
+        for (Subsurface* c : each<Subsurface>(sub.surface->stackBelow)) {
             if (impl(c).sync) {
                 applySubsurfaceCache(impl(c));
             }
         }
 
-        for (Subsurface* c : sub.surface->stackAbove) {
+        for (Subsurface* c : each<Subsurface>(sub.surface->stackAbove)) {
             if (impl(c).sync) {
                 applySubsurfaceCache(impl(c));
             }
@@ -1685,13 +1686,19 @@ namespace {
             s->sub->surface = nullptr;
         }
 
-        for (Subsurface* c : s->stackBelow) {
+        for (Subsurface* c : each<Subsurface>(s->stackBelow)) {
             c->parent = nullptr;
         }
 
-        for (Subsurface* c : s->stackAbove) {
+        for (Subsurface* c : each<Subsurface>(s->stackAbove)) {
             c->parent = nullptr;
         }
+
+        // the list heads die with this surface: detach them so the orphaned
+        // children keep a valid ring among themselves and their own later
+        // unlink()s touch no freed memory
+        s->stackBelow.clear();
+        s->stackAbove.clear();
 
         for (Popup* p : srv->scene->popups) {
             if (p->parent == s) {
@@ -1871,12 +1878,9 @@ namespace {
     }
 
     void unlinkFromParent(SubsurfaceImpl& sub) {
-        if (!sub.parent) {
-            return;
-        }
-
-        removeOne(sub.parent->stackBelow, (Subsurface*)&sub);
-        removeOne(sub.parent->stackAbove, (Subsurface*)&sub);
+        // unlink unconditionally: after the parent died the node still sits
+        // in the orphan ring of its former siblings
+        sub.unlink();
         sub.parent = nullptr;
     }
 
@@ -1904,12 +1908,13 @@ namespace {
         }
 
         if (refSurface == parent) {
-            removeOne(parent->stackBelow, (Subsurface*)&sub);
-            removeOne(parent->stackAbove, (Subsurface*)&sub);
+            sub.unlink();
 
             if (above) {
-                insertAt(parent->stackAbove, 0, (Subsurface*)&sub);
+                // bottom of the above-pile: directly on top of the parent
+                parent->stackAbove.pushFront(&sub);
             } else {
+                // top of the below-pile: directly under the parent
                 parent->stackBelow.pushBack(&sub);
             }
 
@@ -1922,21 +1927,17 @@ namespace {
             return false;
         }
 
-        removeOne(parent->stackBelow, (Subsurface*)&sub);
-        removeOne(parent->stackAbove, (Subsurface*)&sub);
-        Vector<Subsurface*>* stacks[] = {&parent->stackBelow, &parent->stackAbove};
+        // ref->parent == parent guarantees ref sits in one of the parent's
+        // piles, so the relative insert needs no search at all
+        sub.unlink();
 
-        for (auto* stack : stacks) {
-            long idx = indexOf(*stack, ref);
-
-            if (idx >= 0) {
-                insertAt(*stack, above ? (size_t)idx + 1 : (size_t)idx, (Subsurface*)&sub);
-
-                return true;
-            }
+        if (above) {
+            IntrusiveList::insertAfter(ref, &sub);
+        } else {
+            IntrusiveList::insertBefore(ref, &sub);
         }
 
-        return false;
+        return true;
     }
 
     void subsurfacePlaceAbove(wl_client*, wl_resource* res, wl_resource* sibling) {
@@ -5633,7 +5634,7 @@ bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
 Surface* SeatState::pickInTree(Surface& s) {
     Surface* found = nullptr;
 
-    for (Subsurface* c : s.stackBelow) {
+    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
         if (c->surface && c->surface->hasContent) {
             if (Surface* f = pickInTree(*c->surface)) {
                 found = f;
@@ -5645,7 +5646,7 @@ Surface* SeatState::pickInTree(Surface& s) {
         found = &s;
     }
 
-    for (Subsurface* c : s.stackAbove) {
+    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
         if (c->surface && c->surface->hasContent) {
             if (Surface* f = pickInTree(*c->surface)) {
                 found = f;

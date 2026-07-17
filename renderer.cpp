@@ -20,6 +20,7 @@
 #include "wifi.h"
 #include "wifi_ui.h"
 #include "output.h"
+#include "ilist.h"
 #include "scene.h"
 #include "shadow.h"
 #include "toast.h"
@@ -2077,7 +2078,7 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
-    for (Subsurface* c : s.stackBelow) {
+    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
         if (c->surface && c->surface->hasContent) {
             drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
@@ -2107,7 +2108,7 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         s.hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     }
 
-    for (Subsurface* c : s.stackAbove) {
+    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
         if (c->surface && c->surface->hasContent) {
             drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
@@ -2141,7 +2142,7 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
-    for (Subsurface* c : s.stackBelow) {
+    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
         if (c->surface && c->surface->hasContent) {
             drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
@@ -2161,7 +2162,7 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         s.hovered = m.x >= x && m.y >= y && m.x < x + w && m.y < y + h;
     }
 
-    for (Subsurface* c : s.stackAbove) {
+    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
         if (c->surface && c->surface->hasContent) {
             drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
         }
@@ -2171,13 +2172,13 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
 void RendererImpl::markTreeUnhovered(Surface& s) {
     s.hovered = false;
 
-    for (Subsurface* c : s.stackBelow) {
+    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
         if (c->surface) {
             markTreeUnhovered(*c->surface);
         }
     }
 
-    for (Subsurface* c : s.stackAbove) {
+    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
         if (c->surface) {
             markTreeUnhovered(*c->surface);
         }

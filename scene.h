@@ -1,5 +1,6 @@
 #pragma once
 
+#include <std/lib/list.h>
 #include <std/lib/vector.h>
 #include <std/ptr/arc.h>
 #include <std/ptr/refcount.h>
@@ -121,8 +122,12 @@ struct Surface {
     u32 colorGeneration = 0;
 
     Subsurface* sub = nullptr;
-    stl::Vector<Subsurface*> stackBelow;
-    stl::Vector<Subsurface*> stackAbove;
+
+    // z-piles of intrusively linked children (front = deepest); a child in
+    // either list is reachable via its Subsurface node. The dying parent
+    // clear()s both so orphaned children unlink among themselves safely.
+    stl::IntrusiveList stackBelow;
+    stl::IntrusiveList stackAbove;
 
     Toplevel* toplevel = nullptr;
 
@@ -130,7 +135,8 @@ struct Surface {
     Toplevel* rootToplevel();
 };
 
-struct Subsurface {
+// the node links it into the parent's stackBelow/stackAbove pile
+struct Subsurface: stl::IntrusiveNode {
     Surface* surface = nullptr;
     Surface* parent = nullptr;
     int x = 0, y = 0;
