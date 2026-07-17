@@ -9,3 +9,4 @@ struct Notifier;
 // Notifier store; imgui calls inside, so this runs between NewFrame and
 // Render
 void drawHistory(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool toggle, void** state);
+void destroyHistory(void** state);

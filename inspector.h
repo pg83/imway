@@ -19,8 +19,9 @@ struct InspectorInfo {
 };
 
 // the inspector is a plain imgui widget, not an entity. its state is an
-// opaque handle in the caller's slot: nullptr = closed, the widget news the
-// dialog there on toggle and deletes it when the dialog ends — *state is
-// also the caller's "is it open" answer. the window's own close button
-// ends it too. imgui calls inside, so this runs between NewFrame and Render
+// opaque pool-owned Dialog* in the caller's slot: nullptr = closed. *state
+// is also the caller's "is it open" answer; closing retires Dialog's entire
+// ObjPool. the window's own close button ends it too. imgui calls inside, so
+// this runs between NewFrame and Render
 void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool toggle, void** state);
+void destroyInspector(void** state);

@@ -1,4 +1,5 @@
 #include "launcher.h"
+#include "dialog_pool.h"
 #include "icon_store.h"
 #include "util.h"
 #include "xdg_utils.h"
@@ -23,10 +24,9 @@ namespace {
         LauncherAction action = LauncherAction::none;
     };
 
-    // dialog-scoped state: one heap instance per dialog, newed on open
-    // (the constructor reads all .desktop entries), deleted when the dialog
-    // ends — the opaque handle behind the caller's void* slot
+    // Dialog and all of its member storage are retired by one arena teardown.
     struct Dialog {
+        ObjPool* pool = nullptr;
         bool focusField = true;
         // raw buffer by imgui InputText contract
         char query[256] = "";
@@ -36,7 +36,7 @@ namespace {
         Vector<Row> rows;
         Vector<u32> vis;
 
-        Dialog();
+        Dialog(ObjPool* p);
 
         StringView view(u32 off, u32 len) const;
 
@@ -69,7 +69,9 @@ static void appendExec(StringBuilder& out, StringView val) {
     out << StringView(seg, b);
 }
 
-Dialog::Dialog() {
+Dialog::Dialog(ObjPool* p)
+    : pool(p)
+{
     rescan();
 }
 
@@ -328,10 +330,9 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
 
     if (toggle) {
         if (dp) {
-            delete dp;
-            dp = nullptr;
+            dialogPoolDestroy(dp);
         } else {
-            dp = new Dialog();
+            dp = dialogPoolCreate<Dialog>();
         }
     }
 
@@ -343,9 +344,14 @@ bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     bool picked = dp->draw(screenW, screenH, uiScale, icons, texes, open, run, action);
 
     if (!open) {
-        delete dp;
-        dp = nullptr;
+        dialogPoolDestroy(dp);
     }
 
     return picked;
+}
+
+void destroyLauncher(void** state) {
+    Dialog*& dp = *(Dialog**)state;
+
+    dialogPoolDestroy(dp);
 }

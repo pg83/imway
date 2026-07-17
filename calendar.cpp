@@ -1,4 +1,5 @@
 #include "calendar.h"
+#include "dialog_pool.h"
 #include "util.h"
 
 #include <time.h>
@@ -11,15 +12,15 @@ namespace {
     constexpr const char* kMonths[12] = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"};
     constexpr int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-    // dialog-scoped state: one heap instance per dialog, newed on open
-    // (seeded with the current month), deleted when the dialog ends — the
-    // opaque handle behind the caller's void* slot
+    // Root of a per-dialog arena.  The opaque caller slot carries this
+    // Dialog*, while pool owns it and every allocation made for the dialog.
     struct Dialog {
+        ObjPool* pool = nullptr;
         bool fresh = true;
         int year = 0;
         int mon = 0;
 
-        Dialog();
+        Dialog(ObjPool* p);
 
         // pure drawing: state transitions stay in drawCalendar, the only
         // outward sign is the open flag dropping
@@ -27,7 +28,9 @@ namespace {
     };
 }
 
-Dialog::Dialog() {
+Dialog::Dialog(ObjPool* p)
+    : pool(p)
+{
     time_t nowT = time(nullptr);
     tm lt{};
 
@@ -144,10 +147,9 @@ void drawCalendar(int screenW, bool toggle, void** state) {
 
     if (toggle) {
         if (dp) {
-            delete dp;
-            dp = nullptr;
+            dialogPoolDestroy(dp);
         } else {
-            dp = new Dialog();
+            dp = dialogPoolCreate<Dialog>();
         }
     }
 
@@ -160,7 +162,12 @@ void drawCalendar(int screenW, bool toggle, void** state) {
     dp->draw(screenW, open);
 
     if (!open) {
-        delete dp;
-        dp = nullptr;
+        dialogPoolDestroy(dp);
     }
+}
+
+void destroyCalendar(void** state) {
+    Dialog*& dp = *(Dialog**)state;
+
+    dialogPoolDestroy(dp);
 }

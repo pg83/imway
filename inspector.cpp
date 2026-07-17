@@ -1,4 +1,5 @@
 #include "inspector.h"
+#include "dialog_pool.h"
 #include "ilist.h"
 #include "scene.h"
 #include "util.h"
@@ -11,6 +12,13 @@ namespace {
     // dialog-scoped state: the dialog's existence is the whole state — the
     // opaque handle behind the caller's void* slot
     struct Dialog {
+        ObjPool* pool = nullptr;
+
+        Dialog(ObjPool* p)
+            : pool(p)
+        {
+        }
+
         // pure drawing: state transitions stay in drawInspector, the only
         // outward sign is the open flag dropping
         void draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& open);
@@ -78,10 +86,9 @@ void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool 
 
     if (toggle) {
         if (dp) {
-            delete dp;
-            dp = nullptr;
+            dialogPoolDestroy(dp);
         } else {
-            dp = new Dialog();
+            dp = dialogPoolCreate<Dialog>();
         }
     }
 
@@ -94,7 +101,12 @@ void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool 
     dp->draw(scene, info, uiScale, open);
 
     if (!open) {
-        delete dp;
-        dp = nullptr;
+        dialogPoolDestroy(dp);
     }
+}
+
+void destroyInspector(void** state) {
+    Dialog*& dp = *(Dialog**)state;
+
+    dialogPoolDestroy(dp);
 }

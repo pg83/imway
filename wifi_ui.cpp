@@ -1,4 +1,5 @@
 #include "wifi_ui.h"
+#include "dialog_pool.h"
 #include "wifi.h"
 #include "util.h"
 
@@ -9,12 +10,18 @@ using namespace stl;
 namespace {
     // dialog-scoped state behind the caller's void* slot
     struct Dialog {
+        ObjPool* pool = nullptr;
         bool fresh = true;
         // raw buffer by imgui InputText contract
         char pass[128] = "";
         // path of the network the passphrase is being typed for; a new
         // request for a different network clears the field
         StringBuilder passPath;
+
+        Dialog(ObjPool* p)
+            : pool(p)
+        {
+        }
 
         void draw(Wifi& wifi, int screenW, float uiScale, bool& open);
     };
@@ -152,10 +159,9 @@ void drawWifi(Wifi& wifi, int screenW, float uiScale, bool toggle, void** state)
 
     if (toggle) {
         if (dp) {
-            delete dp;
-            dp = nullptr;
+            dialogPoolDestroy(dp);
         } else {
-            dp = new Dialog();
+            dp = dialogPoolCreate<Dialog>();
         }
     }
 
@@ -168,7 +174,12 @@ void drawWifi(Wifi& wifi, int screenW, float uiScale, bool toggle, void** state)
     dp->draw(wifi, screenW, uiScale, open);
 
     if (!open) {
-        delete dp;
-        dp = nullptr;
+        dialogPoolDestroy(dp);
     }
+}
+
+void destroyWifi(void** state) {
+    Dialog*& dp = *(Dialog**)state;
+
+    dialogPoolDestroy(dp);
 }

@@ -1,4 +1,5 @@
 #include "history.h"
+#include "dialog_pool.h"
 #include "icon_store.h"
 #include "launcher.h"
 #include "notifier.h"
@@ -11,7 +12,13 @@ using namespace stl;
 namespace {
     // the panel has no state of its own; its existence is the whole state
     struct Dialog {
+        ObjPool* pool = nullptr;
         bool fresh = true;
+
+        Dialog(ObjPool* p)
+            : pool(p)
+        {
+        }
 
         void draw(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool& open);
     };
@@ -94,10 +101,9 @@ void drawHistory(Notifier& notifier, IconStore& icons, IconResolver& texes, int 
 
     if (toggle) {
         if (dp) {
-            delete dp;
-            dp = nullptr;
+            dialogPoolDestroy(dp);
         } else {
-            dp = new Dialog();
+            dp = dialogPoolCreate<Dialog>();
         }
     }
 
@@ -110,7 +116,12 @@ void drawHistory(Notifier& notifier, IconStore& icons, IconResolver& texes, int 
     dp->draw(notifier, icons, texes, screenW, screenH, uiScale, open);
 
     if (!open) {
-        delete dp;
-        dp = nullptr;
+        dialogPoolDestroy(dp);
     }
+}
+
+void destroyHistory(void** state) {
+    Dialog*& dp = *(Dialog**)state;
+
+    dialogPoolDestroy(dp);
 }
