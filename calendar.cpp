@@ -1,5 +1,7 @@
 #include "calendar.h"
+#include "composer.h"
 #include "dialog.h"
+#include "scene.h"
 #include "util.h"
 
 #include <time.h>
@@ -24,7 +26,7 @@ namespace {
 
         // pure drawing: state transitions stay in drawCalendar, the only
         // outward sign is the open flag dropping
-        void draw(int screenW, bool& open);
+        void draw(Composer& c, bool& open);
     };
 }
 
@@ -39,7 +41,9 @@ Dialog::Dialog(ObjPool* p)
     mon = lt.tm_mon;
 }
 
-void Dialog::draw(int screenW, bool& open) {
+void Dialog::draw(Composer& c, bool& open) {
+    int screenW = c.scene->outW;
+
     ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
 
     if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
@@ -142,11 +146,11 @@ void Dialog::draw(int screenW, bool& open) {
     ImGui::End();
 }
 
-void drawCalendar(int screenW, bool toggle, void** state) {
+void drawCalendar(Composer& c, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
     dialog(toggle, dp, [&](Dialog& d, bool& open) {
-        d.draw(screenW, open);
+        d.draw(c, open);
     });
 }
 

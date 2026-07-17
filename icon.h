@@ -9,3 +9,7 @@ struct Icon {
     int height = 0;
     stl::Vector<u32> argb;
 };
+
+struct IconResolver {
+    virtual u64 iconTexture(const Icon* icon) = 0;
+};

@@ -1,8 +1,10 @@
 #include "history.h"
+#include "composer.h"
 #include "dialog.h"
+#include "icon.h"
 #include "icon_store.h"
-#include "launcher.h"
 #include "notifier.h"
+#include "scene.h"
 #include "util.h"
 
 #include <imgui.h>
@@ -20,11 +22,17 @@ namespace {
         {
         }
 
-        void draw(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool& open);
+        void draw(Composer& c, bool& open);
     };
 }
 
-void Dialog::draw(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool& open) {
+void Dialog::draw(Composer& c, bool& open) {
+    Notifier& notifier = *c.notifier;
+    IconStore& icons = *c.icons;
+    IconResolver& texes = *c.iconResolver;
+    int screenW = c.scene->outW;
+    int screenH = c.scene->outH;
+    float uiScale = ImGui::GetStyle().FontScaleMain;
     float w = 340.f * uiScale;
 
     ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
@@ -96,11 +104,11 @@ void Dialog::draw(Notifier& notifier, IconStore& icons, IconResolver& texes, int
     ImGui::End();
 }
 
-void drawHistory(Notifier& notifier, IconStore& icons, IconResolver& texes, int screenW, int screenH, float uiScale, bool toggle, void** state) {
+void drawHistory(Composer& c, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
     dialog(toggle, dp, [&](Dialog& d, bool& open) {
-        d.draw(notifier, icons, texes, screenW, screenH, uiScale, open);
+        d.draw(c, open);
     });
 }
 

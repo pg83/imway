@@ -3,14 +3,7 @@
 #include <std/lib/buffer.h>
 #include <std/sys/types.h>
 
-struct Icon;
-struct IconStore;
-
-// resolves an icon to an imgui texture valid for the current frame; backed
-// by the renderer's gen -> texture cache
-struct IconResolver {
-    virtual u64 iconTexture(const Icon* icon) = 0;
-};
+struct Composer;
 
 // the launcher mixes a few compositor actions in among the .desktop programs;
 // picking one yields the action (in `action`) instead of a command line
@@ -31,5 +24,5 @@ enum class LauncherAction {
 // and Render. returns true when the user picked something: either `action`
 // is set to a compositor action, or the command line is appended to run
 // (caller memory, precisely because the dialog dies with the pick)
-bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, stl::Buffer& run, LauncherAction& action);
+bool drawLauncher(Composer& c, bool toggle, void** state, stl::Buffer& run, LauncherAction& action);
 void destroyLauncher(void** state);

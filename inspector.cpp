@@ -1,4 +1,5 @@
 #include "inspector.h"
+#include "composer.h"
 #include "dialog.h"
 #include "ilist.h"
 #include "scene.h"
@@ -21,11 +22,14 @@ namespace {
 
         // pure drawing: state transitions stay in drawInspector, the only
         // outward sign is the open flag dropping
-        void draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& open);
+        void draw(Composer& c, const InspectorInfo& info, bool& open);
     };
 }
 
-void Dialog::draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& open) {
+void Dialog::draw(Composer& c, const InspectorInfo& info, bool& open) {
+    Scene& scene = *c.scene;
+    float uiScale = ImGui::GetStyle().FontScaleMain;
+
     ImGui::SetNextWindowSize(ImVec2(440.f * uiScale, 400.f * uiScale), ImGuiCond_FirstUseEver);
 
     if (ImGui::Begin("inspector", &open, ImGuiWindowFlags_NoDocking)) {
@@ -81,11 +85,11 @@ void Dialog::draw(Scene& scene, const InspectorInfo& info, float uiScale, bool& 
     ImGui::End();
 }
 
-void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool toggle, void** state) {
+void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
     dialog(toggle, dp, [&](Dialog& d, bool& open) {
-        d.draw(scene, info, uiScale, open);
+        d.draw(c, info, open);
     });
 }
 

@@ -1,6 +1,9 @@
 #include "launcher.h"
+#include "composer.h"
 #include "dialog.h"
+#include "icon.h"
 #include "icon_store.h"
+#include "scene.h"
 #include "util.h"
 #include "xdg_utils.h"
 
@@ -47,7 +50,7 @@ namespace {
 
         // pure drawing: state transitions stay in drawLauncher, the only
         // outward signs are run/action/picked and the open flag dropping
-        bool draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run, LauncherAction& action);
+        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action);
     };
 }
 
@@ -216,7 +219,13 @@ void Dialog::refilter() {
     }
 }
 
-bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool& open, Buffer& run, LauncherAction& action) {
+bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action) {
+    IconStore& icons = *c.icons;
+    IconResolver& texes = *c.iconResolver;
+    int screenW = c.scene->outW;
+    int screenH = c.scene->outH;
+    float uiScale = ImGui::GetStyle().FontScaleMain;
+
     refilter();
 
     bool picked = false;
@@ -323,14 +332,14 @@ bool Dialog::draw(int screenW, int screenH, float uiScale, IconStore& icons, Ico
     return picked;
 }
 
-bool drawLauncher(int screenW, int screenH, float uiScale, IconStore& icons, IconResolver& texes, bool toggle, void** state, Buffer& run, LauncherAction& action) {
+bool drawLauncher(Composer& c, bool toggle, void** state, Buffer& run, LauncherAction& action) {
     Dialog*& dp = *(Dialog**)state;
 
     action = LauncherAction::none;
     bool picked = false;
 
     dialog(toggle, dp, [&](Dialog& d, bool& open) {
-        picked = d.draw(screenW, screenH, uiScale, icons, texes, open, run, action);
+        picked = d.draw(c, open, run, action);
     });
 
     return picked;

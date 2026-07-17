@@ -10,6 +10,7 @@ struct ev_loop;
 
 struct DBusConn;
 struct IconPool;
+struct IconResolver;
 struct MixerListener;
 struct Wifi;
 struct WifiListener;
@@ -41,6 +42,7 @@ struct Composer {
     Keyboard* kb = nullptr;
     IconPool* iconPool = nullptr;
     IconStore* icons = nullptr;
+    IconResolver* iconResolver = nullptr;
     DBusConn* bus = nullptr;
     Notifier* notifier = nullptr;
     Notifications* notes = nullptr;

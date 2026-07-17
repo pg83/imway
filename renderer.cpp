@@ -441,6 +441,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     nextUiScale = scale;
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
+    comp.iconResolver = this;
     comp.mixerListeners.pushBack(this);
     comp.wifiListeners.pushBack(this);
     setup(scene->outW, scene->outH);
@@ -2893,11 +2894,11 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::EndMainMenuBar();
     }
 
-    drawCalendar(width, calendarToggle, &calendarState);
+    drawCalendar(*comp, calendarToggle, &calendarState);
     calendarToggle = false;
 
     if (comp->wifi) {
-        drawWifi(*comp->wifi, width, uiScale, wifiToggle, &wifiState);
+        drawWifi(*comp, wifiToggle, &wifiState);
         wifiToggle = false;
     }
 
@@ -2933,12 +2934,12 @@ void RendererImpl::buildUi(Scene& scene) {
         info.dmabufCache = dmabufCache.length();
         info.hwCursorKind = hwKind;
         info.hwCursorVisible = hwVisible;
-        drawInspector(scene, info, uiScale, inspectorToggle, &inspectorState);
+        drawInspector(*comp, info, inspectorToggle, &inspectorState);
         inspectorToggle = false;
     }
 
     if (notifier) {
-        drawHistory(*notifier, *icons, *this, width, height, uiScale, historyToggle, &historyState);
+        drawHistory(*comp, historyToggle, &historyState);
         historyToggle = false;
     }
 
@@ -3263,7 +3264,7 @@ void RendererImpl::buildUi(Scene& scene) {
         Buffer cmd;
         LauncherAction act = LauncherAction::none;
 
-        if (drawLauncher(width, height, uiScale, *icons, *this, launcherToggle, &launcherState, cmd, act)) {
+        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act)) {
             switch (act) {
                 case LauncherAction::notifications:
                     historyToggle = true;

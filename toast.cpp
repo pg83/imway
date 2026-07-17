@@ -1,6 +1,6 @@
 #include "toast.h"
+#include "icon.h"
 #include "icon_store.h"
-#include "launcher.h"
 #include "notifier.h"
 #include "util.h"
 

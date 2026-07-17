@@ -2,7 +2,7 @@
 
 #include <std/sys/types.h>
 
-struct Scene;
+struct Composer;
 
 // the frame-time ring the renderer feeds and the inspector plots
 inline constexpr int kFrameHistory = 120;
@@ -23,5 +23,5 @@ struct InspectorInfo {
 // is also the caller's "is it open" answer; closing retires Dialog's entire
 // ObjPool. the window's own close button ends it too. imgui calls inside, so
 // this runs between NewFrame and Render
-void drawInspector(Scene& scene, const InspectorInfo& info, float uiScale, bool toggle, void** state);
+void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, void** state);
 void destroyInspector(void** state);

@@ -1,5 +1,7 @@
 #include "wifi_ui.h"
+#include "composer.h"
 #include "dialog.h"
+#include "scene.h"
 #include "wifi.h"
 #include "util.h"
 
@@ -23,7 +25,7 @@ namespace {
         {
         }
 
-        void draw(Wifi& wifi, int screenW, float uiScale, bool& open);
+        void draw(Composer& c, bool& open);
     };
 
     const char* stateLabel(WifiState s) {
@@ -39,7 +41,11 @@ namespace {
     }
 }
 
-void Dialog::draw(Wifi& wifi, int screenW, float uiScale, bool& open) {
+void Dialog::draw(Composer& c, bool& open) {
+    Wifi& wifi = *c.wifi;
+    int screenW = c.scene->outW;
+    float uiScale = ImGui::GetStyle().FontScaleMain;
+
     float w = 320.f * uiScale;
 
     ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
@@ -154,11 +160,11 @@ void Dialog::draw(Wifi& wifi, int screenW, float uiScale, bool& open) {
     ImGui::End();
 }
 
-void drawWifi(Wifi& wifi, int screenW, float uiScale, bool toggle, void** state) {
+void drawWifi(Composer& c, bool toggle, void** state) {
     Dialog*& dp = *(Dialog**)state;
 
     dialog(toggle, dp, [&](Dialog& d, bool& open) {
-        d.draw(wifi, screenW, uiScale, open);
+        d.draw(c, open);
     });
 }
 
