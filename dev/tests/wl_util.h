@@ -47,13 +47,22 @@ __attribute__((unused)) static struct wl_surface* wlk_focus;
 // used to tell "the client received this key" from "a chord swallowed it"
 __attribute__((unused)) static uint32_t wlk_watch_key = 0xffffffff;
 __attribute__((unused)) static int wlk_watch_hits;
+// modifiers + repeat_info
+__attribute__((unused)) static uint32_t wlk_mods_depressed, wlk_mods_max_depressed;
+__attribute__((unused)) static int wlk_mods_count, wlk_got_repeat;
+__attribute__((unused)) static int32_t wlk_repeat_rate, wlk_repeat_delay;
 
 // last pointer events
 __attribute__((unused)) static uint32_t wlp_enter_serial;  // last wl_pointer.enter
 __attribute__((unused)) static uint32_t wlp_button_serial; // last wl_pointer.button
 __attribute__((unused)) static uint32_t wlp_button, wlp_button_state;
-__attribute__((unused)) static int wlp_button_count;
+__attribute__((unused)) static int wlp_button_count, wlp_motion_count, wlp_axis_count;
+__attribute__((unused)) static wl_fixed_t wlp_x, wlp_y, wlp_axis_value;
+__attribute__((unused)) static uint32_t wlp_axis_which;
 __attribute__((unused)) static struct wl_surface* wlp_focus;
+// relative-pointer deltas
+__attribute__((unused)) static int wlrel_count;
+__attribute__((unused)) static double wlrel_dx, wlrel_dy;
 
 // ---- keyboard ----
 
@@ -83,10 +92,14 @@ static void wlk_key(void* d, struct wl_keyboard* k, uint32_t serial, uint32_t t,
 }
 static void wlk_mods(void* d, struct wl_keyboard* k, uint32_t serial, uint32_t dep, uint32_t lat,
                      uint32_t lock, uint32_t grp) {
-    (void)d; (void)k; (void)serial; (void)dep; (void)lat; (void)lock; (void)grp;
+    (void)d; (void)k; (void)serial; (void)lat; (void)lock; (void)grp;
+    wlk_mods_depressed = dep;
+    if (dep > wlk_mods_max_depressed) wlk_mods_max_depressed = dep;
+    wlk_mods_count++;
 }
 static void wlk_repeat(void* d, struct wl_keyboard* k, int32_t rate, int32_t delay) {
-    (void)d; (void)k; (void)rate; (void)delay;
+    (void)d; (void)k;
+    wlk_repeat_rate = rate; wlk_repeat_delay = delay; wlk_got_repeat = 1;
 }
 static const struct wl_keyboard_listener wlk_listener = {
     .keymap = wlk_keymap, .enter = wlk_enter, .leave = wlk_leave,
@@ -106,7 +119,8 @@ static void wlp_leave(void* d, struct wl_pointer* p, uint32_t serial, struct wl_
     wlp_focus = NULL;
 }
 static void wlp_motion(void* d, struct wl_pointer* p, uint32_t t, wl_fixed_t x, wl_fixed_t y) {
-    (void)d; (void)p; (void)t; (void)x; (void)y;
+    (void)d; (void)p; (void)t;
+    wlp_x = x; wlp_y = y; wlp_motion_count++;
 }
 static void wlp_button_ev(void* d, struct wl_pointer* p, uint32_t serial, uint32_t t,
                           uint32_t button, uint32_t state) {
@@ -117,7 +131,8 @@ static void wlp_button_ev(void* d, struct wl_pointer* p, uint32_t serial, uint32
     wlp_button_count++;
 }
 static void wlp_axis(void* d, struct wl_pointer* p, uint32_t t, uint32_t a, wl_fixed_t v) {
-    (void)d; (void)p; (void)t; (void)a; (void)v;
+    (void)d; (void)p; (void)t;
+    wlp_axis_which = a; wlp_axis_value = v; wlp_axis_count++;
 }
 static void wlp_frame(void* d, struct wl_pointer* p) { (void)d; (void)p; }
 static void wlp_axis_src(void* d, struct wl_pointer* p, uint32_t s) { (void)d; (void)p; (void)s; }
