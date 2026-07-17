@@ -1964,8 +1964,9 @@ void KmsOutput::setupVt() {
     // compositor often sits on tty2+ and K_OFF/KD_GRAPHICS on a foreign
     // console would blank someone else's terminal
     int vt = 0;
+    const char* probes[] = {"/dev/tty", "/dev/tty0"};
 
-    for (const char* probe : {"/dev/tty", "/dev/tty0"}) {
+    for (const char* probe : probes) {
         int fd = open(probe, O_RDWR | O_CLOEXEC);
 
         if (fd < 0) {

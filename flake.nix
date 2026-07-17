@@ -12,16 +12,34 @@
         let
           pkgs = import nixpkgs { inherit system; };
           icdArch = if system == "x86_64-linux" then "x86_64" else "aarch64";
+          pgstd = pkgs.stdenv.mkDerivation {
+            pname = "pgstd";
+            version = "git";
+            src = ./third_party/libstd;
+            dontConfigure = true;
+            nativeBuildInputs = [ pkgs.clang pkgs.llvmPackages.llvm ];
+
+            buildPhase = ''
+              runHook preBuild
+              make -j$NIX_BUILD_CORES CXX=${pkgs.clang}/bin/clang++ std/libstd.a
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              make CXX=${pkgs.clang}/bin/clang++ DESTDIR=$out install
+              runHook postInstall
+            '';
+          };
         in {
           default = pkgs.mkShell {
             nativeBuildInputs = with pkgs; [
-              cmake
-              ninja
-              pkg-config
               clang
               llvmPackages.clang-tools
               wayland-scanner
+              glslang
               python3
+              gdb
               foot
               wl-clipboard
             ];
@@ -46,6 +64,7 @@
               pulseaudio
               sndio
               mesa
+              pgstd
             ];
 
             # The project is also developed under stal/ix, whose static-link
@@ -55,6 +74,9 @@
               unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
               export CC=clang
               export CXX=clang++
+              export GLFW_LIB=-lglfw
+              export CPPFLAGS="-I${pkgs.libdrm.dev}/include/libdrm -I${pkgs.dbus.dev}/include/dbus-1.0 -I${pkgs.dbus.lib}/lib/dbus-1.0/include -I${pkgs.lunasvg}/include/lunasvg"
+              export WL_PROTOCOL_DIR="${pkgs.wayland-protocols}/share/wayland-protocols"
               export VK_DRIVER_FILES="${pkgs.mesa}/share/vulkan/icd.d/lvp_icd.${icdArch}.json"
             '';
           };

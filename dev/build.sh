@@ -16,18 +16,19 @@ JOBS=$(nproc 2>/dev/null || echo 4)
 
 CFLAGS="-O2 -g -I$B/protocols ${CFLAGS:-} ${CPPFLAGS:-}"
 CXXFLAGS="-std=c++23 -O2 -g -DGLFW_INCLUDE_NONE -I$B/protocols -I$B/shaders -Ithird_party/imgui ${CFLAGS} ${CXXFLAGS:-} ${CPPFLAGS:-}"
+GLFW_LIB=${GLFW_LIB:--lglfw3}
 # -lwayland-client: the screenshot tool puts image/png on the clipboard via a
 # wl_data_source off glfw's wl_display (client-side wl_proxy_* + core interfaces)
-LIBS="-ldbus-1 -lwayland-server -lwayland-client -lpng -lglfw3 -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
+LIBS="-ldbus-1 -lwayland-server -lwayland-client -lpng $GLFW_LIB -ldrm -linput -ludev -lxkbcommon -lseat -lvulkan -lev -llunasvg -lplutovg -lstd"
 
 # the mixer providers compile to nullptr stubs without their headers
 # (__has_include gate); each real path pulls symbols and needs its lib, so
 # probe the header and link the lib only then
-if echo '#include <sndio.h>' | $CXX $CXXFLAGS -E - >/dev/null 2>&1; then
+if echo '#include <sndio.h>' | $CXX $CXXFLAGS -x c++ -E - >/dev/null 2>&1; then
     LIBS="$LIBS -lsndio"
 fi
 
-if echo '#include <pulse/pulseaudio.h>' | $CXX $CXXFLAGS -E - >/dev/null 2>&1; then
+if echo '#include <pulse/pulseaudio.h>' | $CXX $CXXFLAGS -x c++ -E - >/dev/null 2>&1; then
     LIBS="$LIBS -lpulse"
 fi
 
@@ -199,15 +200,27 @@ done
 
 rm -f "$B/tests/.probe"
 
+CLIENT_GLUE_OBJS=""
+
+for src in $GLUE; do
+    obj="$B/tests/$(basename "$src" -code.c).o"
+    $CC $CFLAGS -I"$B/tests" -c "$src" -o "$obj"
+    CLIENT_GLUE_OBJS+="$obj "
+done
+
+CMDS=""
+
 for src in dev/tests/client_*.c dev/tests/client_*.cpp; do
     [[ -e "$src" ]] || continue
     name=$(basename "$src")
     name=${name%.*}
 
     case "$src" in
-        *.cpp) $CXX $CXXFLAGS -I"$B/tests" -o "$B/tests/$name" "$src" $GLUE -lwayland-client ${LDFLAGS:-} ;;
-        *)     $CC  $CFLAGS   -I"$B/tests" -o "$B/tests/$name" "$src" $GLUE -lwayland-client ${LDFLAGS:-} ;;
+        *.cpp) CMDS+="$CXX $CXXFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client ${LDFLAGS:-}"$'\n' ;;
+        *)     CMDS+="$CC $CFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client ${LDFLAGS:-}"$'\n' ;;
     esac
 done
+
+printf '%s' "$CMDS" | xargs -d '\n' -P "$JOBS" -I{} sh -c '{}'
 
 echo "OK: $B/tests"
