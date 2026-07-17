@@ -333,20 +333,12 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action) 
 }
 
 bool drawLauncher(Composer& c, bool toggle, void** state, Buffer& run, LauncherAction& action) {
-    Dialog*& dp = *(Dialog**)state;
-
     action = LauncherAction::none;
     bool picked = false;
 
-    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         picked = d.draw(c, open, run, action);
     });
 
     return picked;
-}
-
-void destroyLauncher(void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(dp);
 }

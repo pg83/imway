@@ -7,4 +7,3 @@ struct Composer;
 // ObjPool is retired as a unit when the dialog ends. imgui calls inside, so
 // this runs between NewFrame and Render
 void drawWifi(Composer& c, bool toggle, void** state);
-void destroyWifi(void** state);

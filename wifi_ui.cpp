@@ -161,15 +161,7 @@ void Dialog::draw(Composer& c, bool& open) {
 }
 
 void drawWifi(Composer& c, bool toggle, void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
-}
-
-void destroyWifi(void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(dp);
 }

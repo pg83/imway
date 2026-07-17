@@ -10,4 +10,3 @@ struct Composer;
 // itself on escape or focus loss. imgui calls inside, so this runs between
 // NewFrame and Render
 void drawCalendar(Composer& c, bool toggle, void** state);
-void destroyCalendar(void** state);

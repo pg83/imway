@@ -1,5 +1,7 @@
 #pragma once
 
+#include "pooled.h"
+
 #include <std/mem/obj_pool.h>
 #include <std/ptr/refcount.h>
 
@@ -16,7 +18,9 @@ void dialog(T*& d) noexcept {
 }
 
 template <typename T, typename F>
-void dialog(bool toggle, T*& d, F&& draw) {
+void dialog(stl::ObjPool& owner, bool toggle, void** state, F&& draw) {
+    T*& d = *(T**)state;
+
     if (toggle) {
         if (d) {
             dialog(d);
@@ -26,6 +30,11 @@ void dialog(bool toggle, T*& d, F&& draw) {
 
             d = p->make<T>(p);
             p->ref();
+            pooledGuard(owner, [state] {
+                T*& d = *(T**)state;
+
+                dialog(d);
+            });
         }
     }
 

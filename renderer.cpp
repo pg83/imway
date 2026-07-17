@@ -464,15 +464,6 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 RendererImpl::~RendererImpl() noexcept {
     output->setFrameListener(nullptr);
 
-    // Each open Dialog is the root of its own ObjPool.  Normal interaction
-    // drops that pool through the draw function; shutdown retires any arena
-    // whose opaque Dialog* is still visible here.
-    destroyLauncher(&launcherState);
-    destroyCalendar(&calendarState);
-    destroyWifi(&wifiState);
-    destroyInspector(&inspectorState);
-    destroyHistory(&historyState);
-
     // the device must be idle before the pooled handles unwind (they die
     // right after this destructor); imgui and the churn-class resources
     // (textures, the recreatable syncOut, the present fence) are tied to

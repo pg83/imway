@@ -25,4 +25,3 @@ enum class LauncherAction {
 // is set to a compositor action, or the command line is appended to run
 // (caller memory, precisely because the dialog dies with the pick)
 bool drawLauncher(Composer& c, bool toggle, void** state, stl::Buffer& run, LauncherAction& action);
-void destroyLauncher(void** state);

@@ -147,15 +147,7 @@ void Dialog::draw(Composer& c, bool& open) {
 }
 
 void drawCalendar(Composer& c, bool toggle, void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
-}
-
-void destroyCalendar(void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(dp);
 }

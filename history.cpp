@@ -105,15 +105,7 @@ void Dialog::draw(Composer& c, bool& open) {
 }
 
 void drawHistory(Composer& c, bool toggle, void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
-}
-
-void destroyHistory(void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(dp);
 }

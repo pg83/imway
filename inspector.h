@@ -24,4 +24,3 @@ struct InspectorInfo {
 // ObjPool. the window's own close button ends it too. imgui calls inside, so
 // this runs between NewFrame and Render
 void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, void** state);
-void destroyInspector(void** state);

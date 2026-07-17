@@ -86,15 +86,7 @@ void Dialog::draw(Composer& c, const InspectorInfo& info, bool& open) {
 }
 
 void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(toggle, dp, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, info, open);
     });
-}
-
-void destroyInspector(void** state) {
-    Dialog*& dp = *(Dialog**)state;
-
-    dialog(dp);
 }

@@ -7,4 +7,3 @@ struct Composer;
 // Notifier store; imgui calls inside, so this runs between NewFrame and
 // Render
 void drawHistory(Composer& c, bool toggle, void** state);
-void destroyHistory(void** state);
