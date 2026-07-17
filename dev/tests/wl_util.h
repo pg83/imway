@@ -72,12 +72,20 @@ static void wlk_keymap(void* d, struct wl_keyboard* k, uint32_t format, int32_t 
     wlk_keymap_fd = fd;
     wlk_keymap_size = size;
 }
+__attribute__((unused)) static uint32_t wlk_enter_keys[8]; // pressed keys carried by the last enter
+__attribute__((unused)) static int wlk_enter_nkeys;
+
 static void wlk_enter(void* d, struct wl_keyboard* k, uint32_t serial, struct wl_surface* s,
                       struct wl_array* keys) {
-    (void)d; (void)k; (void)keys;
+    (void)d; (void)k;
     wlk_enters++;
     wlk_enter_serial = serial;
     wlk_focus = s;
+    wlk_enter_nkeys = 0;
+    uint32_t* kc;
+    wl_array_for_each(kc, keys) {
+        if (wlk_enter_nkeys < 8) wlk_enter_keys[wlk_enter_nkeys++] = *kc;
+    }
 }
 static void wlk_leave(void* d, struct wl_keyboard* k, uint32_t serial, struct wl_surface* s) {
     (void)d; (void)k; (void)serial; (void)s;
