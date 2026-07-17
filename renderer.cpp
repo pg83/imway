@@ -916,8 +916,12 @@ void RendererImpl::key(u32 code, bool pressed) {
     }
 
     // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
-    // lives in the slave's modsChanged)
-    bool capture = launcherState || altTabActive || io.WantCaptureKeyboard;
+    // lives in the slave's modsChanged). NOT WantCaptureKeyboard: imgui keys
+    // that off ActiveId, and any mouse-hold over a window parks ActiveId on
+    // the window's MoveId — even a press inside client content — which would
+    // swallow every key typed during a drag. What matters is typing intent:
+    // an active text field, or one of our own overlays.
+    bool capture = launcherState || altTabActive || io.WantTextInput;
 
     scene->kbCaptured = capture;
 

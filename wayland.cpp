@@ -6572,7 +6572,19 @@ void SeatState::endDrag() {
     srv->scene->dragIcon = nullptr;
     srv->scene->needsFrame = true;
 
-    if (dragTarget) {
+    // a drop only lands on a target that accepted a mime type; otherwise
+    // the spec calls for cancelling the operation (the target still gets
+    // its leave). without a source (client-internal drag) accept state is
+    // unknowable — deliver the drop as before
+    bool accepted = !src;
+
+    for (Offer* offer = src ? src->offersHead : nullptr; offer; offer = offer->sourceNext) {
+        if (offer->dnd && offer->accepted) {
+            accepted = true;
+        }
+    }
+
+    if (dragTarget && accepted) {
         for (wl_resource* d : dataDevices) {
             if (sameClientS(d, dragTarget)) {
                 wl_data_device_send_drop(d);
@@ -6586,8 +6598,18 @@ void SeatState::endDrag() {
         if (src && wl_resource_get_version(src->res) >= 3) {
             wl_data_source_send_dnd_drop_performed(src->res);
         }
-    } else if (src) {
-        wl_data_source_send_cancelled(src->res);
+    } else {
+        if (dragTarget) {
+            for (wl_resource* d : dataDevices) {
+                if (sameClientS(d, dragTarget)) {
+                    wl_data_device_send_leave(d);
+                }
+            }
+        }
+
+        if (src) {
+            wl_data_source_send_cancelled(src->res);
+        }
     }
 
     dragTarget = nullptr;
