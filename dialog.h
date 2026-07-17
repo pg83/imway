@@ -21,16 +21,11 @@ void dialog(bool toggle, T*& d, F&& draw) {
         if (d) {
             dialog(d);
         } else {
-            stl::ObjPool* pool = stl::ObjPool::fromMemoryRaw();
+            auto pool = stl::ObjPool::fromMemory();
+            stl::ObjPool* p = pool.mutPtr();
 
-            stl::RefCountOps<stl::ObjPool>::ref(pool);
-
-            try {
-                d = pool->make<T>(pool);
-            } catch (...) {
-                stl::RefCountOps<stl::ObjPool>::unref(pool);
-                throw;
-            }
+            d = p->make<T>(p);
+            p->ref();
         }
     }
 
