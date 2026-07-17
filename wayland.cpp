@@ -1034,6 +1034,15 @@ namespace {
             return;
         }
 
+        // libwayland validates stride against the pixel width only; a client
+        // can pass stride < w*4 and walk the copy loop past the mmap
+        if (stride < (i64)w * 4) {
+            sysE << "imway: shm stride "_sv << stride << " < width*4"_sv << endL;
+            outW = outH = 0;
+
+            return;
+        }
+
         bool incremental = rect && !rect->empty() && outW == w && outH == h && out.length() == (size_t)w * h * 4;
 
         outW = w;
@@ -1634,6 +1643,15 @@ namespace {
             wl_resource_set_user_data(cb, nullptr);
         }
 
+        // sync-subsurface commits park frame callbacks in sub->cache.frames;
+        // they too point at this SurfaceImpl and outlive it until the
+        // wl_subsurface dies
+        if (s->sub) {
+            for (wl_resource* cb : impl(s->sub).cache.frames) {
+                wl_resource_set_user_data(cb, nullptr);
+            }
+        }
+
         for (wl_resource* fb : s->presentFeedbacks) {
             wl_resource_set_user_data(fb, nullptr);
             wp_presentation_feedback_send_discarded(fb);
@@ -2211,6 +2229,12 @@ namespace {
         WaylandImpl* srv = t->srv;
 
         srv->seat.toplevelGone(t);
+
+        // the renderer stashes this between buildUi and frameShown; the client
+        // can destroy the toplevel in that window (KMS: render -> page flip)
+        if (srv->scene->focusedToplevel == t) {
+            srv->scene->focusedToplevel = nullptr;
+        }
 
         if (t->xdg) {
             t->xdg->toplevel = nullptr;
@@ -4499,6 +4523,10 @@ namespace {
 
         i32 stride = wl_shm_buffer_get_stride(shm);
 
+        if (stride < (i64)w * 4) {
+            return;
+        }
+
         wl_shm_buffer_begin_access(shm);
 
         const u8* src = (const u8*)wl_shm_buffer_get_data(shm);
@@ -6571,6 +6599,14 @@ void SeatState::surfaceGone(Surface* s) {
     if (ptrFocus == s) {
         ptrFocus = nullptr;
         buttonsDown = 0;
+    }
+
+    // the wl_surface can die before its xdg_popup role: popupGone then sees
+    // p->surface == null and would leave kbOverride dangling forever
+    if (kbOverride == s) {
+        kbOverride = nullptr;
+        kbSendEnter(kbTargetRes());
+        updateShortcutInhibit();
     }
 
     size_t keep = 0;

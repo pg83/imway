@@ -1,6 +1,7 @@
 #include "keyboard.h"
 #include "util.h"
 
+#include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -9,7 +10,6 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include <std/dbg/verify.h>
-#include <std/sys/mem_fd.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 
@@ -64,12 +64,15 @@ KeyboardImpl::KeyboardImpl(StringView layout, StringView options)
     char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
 
     size = (u32)StringView(str).length() + 1;
-    fd = memFD("imway-keymap");
+    // the same fd is duped to every client, and wl_seat v5+ lets them map it
+    // MAP_SHARED — seal it so no client can truncate or rewrite the keymap
+    fd = memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
 
     bool written = fd >= 0 && write(fd, str, size) == (ssize_t)size;
 
     free(str);
     STD_VERIFY(written);
+    fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
 }
 
 KeyboardImpl::~KeyboardImpl() noexcept {

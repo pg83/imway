@@ -13,6 +13,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <math.h>
+#include <poll.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -37,6 +38,7 @@
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
+#include <std/sym/i_map.h>
 #include <std/sys/throw.h>
 #include "device_kms.h"
 
@@ -470,6 +472,12 @@ namespace {
             int nh = 0;
         };
         Vector<DirectFb> directFbs;
+
+        // GEM handles are per-BO on a drm fd, not per-import: two wl_buffers
+        // sharing one BO resolve to the same numeric handle, and GEM_CLOSE
+        // drops it for both. Refcount handle -> uses, close on the last unref.
+        IntMap<int> gemHandles;
+
         DmabufBuffer* queuedDirect = nullptr;
         DmabufBuffer* currentDirect = nullptr;
         long ddcMax = 0;
@@ -511,7 +519,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(struct ev_loop* loop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
+        KmsOutput(ObjPool* pool, struct ev_loop* loop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -537,6 +545,7 @@ namespace {
         void setFrameListener(FrameListener*) override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1);
+        void drainPendingFlip();
         bool commit(u32 fbId, bool doModeset, int inFenceFd = -1);
         void addCursorProps(drmModeAtomicReq* req);
 
@@ -570,6 +579,8 @@ namespace {
         bool directScanout(DmabufBuffer*) override;
         void dropScanoutFb(DmabufBuffer*) override;
         u32 importDirectFb(DmabufBuffer* buf);
+        void gemHandleRef(u32 handle);
+        void gemHandleUnref(u32 handle);
         void retireDeadDirectFbs();
         void releaseDirectUse(DmabufBuffer*& buf);
         void present(const void* pixels) override;
@@ -742,7 +753,7 @@ void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {
-    output = pool->make<KmsOutput>(loop, fd, vk, *session, connector, modeStr, hdrNits);
+    output = pool->make<KmsOutput>(pool, loop, fd, vk, *session, connector, modeStr, hdrNits);
 
     return output;
 }
@@ -771,6 +782,30 @@ namespace {
     }
 }
 
+// a nonblocking commit may still be in flight when a remodeset is needed;
+// blindly clearing flipPending would let the next frame commit hit EBUSY and
+// get dropped silently (no page-flip event -> frame callbacks starve until
+// the 2s clock tick). Dispatch the pending event the same way drmIoCb would.
+void KmsOutput::drainPendingFlip() {
+    while (flipPending) {
+        pollfd pfd{fd, POLLIN, 0};
+
+        if (poll(&pfd, 1, 100) <= 0) {
+            // no event within a frame's worth of time (master dropped, driver
+            // glitch): give up so the remodeset below can proceed
+            flipPending = false;
+
+            return;
+        }
+
+        drmEventContext ctx{};
+
+        ctx.version = 2;
+        ctx.page_flip_handler = pageFlipHandler;
+        drmHandleEvent(fd, &ctx);
+    }
+}
+
 void KmsOutput::hotplug() {
     drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
 
@@ -794,7 +829,7 @@ void KmsOutput::hotplug() {
         return;
     }
 
-    flipPending = false;
+    drainPendingFlip();
 
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
@@ -803,10 +838,11 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
+KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
     : loop(evLoop)
     , fd(drmFd)
     , vk(v)
+    , gemHandles(pool)
     , hdrNits(hdrWhiteNits)
 {
     session.addListener(this);
@@ -1412,6 +1448,8 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
 int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
+    STD_VERIFY(req);
+
     if (doModeset) {
         drmModeAtomicAddProperty(req, connectorId, connCrtcId, crtcId);
         drmModeAtomicAddProperty(req, crtcId, crtcModeId, modeBlob);
@@ -1496,7 +1534,9 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         gammaDirty = false;
     }
 
-    return ret == 0 ? 0 : errno;
+    // drmModeAtomicCommit returns -errno itself; reading errno here would
+    // report success on libdrm's early exits that never touch errno
+    return ret == 0 ? 0 : -ret;
 }
 
 bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
@@ -1870,7 +1910,7 @@ void KmsOutput::setPowerSave(bool on) {
     powered = on;
 
     if (on) {
-        flipPending = false;
+        drainPendingFlip();
 
         u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
@@ -1879,13 +1919,14 @@ void KmsOutput::setPowerSave(bool on) {
             sysO << "imway: display back on"_sv << endL;
         }
     } else {
+        drainPendingFlip();
+
         // blocking commit, just drops ACTIVE; planes keep their state
         drmModeAtomicReq* req = drmModeAtomicAlloc();
 
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 0);
         drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
         drmModeAtomicFree(req);
-        flipPending = false;
         releaseDirectUse(queuedDirect);
         sysO << "imway: display off (idle)"_sv << endL;
     }
@@ -1989,7 +2030,7 @@ void KmsOutput::sessionEnabled() {
     bool comeback = !sessionActive;
 
     sessionActive = true;
-    flipPending = false;
+    drainPendingFlip();
     releaseDirectUse(queuedDirect);
 
     if (!comeback || !modesetDone) {
@@ -2008,6 +2049,26 @@ bool KmsOutput::presentNeedsPixels() const {
     return scanCount == 0;
 }
 
+void KmsOutput::gemHandleRef(u32 handle) {
+    if (int* refs = gemHandles.find(handle); refs) {
+        (*refs)++;
+    } else {
+        gemHandles.insert(handle, 1);
+    }
+}
+
+void KmsOutput::gemHandleUnref(u32 handle) {
+    int* refs = gemHandles.find(handle);
+
+    if (refs && --*refs == 0) {
+        drm_gem_close gc{};
+
+        gc.handle = handle;
+        drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+        gemHandles.erase(handle);
+    }
+}
+
 // import a client dmabuf as a drm framebuffer, cached by pointer
 u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     for (const DirectFb& d : directFbs) {
@@ -2023,10 +2084,7 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
     auto closeImported = [&] {
         for (int i = 0; i < uniqueCount; i++) {
-            drm_gem_close gc{};
-
-            gc.handle = unique[i];
-            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+            gemHandleUnref(unique[i]);
         }
     };
 
@@ -2045,6 +2103,7 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
         if (!seen) {
             unique[uniqueCount++] = handles[i];
+            gemHandleRef(handles[i]);
         }
 
         pitches[i] = buf->strides[i];
@@ -2118,10 +2177,7 @@ void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
         drmModeRmFB(fd, directFbs[i].fb);
 
         for (int j = 0; j < directFbs[i].nh; j++) {
-            drm_gem_close gc{};
-
-            gc.handle = directFbs[i].handles[j];
-            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+            gemHandleUnref(directFbs[i].handles[j]);
         }
 
         DmabufBuffer* held = directFbs[i].buf;

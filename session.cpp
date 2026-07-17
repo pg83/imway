@@ -68,8 +68,14 @@ namespace {
         ((SeatSession*)data)->disable();
     }
 
-    void seatIoCb(struct ev_loop*, ev_io* w, int) {
-        libseat_dispatch(((SeatSession*)w->data)->seat, 0);
+    void seatIoCb(struct ev_loop* loop, ev_io* w, int) {
+        // seatd death leaves the fd forever readable: without this check the
+        // level-triggered watcher busy-spins at 100% cpu making no progress
+        if (libseat_dispatch(((SeatSession*)w->data)->seat, 0) < 0 && errno != EAGAIN) {
+            sysE << "imway: seat connection lost, exiting"_sv << endL;
+            ev_io_stop(loop, w);
+            ev_break(loop, EVBREAK_ALL);
+        }
     }
 
     const libseat_seat_listener kSeatListener = {

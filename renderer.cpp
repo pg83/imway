@@ -335,6 +335,7 @@ namespace {
         void frameShown(u32 msec) override;
         void gpuCompleted() override;
         bool renderFrame(int scanIdx);
+        bool readbackLastFrame();
         bool screenshot(StringView path) override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
@@ -2074,7 +2075,15 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
 
     si.commandBufferCount = 1;
     si.pCommandBuffers = &curCmd;
-    vkQueueSubmit(queue, 1, &si, curFence);
+
+    if (VkResult res = vkQueueSubmit(queue, 1, &si, curFence); res != VK_SUCCESS) {
+        // out is pre-zeroed by the caller: a transparent cursor beats
+        // freezing the whole session in an infinite fence wait
+        sysE << "imway: cursor rasterize submit failed ("_sv << (long)res << ")"_sv << endL;
+
+        return;
+    }
+
     vkWaitForFences(device, 1, &curFence, VK_TRUE, UINT64_MAX);
     vkResetFences(device, 1, &curFence);
 
@@ -3185,16 +3194,22 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
             if (s->explicitSync) {
                 if (s->syncAcquireWait) {
+                    // the protocol lets the client commit before attaching a
+                    // fence to the acquire point; WAIT_FOR_SUBMIT makes the
+                    // transfer wait for materialization instead of failing
                     u32 binary = 0;
                     int syncFd = -1;
                     bool exported = drmSyncobjCreate(drmFd, 0, &binary) == 0 &&
-                                    drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 &&
+                                    drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) == 0 &&
                                     drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
 
                     if (binary) {
                         drmSyncobjDestroy(drmFd, binary);
                     }
 
+                    // still no fence: skip just this surface and retry next
+                    // frame; failing the whole render would stall frame
+                    // callbacks for every client
                     if (!exported) {
                         if (syncFd >= 0) {
                             close(syncFd);
@@ -3202,13 +3217,13 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
                         scene->needsFrame = true;
 
-                        return false;
+                        continue;
                     }
 
                     if (!waitOnSyncFile(syncFd)) {
                         scene->needsFrame = true;
 
-                        return false;
+                        continue;
                     }
 
                     explicitSurfaces.pushBack(s);
@@ -3481,6 +3496,45 @@ bool RendererImpl::renderFrame(int scanIdx) {
     return true;
 }
 
+// pull the last presented image into the readback buffer; false = the copy
+// submit failed, readbackMap holds stale bytes and the fence never signals
+// (so we must not enter vkWaitForFences)
+bool RendererImpl::readbackLastFrame() {
+    if (output->presentNeedsPixels()) {
+        return true; // the dumb-buffer path already reads back every frame
+    }
+
+    vkResetCommandBuffer(cmd, 0);
+
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cmd, &bi);
+
+    VkBufferImageCopy region{};
+
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {(u32)width, (u32)height, 1};
+    vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
+    vkEndCommandBuffer(cmd);
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &cmd;
+
+    if (VkResult res = vkQueueSubmit(queue, 1, &si, fence); res != VK_SUCCESS) {
+        sysE << "imway: readback submit failed ("_sv << (long)res << ")"_sv << endL;
+
+        return false;
+    }
+
+    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+    vkResetFences(device, 1, &fence);
+
+    return true;
+}
+
 bool RendererImpl::screenshot(StringView path) {
     if (lastFrameDirect) {
         forceComposition = true;
@@ -3495,28 +3549,8 @@ bool RendererImpl::screenshot(StringView path) {
 
     finishGpuFrame(true);
 
-    if (!output->presentNeedsPixels()) {
-        vkResetCommandBuffer(cmd, 0);
-
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
-
-        VkBufferImageCopy region{};
-
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {(u32)width, (u32)height, 1};
-        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
-        vkEndCommandBuffer(cmd);
-
-        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd;
-        vkQueueSubmit(queue, 1, &si, fence);
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(device, 1, &fence);
+    if (!readbackLastFrame()) {
+        return false;
     }
 
     ScopedFD f(open(Buffer(path).cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
@@ -3572,28 +3606,8 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
 
     finishGpuFrame(true);
 
-    if (!output->presentNeedsPixels()) {
-        vkResetCommandBuffer(cmd, 0);
-
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
-
-        VkBufferImageCopy region{};
-
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {(u32)width, (u32)height, 1};
-        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
-        vkEndCommandBuffer(cmd);
-
-        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd;
-        vkQueueSubmit(queue, 1, &si, fence);
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(device, 1, &fence);
+    if (!readbackLastFrame()) {
+        return false;
     }
 
     const unsigned char* src = (const unsigned char*)readbackMap + ((size_t)y * width + x) * 4;
@@ -3630,28 +3644,8 @@ void RendererImpl::captureScreenshot() {
 
     finishGpuFrame(true);
 
-    if (!output->presentNeedsPixels()) {
-        vkResetCommandBuffer(cmd, 0);
-
-        VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-
-        bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        vkBeginCommandBuffer(cmd, &bi);
-
-        VkBufferImageCopy region{};
-
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {(u32)width, (u32)height, 1};
-        vkCmdCopyImageToBuffer(cmd, lastImage, lastLayout, readback, 1, &region);
-        vkEndCommandBuffer(cmd);
-
-        VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-
-        si.commandBufferCount = 1;
-        si.pCommandBuffers = &cmd;
-        vkQueueSubmit(queue, 1, &si, fence);
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-        vkResetFences(device, 1, &fence);
+    if (!readbackLastFrame()) {
+        return;
     }
 
     // non-cloexec: the memfd must survive fork+exec so the tool can read it
@@ -3929,6 +3923,11 @@ void RendererImpl::frameNow() {
 }
 
 void RendererImpl::tick() {
+    // headless present() reports frameShown before the GPU is done, so the
+    // frame retires here instead; without this, dmabuf releases to clients
+    // wait for the next needed frame or the 2s clock tick
+    finishGpuFrame(false);
+
     if (wantFrame()) {
         frameNow();
 
