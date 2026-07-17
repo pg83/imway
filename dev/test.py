@@ -83,18 +83,22 @@ def is_fifo(p: str) -> bool:
         return False
 
 
-def fifo_write(path: str, msg: str) -> None:
-    # non-blocking: a FIFO with no reader raises ENXIO instead of hanging
+def dump_stacks(pid: int, path: str) -> None:
+    # snapshot every thread's backtrace of a (probably stuck) process, then
+    # detach so it can still finish on its own
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
-    except OSError:
-        return
-    try:
-        os.write(fd, msg.encode())
-    except OSError:
-        pass
-    finally:
-        os.close(fd)
+        cp = subprocess.run(
+            ["gdb", "-p", str(pid), "-batch", "-nx",
+             "-ex", "set pagination off",
+             "-ex", "thread apply all bt full",
+             "-ex", "detach", "-ex", "quit"],
+            timeout=30, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        out = cp.stdout
+    except Exception as e:
+        out = f"gdb dump failed: {e}\n"
+    with open(path, "w") as f:
+        f.write(out)
 
 
 def tail(path: str, n: int = 25) -> str:
@@ -165,17 +169,30 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         rc = -1
         shell_out += f"\n[runner] scenario timed out after {timeout}s\n"
 
-    # teardown: clean shutdown is part of every test
+    # teardown: clean shutdown is part of every test. SIGTERM (the compositor
+    # breaks its event loop on it) rather than a FIFO "quit" — writing to the
+    # control FIFO races the compositor's reopen cycle and can be silently
+    # dropped, leaving the compositor running.
     died = proc.poll() is not None
     if not died:
-        fifo_write(ctl, "quit\n")
+        proc.terminate()
     hung = False
-    end = time.monotonic() + 5.0
-    while time.monotonic() < end and proc.poll() is None:
+
+    # wait a short patience for a clean exit
+    patience = time.monotonic() + 3.0
+    while time.monotonic() < patience and proc.poll() is None:
         time.sleep(0.05)
+
     if proc.poll() is None:
-        hung = True
-        proc.kill()
+        # slow shutdown: capture every thread's stack before it (maybe) finishes
+        dump_stacks(proc.pid, os.path.join(rt, "gdb-stacks.txt"))
+        end = time.monotonic() + 5.0
+        while time.monotonic() < end and proc.poll() is None:
+            time.sleep(0.05)
+        if proc.poll() is None:
+            hung = True
+            proc.kill()
+
     comp_rc = proc.wait()
     logf.close()
 
@@ -300,6 +317,10 @@ def main() -> int:
                         details.append(f"    artifacts: {r.artifacts}")
                         details.append(indent(tail(os.path.join(r.artifacts, "scenario.out"), 12)))
                         details.append(indent(tail(os.path.join(r.artifacts, "imway.log"), 8)))
+                        stacks = os.path.join(r.artifacts, "gdb-stacks.txt")
+                        if os.path.exists(stacks):
+                            details.append("    gdb thread stacks (shutdown hang):")
+                            details.append(indent(tail(stacks, 60)))
 
     print("\n".join(lines))
     if details:
