@@ -31,6 +31,36 @@ await() {
     return 1
 }
 
+# echo "X Y" — centroid of the pixels matching an RGB color (±50 per channel)
+centroid() { # <ppm> <r> <g> <b>
+    python3 - "$@" <<'PY'
+import sys
+path, R, G, B = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+f = open(path, 'rb'); assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
+pts = [(x, y) for y in range(h) for x in range(w)
+       if abs(d[(y*w+x)*3]-R) < 50 and abs(d[(y*w+x)*3+1]-G) < 50 and abs(d[(y*w+x)*3+2]-B) < 50]
+assert pts, 'color not found'
+print((min(x for x, _ in pts)+max(x for x, _ in pts))//2,
+      (min(y for _, y in pts)+max(y for _, y in pts))//2)
+PY
+}
+
+# screenshot, find a color, and move the pointer onto its centroid. Retries:
+# the first frame may not be painted yet when the window has only just mapped.
+point_at_color() { # <r> <g> <b>
+    local xy i
+    for ((i = 0; i < 30; i++)); do
+        screenshot "$XDG_RUNTIME_DIR/_pt.ppm" || return 1
+        if xy=$(centroid "$XDG_RUNTIME_DIR/_pt.ppm" "$@" 2>/dev/null); then
+            ctl "motion $xy"
+            return 0
+        fi
+        sleep 0.1
+    done
+    return 1
+}
+
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
 screenshot() {

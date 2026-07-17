@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# #1: a buffer with stride < width*4 must be rejected, not read past the mmap.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+"$IMWAY_CLIENT" &
+
+await 50 in_log "shm stride" || { echo "compositor did not reject the bad stride"; exit 1; }
+kill -0 "$IMWAY_PID" || { echo "compositor died on the bad stride"; exit 1; }
+echo "OK: undersized shm stride rejected, compositor alive"
