@@ -271,6 +271,7 @@ add_executable(imway
     main_screenshot.cpp
     composer.cpp
     scene.cpp
+    frame_resource.cpp
     wayland.cpp
     control.cpp
     input.cpp

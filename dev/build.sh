@@ -86,6 +86,7 @@ IMWAY_SRC="
 main.cpp
 main_screenshot.cpp
 composer.cpp
+frame_resource.cpp
 pooled.cpp
 pooled_vk.cpp
 scene.cpp

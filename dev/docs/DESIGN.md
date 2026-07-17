@@ -463,8 +463,9 @@ standalone.
   Renderer, quit via ev_break. Inside — an ascii→evdev table (us layout).
 - `main.cpp` — assembles the graph into a single `ObjPool`: creation order = reverse
   death order, the scene dies last. Clients die first (in the epilogue of
-  `run()`), their textures go into `orphanedTextures`; subsystems die together
-  with the pool. Errors — `stl::Exception` exceptions (`STD_VERIFY`/`Errno().raise`),
+  `run()`); subsystems die together with the pool. Escaping per-frame resources
+  use the ref-counted arenas from `frame_resource.{h,cpp}`. Errors —
+  `stl::Exception` exceptions (`STD_VERIFY`/`Errno().raise`),
   caught at the main boundary.
 
 ### 14.2 Contracts between layers
@@ -472,9 +473,13 @@ standalone.
 - **`Surface::dirty`** — the SM sets it on commit, the renderer clears it and uploads the
   content into the texture. `dmabuf != nullptr` ⇒ the content is in the dmabuf (pixels are
   empty), otherwise pixels are BGRA, tightly packed rows of w*4.
-- **`Scene::orphanedTextures`** — the SM deposits textures of destroyed nodes,
-  the renderer frees them on its tick (via `vkQueueWaitIdle` — crude but
-  correct). This is the only lifetime decoupling between the SM and the renderer.
+- **`FrameResource`** — the lifetime bridge between the SM, renderer and KMS.
+  A surface-use arena owns `wl_buffer.release` and explicit-sync points; the
+  current surface and every GPU/KMS frame sampling it hold references. A dmabuf
+  has a second arena owning its cached Vulkan import and direct-scanout FB.
+  Retiring the last frame reference therefore releases the protocol buffer and,
+  after the wl_buffer itself dies, tears down all cached GPU/KMS resources. There
+  are no orphan queues, `gpuUses` counters or renderer-to-Wayland completion drain.
 - **view feedback** — the renderer writes into the scene from the ImGui frame: `imgX/imgY`
   (the screen position of the Image item), `hovered`, `desiredW/desiredH` (the window's
   content region). The SM reads: pointer picking — by hovered, resize — a configure by
@@ -482,7 +487,7 @@ standalone.
 - **The frame clock belongs to the renderer** (an ev_timer with period 1/hz): a tick without
   `needsFrame` is empty (perfect idle = 0 frames; lavapipe is a CPU), after
   activity 3 settle frames are drawn (hover/ImGui animations). A full frame:
-  free orphaned → upload dirty textures → the ImGui frame → `Output::present`
+  retire the previous frame refs → upload dirty textures → the ImGui frame → `Output::present`
   → `FrameListener::frameShown(msec)`. On it, the SM sends frame callbacks — to all
   trees shown in the frame, including popups (GTK doesn't draw menu content until it
   gets frame done) — and configures per the view feedback.

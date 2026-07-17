@@ -1,5 +1,7 @@
 #pragma once
 
+#include "frame_resource.h"
+
 #include <std/sys/types.h>
 #include <std/str/view.h>
 
@@ -71,6 +73,6 @@ struct Output {
     // plane, skipping composition; false when it cannot be imported or
     // committed (wrong format, busy). dropScanoutFb releases the imported
     // drm fb when the client buffer dies
-    virtual bool directScanout(DmabufBuffer* buf) = 0;
+    virtual bool directScanout(DmabufBuffer* buf, FrameResource* frame) = 0;
     virtual void dropScanoutFb(DmabufBuffer* buf) = 0;
 };

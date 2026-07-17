@@ -69,6 +69,8 @@
 
 using namespace stl;
 
+struct TextureLease;
+
 // the node links it into the renderer's texture registry
 struct SurfaceTexture: stl::IntrusiveNode {
     int w = 0, h = 0;
@@ -85,6 +87,8 @@ struct SurfaceTexture: stl::IntrusiveNode {
     bool needsUpload = false;
     bool firstUse = true;
     bool external = false;
+    bool arenaOwned = false;
+    TextureLease* lease = nullptr;
 
     // color-management: a surface with a non-sRGB image description is
     // converted into the sRGB composition space by a compute pass. The result
@@ -96,6 +100,15 @@ struct SurfaceTexture: stl::IntrusiveNode {
     u32 convGen = 0xffffffffu;               // colorGeneration reflected by convImage
     bool converted = false;                  // ds currently points at convView
     bool convFresh = false;                  // convImage layout still UNDEFINED
+};
+
+struct TextureLease {
+    void* owner = nullptr;
+    SurfaceTexture* texture = nullptr;
+    void (*destroy)(void*, SurfaceTexture*) = nullptr;
+
+    TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*));
+    ~TextureLease() noexcept;
 };
 
 
@@ -141,7 +154,7 @@ namespace {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         bool frameInFlight = false;
-        Vector<DmabufBuffer*> inFlightDmabufs;
+        Vector<FrameResource*> inFlightFrames;
         VkSampler sampler = VK_NULL_HANDLE;
 
         // color-management conversion compute pipeline
@@ -349,8 +362,7 @@ namespace {
         SurfaceTexture* cacheFind(DmabufBuffer* b);
         bool cacheContainsTex(const SurfaceTexture* tex) const;
         void releaseSurfaceTexture(Surface& s);
-        void drainDead();
-        DmabufBuffer* scanoutCandidate();
+        Surface* scanoutCandidate();
         bool surfaceVisible(Surface* s) const;
         bool finishGpuFrame(bool wait);
 
@@ -358,7 +370,6 @@ namespace {
 
         void frameNow();
         void frameShown(u32 msec) override;
-        void gpuCompleted() override;
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
@@ -381,6 +392,19 @@ namespace {
     // the desktop renders on demand, wake it up so the clock stays fresh
     void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
+    }
+}
+
+TextureLease::TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*))
+    : owner(o)
+    , texture(t)
+    , destroy(d)
+{
+}
+
+TextureLease::~TextureLease() noexcept {
+    if (texture) {
+        destroy(owner, texture);
     }
 }
 
@@ -730,43 +754,20 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         }
     }
 
-    for (DmabufBuffer* buffer : inFlightDmabufs) {
-        buffer->gpuUses--;
-        dmabufUnref(buffer);
+    for (FrameResource* frame : inFlightFrames) {
+        frameUnref(frame);
     }
 
-    inFlightDmabufs.clear();
-
-    if (listener) {
-        listener->gpuCompleted();
-    }
+    inFlightFrames.clear();
 
     return true;
 }
 
 void RendererImpl::frameShown(u32 msec) {
-    bool hadGpuFrame = frameInFlight;
-    bool completed = finishGpuFrame(false);
+    finishGpuFrame(false);
 
     if (listener) {
-        // Direct scanout has no Vulkan submission to retire, but the KMS
-        // pageflip still completed the buffer use.  Keep release notification
-        // separate from presentation callbacks: headless presentation may be
-        // reported before its asynchronous Vulkan work has finished.
-        if (completed && !hadGpuFrame) {
-            listener->gpuCompleted();
-        }
-
         listener->frameShown(msec);
-    }
-}
-
-void RendererImpl::gpuCompleted() {
-    bool hadGpuFrame = frameInFlight;
-    bool completed = finishGpuFrame(false);
-
-    if (completed && !hadGpuFrame && listener) {
-        listener->gpuCompleted();
     }
 }
 
@@ -1604,24 +1605,28 @@ void RendererImpl::uploadSurface(Surface& s) {
     }
 
     if (tex && (tex->w != s.width || tex->h != s.height)) {
-        destroyTexture(tex);
+        releaseSurfaceTexture(s);
         tex = nullptr;
-        s.texture = nullptr;
     }
 
     bool fresh = tex == nullptr;
 
     if (!tex) {
-        tex = textureAlloc.make();
+        FrameResource* frame = frameCreate();
+
+        tex = frame->make<SurfaceTexture>();
+        tex->arenaOwned = true;
         tex->w = s.width;
         tex->h = s.height;
+        s.frame = frame;
 
         try {
             createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
             createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
         } catch (...) {
             sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
-            textureAlloc.release(tex);
+            s.frame = nullptr;
+            frameUnref(frame);
 
             return;
         }
@@ -1634,6 +1639,9 @@ void RendererImpl::uploadSurface(Surface& s) {
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCreateImageView(device, &vci, nullptr, &tex->view);
         tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex->lease = frame->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
+            ((RendererImpl*)owner)->destroyTexture(texture);
+        });
         textures.pushBack(tex);
         s.texture = tex;
     }
@@ -1683,6 +1691,7 @@ bool RendererImpl::cacheContainsTex(const SurfaceTexture* tex) const {
 
 void RendererImpl::releaseSurfaceTexture(Surface& s) {
     SurfaceTexture* tex = s.texture;
+    FrameResource* frame = s.frame;
 
     s.texture = nullptr;
 
@@ -1694,12 +1703,13 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
         return;
     }
 
-    destroyTexture(tex);
+    s.frame = nullptr;
+    frameUnref(frame);
 }
 
 // a fullscreen client whose dmabuf can go straight to the plane, with no
 // compositor chrome that would need composition over it
-DmabufBuffer* RendererImpl::scanoutCandidate() {
+Surface* RendererImpl::scanoutCandidate() {
     if (forceComposition || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
@@ -1766,38 +1776,7 @@ DmabufBuffer* RendererImpl::scanoutCandidate() {
         return nullptr;
     }
 
-    return s->dmabuf;
-}
-
-void RendererImpl::drainDead() {
-    while (!scene->orphanedTextures.empty()) {
-        SurfaceTexture* t = scene->orphanedTextures.popBack();
-
-        if (!cacheContainsTex(t)) {
-            destroyTexture(t);
-        }
-    }
-
-    for (size_t i = dmabufCache.length(); i > 0; i--) {
-        DmabufBuffer* b = dmabufCache[i - 1].key;
-        SurfaceTexture* tex = dmabufCache[i - 1].tex;
-        bool inUse = false;
-
-        for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-            if (s->texture == tex) {
-                inUse = true;
-
-                break;
-            }
-        }
-
-        if (b->resourceAlive || inUse) {
-            continue;
-        }
-
-        output->dropScanoutFb(b);
-        destroyTexture(tex);
-    }
+    return s;
 }
 
 void RendererImpl::destroyTexture(SurfaceTexture* tex) {
@@ -1807,14 +1786,15 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
 
     for (size_t i = 0; i < dmabufCache.length(); i++) {
         if (dmabufCache[i].tex == tex) {
-            DmabufBuffer* b = dmabufCache[i].key;
-
             dmabufCache.mut(i) = dmabufCache.back();
             dmabufCache.popBack();
-            dmabufUnref(b);
-
             break;
         }
+    }
+
+    if (tex->lease) {
+        tex->lease->texture = nullptr;
+        tex->lease = nullptr;
     }
 
     if (tex->ds) {
@@ -1850,7 +1830,10 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     }
 
     tex->unlink();
-    textureAlloc.release(tex);
+
+    if (!tex->arenaOwned) {
+        textureAlloc.release(tex);
+    }
 }
 
 bool RendererImpl::importDmabuf(Surface& s) {
@@ -1876,11 +1859,12 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return true;
     }
 
-    auto* tex = textureAlloc.make();
+    auto* tex = b->lifetime->make<SurfaceTexture>();
 
     tex->w = b->width;
     tex->h = b->height;
     tex->external = true;
+    tex->arenaOwned = true;
 
     VkSubresourceLayout planes[kDmabufMaxPlanes] = {};
     bool disjoint = false;
@@ -1930,8 +1914,6 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
         sysE << "imway: dmabuf vkCreateImage failed"_sv << endL;
-        textureAlloc.release(tex);
-
         return false;
     }
 
@@ -2062,8 +2044,6 @@ bool RendererImpl::importDmabuf(Surface& s) {
             }
         }
 
-        textureAlloc.release(tex);
-
         return false;
     }
 
@@ -2081,8 +2061,10 @@ bool RendererImpl::importDmabuf(Surface& s) {
     vkCreateImageView(device, &vci, nullptr, &tex->view);
 
     tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->lease = b->lifetime->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
+        ((RendererImpl*)owner)->destroyTexture(texture);
+    });
     textures.pushBack(tex);
-    dmabufRef(b);
     dmabufCache.pushBack({b, tex});
     s.texture = tex;
 
@@ -3812,15 +3794,14 @@ bool RendererImpl::renderFrame(int scanIdx) {
     }
 
     for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-        DmabufBuffer* buffer = s->dmabuf;
+        FrameResource* frame = s->frame;
 
-        if (!surfaceVisible(s) || !buffer || contains(inFlightDmabufs, buffer)) {
+        if (!surfaceVisible(s) || !frame || contains(inFlightFrames, frame)) {
             continue;
         }
 
-        dmabufRef(buffer);
-        buffer->gpuUses++;
-        inFlightDmabufs.pushBack(buffer);
+        frameRef(frame);
+        inFlightFrames.pushBack(frame);
     }
 
     if (signalOut) {
@@ -4129,8 +4110,6 @@ void RendererImpl::frameNow() {
     scene->needsFrame = false;
     settleFrames--;
 
-    drainDead();
-
     for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
         if (s->dirty && s->hasContent) {
             bool ready = true;
@@ -4162,8 +4141,8 @@ void RendererImpl::frameNow() {
         }
     }
 
-    DmabufBuffer* cand = scanoutCandidate();
-    bool direct = cand && output->directScanout(cand);
+    Surface* cand = scanoutCandidate();
+    bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);
 
     lastFrameDirect = direct;
 

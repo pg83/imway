@@ -429,6 +429,16 @@ namespace {
         return true;
     }
 
+    struct KmsOutput;
+
+    struct DirectFbOwner {
+        KmsOutput* output = nullptr;
+        DmabufBuffer* buffer = nullptr;
+
+        DirectFbOwner(KmsOutput* o, DmabufBuffer* b);
+        ~DirectFbOwner() noexcept;
+    };
+
     struct KmsOutput: public ::Output, public SessionListener {
         int fd = -1;
         int ttyFd = -1;
@@ -475,6 +485,7 @@ namespace {
             u32 fb = 0;
             u32 handles[4] = {};
             int nh = 0;
+            DirectFbOwner* owner = nullptr;
         };
         Vector<DirectFb> directFbs;
 
@@ -485,6 +496,8 @@ namespace {
 
         DmabufBuffer* queuedDirect = nullptr;
         DmabufBuffer* currentDirect = nullptr;
+        FrameResource* queuedDirectFrame = nullptr;
+        FrameResource* currentDirectFrame = nullptr;
         long ddcMax = 0;
         int ddcCur = 0;
         int ddcPending = -1;
@@ -581,13 +594,12 @@ namespace {
         bool supportsRenderFence() const override;
         void presentImage(int i, int renderFenceFd) override;
         bool presentNeedsPixels() const override;
-        bool directScanout(DmabufBuffer*) override;
+        bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
         u32 importDirectFb(DmabufBuffer* buf);
         void gemHandleRef(u32 handle);
         void gemHandleUnref(u32 handle);
-        void retireDeadDirectFbs();
-        void releaseDirectUse(DmabufBuffer*& buf);
+        void releaseDirectUse(DmabufBuffer*& buf, FrameResource*& frame);
         void present(const void* pixels) override;
     };
 
@@ -597,10 +609,11 @@ namespace {
         out->flipPending = false;
         out->flipNs = (u64)sec * 1000000000ull + (u64)usec * 1000ull;
         out->flipSeq = seq;
-        out->releaseDirectUse(out->currentDirect);
+        out->releaseDirectUse(out->currentDirect, out->currentDirectFrame);
         out->currentDirect = out->queuedDirect;
+        out->currentDirectFrame = out->queuedDirectFrame;
         out->queuedDirect = nullptr;
-        out->retireDeadDirectFbs();
+        out->queuedDirectFrame = nullptr;
 
         if (out->frameListener) {
             out->frameListener->frameShown((u32)(out->flipNs / 1000000ull));
@@ -983,8 +996,8 @@ KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const Dev
 }
 
 KmsOutput::~KmsOutput() noexcept {
-    releaseDirectUse(queuedDirect);
-    releaseDirectUse(currentDirect);
+    releaseDirectUse(queuedDirect, queuedDirectFrame);
+    releaseDirectUse(currentDirect, currentDirectFrame);
 
     while (!directFbs.empty()) {
         // Qualified deliberately: virtual dispatch is unavailable during
@@ -1413,6 +1426,12 @@ bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
 }
 
 void KmsOutput::setFrameListener(FrameListener* listener) {
+    if (!listener && frameListener) {
+        drainPendingFlip();
+        releaseDirectUse(queuedDirect, queuedDirectFrame);
+        releaseDirectUse(currentDirect, currentDirectFrame);
+    }
+
     frameListener = listener;
 }
 
@@ -1923,6 +1942,7 @@ void KmsOutput::setPowerSave(bool on) {
 
         if (commit(lastFb, true)) {
             queuedDirect = nullptr;
+            queuedDirectFrame = nullptr;
             sysO << "imway: display back on"_sv << endL;
         }
     } else {
@@ -1934,7 +1954,7 @@ void KmsOutput::setPowerSave(bool on) {
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 0);
         drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
         drmModeAtomicFree(req);
-        releaseDirectUse(queuedDirect);
+        releaseDirectUse(queuedDirect, queuedDirectFrame);
         sysO << "imway: display off (idle)"_sv << endL;
     }
 }
@@ -2062,6 +2082,7 @@ void KmsOutput::presentImage(int i, int renderFenceFd) {
         modesetDone = true;
         scanNext = i ^ 1;
         queuedDirect = nullptr;
+        queuedDirectFrame = nullptr;
     }
 }
 
@@ -2075,7 +2096,7 @@ void KmsOutput::sessionEnabled() {
 
     sessionActive = true;
     drainPendingFlip();
-    releaseDirectUse(queuedDirect);
+    releaseDirectUse(queuedDirect, queuedDirectFrame);
 
     if (!comeback || !modesetDone) {
         return;
@@ -2085,6 +2106,7 @@ void KmsOutput::sessionEnabled() {
 
     if (commit(lastFb, true)) {
         queuedDirect = nullptr;
+        queuedDirectFrame = nullptr;
         sysO << "imway: session enabled, remodeset"_sv << endL;
     }
 }
@@ -2114,6 +2136,18 @@ void KmsOutput::gemHandleUnref(u32 handle) {
 }
 
 // import a client dmabuf as a drm framebuffer, cached by pointer
+DirectFbOwner::DirectFbOwner(KmsOutput* o, DmabufBuffer* b)
+    : output(o)
+    , buffer(b)
+{
+}
+
+DirectFbOwner::~DirectFbOwner() noexcept {
+    if (buffer) {
+        output->dropScanoutFb(buffer);
+    }
+}
+
 u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     for (const DirectFb& d : directFbs) {
         if (d.buf == buf) {
@@ -2173,14 +2207,14 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
         d.handles[i] = unique[i];
     }
 
-    dmabufRef(buf);
+    d.owner = buf->lifetime->make<DirectFbOwner>(this, buf);
     directFbs.pushBack(d);
 
     return fbId;
 }
 
-bool KmsOutput::directScanout(DmabufBuffer* buf) {
-    if (!started || flipPending || !sessionActive || !modesetDone || !buf) {
+bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
+    if (!started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
         return false;
     }
 
@@ -2198,9 +2232,9 @@ bool KmsOutput::directScanout(DmabufBuffer* buf) {
     if (commit(fbId, false)) {
         // our own composition swapchain is now stale; the next non-direct
         // frame re-acquires and modesets nothing, just flips back
-        dmabufRef(buf);
-        buf->gpuUses++;
+        frameRef(frame);
         queuedDirect = buf;
+        queuedDirectFrame = frame;
 
         return true;
     }
@@ -2224,34 +2258,25 @@ void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
             gemHandleUnref(directFbs[i].handles[j]);
         }
 
-        DmabufBuffer* held = directFbs[i].buf;
+        if (directFbs[i].owner) {
+            directFbs[i].owner->buffer = nullptr;
+        }
 
         directFbs.mut(i) = directFbs.back();
         directFbs.popBack();
-        dmabufUnref(held);
 
         return;
     }
 }
 
-void KmsOutput::retireDeadDirectFbs() {
-    for (size_t i = directFbs.length(); i > 0; i--) {
-        DmabufBuffer* buf = directFbs[i - 1].buf;
-
-        if (!buf->resourceAlive && buf != currentDirect && buf != queuedDirect) {
-            dropScanoutFb(buf);
-        }
-    }
-}
-
-void KmsOutput::releaseDirectUse(DmabufBuffer*& buf) {
+void KmsOutput::releaseDirectUse(DmabufBuffer*& buf, FrameResource*& frame) {
     if (!buf) {
         return;
     }
 
-    buf->gpuUses--;
-    dmabufUnref(buf);
     buf = nullptr;
+    frameUnref(frame);
+    frame = nullptr;
 }
 
 void KmsOutput::present(const void* pixels) {
@@ -2274,6 +2299,7 @@ void KmsOutput::present(const void* pixels) {
     if (commit(b.fbId, false)) {
         nextBuf ^= 1;
         queuedDirect = nullptr;
+        queuedDirectFrame = nullptr;
     }
 }
 

@@ -1,9 +1,9 @@
 #pragma once
 
+#include "frame_resource.h"
+
 #include <std/lib/list.h>
 #include <std/lib/vector.h>
-#include <std/ptr/arc.h>
-#include <std/ptr/refcount.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
@@ -33,13 +33,12 @@ struct DmabufFormat {
 
 inline constexpr int kDmabufMaxPlanes = 4;
 
-struct DmabufBuffer: public stl::ARC {
+struct DmabufBuffer {
+    FrameResource* lifetime = nullptr;
     i32 width = 0, height = 0;
     u32 format = 0;
     u64 modifier = 0;
     int nplanes = 0;
-    int gpuUses = 0;
-    bool resourceAlive = true;
     int fds[kDmabufMaxPlanes] = {-1, -1, -1, -1};
     u32 offsets[kDmabufMaxPlanes] = {};
     u32 strides[kDmabufMaxPlanes] = {};
@@ -49,13 +48,13 @@ struct DmabufBuffer: public stl::ARC {
 
 inline void dmabufRef(DmabufBuffer* b) noexcept {
     if (b) {
-        stl::RefCountOps<DmabufBuffer>::ref(b);
+        frameRef(b->lifetime);
     }
 }
 
 inline void dmabufUnref(DmabufBuffer* b) noexcept {
     if (b) {
-        stl::RefCountOps<DmabufBuffer>::unref(b);
+        frameUnref(b->lifetime);
     }
 }
 
@@ -80,6 +79,7 @@ struct Surface: SceneNode, GrabNode {
     bool damageAll = false;
     stl::Vector<u8> pixels;
     DmabufBuffer* dmabuf = nullptr;
+    FrameResource* frame = nullptr;
 
     SurfaceTexture* texture = nullptr;
 
@@ -244,7 +244,6 @@ struct Scene {
     stl::IntrusiveList toplevels;
     stl::IntrusiveList popups;
 
-    stl::Vector<SurfaceTexture*> orphanedTextures;
     int outW = 1280, outH = 800;
     double hz = 60.0;
     int framesDone = 0;

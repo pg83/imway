@@ -94,27 +94,33 @@ namespace {
     // the kernel handle when the last one goes
     struct TimelineBox {
         WaylandImpl* srv = nullptr;
+        FrameResource* lifetime = nullptr;
         u32 handle = 0;
-        int refs = 0;
 
         ~TimelineBox() noexcept;
     };
 
-    struct PendingBufferRelease;
+    struct DmabufUse;
 
-    struct PendingBufferDestroyListener {
+    struct DmabufUseDestroyListener {
         wl_listener listener{};
-        PendingBufferRelease* release = nullptr;
+        DmabufUse* use = nullptr;
     };
 
-    struct PendingBufferRelease: IntrusiveNode {
+    // Everything tied to one surface use of a dmabuf. The surface and every
+    // GPU/KMS frame sampling it reference the containing FrameResource; this
+    // destructor is therefore the single release point for both implicit and
+    // explicit sync.
+    struct DmabufUse {
         WaylandImpl* srv = nullptr;
         DmabufBuffer* buffer = nullptr;
         wl_resource* res = nullptr;
-        PendingBufferDestroyListener destroy;
+        DmabufUseDestroyListener destroy;
         TimelineBox* acq = nullptr;
         TimelineBox* rel = nullptr;
         u64 relPoint = 0;
+
+        ~DmabufUse() noexcept;
     };
 
     struct CachedBufferDestroyListener {
@@ -192,9 +198,7 @@ namespace {
         Vector<wl_resource*> frameCbs;
         Vector<wl_resource*> presentFeedbacks;
 
-        wl_resource* dmabufRes = nullptr;
-        SurfaceDestroyListener dmabufDestroy;
-        bool dmabufDestroyArmed = false;
+        DmabufUse* dmabufUse = nullptr;
 
         wl_resource* vpRes = nullptr;
         double pendSx = -1, pendSy = -1, pendSw = -1, pendSh = -1;
@@ -209,9 +213,7 @@ namespace {
         wl_resource* syncRes = nullptr;
         TimelineBox* pendAcqTl = nullptr;
         TimelineBox* pendRelTl = nullptr;
-        TimelineBox* heldAcqTl = nullptr;
-        TimelineBox* heldRelTl = nullptr;
-        u64 pendAcqPt = 0, pendRelPt = 0, heldRelPt = 0;
+        u64 pendAcqPt = 0, pendRelPt = 0;
 
         XdgSurface* xdg = nullptr;
     };
@@ -525,8 +527,6 @@ namespace {
         ObjList<RegionBox> regionAlloc;
         ObjList<Positioner> positionerAlloc;
         ObjList<BufferBox> dmabufBoxAlloc;
-        ObjList<PendingBufferRelease> pendingReleaseAlloc;
-        IntrusiveList pendingReleases;
         ObjList<DataSource> dataSourceAlloc;
         ObjList<Offer> offerAlloc;
         ObjList<SpbBox> spbAlloc;
@@ -538,7 +538,6 @@ namespace {
         Vector<ActivationGrant> activationGrants;
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
-        ObjList<TimelineBox> timelineAlloc;
 
         // color-management-v1 objects
         ObjList<CImgDesc> cimgAlloc;
@@ -595,7 +594,6 @@ namespace {
         void holdEnd(bool cancelled) override;
 
         void frameShown(u32 msec) override;
-        void gpuCompleted() override;
 
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
@@ -779,13 +777,13 @@ namespace {
 
     void tlRef(TimelineBox* t) {
         if (t) {
-            t->refs++;
+            frameRef(t->lifetime);
         }
     }
 
     void tlUnref(TimelineBox* t) {
-        if (t && --t->refs == 0) {
-            t->srv->timelineAlloc.release(t);
+        if (t) {
+            frameUnref(t->lifetime);
         }
     }
 
@@ -824,63 +822,11 @@ namespace {
         sub.cache.acq = sub.cache.rel = nullptr;
     }
 
-    // Called directly only when no renderer/KMS use remains. Busy buffers are
-    // moved to pendingReleases and arrive here after the GPU fence/page-flip.
-    void syncReleaseHeld(SurfaceImpl& s) {
-        if (s.heldRelTl) {
-            drmSyncobjTimelineSignal(s.srv->drmFd, &s.heldRelTl->handle, &s.heldRelPt, 1);
-        }
+    void dmabufUseBufferDestroyed(wl_listener* l, void*) {
+        auto* use = ((DmabufUseDestroyListener*)l)->use;
 
-        tlUnref(s.heldAcqTl);
-        tlUnref(s.heldRelTl);
-        s.heldAcqTl = s.heldRelTl = nullptr;
-        s.syncAcquireWait = false;
-        s.explicitSync = false;
-    }
-
-    void heldDmabufDestroyed(wl_listener* l, void*) {
-        SurfaceImpl* s = ((SurfaceDestroyListener*)l)->surface;
-
-        s->dmabufRes = nullptr;
-        s->dmabufDestroyArmed = false;
-        wl_list_remove(&s->dmabufDestroy.listener.link);
-    }
-
-    void pendingReleaseBufferDestroyed(wl_listener* l, void*) {
-        auto* pending = ((PendingBufferDestroyListener*)l)->release;
-
-        pending->res = nullptr;
-        wl_list_remove(&pending->destroy.listener.link);
-    }
-
-    void finishPendingRelease(PendingBufferRelease* pending) {
-        if (pending->rel) {
-            drmSyncobjTimelineSignal(pending->srv->drmFd, &pending->rel->handle, &pending->relPoint, 1);
-        }
-
-        tlUnref(pending->acq);
-        tlUnref(pending->rel);
-
-        if (pending->res) {
-            wl_buffer_send_release(pending->res);
-            wl_list_remove(&pending->destroy.listener.link);
-        }
-
-        dmabufUnref(pending->buffer);
-        pending->unlink();
-        pending->srv->pendingReleaseAlloc.release(pending);
-    }
-
-    void drainPendingReleases(WaylandImpl& srv) {
-        for (IntrusiveNode* n = srv.pendingReleases.mutFront(); n != srv.pendingReleases.mutEnd();) {
-            auto* pending = (PendingBufferRelease*)n;
-
-            n = n->next; // finishing unlinks the node, step past it first
-
-            if (pending->buffer->gpuUses == 0) {
-                finishPendingRelease(pending);
-            }
-        }
+        use->res = nullptr;
+        wl_list_remove(&use->destroy.listener.link);
     }
 
     void releaseHeldDmabuf(SurfaceImpl& s) {
@@ -888,65 +834,42 @@ namespace {
             return;
         }
 
-        if (s.dmabuf->gpuUses > 0) {
-            PendingBufferRelease* pending = s.srv->pendingReleaseAlloc.make();
+        FrameResource* frame = s.frame;
 
-            pending->srv = s.srv;
-            pending->buffer = s.dmabuf;
-            pending->res = s.dmabufRes;
-            pending->acq = s.heldAcqTl;
-            pending->rel = s.heldRelTl;
-            pending->relPoint = s.heldRelPt;
-
-            if (s.dmabufDestroyArmed) {
-                wl_list_remove(&s.dmabufDestroy.listener.link);
-                s.dmabufDestroyArmed = false;
-            }
-
-            if (pending->res) {
-                pending->destroy.listener.notify = pendingReleaseBufferDestroyed;
-                pending->destroy.release = pending;
-                wl_resource_add_destroy_listener(pending->res, &pending->destroy.listener);
-            }
-
-            s.dmabuf = nullptr;
-            s.dmabufRes = nullptr;
-            s.heldAcqTl = s.heldRelTl = nullptr;
-            s.syncAcquireWait = false;
-            s.explicitSync = false;
-            s.srv->pendingReleases.pushBack(pending);
-
-            return;
-        }
-
-        syncReleaseHeld(s);
-
-        if (s.dmabufRes) {
-            wl_buffer_send_release(s.dmabufRes);
-        }
-
-        if (s.dmabufDestroyArmed) {
-            wl_list_remove(&s.dmabufDestroy.listener.link);
-            s.dmabufDestroyArmed = false;
-        }
-
-        DmabufBuffer* old = s.dmabuf;
-
+        s.texture = nullptr;
         s.dmabuf = nullptr;
-        s.dmabufRes = nullptr;
-        dmabufUnref(old);
+        s.frame = nullptr;
+        s.dmabufUse = nullptr;
+        s.syncAcquireWait = false;
+        s.explicitSync = false;
+        frameUnref(frame);
     }
 
-    void holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf) {
-        dmabufRef(buf);
+    DmabufUse* holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf, bool addRef = true) {
         releaseHeldDmabuf(s);
 
+        FrameResource* frame = frameCreate();
+        DmabufUse* use = frame->make<DmabufUse>();
+
+        if (addRef) {
+            dmabufRef(buf);
+        }
+
+        use->srv = s.srv;
+        use->buffer = buf;
+        use->res = buffer;
+        use->destroy.listener.notify = dmabufUseBufferDestroyed;
+        use->destroy.use = use;
+
+        if (buffer) {
+            wl_resource_add_destroy_listener(buffer, &use->destroy.listener);
+        }
+
+        s.frame = frame;
         s.dmabuf = buf;
-        s.dmabufRes = buffer;
-        s.dmabufDestroy.listener.notify = heldDmabufDestroyed;
-        s.dmabufDestroy.surface = &s;
-        wl_resource_add_destroy_listener(buffer, &s.dmabufDestroy.listener);
-        s.dmabufDestroyArmed = true;
+        s.dmabufUse = use;
+
+        return use;
     }
 
     void surfaceDestroy(wl_client*, wl_resource* res) {
@@ -1163,24 +1086,17 @@ namespace {
                     sub.cache.dmabufDestroyArmed = false;
                 }
 
-                s.dmabuf = sub.cache.dmabuf;
-                s.dmabufRes = sub.cache.dmabufRes;
-                s.heldAcqTl = sub.cache.acq;
-                s.heldRelTl = sub.cache.rel;
-                s.heldRelPt = sub.cache.releasePoint;
-                s.syncAcquireHandle = sub.cache.acq ? sub.cache.acq->handle : 0;
+                DmabufUse* use = holdDmabuf(s, sub.cache.dmabufRes, sub.cache.dmabuf, false);
+
+                use->acq = sub.cache.acq;
+                use->rel = sub.cache.rel;
+                use->relPoint = sub.cache.releasePoint;
+                s.syncAcquireHandle = use->acq ? use->acq->handle : 0;
                 s.syncAcquirePoint = sub.cache.acquirePoint;
-                s.syncAcquireWait = sub.cache.acq != nullptr;
-                s.explicitSync = sub.cache.acq != nullptr;
+                s.syncAcquireWait = use->acq != nullptr;
+                s.explicitSync = use->acq != nullptr;
                 s.pixels.clear();
                 s.dirty = true;
-
-                if (s.dmabufRes) {
-                    s.dmabufDestroy.listener.notify = heldDmabufDestroyed;
-                    s.dmabufDestroy.surface = &s;
-                    wl_resource_add_destroy_listener(s.dmabufRes, &s.dmabufDestroy.listener);
-                    s.dmabufDestroyArmed = true;
-                }
 
                 sub.cache.dmabuf = nullptr;
                 sub.cache.dmabufRes = nullptr;
@@ -1283,11 +1199,12 @@ namespace {
             return;
         }
 
-        // references move from pending to held; released when the buffer is
-        s.heldAcqTl = s.pendAcqTl;
-        s.heldRelTl = s.pendRelTl;
-        s.heldRelPt = s.pendRelPt;
-        s.syncAcquireHandle = s.heldAcqTl->handle;
+        // references move from pending into the content-use arena and are
+        // released when the last GPU/KMS frame using that content retires
+        s.dmabufUse->acq = s.pendAcqTl;
+        s.dmabufUse->rel = s.pendRelTl;
+        s.dmabufUse->relPoint = s.pendRelPt;
+        s.syncAcquireHandle = s.dmabufUse->acq->handle;
         s.syncAcquirePoint = s.pendAcqPt;
         s.syncAcquireWait = true;
         s.explicitSync = true;
@@ -1738,9 +1655,12 @@ namespace {
         kbInhibitSurfaceGone(*s);
         syncSurfaceGone(*s);
 
-        if (s->texture) {
-            srv->scene->orphanedTextures.pushBack(s->texture);
+        if (s->frame) {
+            FrameResource* frame = s->frame;
+
             s->texture = nullptr;
+            s->frame = nullptr;
+            frameUnref(frame);
         }
 
         srv->scene->needsFrame = true;
@@ -4444,11 +4364,12 @@ namespace {
             return;
         }
 
-        TimelineBox* t = srv->timelineAlloc.make();
+        FrameResource* lifetime = frameCreate();
+        TimelineBox* t = lifetime->make<TimelineBox>();
 
         t->srv = srv;
+        t->lifetime = lifetime;
         t->handle = handle;
-        t->refs = 1; // the resource's own ref
         wl_resource_set_implementation(r, &syncTimelineImpl, t, syncTimelineResourceDestroyed);
     }
 
@@ -4894,9 +4815,6 @@ namespace {
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
 
-        box->buf->resourceAlive = false;
-        box->srv->scene->needsFrame = true;
-
         box->srv->dmabufBoxAlloc.release(box);
     }
 
@@ -5068,8 +4986,10 @@ namespace {
         p->srv = srv;
         p->pending = srv->dmabufBoxAlloc.make();
         p->pending->srv = srv;
-        p->pending->buf = new DmabufBuffer;
-        dmabufRef(p->pending->buf);
+        FrameResource* lifetime = frameCreate();
+
+        p->pending->buf = lifetime->make<DmabufBuffer>();
+        p->pending->buf->lifetime = lifetime;
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
 
@@ -5958,6 +5878,22 @@ TimelineBox::~TimelineBox() noexcept {
     }
 }
 
+DmabufUse::~DmabufUse() noexcept {
+    if (rel) {
+        drmSyncobjTimelineSignal(srv->drmFd, &rel->handle, &relPoint, 1);
+    }
+
+    tlUnref(acq);
+    tlUnref(rel);
+
+    if (res) {
+        wl_buffer_send_release(res);
+        wl_list_remove(&destroy.listener.link);
+    }
+
+    dmabufUnref(buffer);
+}
+
 bool WaylandImpl::idleBlocked() {
     for (IdleInhibitor* inhibitor : each<IdleInhibitor>(idleInhibitors)) {
         Surface* surface = inhibitor->surface;
@@ -6815,7 +6751,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , regionAlloc(comp.pool)
     , positionerAlloc(comp.pool)
     , dmabufBoxAlloc(comp.pool)
-    , pendingReleaseAlloc(comp.pool)
     , dataSourceAlloc(comp.pool)
     , offerAlloc(comp.pool)
     , spbAlloc(comp.pool)
@@ -6827,7 +6762,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , cparAlloc(comp.pool)
     , idleAlloc(comp.pool)
     , idleInhibitorAlloc(comp.pool)
-    , timelineAlloc(comp.pool)
 {
     formats.append(cfg.formats, cfg.formatCount);
 
@@ -7398,10 +7332,6 @@ FrameListener* WaylandImpl::frameListener() {
 
 SessionListener* WaylandImpl::sessionListener() {
     return this;
-}
-
-void WaylandImpl::gpuCompleted() {
-    drainPendingReleases(*this);
 }
 
 void WaylandImpl::sessionEnabled() {

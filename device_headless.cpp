@@ -90,7 +90,7 @@ namespace {
         void presentImage(int, int) override;
         bool presentNeedsPixels() const override;
         void present(const void*) override;
-        bool directScanout(DmabufBuffer*) override;
+        bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
     };
 
@@ -300,7 +300,7 @@ Device* DeviceHeadless::create(ObjPool* pool, struct ev_loop* loop) {
     return pool->make<HeadlessDevice>(pool, loop);
 }
 
-bool HeadlessOutput::directScanout(DmabufBuffer*) {
+bool HeadlessOutput::directScanout(DmabufBuffer*, FrameResource*) {
     return false;
 }
 
