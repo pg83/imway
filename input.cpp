@@ -322,23 +322,34 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_SCROLL_CONTINUOUS: {
                 auto* p = libinput_event_get_pointer_event(ev);
                 bool wheel = libinput_event_get_type(ev) == LIBINPUT_EVENT_POINTER_SCROLL_WHEEL;
+                bool finger = libinput_event_get_type(ev) == LIBINPUT_EVENT_POINTER_SCROLL_FINGER;
 
                 // sink units are wheel notches; v120 is only valid for wheels,
                 // finger/continuous values come in scroll units, ~15 per notch
-                double dx = 0, dy = 0;
+                ScrollEvent scroll;
+
+                scroll.source = wheel ? ScrollSource::wheel : finger ? ScrollSource::finger : ScrollSource::continuous;
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
-                    dy = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 120.0
-                               : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) / 15.0;
+                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)
+                                       : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
+
+                    scroll.dy = raw / (wheel ? 120.0 : 15.0);
+                    scroll.discreteY = wheel ? (i32)(raw / 120.0) : 0;
+                    scroll.stopY = !wheel && raw == 0;
                 }
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
-                    dx = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 120.0
-                               : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) / 15.0;
+                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)
+                                       : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
+
+                    scroll.dx = raw / (wheel ? 120.0 : 15.0);
+                    scroll.discreteX = wheel ? (i32)(raw / 120.0) : 0;
+                    scroll.stopX = !wheel && raw == 0;
                 }
 
-                if (dx != 0 || dy != 0) {
-                    sink->scroll(dx, dy);
+                if (scroll.dx != 0 || scroll.dy != 0 || scroll.stopX || scroll.stopY) {
+                    sink->scroll(scroll);
                 }
 
                 break;

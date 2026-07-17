@@ -77,6 +77,10 @@ static void draw(void) {
     wl_surface_attach(surface, buf, 0, 0);
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
+    // Viewport state is persistent. A later commit that only carries damage
+    // must not silently clear the source/destination rectangle.
+    wl_surface_damage(surface, 0, 0, W, H);
+    wl_surface_commit(surface);
     drawn = 1;
     printf("client_viewport: committed 200x200 cropped → 150x150\n");
 }

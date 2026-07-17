@@ -31,6 +31,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -44,6 +45,7 @@
 
 #include <vulkan/vulkan.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xdg-shell-server-protocol.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -86,7 +88,7 @@ namespace {
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener, public WifiListener {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener, public WifiListener, public FrameListener {
         InputSink* sink() override;
 
 
@@ -123,6 +125,8 @@ namespace {
         VkCommandPool cmdPool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
+        bool frameInFlight = false;
+        Vector<DmabufBuffer*> inFlightDmabufs;
         VkSampler sampler = VK_NULL_HANDLE;
 
         ObjList<SurfaceTexture> textureAlloc;
@@ -194,6 +198,8 @@ namespace {
         bool pickPending = false;
         int pickX = 0, pickY = 0;
         bool pickShow = false;
+        bool forceComposition = false;
+        bool lastFrameDirect = false;
         u8 pickR = 0, pickG = 0, pickB = 0;
         float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
@@ -245,10 +251,11 @@ namespace {
         VkFormat fmt = kVkFormat;
         bool hasSyncFd = false;
         VkSemaphore syncOut = VK_NULL_HANDLE;
-        VkSemaphore syncWaitPool[16] = {};
+        Vector<VkSemaphore> syncWaitPool;
         PFN_vkImportSemaphoreFdKHR importSemFd = nullptr;
         PFN_vkGetSemaphoreFdKHR getSemFd = nullptr;
         Vector<int> frameSyncFds;
+        int presentFenceFd = -1;
 
         ev_prepare prep{};
         bool haveFrame = false;
@@ -287,7 +294,7 @@ namespace {
         void motion(double x, double y) override;
         void button(u32 btn, bool pressed) override;
         void key(u32 code, bool pressed) override;
-        void scroll(double dx, double dy) override;
+        void scroll(const ScrollEvent& ev) override;
 
         // the relative stream always reaches the slave (locked-pointer
         // clients live off it); the visible cursor only moves when no lock
@@ -319,11 +326,15 @@ namespace {
         void releaseSurfaceTexture(Surface& s);
         void drainDead();
         DmabufBuffer* scanoutCandidate();
+        bool surfaceVisible(Surface* s) const;
+        bool finishGpuFrame(bool wait);
 
         bool wantFrame() const;
 
         void frameNow();
-        void renderFrame(int scanIdx);
+        void frameShown(u32 msec) override;
+        void gpuCompleted() override;
+        bool renderFrame(int scanIdx);
         bool screenshot(StringView path) override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
@@ -383,6 +394,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     comp.mixerListeners.pushBack(this);
     comp.wifiListeners.pushBack(this);
     setup(scene->outW, scene->outH);
+    output->setFrameListener(this);
 
     // before any input arrives the cursor sits at the screen center
     posX = scene->outW / 2.0;
@@ -405,6 +417,8 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 }
 
 RendererImpl::~RendererImpl() noexcept {
+    output->setFrameListener(nullptr);
+
     if (output->vsynced()) {
         ev_prepare_stop(loop, &prep);
     } else {
@@ -471,12 +485,12 @@ void RendererImpl::button(u32 btn, bool pressed) {
     }
 }
 
-void RendererImpl::scroll(double dx, double dy) {
+void RendererImpl::scroll(const ScrollEvent& ev) {
     scene->needsFrame = true;
-    ImGui::GetIO().AddMouseWheelEvent((float)-dx, (float)-dy);
+    ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
     if (next && !scene->ptrCaptured) {
-        next->scroll(dx, dy);
+        next->scroll(ev);
     }
 }
 
@@ -603,6 +617,95 @@ bool RendererImpl::wantFrame() const {
     return scene->needsFrame || settleFrames > 0;
 }
 
+bool RendererImpl::surfaceVisible(Surface* s) const {
+    if (!s || !s->hasContent) {
+        return false;
+    }
+
+    Surface* root = s->rootSurface();
+
+    if (root->toplevel && root->toplevel->mapped) {
+        return true;
+    }
+
+    for (Popup* popup : scene->popups) {
+        if (popup->mapped && popup->surface == root) {
+            return true;
+        }
+    }
+
+    return root == scene->cursorSurface || root == scene->dragIcon;
+}
+
+bool RendererImpl::finishGpuFrame(bool wait) {
+    if (!frameInFlight) {
+        return true;
+    }
+
+    VkResult status = wait ? vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) : vkGetFenceStatus(device, fence);
+
+    if (status == VK_NOT_READY) {
+        return false;
+    }
+
+    if (status != VK_SUCCESS) {
+        sysE << "imway: Vulkan frame fence failed ("_sv << (long)status << ")"_sv << endL;
+        ev_break(loop, EVBREAK_ALL);
+
+        return false;
+    }
+
+    status = vkResetFences(device, 1, &fence);
+
+    if (status != VK_SUCCESS) {
+        sysE << "imway: Vulkan frame fence reset failed ("_sv << (long)status << ")"_sv << endL;
+        ev_break(loop, EVBREAK_ALL);
+
+        return false;
+    }
+
+    frameInFlight = false;
+
+    for (DmabufBuffer* buffer : inFlightDmabufs) {
+        buffer->gpuUses--;
+        dmabufUnref(buffer);
+    }
+
+    inFlightDmabufs.clear();
+
+    if (listener) {
+        listener->gpuCompleted();
+    }
+
+    return true;
+}
+
+void RendererImpl::frameShown(u32 msec) {
+    bool hadGpuFrame = frameInFlight;
+    bool completed = finishGpuFrame(false);
+
+    if (listener) {
+        // Direct scanout has no Vulkan submission to retire, but the KMS
+        // pageflip still completed the buffer use.  Keep release notification
+        // separate from presentation callbacks: headless presentation may be
+        // reported before its asynchronous Vulkan work has finished.
+        if (completed && !hadGpuFrame) {
+            listener->gpuCompleted();
+        }
+
+        listener->frameShown(msec);
+    }
+}
+
+void RendererImpl::gpuCompleted() {
+    bool hadGpuFrame = frameInFlight;
+    bool completed = finishGpuFrame(false);
+
+    if (completed && !hadGpuFrame && listener) {
+        listener->gpuCompleted();
+    }
+}
+
 namespace {
     ImGuiKey evdevToImGuiKey(u32 code) {
         switch (code) {
@@ -707,7 +810,7 @@ void RendererImpl::key(u32 code, bool pressed) {
     // 1. compositor-global chords are sacred: consumed before anyone,
     // imgui included, matched on the group-0 keysym so they work in
     // any layout
-    if (next && keyboard && code < 256) {
+    if (!scene->shortcutsInhibited && next && keyboard && code < 256) {
         if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
             altTabActive = false;
             altTabSel = nullptr;
@@ -1038,8 +1141,11 @@ void RendererImpl::setup(int w, int h) {
 
         VkSemaphoreCreateInfo plain{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
-        for (auto& sem : syncWaitPool) {
+        for (int i = 0; i < 16; i++) {
+            VkSemaphore sem = VK_NULL_HANDLE;
+
             VK_CHECK(vkCreateSemaphore(device, &plain, nullptr, &sem));
+            syncWaitPool.pushBack(sem);
         }
     }
 
@@ -1264,13 +1370,23 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
 // a fullscreen client whose dmabuf can go straight to the plane, with no
 // compositor chrome that would need composition over it
 DmabufBuffer* RendererImpl::scanoutCandidate() {
-    if (!scene->popups.empty() || scene->dragIcon) {
+    if (forceComposition || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
 
     // any open compositor ui needs composition
-    if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || settings.open) {
+    if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || pickPending ||
+        altTabActive || osdMs || settings.open) {
         return nullptr;
+    }
+
+    if (scene->drawCursor) {
+        Surface* cursor = scene->cursorSurface;
+
+        if (!hwCursorReady || output->cursorCapW() <= 0 || (cursor &&
+            (cursor->dmabuf || cursor->width > output->cursorCapW() || cursor->height > output->cursorCapH()))) {
+            return nullptr;
+        }
     }
 
     // an active toast must be composited to show
@@ -1307,7 +1423,8 @@ DmabufBuffer* RendererImpl::scanoutCandidate() {
 
     Surface* s = fs->surface;
 
-    if (!s || !s->dmabuf || !s->hasContent) {
+    if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 ||
+        s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst) {
         return nullptr;
     }
 
@@ -1331,37 +1448,25 @@ void RendererImpl::drainDead() {
         }
     }
 
-    while (!scene->deadDmabufs.empty()) {
-        DmabufBuffer* b = scene->deadDmabufs.popBack();
-
-        output->dropScanoutFb(b);
-
-        SurfaceTexture* tex = cacheFind(b);
-
-        if (!tex) {
-            continue;
-        }
-
+    for (size_t i = dmabufCache.length(); i > 0; i--) {
+        DmabufBuffer* b = dmabufCache[i - 1].key;
+        SurfaceTexture* tex = dmabufCache[i - 1].tex;
         bool inUse = false;
 
         for (Surface* s : scene->surfaces) {
             if (s->texture == tex) {
                 inUse = true;
-            }
-        }
-
-        for (size_t i = 0; i < dmabufCache.length(); i++) {
-            if (dmabufCache[i].key == b) {
-                dmabufCache.mut(i) = dmabufCache.back();
-                dmabufCache.popBack();
 
                 break;
             }
         }
 
-        if (!inUse) {
-            destroyTexture(tex);
+        if (b->resourceAlive || inUse) {
+            continue;
         }
+
+        output->dropScanoutFb(b);
+        destroyTexture(tex);
     }
 }
 
@@ -1372,8 +1477,11 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
 
     for (size_t i = 0; i < dmabufCache.length(); i++) {
         if (dmabufCache[i].tex == tex) {
+            DmabufBuffer* b = dmabufCache[i].key;
+
             dmabufCache.mut(i) = dmabufCache.back();
             dmabufCache.popBack();
+            dmabufUnref(b);
 
             break;
         }
@@ -1444,12 +1552,17 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     VkSubresourceLayout planes[kDmabufMaxPlanes] = {};
     bool disjoint = false;
+    struct stat firstStat{};
+    bool firstStatOk = fstat(b->fds[0], &firstStat) == 0;
 
     for (int i = 0; i < b->nplanes; i++) {
         planes[i].offset = b->offsets[i];
         planes[i].rowPitch = b->strides[i];
 
-        if (b->fds[i] != b->fds[0]) {
+        struct stat planeStat{};
+
+        if (i > 0 && (!firstStatOk || fstat(b->fds[i], &planeStat) != 0 ||
+                      planeStat.st_dev != firstStat.st_dev || planeStat.st_ino != firstStat.st_ino)) {
             disjoint = true;
         }
     }
@@ -1631,48 +1744,33 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vkCreateImageView(device, &vci, nullptr, &tex->view);
 
-    VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-
-    cbai.commandPool = cmdPool;
-    cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbai.commandBufferCount = 1;
-
-    VkCommandBuffer once = VK_NULL_HANDLE;
-
-    vkAllocateCommandBuffers(device, &cbai, &once);
-
-    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-
-    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    vkBeginCommandBuffer(once, &bi);
-
-    VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-
-    toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    toRead.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    toRead.image = tex->image;
-    toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(once, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
-    vkEndCommandBuffer(once);
-
-    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-
-    si.commandBufferCount = 1;
-    si.pCommandBuffers = &once;
-    vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(queue);
-    vkFreeCommandBuffers(device, cmdPool, 1, &once);
-
     tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-    tex->firstUse = false;
     textures.pushBack(tex);
+    dmabufRef(b);
     dmabufCache.pushBack({b, tex});
     s.texture = tex;
 
     return true;
+}
+
+ImVec2 transformedUv(int transform, float x, float y) {
+    switch (transform) {
+        case 1: return ImVec2(1.f - y, x);       // 90
+        case 2: return ImVec2(1.f - x, 1.f - y); // 180
+        case 3: return ImVec2(y, 1.f - x);       // 270
+        case 4: return ImVec2(1.f - x, y);       // flipped
+        case 5: return ImVec2(1.f - y, 1.f - x); // flipped 90
+        case 6: return ImVec2(x, 1.f - y);       // flipped 180
+        case 7: return ImVec2(y, x);             // flipped 270
+        default: return ImVec2(x, y);
+    }
+}
+
+void surfaceUvs(const Surface& s, float x0, float y0, float x1, float y1, ImVec2 (&uv)[4]) {
+    uv[0] = transformedUv(s.bufferTransform, x0, y0);
+    uv[1] = transformedUv(s.bufferTransform, x1, y0);
+    uv[2] = transformedUv(s.bufferTransform, x1, y1);
+    uv[3] = transformedUv(s.bufferTransform, x0, y1);
 }
 
 // x/y is where the VISIBLE part (window geometry) goes; imgX/imgY keep the
@@ -1680,19 +1778,28 @@ bool RendererImpl::importDmabuf(Surface& s) {
 void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     float gx = 0.f, gy = 0.f;
     float w = (float)s.viewW(), h = (float)s.viewH();
-    ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+    float ux0 = 0.f, uy0 = 0.f, ux1 = 1.f, uy1 = 1.f;
     bool viewported = s.vp.hasSrc || s.vp.hasDst;
+    bool swapped = s.bufferTransform == 1 || s.bufferTransform == 3 || s.bufferTransform == 5 || s.bufferTransform == 7;
+    float tw = (float)(swapped ? s.height : s.width), th = (float)(swapped ? s.width : s.height);
 
-    if (s.texture && s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
-        uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-        uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
-    } else if (s.texture && !viewported && s.hasGeom && s.texture->w > 0 && s.texture->h > 0) {
+    x += (float)s.bufferOffsetX;
+    y += (float)s.bufferOffsetY;
+
+    if (s.texture && s.vp.hasSrc && tw > 0 && th > 0) {
+        ux0 = (float)(s.vp.sx * s.bufferScale / tw);
+        uy0 = (float)(s.vp.sy * s.bufferScale / th);
+        ux1 = (float)((s.vp.sx + s.vp.sw) * s.bufferScale / tw);
+        uy1 = (float)((s.vp.sy + s.vp.sh) * s.bufferScale / th);
+    } else if (s.texture && !viewported && s.hasGeom && tw > 0 && th > 0) {
         gx = (float)s.geomX();
         gy = (float)s.geomY();
         w = (float)s.geomW();
         h = (float)s.geomH();
-        uv0 = ImVec2(gx / (float)s.texture->w, gy / (float)s.texture->h);
-        uv1 = ImVec2((gx + w) / (float)s.texture->w, (gy + h) / (float)s.texture->h);
+        ux0 = gx * s.bufferScale / tw;
+        uy0 = gy * s.bufferScale / th;
+        ux1 = (gx + w) * s.bufferScale / tw;
+        uy1 = (gy + h) * s.bufferScale / th;
     }
 
     for (Subsurface* c : s.stackBelow) {
@@ -1703,7 +1810,20 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 
     if (s.texture) {
         ImGui::SetCursorScreenPos(ImVec2(x, y));
-        ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv0, uv1);
+        ImVec2 uv[4];
+
+        surfaceUvs(s, ux0, uy0, ux1, uy1, uv);
+
+        if (s.bufferTransform == 0) {
+            ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2]);
+        } else {
+            ImGui::PushID(&s);
+            ImGui::InvisibleButton("surface", ImVec2(w, h));
+            ImGui::GetWindowDrawList()->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
+                ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
+            ImGui::PopID();
+        }
+
         s.imgX = x - gx;
         s.imgY = y - gy;
         s.hovered = ImGui::IsItemHovered();
@@ -1719,19 +1839,28 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
     float gx = 0.f, gy = 0.f;
     float w = (float)s.viewW(), h = (float)s.viewH();
-    ImVec2 uv0(0.f, 0.f), uv1(1.f, 1.f);
+    float ux0 = 0.f, uy0 = 0.f, ux1 = 1.f, uy1 = 1.f;
     bool viewported = s.vp.hasSrc || s.vp.hasDst;
+    bool swapped = s.bufferTransform == 1 || s.bufferTransform == 3 || s.bufferTransform == 5 || s.bufferTransform == 7;
+    float tw = (float)(swapped ? s.height : s.width), th = (float)(swapped ? s.width : s.height);
 
-    if (s.texture && s.vp.hasSrc && s.texture->w > 0 && s.texture->h > 0) {
-        uv0 = ImVec2((float)(s.vp.sx / s.texture->w), (float)(s.vp.sy / s.texture->h));
-        uv1 = ImVec2((float)((s.vp.sx + s.vp.sw) / s.texture->w), (float)((s.vp.sy + s.vp.sh) / s.texture->h));
-    } else if (s.texture && !viewported && s.hasGeom && s.texture->w > 0 && s.texture->h > 0) {
+    x += (float)s.bufferOffsetX;
+    y += (float)s.bufferOffsetY;
+
+    if (s.texture && s.vp.hasSrc && tw > 0 && th > 0) {
+        ux0 = (float)(s.vp.sx * s.bufferScale / tw);
+        uy0 = (float)(s.vp.sy * s.bufferScale / th);
+        ux1 = (float)((s.vp.sx + s.vp.sw) * s.bufferScale / tw);
+        uy1 = (float)((s.vp.sy + s.vp.sh) * s.bufferScale / th);
+    } else if (s.texture && !viewported && s.hasGeom && tw > 0 && th > 0) {
         gx = (float)s.geomX();
         gy = (float)s.geomY();
         w = (float)s.geomW();
         h = (float)s.geomH();
-        uv0 = ImVec2(gx / (float)s.texture->w, gy / (float)s.texture->h);
-        uv1 = ImVec2((gx + w) / (float)s.texture->w, (gy + h) / (float)s.texture->h);
+        ux0 = gx * s.bufferScale / tw;
+        uy0 = gy * s.bufferScale / th;
+        ux1 = (gx + w) * s.bufferScale / tw;
+        uy1 = (gy + h) * s.bufferScale / th;
     }
 
     for (Subsurface* c : s.stackBelow) {
@@ -1741,7 +1870,11 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
     }
 
     if (s.texture) {
-        ImGui::GetForegroundDrawList()->AddImage((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(x, y), ImVec2(x + w, y + h), uv0, uv1);
+        ImVec2 uv[4];
+
+        surfaceUvs(s, ux0, uy0, ux1, uy1, uv);
+        ImGui::GetForegroundDrawList()->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
+            ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
         s.imgX = x - gx;
         s.imgY = y - gy;
 
@@ -2609,11 +2742,57 @@ void RendererImpl::buildUi(Scene& scene) {
                 ImGui::SetWindowFocus();
             }
 
-            // client-initiated move/resize is dormant until it returns at
-            // the dock-group level; the flags are consumed so they do not
-            // go stale
-            t->moveRequested = false;
-            t->resizeEdges = 0;
+            if (t->moveRequested) {
+                if (!t->fullscreen && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    ImGuiWindow* window = ImGui::GetCurrentWindow();
+
+                    ImGui::StartMouseMovingWindowOrNode(window, window->DockNode, true);
+                }
+
+                t->moveRequested = false;
+            }
+
+            if (t->resizeEdges) {
+                if (!t->docked && !t->fullscreen && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    ImVec2 mouse = ImGui::GetMousePos();
+
+                    t->clientResizeEdges = t->resizeEdges;
+                    t->resizeStartMouseX = mouse.x;
+                    t->resizeStartMouseY = mouse.y;
+                    t->resizeStartW = t->applyW;
+                    t->resizeStartH = t->applyH;
+                    t->resizeAnchor = kResizeActive |
+                                      ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? kResizeLeft : 0) |
+                                      ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? kResizeTop : 0);
+                }
+
+                t->resizeEdges = 0;
+            }
+
+            if (t->clientResizeEdges) {
+                if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    ImVec2 mouse = ImGui::GetMousePos();
+                    float dx = mouse.x - t->resizeStartMouseX;
+                    float dy = mouse.y - t->resizeStartMouseY;
+                    float rw = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) ? dx
+                             : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? -dx : 0.f;
+                    float rh = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) ? dy
+                             : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? -dy : 0.f;
+
+                    t->dragW = t->resizeStartW + rw;
+                    t->dragH = t->resizeStartH + rh;
+
+                    if (t->dragW < chromeW + 1.f) {
+                        t->dragW = chromeW + 1.f;
+                    }
+
+                    if (t->dragH < chromeH + 1.f) {
+                        t->dragH = chromeH + 1.f;
+                    }
+                } else {
+                    t->clientResizeEdges = 0;
+                }
+            }
 
             if (t->docked || t->fullscreen) {
                 // the node/screen dictates the size, the client must fill it
@@ -2635,6 +2814,24 @@ void RendererImpl::buildUi(Scene& scene) {
                 // transaction is done, stop compensating so a move can proceed
                 if ((t->resizeAnchor & kResizeActive) && stepW == 0.f && stepH == 0.f) {
                     t->resizeAnchor = 0;
+                }
+            }
+
+            if (!t->docked && !t->fullscreen) {
+                if (t->minW > 0 && t->desiredW < t->minW) {
+                    t->desiredW = t->minW;
+                }
+
+                if (t->minH > 0 && t->desiredH < t->minH) {
+                    t->desiredH = t->minH;
+                }
+
+                if (t->maxW > 0 && t->desiredW > t->maxW) {
+                    t->desiredW = t->maxW;
+                }
+
+                if (t->maxH > 0 && t->desiredH > t->maxH) {
+                    t->desiredH = t->maxH;
                 }
             }
 
@@ -2930,7 +3127,119 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
     output->setCursorPos((int)mp.x - hwHotX, (int)mp.y - hwHotY, true);
 }
 
-void RendererImpl::renderFrame(int scanIdx) {
+bool RendererImpl::renderFrame(int scanIdx) {
+    Vector<SurfaceTexture*> externalFirstUses;
+    Vector<VkSemaphore> waits;
+    Vector<VkPipelineStageFlags> waitStages;
+    Vector<Surface*> explicitSurfaces;
+
+    frameSyncFds.clear();
+
+    if (presentFenceFd >= 0) {
+        // presentImage consumes the fence synchronously.  Reaching another
+        // frame with one still pending would otherwise leak it.
+        close(presentFenceFd);
+        presentFenceFd = -1;
+    }
+
+    auto waitOnSyncFile = [&](int syncFd) {
+        size_t index = waits.length();
+
+        if (index == syncWaitPool.length()) {
+            VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+            VkSemaphore sem = VK_NULL_HANDLE;
+
+            if (vkCreateSemaphore(device, &sci, nullptr, &sem) != VK_SUCCESS) {
+                close(syncFd);
+
+                return false;
+            }
+
+            syncWaitPool.pushBack(sem);
+        }
+
+        VkImportSemaphoreFdInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR};
+
+        imp.semaphore = syncWaitPool[index];
+        imp.flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT;
+        imp.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
+        imp.fd = syncFd;
+
+        if (importSemFd(device, &imp) != VK_SUCCESS) {
+            close(syncFd);
+
+            return false;
+        }
+
+        waits.pushBack(syncWaitPool[index]);
+        waitStages.pushBack(VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
+
+        return true;
+    };
+
+    if (hasSyncFd) {
+        for (Surface* s : scene->surfaces) {
+            if (!surfaceVisible(s) || !s->dmabuf || !s->texture || !s->texture->external) {
+                continue;
+            }
+
+            if (s->explicitSync) {
+                if (s->syncAcquireWait) {
+                    u32 binary = 0;
+                    int syncFd = -1;
+                    bool exported = drmSyncobjCreate(drmFd, 0, &binary) == 0 &&
+                                    drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 &&
+                                    drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
+
+                    if (binary) {
+                        drmSyncobjDestroy(drmFd, binary);
+                    }
+
+                    if (!exported) {
+                        if (syncFd >= 0) {
+                            close(syncFd);
+                        }
+
+                        scene->needsFrame = true;
+
+                        return false;
+                    }
+
+                    if (!waitOnSyncFile(syncFd)) {
+                        scene->needsFrame = true;
+
+                        return false;
+                    }
+
+                    explicitSurfaces.pushBack(s);
+                }
+
+                continue;
+            }
+
+            for (int i = 0; i < s->dmabuf->nplanes; i++) {
+                int fd = s->dmabuf->fds[i];
+
+                if (fd < 0 || contains(frameSyncFds, fd)) {
+                    continue;
+                }
+
+                frameSyncFds.pushBack(fd);
+
+                dma_buf_export_sync_file exp{};
+
+                exp.flags = DMA_BUF_SYNC_WRITE;
+                exp.fd = -1;
+
+                if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0 || exp.fd < 0) {
+                    continue;
+                }
+
+                waitOnSyncFile(exp.fd);
+            }
+        }
+    }
+
     buildUi(*scene);
 
     vkResetCommandBuffer(cmd, 0);
@@ -2939,6 +3248,24 @@ void RendererImpl::renderFrame(int scanIdx) {
 
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
+
+    for (SurfaceTexture* tex : textures) {
+        if (!tex->external || !tex->firstUse) {
+            continue;
+        }
+
+        VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toRead.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toRead.image = tex->image;
+        toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+        externalFirstUses.pushBack(tex);
+    }
 
     for (SurfaceTexture* tex : textures) {
         if (!tex->needsUpload) {
@@ -3044,7 +3371,6 @@ void RendererImpl::renderFrame(int scanIdx) {
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;
     lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-    haveFrame = true;
 
     if (output->presentNeedsPixels()) {
         VkBufferImageCopy region{};
@@ -3056,74 +3382,49 @@ void RendererImpl::renderFrame(int scanIdx) {
 
     vkEndCommandBuffer(cmd);
 
-    frameSyncFds.clear();
-
-    VkSemaphore waits[16];
-    VkPipelineStageFlags waitStages[16];
-    u32 nwaits = 0;
-
-    if (hasSyncFd) {
-        for (Surface* s : scene->surfaces) {
-            if (!s->dmabuf || !s->texture || !s->texture->external) {
-                continue;
-            }
-
-            for (int i = 0; i < s->dmabuf->nplanes; i++) {
-                int fd = s->dmabuf->fds[i];
-
-                if (fd < 0 || contains(frameSyncFds, fd)) {
-                    continue;
-                }
-
-                frameSyncFds.pushBack(fd);
-
-                if (nwaits >= 16) {
-                    continue;
-                }
-
-                dma_buf_export_sync_file exp{};
-
-                exp.flags = DMA_BUF_SYNC_WRITE;
-                exp.fd = -1;
-
-                if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0 || exp.fd < 0) {
-                    continue;
-                }
-
-                VkImportSemaphoreFdInfoKHR imp{VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR};
-
-                imp.semaphore = syncWaitPool[nwaits];
-                imp.flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT;
-                imp.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
-                imp.fd = exp.fd;
-
-                if (importSemFd(device, &imp) != VK_SUCCESS) {
-                    close(exp.fd);
-
-                    continue;
-                }
-
-                waits[nwaits] = syncWaitPool[nwaits];
-                waitStages[nwaits] = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-                nwaits++;
-            }
-        }
-    }
-
-    bool signalOut = hasSyncFd && !frameSyncFds.empty();
+    bool needPresentFence = scanIdx >= 0 && output->supportsRenderFence();
+    bool signalOut = hasSyncFd && (needPresentFence || !frameSyncFds.empty());
 
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
 
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
-    si.waitSemaphoreCount = nwaits;
-    si.pWaitSemaphores = waits;
-    si.pWaitDstStageMask = waitStages;
+    si.waitSemaphoreCount = (u32)waits.length();
+    si.pWaitSemaphores = waits.data();
+    si.pWaitDstStageMask = waitStages.data();
     si.signalSemaphoreCount = signalOut ? 1 : 0;
     si.pSignalSemaphores = &syncOut;
-    vkQueueSubmit(queue, 1, &si, fence);
-    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
-    vkResetFences(device, 1, &fence);
+    VkResult submitResult = vkQueueSubmit(queue, 1, &si, fence);
+
+    if (submitResult != VK_SUCCESS) {
+        sysE << "imway: Vulkan queue submit failed ("_sv << (long)submitResult << ")"_sv << endL;
+        ev_break(loop, EVBREAK_ALL);
+
+        return false;
+    }
+
+    frameInFlight = true;
+    haveFrame = true;
+
+    for (Surface* s : explicitSurfaces) {
+        s->syncAcquireWait = false;
+    }
+
+    for (SurfaceTexture* tex : externalFirstUses) {
+        tex->firstUse = false;
+    }
+
+    for (Surface* s : scene->surfaces) {
+        DmabufBuffer* buffer = s->dmabuf;
+
+        if (!surfaceVisible(s) || !buffer || contains(inFlightDmabufs, buffer)) {
+            continue;
+        }
+
+        dmabufRef(buffer);
+        buffer->gpuUses++;
+        inFlightDmabufs.pushBack(buffer);
+    }
 
     if (signalOut) {
         VkSemaphoreGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
@@ -3142,8 +3443,19 @@ void RendererImpl::renderFrame(int scanIdx) {
                 ioctl(fd, DMA_BUF_IOCTL_IMPORT_SYNC_FILE, &imp);
             }
 
-            close(outFd);
+            if (needPresentFence) {
+                presentFenceFd = outFd;
+            } else {
+                close(outFd);
+            }
         }
+    }
+
+    // The dumb-buffer backend consumes the readback on the CPU immediately.
+    // Zero-copy/headless paths keep the submission asynchronous and retire it
+    // at the next fence poll or presentation completion.
+    if (output->presentNeedsPixels()) {
+        finishGpuFrame(true);
     }
 
     if (pendingShape >= 0) {
@@ -3165,12 +3477,23 @@ void RendererImpl::renderFrame(int scanIdx) {
             scene->needsFrame = true;
         }
     }
+
+    return true;
 }
 
 bool RendererImpl::screenshot(StringView path) {
+    if (lastFrameDirect) {
+        forceComposition = true;
+        scene->needsFrame = true;
+        frameNow();
+        forceComposition = false;
+    }
+
     if (!haveFrame) {
         return false;
     }
+
+    finishGpuFrame(true);
 
     if (!output->presentNeedsPixels()) {
         vkResetCommandBuffer(cmd, 0);
@@ -3247,6 +3570,8 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
         return false;
     }
 
+    finishGpuFrame(true);
+
     if (!output->presentNeedsPixels()) {
         vkResetCommandBuffer(cmd, 0);
 
@@ -3292,9 +3617,18 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
 // header) and hand it to the crop tool via /proc/self/fd — no temp file,
 // the buffer lives in ram and the kernel reclaims it when the tool exits
 void RendererImpl::captureScreenshot() {
+    if (lastFrameDirect) {
+        forceComposition = true;
+        scene->needsFrame = true;
+        frameNow();
+        forceComposition = false;
+    }
+
     if (!haveFrame) {
         return;
     }
+
+    finishGpuFrame(true);
 
     if (!output->presentNeedsPixels()) {
         vkResetCommandBuffer(cmd, 0);
@@ -3401,6 +3735,12 @@ void RendererImpl::shutdown() noexcept {
     }
 
     vkDeviceWaitIdle(device);
+    finishGpuFrame(false);
+
+    if (presentFenceFd >= 0) {
+        close(presentFenceFd);
+        presentFenceFd = -1;
+    }
 
     while (!textures.empty()) {
         destroyTexture(textures.back());
@@ -3479,6 +3819,12 @@ void RendererImpl::shutdown() noexcept {
 }
 
 void RendererImpl::frameNow() {
+    if (!finishGpuFrame(false)) {
+        scene->needsFrame = true;
+
+        return;
+    }
+
     timespec ft0{};
 
     clock_gettime(CLOCK_MONOTONIC, &ft0);
@@ -3493,26 +3839,11 @@ void RendererImpl::frameNow() {
     drainDead();
 
     for (Surface* s : scene->surfaces) {
-        if (s->syncAcquireWait && drmFd >= 0) {
-            // explicit sync: the client told us when the buffer is ready
-            timespec ts{};
-
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-
-            i64 deadline = (i64)ts.tv_sec * 1000000000 + ts.tv_nsec + 200000000;
-            u32 h = s->syncAcquireHandle;
-            u64 pt = s->syncAcquirePoint;
-
-            if (drmSyncobjTimelineWait(drmFd, &h, &pt, 1, deadline, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, nullptr) != 0) {
-                sysE << "imway: acquire point wait timed out"_sv << endL;
-            }
-
-            s->syncAcquireWait = false;
-        }
-
         if (s->dirty && s->hasContent) {
+            bool ready = true;
+
             if (s->dmabuf) {
-                importDmabuf(*s);
+                ready = importDmabuf(*s);
             } else {
                 uploadSurface(*s);
             }
@@ -3521,20 +3852,44 @@ void RendererImpl::frameNow() {
                 hwSurfStale = true;
             }
 
-            s->dirty = false;
+            s->dirty = !ready;
+
+            if (!ready) {
+                scene->needsFrame = true;
+            }
         }
     }
 
     DmabufBuffer* cand = scanoutCandidate();
     bool direct = cand && output->directScanout(cand);
 
+    lastFrameDirect = direct;
+
     if (!direct) {
         int idx = output->scanoutCount() > 0 ? output->acquire() : -1;
 
-        renderFrame(idx);
+        if (!renderFrame(idx)) {
+            scene->needsFrame = true;
+
+            return;
+        }
 
         if (idx >= 0) {
-            output->presentImage(idx);
+            // Older KMS drivers do not expose IN_FENCE_FD, and exporting a
+            // sync_file can also fail.  Preserve correctness in both cases
+            // by waiting on the CPU before handing the framebuffer to KMS.
+            if (presentFenceFd < 0 && !finishGpuFrame(true)) {
+                scene->needsFrame = true;
+
+                return;
+            }
+
+            output->presentImage(idx, presentFenceFd);
+
+            if (presentFenceFd >= 0) {
+                close(presentFenceFd);
+                presentFenceFd = -1;
+            }
         } else {
             output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
         }
@@ -3558,10 +3913,6 @@ void RendererImpl::frameNow() {
                 notifier->post(p);
             }
         }
-    }
-
-    if (listener) {
-        listener->frameShown(nowMsec());
     }
 
     timespec ft1{};

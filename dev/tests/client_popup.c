@@ -19,10 +19,12 @@ static struct wl_compositor* compositor;
 static struct wl_shm* shm;
 static struct xdg_wm_base* wm_base;
 static struct wl_seat* seat;
+static struct wl_pointer* pointer;
 static struct wl_surface* surface;
 static struct wl_surface* popup_surface;
 static struct xdg_popup* popup;
 static int drawn, popup_drawn;
+static struct xdg_surface* toplevel_xs;
 
 static void registry_global(void* data, struct wl_registry* reg, uint32_t name,
                             const char* iface, uint32_t version) {
@@ -113,7 +115,7 @@ static void popup_xdg_configure(void* d, struct xdg_surface* xs, uint32_t serial
 }
 static const struct xdg_surface_listener popup_xdg_listener = {popup_xdg_configure};
 
-static void open_popup(struct xdg_surface* parent_xs) {
+static void open_popup(struct xdg_surface* parent_xs, uint32_t serial) {
     struct xdg_positioner* pos = xdg_wm_base_create_positioner(wm_base);
     xdg_positioner_set_size(pos, 120, 90);
     xdg_positioner_set_anchor_rect(pos, 20, 20, 60, 20);
@@ -126,14 +128,49 @@ static void open_popup(struct xdg_surface* parent_xs) {
     xdg_surface_add_listener(pxs, &popup_xdg_listener, NULL);
     popup = xdg_surface_get_popup(pxs, parent_xs, pos);
     xdg_popup_add_listener(popup, &popup_listener, NULL);
-    if (seat) xdg_popup_grab(popup, seat, 0);
+    if (seat) xdg_popup_grab(popup, seat, serial);
     xdg_positioner_destroy(pos);
     wl_surface_commit(popup_surface); // no buffer → wait for configure
 }
 
-// --- toplevel ---
+// --- pointer / toplevel ---
 
-static struct xdg_surface* toplevel_xs;
+static void pointer_enter(void* d, struct wl_pointer* p, uint32_t serial, struct wl_surface* s,
+                          wl_fixed_t x, wl_fixed_t y) {
+    (void)d; (void)p; (void)serial; (void)s; (void)x; (void)y;
+}
+static void pointer_leave(void* d, struct wl_pointer* p, uint32_t serial, struct wl_surface* s) {
+    (void)d; (void)p; (void)serial; (void)s;
+}
+static void pointer_motion(void* d, struct wl_pointer* p, uint32_t time, wl_fixed_t x, wl_fixed_t y) {
+    (void)d; (void)p; (void)time; (void)x; (void)y;
+}
+static void pointer_button(void* d, struct wl_pointer* p, uint32_t serial, uint32_t time,
+                           uint32_t button, uint32_t state) {
+    (void)d; (void)p; (void)time; (void)button;
+    if (state == WL_POINTER_BUTTON_STATE_PRESSED && drawn && !popup)
+        open_popup(toplevel_xs, serial);
+}
+static void pointer_axis(void* d, struct wl_pointer* p, uint32_t time, uint32_t axis,
+                         wl_fixed_t value) {
+    (void)d; (void)p; (void)time; (void)axis; (void)value;
+}
+static void pointer_frame(void* d, struct wl_pointer* p) { (void)d; (void)p; }
+static void pointer_axis_source(void* d, struct wl_pointer* p, uint32_t source) {
+    (void)d; (void)p; (void)source;
+}
+static void pointer_axis_stop(void* d, struct wl_pointer* p, uint32_t time, uint32_t axis) {
+    (void)d; (void)p; (void)time; (void)axis;
+}
+static void pointer_axis_discrete(void* d, struct wl_pointer* p, uint32_t axis, int32_t discrete) {
+    (void)d; (void)p; (void)axis; (void)discrete;
+}
+static const struct wl_pointer_listener pointer_listener = {
+    .enter = pointer_enter, .leave = pointer_leave, .motion = pointer_motion,
+    .button = pointer_button, .axis = pointer_axis, .frame = pointer_frame,
+    .axis_source = pointer_axis_source, .axis_stop = pointer_axis_stop,
+    .axis_discrete = pointer_axis_discrete,
+};
 
 static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
     (void)d;
@@ -143,7 +180,7 @@ static void xdg_surface_configure(void* d, struct xdg_surface* xs, uint32_t seri
         wl_surface_commit(surface);
         drawn = 1;
         printf("client_popup: toplevel committed\n");
-        open_popup(toplevel_xs);
+        printf("client_popup: ready for grab\n");
     }
 }
 static const struct xdg_surface_listener xdg_surface_listener = {xdg_surface_configure};
@@ -181,6 +218,10 @@ int main(void) {
         return 1;
     }
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
+    if (seat) {
+        pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(pointer, &pointer_listener, NULL);
+    }
 
     surface = wl_compositor_create_surface(compositor);
     toplevel_xs = xdg_wm_base_get_xdg_surface(wm_base, surface);

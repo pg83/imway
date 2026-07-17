@@ -200,6 +200,7 @@ int main(int argc, char** argv) {
         wcfg.output = output;
         wcfg.dpmsSec = kms ? dpmsSec : 0;
         wcfg.drmFd = device->drmFd();
+        wcfg.explicitSync = device->explicitSyncSupported();
 
         c.iconPool = IconPool::create(pool.mutPtr());
         c.icons = IconStore::create(c);

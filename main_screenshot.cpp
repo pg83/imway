@@ -15,7 +15,6 @@
 #include <std/sys/throw.h>
 #include <std/sys/types.h>
 
-#define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WAYLAND

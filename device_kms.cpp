@@ -2,6 +2,7 @@
 #include "device.h"
 
 #include "device_vk.h"
+#include "frame_listener.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -436,6 +437,8 @@ namespace {
         int scanNext = 0;
 
         u32 connectorId = 0;
+        StringBuilder connectorLabel;
+        int physicalWmm = 0, physicalHmm = 0;
         u32 crtcId = 0;
         u32 planeId = 0;
         drmModeModeInfo mode{};
@@ -444,6 +447,7 @@ namespace {
         u32 connCrtcId = 0;
         u32 crtcModeId = 0, crtcActive = 0;
         u32 plFbId = 0, plCrtcId = 0;
+        u32 plInFenceFd = 0;
         u32 plSrcX = 0, plSrcY = 0, plSrcW = 0, plSrcH = 0;
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
@@ -466,6 +470,8 @@ namespace {
             int nh = 0;
         };
         Vector<DirectFb> directFbs;
+        DmabufBuffer* queuedDirect = nullptr;
+        DmabufBuffer* currentDirect = nullptr;
         long ddcMax = 0;
         int ddcCur = 0;
         int ddcPending = -1;
@@ -485,6 +491,7 @@ namespace {
         // last completed pageflip, for presentation-time feedback
         u64 flipNs = 0;
         u32 flipSeq = 0;
+        FrameListener* frameListener = nullptr;
 
         u32 cursorPlaneId = 0;
         u32 cuFbId = 0, cuCrtcId = 0;
@@ -513,6 +520,11 @@ namespace {
         int width() const override;
         int height() const override;
         double refresh() const override;
+        StringView outputName() const override;
+        StringView make() const override;
+        StringView model() const override;
+        int physicalWidthMm() const override;
+        int physicalHeightMm() const override;
         void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
         void buildGammaLut();
@@ -522,9 +534,10 @@ namespace {
         void setSdrWhite(double nits) override;
         void setColorTemp(double kelvin) override;
         bool lastFlip(u64& nsec, u32& seq) const override;
+        void setFrameListener(FrameListener*) override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
-        int tryCommit(u32 fbId, bool doModeset, bool withCursor);
-        bool commit(u32 fbId, bool doModeset);
+        int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1);
+        bool commit(u32 fbId, bool doModeset, int inFenceFd = -1);
         void addCursorProps(drmModeAtomicReq* req);
 
         int cursorCapW() const override;
@@ -551,11 +564,14 @@ namespace {
         int scanoutCount() const override;
         ScanoutBuffer* scanoutBuffer(int i) override;
         int acquire() override;
-        void presentImage(int i) override;
+        bool supportsRenderFence() const override;
+        void presentImage(int i, int renderFenceFd) override;
         bool presentNeedsPixels() const override;
         bool directScanout(DmabufBuffer*) override;
         void dropScanoutFb(DmabufBuffer*) override;
         u32 importDirectFb(DmabufBuffer* buf);
+        void retireDeadDirectFbs();
+        void releaseDirectUse(DmabufBuffer*& buf);
         void present(const void* pixels) override;
     };
 
@@ -565,6 +581,14 @@ namespace {
         out->flipPending = false;
         out->flipNs = (u64)sec * 1000000000ull + (u64)usec * 1000ull;
         out->flipSeq = seq;
+        out->releaseDirectUse(out->currentDirect);
+        out->currentDirect = out->queuedDirect;
+        out->queuedDirect = nullptr;
+        out->retireDeadDirectFbs();
+
+        if (out->frameListener) {
+            out->frameListener->frameShown((u32)(out->flipNs / 1000000ull));
+        }
     }
 
     void drmIoCb(struct ev_loop*, ev_io* w, int) {
@@ -595,6 +619,7 @@ namespace {
         ~KmsDevice() noexcept;
 
         int drmFd() const override;
+        bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
         ::Output* createOutput(StringView connector, StringView modeStr, double hdrNits) override;
@@ -702,6 +727,10 @@ int KmsDevice::drmFd() const {
     return fd;
 }
 
+bool KmsDevice::explicitSyncSupported() const {
+    return fd >= 0 && vk && vk->hasSyncFd;
+}
+
 unsigned long long KmsDevice::renderDevice() const {
     return vk->renderDev;
 }
@@ -788,6 +817,7 @@ KmsOutput::KmsOutput(struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Sessi
     crtcActive = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "ACTIVE");
     plFbId = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "FB_ID");
     plCrtcId = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_ID");
+    plInFenceFd = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "IN_FENCE_FD");
     plSrcX = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "SRC_X");
     plSrcY = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "SRC_Y");
     plSrcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "SRC_W");
@@ -931,8 +961,13 @@ KmsOutput::~KmsOutput() noexcept {
         close(ddcFd);
     }
 
+    releaseDirectUse(queuedDirect);
+    releaseDirectUse(currentDirect);
+
     while (!directFbs.empty()) {
-        dropScanoutFb(directFbs.back().buf);
+        // Qualified deliberately: virtual dispatch is unavailable during
+        // destruction and this is exactly the KMS-owned cleanup path.
+        KmsOutput::dropScanoutFb(directFbs.back().buf);
     }
 
     if (modesetDone) {
@@ -996,7 +1031,9 @@ KmsOutput::~KmsOutput() noexcept {
         drmModeDestroyPropertyBlob(fd, modeBlob);
     }
 
-    for (u32 blob : {hdrMetaBlob, degammaBlob, ctmBlob, gammaBlob}) {
+    u32 colorBlobs[] = {hdrMetaBlob, degammaBlob, ctmBlob, gammaBlob};
+
+    for (u32 blob : colorBlobs) {
         if (blob) {
             drmModeDestroyPropertyBlob(fd, blob);
         }
@@ -1014,6 +1051,12 @@ int KmsOutput::height() const {
 double KmsOutput::refresh() const {
     return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
 }
+
+StringView KmsOutput::outputName() const { return sv(connectorLabel); }
+StringView KmsOutput::make() const { return "DRM"_sv; }
+StringView KmsOutput::model() const { return sv(connectorLabel); }
+int KmsOutput::physicalWidthMm() const { return physicalWmm; }
+int KmsOutput::physicalHeightMm() const { return physicalHmm; }
 
 void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     drmModeRes* res = drmModeGetResources(fd);
@@ -1052,6 +1095,9 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     STD_VERIFY(conn);
 
     connectorId = conn->connector_id;
+    connectorName(conn, connectorLabel);
+    physicalWmm = conn->mmWidth;
+    physicalHmm = conn->mmHeight;
 
     if (!modeStr.empty()) {
         ModeSpec want{};
@@ -1117,6 +1163,10 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
             crtcIndex = i;
         }
     }
+
+    // possible_crtcs is a 32-bit mask.  A stale encoder/crtc association
+    // must not turn into an undefined negative or oversized shift below.
+    STD_VERIFY(crtcIndex >= 0 && crtcIndex < 32);
 
     drmModeFreeResources(res);
 
@@ -1330,6 +1380,10 @@ bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
     return true;
 }
 
+void KmsOutput::setFrameListener(FrameListener* listener) {
+    frameListener = listener;
+}
+
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     drm_mode_create_dumb create{};
 
@@ -1355,7 +1409,7 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
+int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     if (doModeset) {
@@ -1403,6 +1457,11 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
 
     drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
     drmModeAtomicAddProperty(req, planeId, plCrtcId, crtcId);
+
+    if (plInFenceFd && inFenceFd >= 0) {
+        drmModeAtomicAddProperty(req, planeId, plInFenceFd, (u64)inFenceFd);
+    }
+
     drmModeAtomicAddProperty(req, planeId, plSrcX, 0);
     drmModeAtomicAddProperty(req, planeId, plSrcY, 0);
     drmModeAtomicAddProperty(req, planeId, plSrcW, (u64)mode.hdisplay << 16);
@@ -1440,8 +1499,8 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor) {
     return ret == 0 ? 0 : errno;
 }
 
-bool KmsOutput::commit(u32 fbId, bool doModeset) {
-    int err = tryCommit(fbId, doModeset, true);
+bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
+    int err = tryCommit(fbId, doModeset, true, inFenceFd);
 
     if (err == EBUSY) {
         return false;
@@ -1450,7 +1509,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset) {
     // bisect: some driver/mode combinations reject the cursor plane in the
     // same commit — retry without it and fall back to the software cursor
     if (err != 0 && cursorPlaneId && cursorEnabled) {
-        int errNoCursor = tryCommit(fbId, doModeset, false);
+        int errNoCursor = tryCommit(fbId, doModeset, false, inFenceFd);
 
         if (errNoCursor == 0) {
             sysE << "imway: cursor plane rejected by this mode (errno "_sv << err << "), software cursor"_sv << endL;
@@ -1816,6 +1875,7 @@ void KmsOutput::setPowerSave(bool on) {
         u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
         if (commit(lastFb, true)) {
+            queuedDirect = nullptr;
             sysO << "imway: display back on"_sv << endL;
         }
     } else {
@@ -1826,6 +1886,7 @@ void KmsOutput::setPowerSave(bool on) {
         drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
         drmModeAtomicFree(req);
         flipPending = false;
+        releaseDirectUse(queuedDirect);
         sysO << "imway: display off (idle)"_sv << endL;
     }
 }
@@ -1903,14 +1964,19 @@ int KmsOutput::acquire() {
     return scanNext;
 }
 
-void KmsOutput::presentImage(int i) {
+bool KmsOutput::supportsRenderFence() const {
+    return plInFenceFd != 0;
+}
+
+void KmsOutput::presentImage(int i, int renderFenceFd) {
     if (!started || flipPending || !sessionActive) {
         return;
     }
 
-    if (commit(scan[i].fbId, !modesetDone)) {
+    if (commit(scan[i].fbId, !modesetDone, renderFenceFd)) {
         modesetDone = true;
         scanNext = i ^ 1;
+        queuedDirect = nullptr;
     }
 }
 
@@ -1924,6 +1990,7 @@ void KmsOutput::sessionEnabled() {
 
     sessionActive = true;
     flipPending = false;
+    releaseDirectUse(queuedDirect);
 
     if (!comeback || !modesetDone) {
         return;
@@ -1932,6 +1999,7 @@ void KmsOutput::sessionEnabled() {
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
     if (commit(lastFb, true)) {
+        queuedDirect = nullptr;
         sysO << "imway: session enabled, remodeset"_sv << endL;
     }
 }
@@ -1950,18 +2018,33 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
     u32 handles[4] = {}, pitches[4] = {}, offs[4] = {};
     u64 mods[4] = {};
+    u32 unique[4] = {};
+    int uniqueCount = 0;
+
+    auto closeImported = [&] {
+        for (int i = 0; i < uniqueCount; i++) {
+            drm_gem_close gc{};
+
+            gc.handle = unique[i];
+            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
+        }
+    };
 
     for (int i = 0; i < buf->nplanes; i++) {
         if (drmPrimeFDToHandle(fd, buf->fds[i], &handles[i]) != 0) {
-            // undo the handles taken so far
-            for (int j = 0; j < i; j++) {
-                drm_gem_close gc{};
-
-                gc.handle = handles[j];
-                drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
-            }
+            closeImported();
 
             return 0;
+        }
+
+        bool seen = false;
+
+        for (int j = 0; j < uniqueCount; j++) {
+            seen |= unique[j] == handles[i];
+        }
+
+        if (!seen) {
+            unique[uniqueCount++] = handles[i];
         }
 
         pitches[i] = buf->strides[i];
@@ -1972,12 +2055,7 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     u32 fbId = 0;
 
     if (drmModeAddFB2WithModifiers(fd, buf->width, buf->height, buf->format, handles, pitches, offs, mods, &fbId, DRM_MODE_FB_MODIFIERS) != 0) {
-        for (int i = 0; i < buf->nplanes; i++) {
-            drm_gem_close gc{};
-
-            gc.handle = handles[i];
-            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
-        }
+        closeImported();
 
         return 0;
     }
@@ -1986,12 +2064,13 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
     d.buf = buf;
     d.fb = fbId;
-    d.nh = buf->nplanes;
+    d.nh = uniqueCount;
 
-    for (int i = 0; i < buf->nplanes; i++) {
-        d.handles[i] = handles[i];
+    for (int i = 0; i < uniqueCount; i++) {
+        d.handles[i] = unique[i];
     }
 
+    dmabufRef(buf);
     directFbs.pushBack(d);
 
     return fbId;
@@ -2016,6 +2095,10 @@ bool KmsOutput::directScanout(DmabufBuffer* buf) {
     if (commit(fbId, false)) {
         // our own composition swapchain is now stale; the next non-direct
         // frame re-acquires and modesets nothing, just flips back
+        dmabufRef(buf);
+        buf->gpuUses++;
+        queuedDirect = buf;
+
         return true;
     }
 
@@ -2023,6 +2106,10 @@ bool KmsOutput::directScanout(DmabufBuffer* buf) {
 }
 
 void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
+    if (buf == currentDirect || (flipPending && buf == queuedDirect)) {
+        return;
+    }
+
     for (size_t i = 0; i < directFbs.length(); i++) {
         if (directFbs[i].buf != buf) {
             continue;
@@ -2037,11 +2124,34 @@ void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
             drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &gc);
         }
 
+        DmabufBuffer* held = directFbs[i].buf;
+
         directFbs.mut(i) = directFbs.back();
         directFbs.popBack();
+        dmabufUnref(held);
 
         return;
     }
+}
+
+void KmsOutput::retireDeadDirectFbs() {
+    for (size_t i = directFbs.length(); i > 0; i--) {
+        DmabufBuffer* buf = directFbs[i - 1].buf;
+
+        if (!buf->resourceAlive && buf != currentDirect && buf != queuedDirect) {
+            dropScanoutFb(buf);
+        }
+    }
+}
+
+void KmsOutput::releaseDirectUse(DmabufBuffer*& buf) {
+    if (!buf) {
+        return;
+    }
+
+    buf->gpuUses--;
+    dmabufUnref(buf);
+    buf = nullptr;
 }
 
 void KmsOutput::present(const void* pixels) {
@@ -2063,6 +2173,7 @@ void KmsOutput::present(const void* pixels) {
 
     if (commit(b.fbId, false)) {
         nextBuf ^= 1;
+        queuedDirect = nullptr;
     }
 }
 
@@ -2167,4 +2278,3 @@ void DeviceKms::list() {
 
     vkDestroyInstance(instance, nullptr);
 }
-

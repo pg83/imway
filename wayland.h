@@ -31,6 +31,7 @@ struct WaylandConfig {
     Output* output = nullptr;
     double dpmsSec = 0;
     int drmFd = -1;
+    bool explicitSync = false;
 };
 
 struct Wayland {

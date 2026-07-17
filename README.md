@@ -33,7 +33,28 @@ Raw, no frameworks (no wlroots/Smithay):
 
 ## Development
 
-The code is built and tested in a QEMU VM (Debian, aarch64+hvf on macOS):
+The reproducible Linux development environment is provided by the Nix flake:
+
+```sh
+git submodule update --init
+nix --extra-experimental-features "nix-command flakes" develop
+cmake -S . -B build -G Ninja
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+AddressSanitizer and UndefinedBehaviorSanitizer use a separate build tree and
+also instrument the vendored libstd:
+
+```sh
+cmake -S . -B build-sanitize -G Ninja -DIMWAY_SANITIZERS=ON
+cmake --build build-sanitize
+ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 \
+ctest --test-dir build-sanitize --output-on-failure
+```
+
+The QEMU workflow (Debian, aarch64+hvf on macOS) remains available:
 
 ```sh
 git submodule update --init   # vendored libstd (third_party/libstd)
@@ -48,8 +69,6 @@ with `-DIMWAY_USE_VENDORED_STD=OFF` to link a system-installed one (`-lstd`,
 headers expected on the compiler's default include path). Tests are headless screenshots with
 pixel checks: shm, subsurfaces, viewporter, dmabuf (via udmabuf), and a
 keyboard e2e test (typing a command into foot).
-
-Design and roadmap: [docs/DESIGN.md](docs/DESIGN.md).
 
 The target platform is [stal/ix](https://stal-ix.github.io/): fully static
 linking, with the Vulkan driver linked into the binary.

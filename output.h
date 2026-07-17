@@ -1,14 +1,21 @@
 #pragma once
 
 #include <std/sys/types.h>
+#include <std/str/view.h>
 
 struct ScanoutBuffer;
 struct DmabufBuffer;
+struct FrameListener;
 
 struct Output {
     virtual int width() const = 0;
     virtual int height() const = 0;
     virtual double refresh() const = 0;
+    virtual stl::StringView outputName() const = 0;
+    virtual stl::StringView make() const = 0;
+    virtual stl::StringView model() const = 0;
+    virtual int physicalWidthMm() const = 0;
+    virtual int physicalHeightMm() const = 0;
 
     // hardware cursor plane; the image is capW x capH premultiplied ARGB8888,
     // cap of 0 means no hardware cursor on this output
@@ -41,6 +48,7 @@ struct Output {
     // timestamp (CLOCK_MONOTONIC ns) and vblank sequence of the last
     // completed pageflip; false when the backend has no real flips
     virtual bool lastFlip(u64& nsec, u32& seq) const = 0;
+    virtual void setFrameListener(FrameListener* listener) = 0;
 
     virtual bool start() = 0;
 
@@ -50,7 +58,11 @@ struct Output {
     virtual int scanoutCount() const = 0;
     virtual ScanoutBuffer* scanoutBuffer(int i) = 0;
     virtual int acquire() = 0;
-    virtual void presentImage(int i) = 0;
+    // True when the backend can attach a Vulkan completion sync_file to the
+    // primary-plane commit.  The fd passed to presentImage is borrowed and
+    // remains owned by the caller.
+    virtual bool supportsRenderFence() const = 0;
+    virtual void presentImage(int i, int renderFenceFd) = 0;
 
     virtual bool presentNeedsPixels() const = 0;
     virtual void present(const void* pixels) = 0;

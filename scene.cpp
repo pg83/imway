@@ -1,11 +1,26 @@
 #include "scene.h"
 
+#include <unistd.h>
+
+DmabufBuffer::~DmabufBuffer() noexcept {
+    for (int& fd : fds) {
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
+    }
+}
+
 int Surface::viewW() const {
-    return vp.hasDst ? vp.dw : vp.hasSrc ? (int)vp.sw : width / bufferScale;
+    bool swapped = bufferTransform == 1 || bufferTransform == 3 || bufferTransform == 5 || bufferTransform == 7;
+
+    return vp.hasDst ? vp.dw : vp.hasSrc ? (int)vp.sw : (swapped ? height : width) / bufferScale;
 }
 
 int Surface::viewH() const {
-    return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : height / bufferScale;
+    bool swapped = bufferTransform == 1 || bufferTransform == 3 || bufferTransform == 5 || bufferTransform == 7;
+
+    return vp.hasDst ? vp.dh : vp.hasSrc ? (int)vp.sh : (swapped ? width : height) / bufferScale;
 }
 
 int Surface::geomX() const {
@@ -42,7 +57,7 @@ bool Surface::inputContains(double sx, double sy) const {
     }
 
     for (const RectI& r : inputRegion) {
-        if (sx >= r.x && sy >= r.y && sx < r.x + r.w && sy < r.y + r.h) {
+        if (sx >= r.x && sy >= r.y && sx < (double)r.x + r.w && sy < (double)r.y + r.h) {
             return true;
         }
     }
@@ -81,39 +96,36 @@ void unionRect(RectI& a, const RectI& b) {
         return;
     }
 
-    i32 x2 = a.x + a.w > b.x + b.w ? a.x + a.w : b.x + b.w;
-    i32 y2 = a.y + a.h > b.y + b.h ? a.y + a.h : b.y + b.h;
+    i64 ax2 = (i64)a.x + a.w, ay2 = (i64)a.y + a.h;
+    i64 bx2 = (i64)b.x + b.w, by2 = (i64)b.y + b.h;
+    i64 x1 = a.x < b.x ? a.x : b.x;
+    i64 y1 = a.y < b.y ? a.y : b.y;
+    i64 x2 = ax2 > bx2 ? ax2 : bx2;
+    i64 y2 = ay2 > by2 ? ay2 : by2;
+    constexpr i64 maxI32 = 0x7fffffff;
 
-    a.x = a.x < b.x ? a.x : b.x;
-    a.y = a.y < b.y ? a.y : b.y;
-    a.w = x2 - a.x;
-    a.h = y2 - a.y;
+    a.x = (i32)x1;
+    a.y = (i32)y1;
+    a.w = (i32)(x2 - x1 > maxI32 ? maxI32 : x2 - x1);
+    a.h = (i32)(y2 - y1 > maxI32 ? maxI32 : y2 - y1);
 }
 
 void clipRect(RectI& r, i32 w, i32 h) {
-    if (r.x < 0) {
-        r.w += r.x;
-        r.x = 0;
+    i64 x1 = r.x > 0 ? r.x : 0;
+    i64 y1 = r.y > 0 ? r.y : 0;
+    i64 x2 = (i64)r.x + r.w;
+    i64 y2 = (i64)r.y + r.h;
+
+    if (x2 > w) {
+        x2 = w;
     }
 
-    if (r.y < 0) {
-        r.h += r.y;
-        r.y = 0;
+    if (y2 > h) {
+        y2 = h;
     }
 
-    if (r.x + r.w > w) {
-        r.w = w - r.x;
-    }
-
-    if (r.y + r.h > h) {
-        r.h = h - r.y;
-    }
-
-    if (r.w < 0) {
-        r.w = 0;
-    }
-
-    if (r.h < 0) {
-        r.h = 0;
-    }
+    r.x = (i32)(x1 < w ? x1 : w);
+    r.y = (i32)(y1 < h ? y1 : h);
+    r.w = (i32)(x2 > x1 ? x2 - x1 : 0);
+    r.h = (i32)(y2 > y1 ? y2 - y1 : 0);
 }

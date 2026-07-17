@@ -1,9 +1,26 @@
 cmake_minimum_required(VERSION 3.25)
 project(imway CXX C)
 
+if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(FATAL_ERROR "imway's libstd dependency currently requires Clang; configure from `nix develop`")
+endif()
+
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+option(IMWAY_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+set(PGSTD_EXTRA "-Wno-error=unused-result")
+if(IMWAY_SANITIZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        message(FATAL_ERROR "IMWAY_SANITIZERS requires Clang or GCC")
+    endif()
+
+    add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+    string(APPEND PGSTD_EXTRA " -fsanitize=address,undefined -fno-omit-frame-pointer")
+endif()
 
 find_package(PkgConfig REQUIRED)
 find_package(Vulkan REQUIRED)
@@ -42,6 +59,13 @@ option(IMWAY_USE_VENDORED_STD "Build libstd from third_party/libstd; OFF = link 
 
 if(IMWAY_USE_VENDORED_STD)
     set(STD_ROOT "${CMAKE_SOURCE_DIR}/third_party/libstd")
+    set(STD_BUILD_ROOT "${CMAKE_BINARY_DIR}/libstd")
+    file(GLOB_RECURSE STD_INPUTS CONFIGURE_DEPENDS
+        "${STD_ROOT}/std/*.cpp"
+        "${STD_ROOT}/std/*.h")
+    file(MAKE_DIRECTORY "${STD_BUILD_ROOT}")
+    file(GENERATE OUTPUT "${STD_BUILD_ROOT}/build-flags.txt"
+        CONTENT "CXX=${CMAKE_CXX_COMPILER}\nEXTRA=${PGSTD_EXTRA}\n")
 
     include(ProcessorCount)
     ProcessorCount(NCPU)
@@ -49,13 +73,19 @@ if(IMWAY_USE_VENDORED_STD)
         set(NCPU 2)
     endif()
 
-    add_custom_target(pgstd_build
-        COMMAND make -C "${STD_ROOT}" -j${NCPU} CXX=${CMAKE_CXX_COMPILER} std/libstd.a
-        BYPRODUCTS "${STD_ROOT}/std/libstd.a"
+    add_custom_command(OUTPUT "${STD_BUILD_ROOT}/std/libstd.a"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${STD_ROOT}/std" "${STD_BUILD_ROOT}/std"
+        COMMAND ${CMAKE_COMMAND} -E copy "${STD_ROOT}/Makefile" "${STD_BUILD_ROOT}/Makefile"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${STD_BUILD_ROOT}/dev"
+        COMMAND ${CMAKE_COMMAND} -E touch "${STD_BUILD_ROOT}/dev/build.sh" "${STD_BUILD_ROOT}/dev/run.sh"
+        COMMAND make -C "${STD_BUILD_ROOT}" clear
+        COMMAND make -C "${STD_BUILD_ROOT}" -j${NCPU} CXX=${CMAKE_CXX_COMPILER} "EXTRA=${PGSTD_EXTRA}" std/libstd.a
+        DEPENDS ${STD_INPUTS} "${STD_ROOT}/Makefile" "${STD_BUILD_ROOT}/build-flags.txt"
         COMMENT "building vendored libstd")
+    add_custom_target(pgstd_build DEPENDS "${STD_BUILD_ROOT}/std/libstd.a")
 
     add_library(pgstd STATIC IMPORTED)
-    set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_ROOT}/std/libstd.a")
+    set_target_properties(pgstd PROPERTIES IMPORTED_LOCATION "${STD_BUILD_ROOT}/std/libstd.a")
     target_include_directories(pgstd INTERFACE "${STD_ROOT}")
     add_dependencies(pgstd pgstd_build)
 else()
@@ -172,6 +202,7 @@ add_custom_command(OUTPUT "${PROTO_DIR}/xdg-activation-v1-protocol.c"
 
 foreach(PROTO
         "staging/color-management/color-management-v1"
+        "staging/xdg-toplevel-icon/xdg-toplevel-icon-v1"
         "unstable/xdg-output/xdg-output-unstable-v1"
         "staging/fractional-scale/fractional-scale-v1"
         "unstable/pointer-gestures/pointer-gestures-unstable-v1"

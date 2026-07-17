@@ -1,6 +1,8 @@
 #pragma once
 
 #include <std/lib/vector.h>
+#include <std/ptr/arc.h>
+#include <std/ptr/refcount.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
@@ -30,19 +32,37 @@ struct DmabufFormat {
 
 inline constexpr int kDmabufMaxPlanes = 4;
 
-struct DmabufBuffer {
+struct DmabufBuffer: public stl::ARC {
     i32 width = 0, height = 0;
     u32 format = 0;
     u64 modifier = 0;
     int nplanes = 0;
+    int gpuUses = 0;
+    bool resourceAlive = true;
     int fds[kDmabufMaxPlanes] = {-1, -1, -1, -1};
     u32 offsets[kDmabufMaxPlanes] = {};
     u32 strides[kDmabufMaxPlanes] = {};
+
+    ~DmabufBuffer() noexcept;
 };
+
+inline void dmabufRef(DmabufBuffer* b) noexcept {
+    if (b) {
+        stl::RefCountOps<DmabufBuffer>::ref(b);
+    }
+}
+
+inline void dmabufUnref(DmabufBuffer* b) noexcept {
+    if (b) {
+        stl::RefCountOps<DmabufBuffer>::unref(b);
+    }
+}
 
 struct Surface {
     int width = 0, height = 0;
     int bufferScale = 1;
+    int bufferTransform = 0;
+    int bufferOffsetX = 0, bufferOffsetY = 0;
     bool hasContent = false;
     bool dirty = false;
     RectI damage;
@@ -57,6 +77,7 @@ struct Surface {
     u32 syncAcquireHandle = 0;
     u64 syncAcquirePoint = 0;
     bool syncAcquireWait = false;
+    bool explicitSync = false;
 
     struct {
         bool hasSrc = false, hasDst = false;
@@ -126,6 +147,8 @@ struct Toplevel {
     bool iconFromClient = false;
 
     int desiredW = 0, desiredH = 0;
+    int minW = 0, minH = 0;
+    int maxW = 0, maxH = 0;
 
     // transactional resize (floating windows): the window is held at
     // applyW/H — the size derived from the last committed geometry, chrome
@@ -138,6 +161,9 @@ struct Toplevel {
 
     bool moveRequested = false;
     u32 resizeEdges = 0;
+    u32 clientResizeEdges = 0;
+    float resizeStartMouseX = 0, resizeStartMouseY = 0;
+    float resizeStartW = 0, resizeStartH = 0;
 
     // interactive-resize position compensation (renderer): which edge/corner is
     // being dragged (bit0 left, bit1 top, bit7 active), the window's last known
@@ -191,8 +217,6 @@ struct Scene {
     stl::Vector<Popup*> popups;
 
     stl::Vector<SurfaceTexture*> orphanedTextures;
-    stl::Vector<DmabufBuffer*> deadDmabufs;
-
     int outW = 1280, outH = 800;
     double hz = 60.0;
     int framesDone = 0;
@@ -210,6 +234,7 @@ struct Scene {
     Toplevel* focusedToplevel = nullptr;
     bool kbCaptured = false;
     bool ptrCaptured = false;
+    bool shortcutsInhibited = false;
 
     // pointer-constraints state: written by wayland, honored by the input source
     bool pointerLocked = false;

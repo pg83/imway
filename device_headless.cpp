@@ -2,6 +2,7 @@
 #include "device.h"
 
 #include "device_vk.h"
+#include "frame_listener.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -46,6 +47,7 @@ namespace {
     struct HeadlessOutput: public ::Output {
         int w = 0, h = 0;
         double hz = 60.0;
+        FrameListener* frameListener = nullptr;
 
         // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
         // so headless exercises the renderer's hw-cursor rasterization path
@@ -57,6 +59,11 @@ namespace {
         int width() const override;
         int height() const override;
         double refresh() const override;
+        StringView outputName() const override;
+        StringView make() const override;
+        StringView model() const override;
+        int physicalWidthMm() const override;
+        int physicalHeightMm() const override;
         int cursorCapW() const override;
         int cursorCapH() const override;
         void setCursorImage(const u32*) override;
@@ -71,13 +78,15 @@ namespace {
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
         bool lastFlip(u64&, u32&) const override;
+        void setFrameListener(FrameListener*) override;
         bool start() override;
         bool ready() const override;
         bool vsynced() const override;
         int scanoutCount() const override;
         ScanoutBuffer* scanoutBuffer(int) override;
         int acquire() override;
-        void presentImage(int) override;
+        bool supportsRenderFence() const override;
+        void presentImage(int, int) override;
         bool presentNeedsPixels() const override;
         void present(const void*) override;
         bool directScanout(DmabufBuffer*) override;
@@ -95,6 +104,7 @@ namespace {
         ~HeadlessDevice() noexcept;
 
         int drmFd() const override;
+        bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
         ::Output* createOutput(StringView, StringView modeStr, double hdrNits) override;
@@ -123,6 +133,12 @@ int HeadlessOutput::height() const {
 double HeadlessOutput::refresh() const {
     return hz;
 }
+
+StringView HeadlessOutput::outputName() const { return "HEADLESS-1"_sv; }
+StringView HeadlessOutput::make() const { return "imway"_sv; }
+StringView HeadlessOutput::model() const { return "headless"_sv; }
+int HeadlessOutput::physicalWidthMm() const { return 0; }
+int HeadlessOutput::physicalHeightMm() const { return 0; }
 
 int HeadlessOutput::cursorCapW() const {
     return 0;
@@ -170,6 +186,10 @@ bool HeadlessOutput::lastFlip(u64&, u32&) const {
     return false;
 }
 
+void HeadlessOutput::setFrameListener(FrameListener* listener) {
+    frameListener = listener;
+}
+
 bool HeadlessOutput::start() {
     return true;
 }
@@ -194,7 +214,11 @@ int HeadlessOutput::acquire() {
     return -1;
 }
 
-void HeadlessOutput::presentImage(int) {
+bool HeadlessOutput::supportsRenderFence() const {
+    return false;
+}
+
+void HeadlessOutput::presentImage(int, int) {
 }
 
 bool HeadlessOutput::presentNeedsPixels() const {
@@ -202,6 +226,9 @@ bool HeadlessOutput::presentNeedsPixels() const {
 }
 
 void HeadlessOutput::present(const void*) {
+    if (frameListener) {
+        frameListener->frameShown(nowMsec());
+    }
 }
 
 HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
@@ -246,6 +273,10 @@ HeadlessDevice::~HeadlessDevice() noexcept {
 
 int HeadlessDevice::drmFd() const {
     return syncFd;
+}
+
+bool HeadlessDevice::explicitSyncSupported() const {
+    return syncFd >= 0 && vk->hasSyncFd;
 }
 
 unsigned long long HeadlessDevice::renderDevice() const {

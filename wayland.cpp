@@ -14,7 +14,9 @@
 #include "util.h"
 
 #include <fcntl.h>
+#include <stdio.h>
 #include <string.h>
+#include <sys/random.h>
 #include <time.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -58,7 +60,13 @@ using namespace stl;
 namespace {
     struct PopupImpl;
     struct SurfaceImpl;
+    struct SubsurfaceImpl;
     struct WaylandImpl;
+
+    struct SurfaceDestroyListener {
+        wl_listener listener{};
+        SurfaceImpl* surface = nullptr;
+    };
 
     // color-management-v1: a client image description reduced to what we act
     // on — the parametric hdr case (st2084 PQ + BT.2020) with its luminances
@@ -78,6 +86,7 @@ namespace {
     struct ToplevelImpl;
     struct WaylandImpl;
     struct ConstraintBox;
+    struct IdleInhibitor;
 
     struct TimelineBox {
         WaylandImpl* srv = nullptr;
@@ -86,9 +95,48 @@ namespace {
         bool resAlive = true;
     };
 
+    struct PendingBufferRelease;
+
+    struct PendingBufferDestroyListener {
+        wl_listener listener{};
+        PendingBufferRelease* release = nullptr;
+    };
+
+    struct PendingBufferRelease {
+        WaylandImpl* srv = nullptr;
+        DmabufBuffer* buffer = nullptr;
+        wl_resource* res = nullptr;
+        PendingBufferDestroyListener destroy;
+        TimelineBox* acq = nullptr;
+        TimelineBox* rel = nullptr;
+        u64 relPoint = 0;
+    };
+
+    struct CachedBufferDestroyListener {
+        wl_listener listener{};
+        SubsurfaceImpl* sub = nullptr;
+    };
+
+    struct ActivationTokenRequest {
+        WaylandImpl* srv = nullptr;
+        wl_client* client = nullptr;
+        SurfaceImpl* surface = nullptr;
+        StringBuilder appId;
+        u32 serial = 0;
+        bool serialSet = false;
+        bool surfaceSet = false;
+        bool committed = false;
+    };
+
+    struct ActivationGrant {
+        char token[64] = {};
+        bool authorized = false;
+    };
+
     struct XdgSurface {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
+        wl_resource* wmBaseRes = nullptr;
         SurfaceImpl* surface = nullptr;
         ToplevelImpl* toplevel = nullptr;
         PopupImpl* popup = nullptr;
@@ -100,42 +148,58 @@ namespace {
         // answered once a commit lands with its serial acked
         u32 ackedSerial = 0;
         u32 committedAckSerial = 0;
+        Vector<u32> configureSerials;
 
         RectI pendGeom;
         bool pendGeomSet = false;
     };
 
+    enum class SurfaceRole {
+        none,
+        xdgToplevel,
+        xdgPopup,
+        subsurface,
+        cursor,
+        dragIcon,
+    };
+
     struct SurfaceImpl: public Surface {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
+        SurfaceRole role = SurfaceRole::none;
 
         struct {
             wl_resource* buffer = nullptr;
             bool newlyAttached = false;
-            wl_listener bufferDestroy{};
+            SurfaceDestroyListener bufferDestroy;
             bool bufferDestroyArmed = false;
             Vector<wl_resource*> frames;
             bool inputRegionSet = false;
+            bool inputRegionChanged = false;
             Vector<RectI> inputRegion;
             RectI damage;
             bool damageAll = false;
             int scale = 0;
+            int transform = -1;
+            int attachX = 0, attachY = 0;
         } pending;
 
         Vector<wl_resource*> frameCbs;
         Vector<wl_resource*> presentFeedbacks;
 
         wl_resource* dmabufRes = nullptr;
-        wl_listener dmabufDestroy{};
+        SurfaceDestroyListener dmabufDestroy;
         bool dmabufDestroyArmed = false;
 
         wl_resource* vpRes = nullptr;
         double pendSx = -1, pendSy = -1, pendSw = -1, pendSh = -1;
         int pendDw = -1, pendDh = -1;
+        bool pendSrcSet = false, pendDstSet = false;
 
         wl_resource* fracRes = nullptr;
         ConstraintBox* constraint = nullptr;
         wl_resource* kbInhibitRes = nullptr;
+        bool kbInhibitActive = false;
 
         wl_resource* syncRes = nullptr;
         TimelineBox* pendAcqTl = nullptr;
@@ -161,6 +225,22 @@ namespace {
             int width = 0, height = 0;
             Vector<u8> pixels;
             Vector<wl_resource*> frames;
+            DmabufBuffer* dmabuf = nullptr;
+            wl_resource* dmabufRes = nullptr;
+            CachedBufferDestroyListener dmabufDestroy;
+            bool dmabufDestroyArmed = false;
+            TimelineBox* acq = nullptr;
+            TimelineBox* rel = nullptr;
+            u64 acquirePoint = 0, releasePoint = 0;
+            bool scaleSet = false, transformSet = false;
+            int scale = 1, transform = WL_OUTPUT_TRANSFORM_NORMAL;
+            int offsetX = 0, offsetY = 0;
+            bool vpSrcSet = false, vpDstSet = false;
+            bool vpHasSrc = false, vpHasDst = false;
+            double sx = 0, sy = 0, sw = 0, sh = 0;
+            int dw = 0, dh = 0;
+            bool inputChanged = false, inputSet = false;
+            Vector<RectI> inputRegion;
         } cache;
 
         bool effectiveSync() const;
@@ -174,10 +254,30 @@ namespace {
         u32 cfgSerial = 0;
         int prevW = 0, prevH = 0;
         bool cfgDocked = false;
+        int pendingMinW = 0, pendingMinH = 0;
+        int pendingMaxW = 0, pendingMaxH = 0;
+        bool pendingMinSet = false, pendingMaxSet = false;
 
         // pool icon built from client pixels (xdg-toplevel-icon); wayland
         // owns it: released on replace and on destroy
         Icon* ownIcon = nullptr;
+    };
+
+    struct Positioner {
+        WaylandImpl* srv = nullptr;
+
+        int w = 0, h = 0;
+        int ax = 0, ay = 0, aw = 0, ah = 0;
+        u32 anchor = XDG_POSITIONER_ANCHOR_NONE;
+        u32 gravity = XDG_POSITIONER_GRAVITY_NONE;
+        u32 constraints = XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_NONE;
+        int dx = 0, dy = 0;
+        bool reactive = false;
+        int parentW = 0, parentH = 0;
+        u32 parentConfigure = 0;
+
+        void place(int& outX, int& outY, int& outW, int& outH,
+                   int minX, int minY, int maxX, int maxY) const;
     };
 
     struct PopupImpl: public Popup {
@@ -185,6 +285,10 @@ namespace {
         wl_resource* res = nullptr;
         XdgSurface* xdg = nullptr;
         int w = 0, h = 0;
+        Positioner positioner;
+        int pendingX = 0, pendingY = 0, pendingW = 0, pendingH = 0;
+        u32 positionSerial = 0;
+        bool positionPending = false;
     };
 
     struct RegionBox {
@@ -212,21 +316,19 @@ namespace {
         RectI regionBox;
     };
 
-    struct Positioner {
+    struct IdleInhibitor {
         WaylandImpl* srv = nullptr;
-
-        int w = 0, h = 0;
-        int ax = 0, ay = 0, aw = 0, ah = 0;
-        u32 anchor = XDG_POSITIONER_ANCHOR_NONE;
-        u32 gravity = XDG_POSITIONER_GRAVITY_NONE;
-        int dx = 0, dy = 0;
-
-        void place(int& outX, int& outY) const;
+        SurfaceImpl* surface = nullptr;
+        wl_resource* res = nullptr;
     };
 
     struct BufferBox {
         WaylandImpl* srv = nullptr;
-        DmabufBuffer buf;
+        DmabufBuffer* buf = nullptr;
+
+        ~BufferBox() noexcept {
+            dmabufUnref(buf);
+        }
     };
 
     struct SpbBox {
@@ -248,9 +350,23 @@ namespace {
         wl_resource* res = nullptr;
         bool primary = false;
         Vector<Mime> mimes;
-        Vector<wl_resource*> offers;
+        struct Offer* offersHead = nullptr;
         u32 dndActions = 0;
         bool dropPerformed = false;
+        bool actionsSet = false;
+        bool usedForDrag = false;
+        bool usedForSelection = false;
+    };
+
+    struct Offer {
+        WaylandImpl* srv = nullptr;
+        DataSource* source = nullptr;
+        wl_resource* res = nullptr;
+        Offer* sourceNext = nullptr;
+        bool dnd = false;
+        bool accepted = false;
+        bool finished = false;
+        u32 action = WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
     };
 
     struct SeatState {
@@ -271,15 +387,30 @@ namespace {
         DataSource* primarySel = nullptr;
 
         DataSource* dragSource = nullptr;
+        wl_client* dragClient = nullptr;
         Surface* dragTarget = nullptr;
         u32 lastPressedButton = 0;
         Vector<u32> pressedButtons;
 
+        struct InputSerial {
+            u32 value = 0;
+            wl_client* client = nullptr;
+            Surface* surface = nullptr;
+        };
+
+        Vector<InputSerial> inputSerials;
+        u32 pointerGrabSerial = 0;
+        wl_client* pointerGrabClient = nullptr;
+        Surface* pointerGrabOrigin = nullptr;
+
         void releaseAllKeys();
-        void setSelection(DataSource* src, bool primary);
+        void rememberSerial(u32 serial, wl_client* client, Surface* surface);
+        bool validSerial(wl_client* client, u32 serial) const;
+        bool validSelectionSerial(wl_client* client, u32 serial);
+        void setSelection(wl_client* client, u32 serial, DataSource* src, bool primary);
         void sendSelections(wl_client* client);
         void sourceGone(DataSource* src);
-        void startDrag(DataSource* src, Surface* icon);
+        void startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon);
         void dragMotion();
         void endDrag();
 
@@ -306,7 +437,7 @@ namespace {
 
         void handleMotion(double x, double y);
         void handleButton(u32 button, bool pressed);
-        void handleScroll(double dx, double dy);
+        void handleScroll(const ScrollEvent& ev);
         void handleKey(u32 code, bool pressed);
 
         void handleRelMotion(double dx, double dy, double dxRaw, double dyRaw);
@@ -328,6 +459,7 @@ namespace {
         void kbSendEnter(wl_resource* target);
         void updateModifiers();
         void layoutIndicator();
+        void updateShortcutInhibit();
 
         void focusToplevel(Toplevel* t);
         void popupGrabStart(Popup* p);
@@ -377,11 +509,17 @@ namespace {
         ObjList<RegionBox> regionAlloc;
         ObjList<Positioner> positionerAlloc;
         ObjList<BufferBox> dmabufBoxAlloc;
+        ObjList<PendingBufferRelease> pendingReleaseAlloc;
+        Vector<PendingBufferRelease*> pendingReleases;
         ObjList<DataSource> dataSourceAlloc;
+        ObjList<Offer> offerAlloc;
         ObjList<SpbBox> spbAlloc;
         ObjList<Params> dmabufParamsAlloc;
         ObjList<ConstraintBox> constraintAlloc;
         ObjList<IconBox> iconAlloc;
+        ObjList<ActivationTokenRequest> activationTokenAlloc;
+        Vector<ActivationTokenRequest*> activationTokenRequests;
+        Vector<ActivationGrant> activationGrants;
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
         ObjList<TimelineBox> timelineAlloc;
@@ -392,6 +530,7 @@ namespace {
         u32 cimgIdentity = 0;
 
         int drmFd = -1;
+        bool explicitSyncSupported = false;
 
         struct IdleNotif {
             WaylandImpl* srv = nullptr;
@@ -402,13 +541,15 @@ namespace {
 
         ObjList<IdleNotif> idleAlloc;
         Vector<IdleNotif*> idleNotifs;
-        int idleInhibitors = 0;
+        ObjList<IdleInhibitor> idleInhibitorAlloc;
+        Vector<IdleInhibitor*> idleInhibitors;
         ::Output* output = nullptr;
         double dpmsSec = 0;
         bool dpmsOff = false;
         ev_timer dpmsTimer{};
 
         void activity();
+        bool idleBlocked() const;
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
@@ -424,7 +565,7 @@ namespace {
         void motion(double x, double y) override;
         void button(u32 btn, bool pressed) override;
         void key(u32 code, bool pressed) override;
-        void scroll(double dx, double dy) override;
+        void scroll(const ScrollEvent& ev) override;
         void modsChanged() override;
         void absMotion(double, double) override;
         void relMotion(double dx, double dy, double dxRaw, double dyRaw) override;
@@ -438,6 +579,7 @@ namespace {
         void holdEnd(bool cancelled) override;
 
         void frameShown(u32 msec) override;
+        void gpuCompleted() override;
 
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
@@ -470,6 +612,15 @@ namespace {
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h);
     void xdgToplevelReconfigure(ToplevelImpl& t);
 
+    u32 sendXdgSurfaceConfigure(XdgSurface& xs) {
+        u32 serial = wl_display_next_serial(xs.srv->display);
+
+        xs.configureSerials.pushBack(serial);
+        xdg_surface_send_configure(xs.res, serial);
+
+        return serial;
+    }
+
     void wmBasePong(wl_client*, wl_resource* res, u32) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
@@ -482,6 +633,14 @@ namespace {
 
     void wmBaseResourceDestroyed(wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        for (Surface* surface : srv->scene->surfaces) {
+            auto* impl = (SurfaceImpl*)surface;
+
+            if (impl->xdg && impl->xdg->wmBaseRes == res) {
+                impl->xdg->wmBaseRes = nullptr;
+            }
+        }
 
         for (size_t i = 0; i < srv->wmBases.length(); i++) {
             if (srv->wmBases[i].res == res) {
@@ -570,6 +729,7 @@ namespace {
     void applySubsurfaceCache(SubsurfaceImpl&);
     void xdgHandleCommit(SurfaceImpl&);
     void xdgPopupDismiss(PopupImpl&);
+    void dismissPopupTree(PopupImpl&);
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
     void fracSurfaceGone(SurfaceImpl&);
@@ -586,7 +746,7 @@ namespace {
 
     void detachPendingBuffer(SurfaceImpl& s) {
         if (s.pending.bufferDestroyArmed) {
-            wl_list_remove(&s.pending.bufferDestroy.link);
+            wl_list_remove(&s.pending.bufferDestroy.listener.link);
             s.pending.bufferDestroyArmed = false;
         }
 
@@ -594,11 +754,11 @@ namespace {
     }
 
     void pendingBufferDestroyed(wl_listener* l, void*) {
-        SurfaceImpl* s = wl_container_of(l, s, pending.bufferDestroy);
+        SurfaceImpl* s = ((SurfaceDestroyListener*)l)->surface;
 
         s->pending.buffer = nullptr;
         s->pending.bufferDestroyArmed = false;
-        wl_list_remove(&s->pending.bufferDestroy.link);
+        wl_list_remove(&s->pending.bufferDestroy.listener.link);
     }
 
     void tlUnref(TimelineBox* t) {
@@ -612,9 +772,43 @@ namespace {
         }
     }
 
-    // the renderer is synchronous (it waits its own fence every frame), so by
-    // the time a buffer is released all GPU reads are done and the release
-    // point can be signalled right here
+    void cachedDmabufDestroyed(wl_listener* l, void*) {
+        SubsurfaceImpl* sub = ((CachedBufferDestroyListener*)l)->sub;
+
+        sub->cache.dmabufRes = nullptr;
+        sub->cache.dmabufDestroyArmed = false;
+        wl_list_remove(&sub->cache.dmabufDestroy.listener.link);
+    }
+
+    void releaseCachedDmabuf(SubsurfaceImpl& sub) {
+        if (!sub.cache.dmabuf) {
+            return;
+        }
+
+        if (sub.cache.rel) {
+            drmSyncobjTimelineSignal(sub.srv->drmFd, &sub.cache.rel->handle, &sub.cache.releasePoint, 1);
+        }
+
+        tlUnref(sub.cache.acq);
+        tlUnref(sub.cache.rel);
+
+        if (sub.cache.dmabufRes) {
+            wl_buffer_send_release(sub.cache.dmabufRes);
+        }
+
+        if (sub.cache.dmabufDestroyArmed) {
+            wl_list_remove(&sub.cache.dmabufDestroy.listener.link);
+        }
+
+        dmabufUnref(sub.cache.dmabuf);
+        sub.cache.dmabuf = nullptr;
+        sub.cache.dmabufRes = nullptr;
+        sub.cache.dmabufDestroyArmed = false;
+        sub.cache.acq = sub.cache.rel = nullptr;
+    }
+
+    // Called directly only when no renderer/KMS use remains. Busy buffers are
+    // moved to pendingReleases and arrive here after the GPU fence/page-flip.
     void syncReleaseHeld(SurfaceImpl& s) {
         if (s.heldRelTl) {
             drmSyncobjTimelineSignal(s.srv->drmFd, &s.heldRelTl->handle, &s.heldRelPt, 1);
@@ -624,42 +818,115 @@ namespace {
         tlUnref(s.heldRelTl);
         s.heldAcqTl = s.heldRelTl = nullptr;
         s.syncAcquireWait = false;
+        s.explicitSync = false;
     }
 
     void heldDmabufDestroyed(wl_listener* l, void*) {
-        SurfaceImpl* s = wl_container_of(l, s, dmabufDestroy);
+        SurfaceImpl* s = ((SurfaceDestroyListener*)l)->surface;
 
-        syncReleaseHeld(*s);
-        s->dmabuf = nullptr;
         s->dmabufRes = nullptr;
         s->dmabufDestroyArmed = false;
-        wl_list_remove(&s->dmabufDestroy.link);
+        wl_list_remove(&s->dmabufDestroy.listener.link);
+    }
+
+    void pendingReleaseBufferDestroyed(wl_listener* l, void*) {
+        auto* pending = ((PendingBufferDestroyListener*)l)->release;
+
+        pending->res = nullptr;
+        wl_list_remove(&pending->destroy.listener.link);
+    }
+
+    void finishPendingRelease(PendingBufferRelease* pending) {
+        if (pending->rel) {
+            drmSyncobjTimelineSignal(pending->srv->drmFd, &pending->rel->handle, &pending->relPoint, 1);
+        }
+
+        tlUnref(pending->acq);
+        tlUnref(pending->rel);
+
+        if (pending->res) {
+            wl_buffer_send_release(pending->res);
+            wl_list_remove(&pending->destroy.listener.link);
+        }
+
+        dmabufUnref(pending->buffer);
+        removeOne(pending->srv->pendingReleases, pending);
+        pending->srv->pendingReleaseAlloc.release(pending);
+    }
+
+    void drainPendingReleases(WaylandImpl& srv) {
+        for (size_t i = srv.pendingReleases.length(); i > 0; i--) {
+            PendingBufferRelease* pending = srv.pendingReleases[i - 1];
+
+            if (pending->buffer->gpuUses == 0) {
+                finishPendingRelease(pending);
+            }
+        }
     }
 
     void releaseHeldDmabuf(SurfaceImpl& s) {
-        if (!s.dmabufRes) {
+        if (!s.dmabuf) {
+            return;
+        }
+
+        if (s.dmabuf->gpuUses > 0) {
+            PendingBufferRelease* pending = s.srv->pendingReleaseAlloc.make();
+
+            pending->srv = s.srv;
+            pending->buffer = s.dmabuf;
+            pending->res = s.dmabufRes;
+            pending->acq = s.heldAcqTl;
+            pending->rel = s.heldRelTl;
+            pending->relPoint = s.heldRelPt;
+
+            if (s.dmabufDestroyArmed) {
+                wl_list_remove(&s.dmabufDestroy.listener.link);
+                s.dmabufDestroyArmed = false;
+            }
+
+            if (pending->res) {
+                pending->destroy.listener.notify = pendingReleaseBufferDestroyed;
+                pending->destroy.release = pending;
+                wl_resource_add_destroy_listener(pending->res, &pending->destroy.listener);
+            }
+
+            s.dmabuf = nullptr;
+            s.dmabufRes = nullptr;
+            s.heldAcqTl = s.heldRelTl = nullptr;
+            s.syncAcquireWait = false;
+            s.explicitSync = false;
+            s.srv->pendingReleases.pushBack(pending);
+
             return;
         }
 
         syncReleaseHeld(s);
-        wl_buffer_send_release(s.dmabufRes);
+
+        if (s.dmabufRes) {
+            wl_buffer_send_release(s.dmabufRes);
+        }
 
         if (s.dmabufDestroyArmed) {
-            wl_list_remove(&s.dmabufDestroy.link);
+            wl_list_remove(&s.dmabufDestroy.listener.link);
             s.dmabufDestroyArmed = false;
         }
 
+        DmabufBuffer* old = s.dmabuf;
+
         s.dmabuf = nullptr;
         s.dmabufRes = nullptr;
+        dmabufUnref(old);
     }
 
     void holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf) {
+        dmabufRef(buf);
         releaseHeldDmabuf(s);
 
         s.dmabuf = buf;
         s.dmabufRes = buffer;
-        s.dmabufDestroy.notify = heldDmabufDestroyed;
-        wl_resource_add_destroy_listener(buffer, &s.dmabufDestroy);
+        s.dmabufDestroy.listener.notify = heldDmabufDestroyed;
+        s.dmabufDestroy.surface = &s;
+        wl_resource_add_destroy_listener(buffer, &s.dmabufDestroy.listener);
         s.dmabufDestroyArmed = true;
     }
 
@@ -667,16 +934,19 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void surfaceAttach(wl_client*, wl_resource* res, wl_resource* buffer, i32, i32) {
+    void surfaceAttach(wl_client*, wl_resource* res, wl_resource* buffer, i32 x, i32 y) {
         SurfaceImpl& s = *surfaceFrom(res);
 
         detachPendingBuffer(s);
         s.pending.buffer = buffer;
         s.pending.newlyAttached = true;
+        s.pending.attachX = x;
+        s.pending.attachY = y;
 
         if (buffer) {
-            s.pending.bufferDestroy.notify = pendingBufferDestroyed;
-            wl_resource_add_destroy_listener(buffer, &s.pending.bufferDestroy);
+            s.pending.bufferDestroy.listener.notify = pendingBufferDestroyed;
+            s.pending.bufferDestroy.surface = &s;
+            wl_resource_add_destroy_listener(buffer, &s.pending.bufferDestroy.listener);
             s.pending.bufferDestroyArmed = true;
         }
     }
@@ -684,15 +954,24 @@ namespace {
     void surfaceDamage(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
         SurfaceImpl& s = *surfaceFrom(res);
 
-        if (s.vp.hasSrc || s.vp.hasDst) {
+        if (s.vp.hasSrc || s.vp.hasDst || s.bufferTransform != WL_OUTPUT_TRANSFORM_NORMAL) {
             s.pending.damageAll = true;
 
             return;
         }
 
         i32 sc = s.bufferScale;
+        i64 bx = (i64)x * sc, by = (i64)y * sc;
+        i64 bw = (i64)w * sc, bh = (i64)h * sc;
+        constexpr i64 minI32 = -0x80000000ll, maxI32 = 0x7fffffff;
 
-        unionRect(s.pending.damage, {x * sc, y * sc, w * sc, h * sc});
+        if (bx < minI32 || bx > maxI32 || by < minI32 || by > maxI32 || bw < minI32 || bw > maxI32 || bh < minI32 || bh > maxI32) {
+            s.pending.damageAll = true;
+
+            return;
+        }
+
+        unionRect(s.pending.damage, {(i32)bx, (i32)by, (i32)bw, (i32)bh});
     }
 
     void frameCallbackDestroyed(wl_resource* cb) {
@@ -725,6 +1004,8 @@ namespace {
 
     void surfaceSetInputRegion(wl_client*, wl_resource* res, wl_resource* region) {
         SurfaceImpl& s = *surfaceFrom(res);
+
+        s.pending.inputRegionChanged = true;
 
         if (!region) {
             s.pending.inputRegionSet = false;
@@ -808,27 +1089,107 @@ namespace {
     }
 
     void applySubsurfaceCache(SubsurfaceImpl& sub) {
-        if (sub.cache.valid) {
-            SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
+        SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
 
+        if (sub.cache.scaleSet) {
+            s.bufferScale = sub.cache.scale;
+            sub.cache.scaleSet = false;
+            s.damageAll = true;
+        }
+
+        if (sub.cache.transformSet) {
+            s.bufferTransform = sub.cache.transform;
+            sub.cache.transformSet = false;
+            s.damageAll = true;
+        }
+
+        s.bufferOffsetX += sub.cache.offsetX;
+        s.bufferOffsetY += sub.cache.offsetY;
+        sub.cache.offsetX = sub.cache.offsetY = 0;
+
+        if (sub.cache.vpSrcSet) {
+            s.vp.hasSrc = sub.cache.vpHasSrc;
+            s.vp.sx = sub.cache.sx;
+            s.vp.sy = sub.cache.sy;
+            s.vp.sw = sub.cache.sw;
+            s.vp.sh = sub.cache.sh;
+            sub.cache.vpSrcSet = false;
+        }
+
+        if (sub.cache.vpDstSet) {
+            s.vp.hasDst = sub.cache.vpHasDst;
+            s.vp.dw = sub.cache.dw;
+            s.vp.dh = sub.cache.dh;
+            sub.cache.vpDstSet = false;
+        }
+
+        if (sub.cache.valid) {
+            releaseHeldDmabuf(s);
             s.hasContent = sub.cache.hasContent;
             s.width = sub.cache.width;
             s.height = sub.cache.height;
 
-            if (sub.cache.hasContent && !sub.cache.pixels.empty()) {
+            if (sub.cache.dmabuf) {
+                if (sub.cache.dmabufDestroyArmed) {
+                    wl_list_remove(&sub.cache.dmabufDestroy.listener.link);
+                    sub.cache.dmabufDestroyArmed = false;
+                }
+
+                s.dmabuf = sub.cache.dmabuf;
+                s.dmabufRes = sub.cache.dmabufRes;
+                s.heldAcqTl = sub.cache.acq;
+                s.heldRelTl = sub.cache.rel;
+                s.heldRelPt = sub.cache.releasePoint;
+                s.syncAcquireHandle = sub.cache.acq ? sub.cache.acq->handle : 0;
+                s.syncAcquirePoint = sub.cache.acquirePoint;
+                s.syncAcquireWait = sub.cache.acq != nullptr;
+                s.explicitSync = sub.cache.acq != nullptr;
+                s.pixels.clear();
+                s.dirty = true;
+
+                if (s.dmabufRes) {
+                    s.dmabufDestroy.listener.notify = heldDmabufDestroyed;
+                    s.dmabufDestroy.surface = &s;
+                    wl_resource_add_destroy_listener(s.dmabufRes, &s.dmabufDestroy.listener);
+                    s.dmabufDestroyArmed = true;
+                }
+
+                sub.cache.dmabuf = nullptr;
+                sub.cache.dmabufRes = nullptr;
+                sub.cache.acq = sub.cache.rel = nullptr;
+            } else if (sub.cache.hasContent && !sub.cache.pixels.empty()) {
                 s.pixels.xchg(sub.cache.pixels);
                 s.dirty = true;
                 s.damageAll = true;
             }
 
-            for (wl_resource* cb : sub.cache.frames) {
-                s.frameCbs.pushBack(cb);
-            }
-
-            sub.cache.frames.clear();
             sub.cache.pixels.clear();
             sub.cache.valid = false;
         }
+
+        if (sub.cache.inputChanged) {
+            s.inputRegionSet = sub.cache.inputSet;
+            s.inputRegion.clear();
+
+            for (const RectI& cachedRect : sub.cache.inputRegion) {
+                RectI r = cachedRect;
+
+                clipRect(r, s.viewW(), s.viewH());
+
+                if (!r.empty()) {
+                    s.inputRegion.pushBack(r);
+                }
+            }
+
+            sub.cache.inputRegion.clear();
+            sub.cache.inputChanged = false;
+        }
+
+        for (wl_resource* cb : sub.cache.frames) {
+            s.frameCbs.pushBack(cb);
+        }
+
+        sub.cache.frames.clear();
 
         if (sub.pendingPos) {
             sub.x = sub.pendingX;
@@ -901,6 +1262,7 @@ namespace {
         s.syncAcquireHandle = s.heldAcqTl->handle;
         s.syncAcquirePoint = s.pendAcqPt;
         s.syncAcquireWait = true;
+        s.explicitSync = true;
         s.pendAcqTl = s.pendRelTl = nullptr;
     }
 
@@ -909,6 +1271,18 @@ namespace {
 
         s.srv->scene->needsFrame = true;
 
+        if (s.xdg && !s.xdg->toplevel && !s.xdg->popup) {
+            wl_resource_post_error(s.xdg->res, XDG_SURFACE_ERROR_NOT_CONSTRUCTED, "xdg_surface committed before constructing a role object");
+
+            return;
+        }
+
+        if (s.xdg && s.pending.newlyAttached && s.pending.buffer && (!s.xdg->initialConfigureSent || !s.xdg->acked)) {
+            wl_resource_post_error(s.xdg->res, XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER, "buffer attached before the initial configure was acknowledged");
+
+            return;
+        }
+
         SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
         bool toCache = sub && sub->effectiveSync();
 
@@ -916,7 +1290,54 @@ namespace {
             return;
         }
 
+        bool cachedContent = toCache && sub->cache.valid ? sub->cache.hasContent : s.hasContent;
+        bool validateCurrentSize = !s.pending.newlyAttached && cachedContent && (s.pending.scale > 0 || s.pending.transform >= 0);
+
+        if ((s.pending.newlyAttached && s.pending.buffer) || validateCurrentSize) {
+            int bw = validateCurrentSize ? (toCache && sub->cache.valid ? sub->cache.width : s.width) : 0;
+            int bh = validateCurrentSize ? (toCache && sub->cache.valid ? sub->cache.height : s.height) : 0;
+
+            if (!validateCurrentSize) {
+                if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
+                    bw = wl_shm_buffer_get_width(shm);
+                    bh = wl_shm_buffer_get_height(shm);
+                } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
+                    (void)spb;
+                    bw = bh = 1;
+                } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
+                    bw = db->width;
+                    bh = db->height;
+                }
+            }
+
+            int scale = s.pending.scale > 0 ? s.pending.scale : toCache && sub->cache.scaleSet ? sub->cache.scale : s.bufferScale;
+            int transform = s.pending.transform >= 0 ? s.pending.transform : toCache && sub->cache.transformSet ? sub->cache.transform : s.bufferTransform;
+            bool swapped = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270 ||
+                           transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
+            int tw = swapped ? bh : bw, th = swapped ? bw : bh;
+
+            if (bw > 0 && (tw % scale != 0 || th % scale != 0)) {
+                wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_SIZE, "buffer dimensions are not divisible by buffer_scale after transform");
+
+                return;
+            }
+        }
+
         if (s.pending.newlyAttached) {
+            if (s.pending.buffer) {
+                if (toCache) {
+                    sub->cache.offsetX += s.pending.attachX;
+                    sub->cache.offsetY += s.pending.attachY;
+                } else {
+                    s.bufferOffsetX += s.pending.attachX;
+                    s.bufferOffsetY += s.pending.attachY;
+                }
+            }
+
+            if (toCache) {
+                releaseCachedDmabuf(*sub);
+            }
+
             if (!s.pending.buffer) {
                 if (toCache) {
                     sub->cache.valid = true;
@@ -948,7 +1369,10 @@ namespace {
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
-                releaseHeldDmabuf(s);
+
+                if (!toCache) {
+                    releaseHeldDmabuf(s);
+                }
             } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
                 if (toCache) {
                     sub->cache.width = sub->cache.height = 1;
@@ -966,39 +1390,158 @@ namespace {
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
-                releaseHeldDmabuf(s);
+
+                if (!toCache) {
+                    releaseHeldDmabuf(s);
+                }
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
-                holdDmabuf(s, s.pending.buffer, db);
-                syncApplyPoints(s);
-                s.width = db->width;
-                s.height = db->height;
-                s.pixels.clear();
-                s.hasContent = true;
-                s.dirty = true;
+                if (toCache) {
+                    dmabufRef(db);
+                    sub->cache.dmabuf = db;
+                    sub->cache.dmabufRes = s.pending.buffer;
+                    sub->cache.dmabufDestroy.listener.notify = cachedDmabufDestroyed;
+                    sub->cache.dmabufDestroy.sub = sub;
+                    wl_resource_add_destroy_listener(s.pending.buffer, &sub->cache.dmabufDestroy.listener);
+                    sub->cache.dmabufDestroyArmed = true;
+                    sub->cache.width = db->width;
+                    sub->cache.height = db->height;
+                    sub->cache.hasContent = true;
+                    sub->cache.valid = true;
+                    sub->cache.pixels.clear();
+
+                    if (s.pendAcqTl && s.pendRelTl) {
+                        sub->cache.acq = s.pendAcqTl;
+                        sub->cache.rel = s.pendRelTl;
+                        sub->cache.acquirePoint = s.pendAcqPt;
+                        sub->cache.releasePoint = s.pendRelPt;
+                        s.pendAcqTl = s.pendRelTl = nullptr;
+                    }
+                } else {
+                    holdDmabuf(s, s.pending.buffer, db);
+                    syncApplyPoints(s);
+                    s.width = db->width;
+                    s.height = db->height;
+                    s.pixels.clear();
+                    s.hasContent = true;
+                    s.dirty = true;
+                }
             } else {
                 sysE << "imway: unknown buffer type"_sv << endL;
             }
 
             detachPendingBuffer(s);
             s.pending.newlyAttached = false;
+            s.pending.attachX = s.pending.attachY = 0;
         }
 
         s.pending.damage = {};
         s.pending.damageAll = false;
 
-        if (s.pending.scale > 0 && s.pending.scale != s.bufferScale) {
-            s.bufferScale = s.pending.scale;
-            s.damageAll = true;
+        if (s.pending.scale > 0) {
+            if (toCache) {
+                sub->cache.scale = s.pending.scale;
+                sub->cache.scaleSet = true;
+            } else if (s.pending.scale != s.bufferScale) {
+                s.bufferScale = s.pending.scale;
+                s.damageAll = true;
+            }
         }
 
-        s.inputRegionSet = s.pending.inputRegionSet;
-        s.inputRegion.clear();
-        s.inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
+        s.pending.scale = 0;
 
-        // viewport state applies on this surface's commit even when the
-        // content itself parks in a sync-subsurface cache — otherwise a
-        // synced child using wp_viewport never gets its src/dst at all
-        viewportApplyPending(s);
+        if (s.pending.transform >= 0) {
+            if (toCache) {
+                sub->cache.transform = s.pending.transform;
+                sub->cache.transformSet = true;
+            } else if (s.pending.transform != s.bufferTransform) {
+                s.bufferTransform = s.pending.transform;
+                s.damageAll = true;
+            }
+        }
+
+        s.pending.transform = -1;
+
+        if (toCache) {
+            if (s.pendSrcSet) {
+                sub->cache.vpSrcSet = true;
+                sub->cache.vpHasSrc = s.pendSw > 0;
+                sub->cache.sx = s.pendSx;
+                sub->cache.sy = s.pendSy;
+                sub->cache.sw = s.pendSw;
+                sub->cache.sh = s.pendSh;
+                s.pendSrcSet = false;
+            }
+
+            if (s.pendDstSet) {
+                sub->cache.vpDstSet = true;
+                sub->cache.vpHasDst = s.pendDw > 0;
+                sub->cache.dw = s.pendDw;
+                sub->cache.dh = s.pendDh;
+                s.pendDstSet = false;
+            }
+        } else {
+            viewportApplyPending(s);
+        }
+
+        bool targetHasSrc = toCache && sub->cache.vpSrcSet ? sub->cache.vpHasSrc : s.vp.hasSrc;
+        bool targetHasDst = toCache && sub->cache.vpDstSet ? sub->cache.vpHasDst : s.vp.hasDst;
+        bool targetHasContent = toCache && sub->cache.valid ? sub->cache.hasContent : s.hasContent;
+
+        if (targetHasSrc && targetHasContent) {
+            int targetTransform = toCache && sub->cache.transformSet ? sub->cache.transform : s.bufferTransform;
+            int targetScale = toCache && sub->cache.scaleSet ? sub->cache.scale : s.bufferScale;
+            int targetW = toCache && sub->cache.valid ? sub->cache.width : s.width;
+            int targetH = toCache && sub->cache.valid ? sub->cache.height : s.height;
+            double sx = toCache && sub->cache.vpSrcSet ? sub->cache.sx : s.vp.sx;
+            double sy = toCache && sub->cache.vpSrcSet ? sub->cache.sy : s.vp.sy;
+            double sw = toCache && sub->cache.vpSrcSet ? sub->cache.sw : s.vp.sw;
+            double sh = toCache && sub->cache.vpSrcSet ? sub->cache.sh : s.vp.sh;
+            bool swapped = targetTransform == WL_OUTPUT_TRANSFORM_90 || targetTransform == WL_OUTPUT_TRANSFORM_270 ||
+                           targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
+            double contentW = (double)(swapped ? targetH : targetW) / targetScale;
+            double contentH = (double)(swapped ? targetW : targetH) / targetScale;
+
+            if (sx + sw > contentW || sy + sh > contentH) {
+                if (s.vpRes) {
+                    wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_OUT_OF_BUFFER, "source rectangle is outside the buffer");
+                }
+
+                return;
+            }
+
+            if (!targetHasDst && (sw != (int)sw || sh != (int)sh)) {
+                if (s.vpRes) {
+                    wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_BAD_SIZE, "fractional source size requires a destination size");
+                }
+
+                return;
+            }
+        }
+
+        if (s.pending.inputRegionChanged) {
+            if (toCache) {
+                sub->cache.inputChanged = true;
+                sub->cache.inputSet = s.pending.inputRegionSet;
+                sub->cache.inputRegion.clear();
+                sub->cache.inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
+            } else {
+                s.inputRegionSet = s.pending.inputRegionSet;
+                s.inputRegion.clear();
+
+                for (const RectI& pendingRect : s.pending.inputRegion) {
+                    RectI r = pendingRect;
+
+                    clipRect(r, s.viewW(), s.viewH());
+
+                    if (!r.empty()) {
+                        s.inputRegion.pushBack(r);
+                    }
+                }
+            }
+
+            s.pending.inputRegionChanged = false;
+            s.pending.inputRegion.clear();
+        }
 
         if (toCache) {
             for (wl_resource* cb : s.pending.frames) {
@@ -1023,7 +1566,14 @@ namespace {
         }
     }
 
-    void surfaceSetBufferTransform(wl_client*, wl_resource*, i32) {
+    void surfaceSetBufferTransform(wl_client*, wl_resource* res, i32 transform) {
+        if (transform < WL_OUTPUT_TRANSFORM_NORMAL || transform > WL_OUTPUT_TRANSFORM_FLIPPED_270) {
+            wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_TRANSFORM, "unknown buffer transform");
+
+            return;
+        }
+
+        surfaceFrom(res)->pending.transform = transform;
     }
 
     void surfaceSetBufferScale(wl_client*, wl_resource* res, i32 scale) {
@@ -1119,8 +1669,20 @@ namespace {
                 p->parent = nullptr;
 
                 if (p->mapped) {
-                    xdgPopupDismiss(*(PopupImpl*)p);
+                    dismissPopupTree(*(PopupImpl*)p);
                 }
+            }
+        }
+
+        for (IdleInhibitor* inhibitor : srv->idleInhibitors) {
+            if (inhibitor->surface == s) {
+                inhibitor->surface = nullptr;
+            }
+        }
+
+        for (ActivationTokenRequest* request : srv->activationTokenRequests) {
+            if (request->surface == s) {
+                request->surface = nullptr;
             }
         }
 
@@ -1148,24 +1710,68 @@ namespace {
     }
 
     void regionAdd(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
-        ((RegionBox*)wl_resource_get_user_data(res))->rects.pushBack({x, y, w, h});
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+
+        constexpr i64 maxI32 = 0x7fffffff;
+        i64 x2 = (i64)x + w, y2 = (i64)y + h;
+
+        if (x2 > maxI32) {
+            x2 = maxI32;
+        }
+
+        if (y2 > maxI32) {
+            y2 = maxI32;
+        }
+
+        if (x2 > x && y2 > y) {
+            ((RegionBox*)wl_resource_get_user_data(res))->rects.pushBack({x, y, (i32)(x2 - x), (i32)(y2 - y)});
+        }
     }
 
     void regionSubtract(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
         auto& v = ((RegionBox*)wl_resource_get_user_data(res))->rects;
-        size_t keep = 0;
+
+        if (w <= 0 || h <= 0) {
+            return;
+        }
+
+        i64 sx1 = x, sy1 = y, sx2 = (i64)x + w, sy2 = (i64)y + h;
+        Vector<RectI> out;
 
         for (size_t i = 0; i < v.length(); i++) {
             const RectI& r = v[i];
+            i64 rx1 = r.x, ry1 = r.y, rx2 = (i64)r.x + r.w, ry2 = (i64)r.y + r.h;
+            i64 ix1 = rx1 > sx1 ? rx1 : sx1;
+            i64 iy1 = ry1 > sy1 ? ry1 : sy1;
+            i64 ix2 = rx2 < sx2 ? rx2 : sx2;
+            i64 iy2 = ry2 < sy2 ? ry2 : sy2;
 
-            if (!(r.x >= x && r.y >= y && r.x + r.w <= x + w && r.y + r.h <= y + h)) {
-                v.mut(keep++) = r;
+            if (ix1 >= ix2 || iy1 >= iy2) {
+                out.pushBack(r);
+
+                continue;
+            }
+
+            if (ry1 < iy1) {
+                out.pushBack({r.x, r.y, r.w, (i32)(iy1 - ry1)});
+            }
+
+            if (iy2 < ry2) {
+                out.pushBack({r.x, (i32)iy2, r.w, (i32)(ry2 - iy2)});
+            }
+
+            if (rx1 < ix1) {
+                out.pushBack({r.x, (i32)iy1, (i32)(ix1 - rx1), (i32)(iy2 - iy1)});
+            }
+
+            if (ix2 < rx2) {
+                out.pushBack({(i32)ix2, (i32)iy1, (i32)(rx2 - ix2), (i32)(iy2 - iy1)});
             }
         }
 
-        while (v.length() > keep) {
-            v.popBack();
-        }
+        v.xchg(out);
     }
 
     const struct wl_region_interface regionImpl = {
@@ -1261,27 +1867,34 @@ namespace {
         sub->pendingPos = true;
     }
 
-    void subsurfaceRestack(SubsurfaceImpl& sub, Surface* refSurface, bool above) {
+    bool subsurfaceRestack(SubsurfaceImpl& sub, Surface* refSurface, bool above) {
         Surface* parent = sub.parent;
 
         if (!parent) {
-            return;
+            return false;
         }
 
-        removeOne(parent->stackBelow, (Subsurface*)&sub);
-        removeOne(parent->stackAbove, (Subsurface*)&sub);
-
         if (refSurface == parent) {
+            removeOne(parent->stackBelow, (Subsurface*)&sub);
+            removeOne(parent->stackAbove, (Subsurface*)&sub);
+
             if (above) {
                 insertAt(parent->stackAbove, 0, (Subsurface*)&sub);
             } else {
                 parent->stackBelow.pushBack(&sub);
             }
 
-            return;
+            return true;
         }
 
         Subsurface* ref = refSurface->sub;
+
+        if (!ref || ref->parent != parent || ref == &sub) {
+            return false;
+        }
+
+        removeOne(parent->stackBelow, (Subsurface*)&sub);
+        removeOne(parent->stackAbove, (Subsurface*)&sub);
         Vector<Subsurface*>* stacks[] = {&parent->stackBelow, &parent->stackAbove};
 
         for (auto* stack : stacks) {
@@ -1290,26 +1903,26 @@ namespace {
             if (idx >= 0) {
                 insertAt(*stack, above ? (size_t)idx + 1 : (size_t)idx, (Subsurface*)&sub);
 
-                return;
+                return true;
             }
         }
 
-        parent->stackAbove.pushBack(&sub);
+        return false;
     }
 
     void subsurfacePlaceAbove(wl_client*, wl_resource* res, wl_resource* sibling) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (sub && sibling) {
-            subsurfaceRestack(*sub, surfaceFrom(sibling), true);
+        if (sub && sibling && !subsurfaceRestack(*sub, surfaceFrom(sibling), true)) {
+            wl_resource_post_error(res, WL_SUBSURFACE_ERROR_BAD_SURFACE, "surface is not a sibling or parent");
         }
     }
 
     void subsurfacePlaceBelow(wl_client*, wl_resource* res, wl_resource* sibling) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (sub && sibling) {
-            subsurfaceRestack(*sub, surfaceFrom(sibling), false);
+        if (sub && sibling && !subsurfaceRestack(*sub, surfaceFrom(sibling), false)) {
+            wl_resource_post_error(res, WL_SUBSURFACE_ERROR_BAD_SURFACE, "surface is not a sibling or parent");
         }
     }
 
@@ -1322,7 +1935,7 @@ namespace {
     void subsurfaceSetDesync(wl_client*, wl_resource* res) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (!sub) {
+        if (!sub || !sub->surface) {
             return;
         }
 
@@ -1355,6 +1968,8 @@ namespace {
             wl_resource_destroy(cb);
         }
 
+        releaseCachedDmabuf(*sub);
+
         if (sub->surface) {
             sub->surface->sub = nullptr;
         }
@@ -1371,8 +1986,39 @@ namespace {
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
-        if (surface->xdg || surface->sub) {
+        if (!surface) {
+            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "invalid child surface");
+
+            return;
+        }
+
+        if (!parent) {
+            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "invalid parent surface");
+
+            return;
+        }
+
+        if (surface->role != SurfaceRole::none || surface->xdg || surface->sub) {
             wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "surface already has a role");
+
+            return;
+        }
+
+        Surface* ancestor = parent;
+        size_t remaining = srv->scene->surfaces.length() + 1;
+
+        while (ancestor && remaining-- > 0) {
+            if (ancestor == surface) {
+                wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "subsurface hierarchy would contain a cycle");
+
+                return;
+            }
+
+            ancestor = ancestor->sub ? ancestor->sub->parent : nullptr;
+        }
+
+        if (ancestor) {
+            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "invalid subsurface hierarchy");
 
             return;
         }
@@ -1391,6 +2037,7 @@ namespace {
         sub->surface = surface;
         sub->parent = parent;
         sub->res = sres;
+        surface->role = SurfaceRole::subsurface;
         surface->sub = sub;
         parent->stackAbove.pushBack(sub);
         wl_resource_set_implementation(sres, &subsurfaceImpl, sub, subsurfaceResourceDestroyed);
@@ -1441,31 +2088,70 @@ namespace {
         }
     }
 
-    void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
+    bool validToplevelGrab(ToplevelImpl& toplevel, wl_client* client, wl_resource* seatRes, u32 serial) {
+        auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
+
+        return seat == &toplevel.srv->seat && seat->buttonsDown > 0 &&
+               seat->pointerGrabClient == client && seat->pointerGrabSerial == serial &&
+               seat->pointerGrabOrigin && seat->pointerGrabOrigin->rootToplevel() == &toplevel;
     }
 
-    void toplevelMove(wl_client*, wl_resource* res, wl_resource*, u32) {
+    void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
+        // imway has no per-window context menu; the request is intentionally
+        // ignored, as permitted by xdg-shell.
+    }
+
+    void toplevelMove(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti && ti->srv->seat.buttonsDown > 0) {
+        if (ti && validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->moveRequested = true;
             ti->srv->scene->needsFrame = true;
         }
     }
 
-    void toplevelResize(wl_client*, wl_resource* res, wl_resource*, u32, u32 edges) {
+    void toplevelResize(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial, u32 edges) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti && ti->srv->seat.buttonsDown > 0 && edges != 0) {
+        if (!xdg_toplevel_resize_edge_is_valid(edges, wl_resource_get_version(res)) ||
+            edges == XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ERROR_INVALID_RESIZE_EDGE, "invalid resize edge");
+
+            return;
+        }
+
+        if (ti && validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->resizeEdges = edges;
             ti->srv->scene->needsFrame = true;
         }
     }
 
-    void toplevelSetMaxSize(wl_client*, wl_resource*, i32, i32) {
+    void toplevelSetMaxSize(wl_client*, wl_resource* res, i32 w, i32 h) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (w < 0 || h < 0) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ERROR_INVALID_SIZE, "maximum size must not be negative");
+
+            return;
+        }
+
+        ti->pendingMaxW = w;
+        ti->pendingMaxH = h;
+        ti->pendingMaxSet = true;
     }
 
-    void toplevelSetMinSize(wl_client*, wl_resource*, i32, i32) {
+    void toplevelSetMinSize(wl_client*, wl_resource* res, i32 w, i32 h) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (w < 0 || h < 0) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_ERROR_INVALID_SIZE, "minimum size must not be negative");
+
+            return;
+        }
+
+        ti->pendingMinW = w;
+        ti->pendingMinH = h;
+        ti->pendingMinSet = true;
     }
 
     void toplevelSetMaximized(wl_client*, wl_resource*) {
@@ -1546,6 +2232,14 @@ namespace {
     }
 
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
+        auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+
+        if (xs && (xs->toplevel || xs->popup)) {
+            wl_resource_post_error(res, XDG_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT, "xdg_surface destroyed before its role object");
+
+            return;
+        }
+
         wl_resource_destroy(res);
     }
 
@@ -1562,12 +2256,19 @@ namespace {
             xdg_popup_send_configure(p.res, p.x, p.y, p.w, p.h);
         }
 
-        xdg_surface_send_configure(xs.res, wl_display_next_serial(xs.srv->display));
+        sendXdgSurfaceConfigure(xs);
         xs.initialConfigureSent = true;
     }
 
     void xdgSurfaceGetToplevel(wl_client* client, wl_resource* res, u32 id) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+
+        if (xs->toplevel || xs->popup || !xs->surface || xs->surface->role != SurfaceRole::none) {
+            wl_resource_post_error(res, XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED, "xdg_surface already has a role object");
+
+            return;
+        }
+
         wl_resource* tres = wl_resource_create(client, &xdg_toplevel_interface, wl_resource_get_version(res), id);
 
         if (!tres) {
@@ -1586,6 +2287,7 @@ namespace {
         t->id = srv->nextToplevelId++;
         t->title << "(untitled)"_sv;
         xs->toplevel = t;
+        xs->surface->role = SurfaceRole::xdgToplevel;
 
         if (xs->surface) {
             xs->surface->toplevel = t;
@@ -1600,12 +2302,43 @@ namespace {
     void xdgSurfaceSetWindowGeometry(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
+        if (w <= 0 || h <= 0) {
+            wl_resource_post_error(res, XDG_SURFACE_ERROR_INVALID_SIZE, "window geometry must have a positive size");
+
+            return;
+        }
+
         xs->pendGeom = {x, y, w, h};
         xs->pendGeomSet = true;
     }
 
     void xdgSurfaceAckConfigure(wl_client*, wl_resource* res, u32 serial) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+        size_t found = xs->configureSerials.length();
+
+        for (size_t i = 0; i < xs->configureSerials.length(); i++) {
+            if (xs->configureSerials[i] == serial) {
+                found = i;
+
+                break;
+            }
+        }
+
+        if (found == xs->configureSerials.length()) {
+            wl_resource_post_error(res, XDG_SURFACE_ERROR_INVALID_SERIAL, "unknown configure serial %u", serial);
+
+            return;
+        }
+
+        size_t keep = 0;
+
+        for (size_t i = found + 1; i < xs->configureSerials.length(); i++) {
+            xs->configureSerials.mut(keep++) = xs->configureSerials[i];
+        }
+
+        while (xs->configureSerials.length() > keep) {
+            xs->configureSerials.popBack();
+        }
 
         xs->acked = true;
         xs->ackedSerial = serial;
@@ -1649,6 +2382,12 @@ namespace {
     }
 
     void positionerSetSize(wl_client*, wl_resource* res, i32 w, i32 h) {
+        if (w <= 0 || h <= 0) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "positioner size must be positive");
+
+            return;
+        }
+
         Positioner* p = positionerFrom(res);
 
         p->w = w;
@@ -1656,6 +2395,12 @@ namespace {
     }
 
     void positionerSetAnchorRect(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        if (w <= 0 || h <= 0) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "anchor rectangle must be positive");
+
+            return;
+        }
+
         Positioner* p = positionerFrom(res);
 
         p->ax = x;
@@ -1665,14 +2410,33 @@ namespace {
     }
 
     void positionerSetAnchor(wl_client*, wl_resource* res, u32 a) {
+        if (!xdg_positioner_anchor_is_valid(a, wl_resource_get_version(res))) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "unknown anchor");
+
+            return;
+        }
+
         positionerFrom(res)->anchor = a;
     }
 
     void positionerSetGravity(wl_client*, wl_resource* res, u32 g) {
+        if (!xdg_positioner_gravity_is_valid(g, wl_resource_get_version(res))) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "unknown gravity");
+
+            return;
+        }
+
         positionerFrom(res)->gravity = g;
     }
 
-    void positionerSetConstraintAdjustment(wl_client*, wl_resource*, u32) {
+    void positionerSetConstraintAdjustment(wl_client*, wl_resource* res, u32 constraints) {
+        if (!xdg_positioner_constraint_adjustment_is_valid(constraints, wl_resource_get_version(res))) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "unknown constraint adjustment");
+
+            return;
+        }
+
+        positionerFrom(res)->constraints = constraints;
     }
 
     void positionerSetOffset(wl_client*, wl_resource* res, i32 x, i32 y) {
@@ -1682,13 +2446,25 @@ namespace {
         p->dy = y;
     }
 
-    void positionerSetReactive(wl_client*, wl_resource*) {
+    void positionerSetReactive(wl_client*, wl_resource* res) {
+        positionerFrom(res)->reactive = true;
     }
 
-    void positionerSetParentSize(wl_client*, wl_resource*, i32, i32) {
+    void positionerSetParentSize(wl_client*, wl_resource* res, i32 w, i32 h) {
+        if (w <= 0 || h <= 0) {
+            wl_resource_post_error(res, XDG_POSITIONER_ERROR_INVALID_INPUT, "parent size must be positive");
+
+            return;
+        }
+
+        Positioner* p = positionerFrom(res);
+
+        p->parentW = w;
+        p->parentH = h;
     }
 
-    void positionerSetParentConfigure(wl_client*, wl_resource*, u32) {
+    void positionerSetParentConfigure(wl_client*, wl_resource* res, u32 serial) {
+        positionerFrom(res)->parentConfigure = serial;
     }
 
     const struct xdg_positioner_interface positionerImpl = {
@@ -1710,12 +2486,72 @@ namespace {
         p->srv->positionerAlloc.release(p);
     }
 
+    int clampPosition(i64 v) {
+        constexpr i64 min = -2147483647LL - 1;
+        constexpr i64 max = 2147483647LL;
+
+        return (int)(v < min ? min : v > max ? max : v);
+    }
+
+    void placePopup(const PopupImpl& popup, const Positioner& positioner,
+                    int& x, int& y, int& w, int& h) {
+        int minX = 0, minY = 0;
+        int maxX = popup.srv->scene->outW, maxY = popup.srv->scene->outH;
+
+        if (popup.parent) {
+            i64 parentX = (i64)popup.parent->imgX + popup.parent->geomX();
+            i64 parentY = (i64)popup.parent->imgY + popup.parent->geomY();
+
+            minX = clampPosition(-parentX);
+            minY = clampPosition(-parentY);
+            maxX = clampPosition((i64)popup.srv->scene->outW - parentX);
+            maxY = clampPosition((i64)popup.srv->scene->outH - parentY);
+        }
+
+        positioner.place(x, y, w, h, minX, minY, maxX, maxY);
+    }
+
+    void configurePopupPosition(PopupImpl& popup, const Positioner& positioner, bool repositioned, u32 token) {
+        placePopup(popup, positioner, popup.pendingX, popup.pendingY, popup.pendingW, popup.pendingH);
+        popup.positioner = positioner;
+        popup.positionPending = true;
+
+        if (repositioned) {
+            xdg_popup_send_repositioned(popup.res, token);
+        }
+
+        xdg_popup_send_configure(popup.res, popup.pendingX, popup.pendingY, popup.pendingW, popup.pendingH);
+        popup.positionSerial = sendXdgSurfaceConfigure(*popup.xdg);
+    }
+
     void popupDestroy(wl_client*, wl_resource* res) {
+        auto* popup = (PopupImpl*)wl_resource_get_user_data(res);
+
+        for (Popup* child : popup->srv->scene->popups) {
+            if (child->parent == popup->surface) {
+                wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
+                                       "popup has a live child popup");
+
+                return;
+            }
+        }
+
         wl_resource_destroy(res);
     }
 
-    void popupGrab(wl_client*, wl_resource* res, wl_resource*, u32) {
+    void popupGrab(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial) {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
+        auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
+
+        auto* parentSurface = (SurfaceImpl*)p->parent;
+        PopupImpl* parentPopup = parentSurface && parentSurface->xdg ? parentSurface->xdg->popup : nullptr;
+
+        if (p->mapped || !seat || seat != &p->srv->seat || seat->pointerGrabClient != client ||
+            seat->pointerGrabSerial != serial || seat->buttonsDown <= 0 || (parentPopup && !parentPopup->grab)) {
+            wl_resource_post_error(res, XDG_POPUP_ERROR_INVALID_GRAB, "popup grab serial is not an active implicit grab");
+
+            return;
+        }
 
         p->grab = true;
     }
@@ -1724,13 +2560,14 @@ namespace {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
         Positioner* pos = positionerFrom(positioner);
 
-        pos->place(p->x, p->y);
-        p->w = pos->w;
-        p->h = pos->h;
-        xdg_popup_send_repositioned(res, token);
-        xdg_popup_send_configure(res, p->x, p->y, p->w, p->h);
-        xdg_surface_send_configure(p->xdg->res, wl_display_next_serial(p->srv->display));
-        p->srv->scene->needsFrame = true;
+        if (!pos || pos->w <= 0 || pos->h <= 0 || pos->aw <= 0 || pos->ah <= 0) {
+            wl_resource_post_error(p->xdg->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER,
+                                   "positioner needs size and anchor rectangle");
+
+            return;
+        }
+
+        configurePopupPosition(*p, *pos, true, token);
     }
 
     const struct xdg_popup_interface popupImpl = {
@@ -1756,14 +2593,28 @@ namespace {
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
+        Positioner* pos = positionerFrom(positionerRes);
 
-        if (!parentRes) {
-            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "popup without a parent is not supported");
+        if (xs->toplevel || xs->popup || !xs->surface || xs->surface->role != SurfaceRole::none) {
+            wl_resource_post_error(res, XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED, "xdg_surface already has a role object");
 
             return;
         }
 
-        auto* parentXs = (XdgSurface*)wl_resource_get_user_data(parentRes);
+        auto* parentXs = parentRes ? (XdgSurface*)wl_resource_get_user_data(parentRes) : nullptr;
+
+        if (parentRes && (!parentXs || (!parentXs->toplevel && !parentXs->popup) || !parentXs->surface)) {
+            wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "popup parent has no constructed role");
+
+            return;
+        }
+
+        if (!pos || pos->w <= 0 || pos->h <= 0 || pos->aw <= 0 || pos->ah <= 0) {
+            wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER, "positioner needs size and anchor rectangle");
+
+            return;
+        }
+
         wl_resource* pres = wl_resource_create(client, &xdg_popup_interface, wl_resource_get_version(res), id);
 
         if (!pres) {
@@ -1779,19 +2630,30 @@ namespace {
         p->res = pres;
         p->xdg = xs;
         p->surface = xs->surface;
-        p->parent = parentXs->surface;
+        p->parent = parentXs ? parentXs->surface : nullptr;
 
-        Positioner* pos = positionerFrom(positionerRes);
-
-        pos->place(p->x, p->y);
-        p->w = pos->w;
-        p->h = pos->h;
+        p->positioner = *pos;
+        placePopup(*p, *pos, p->x, p->y, p->w, p->h);
         xs->popup = p;
+        xs->surface->role = SurfaceRole::xdgPopup;
         srv->scene->popups.pushBack(p);
         wl_resource_set_implementation(pres, &popupImpl, p, popupResourceDestroyed);
     }
 
     void wmBaseDestroy(wl_client*, wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        for (Surface* surface : srv->scene->surfaces) {
+            auto* impl = (SurfaceImpl*)surface;
+
+            if (impl->xdg && impl->xdg->wmBaseRes == res) {
+                wl_resource_post_error(res, XDG_WM_BASE_ERROR_DEFUNCT_SURFACES,
+                                       "xdg_wm_base still owns xdg_surface objects");
+
+                return;
+            }
+        }
+
         wl_resource_destroy(res);
     }
 
@@ -1814,6 +2676,18 @@ namespace {
     void wmBaseGetXdgSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         auto* surface = surfaceFrom(surfaceRes);
+        if (surface->xdg || surface->role != SurfaceRole::none) {
+            wl_resource_post_error(res, XDG_WM_BASE_ERROR_ROLE, "wl_surface already has a role or xdg_surface");
+
+            return;
+        }
+
+        if (surface->hasContent || surface->pending.buffer) {
+            wl_resource_post_error(res, XDG_WM_BASE_ERROR_INVALID_SURFACE_STATE, "wl_surface has a buffer before xdg_surface creation");
+
+            return;
+        }
+
         wl_resource* xres = wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
 
         if (!xres) {
@@ -1826,6 +2700,7 @@ namespace {
 
         xs->srv = srv;
         xs->res = xres;
+        xs->wmBaseRes = res;
         xs->surface = surface;
         surface->xdg = xs;
         wl_resource_set_implementation(xres, &xdgSurfaceImpl, xs, xdgSurfaceResourceDestroyed);
@@ -1857,6 +2732,13 @@ namespace {
     }
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h) {
+        // Resource teardown on disconnect is not ordered by role hierarchy.
+        // Keep a half-torn-down toplevel inert until its own destroy callback
+        // removes it from the scene.
+        if (!t.res || !t.xdg) {
+            return;
+        }
+
         wl_array states;
 
         wl_array_init(&states);
@@ -1884,9 +2766,7 @@ namespace {
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
 
-        u32 serial = wl_display_next_serial(t.srv->display);
-
-        xdg_surface_send_configure(t.xdg->res, serial);
+        u32 serial = sendXdgSurfaceConfigure(*t.xdg);
         t.cfgSerial = serial;
         t.cfgW = w;
         t.cfgH = h;
@@ -1907,6 +2787,54 @@ namespace {
 
         xs->committedAckSerial = xs->ackedSerial;
 
+        if (xs->popup && !xs->initialConfigureSent) {
+            auto* parent = (SurfaceImpl*)xs->popup->parent;
+            bool parentMapped = parent && parent->xdg &&
+                                ((parent->xdg->toplevel && parent->xdg->toplevel->mapped) ||
+                                 (parent->xdg->popup && parent->xdg->popup->mapped));
+
+            if (!parentMapped) {
+                wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
+                                       "popup parent is missing or not mapped");
+
+                return;
+            }
+        }
+
+        if (xs->popup && xs->popup->positionPending &&
+            (i32)(xs->committedAckSerial - xs->popup->positionSerial) >= 0) {
+            PopupImpl& popup = *xs->popup;
+
+            popup.x = popup.pendingX;
+            popup.y = popup.pendingY;
+            popup.w = popup.pendingW;
+            popup.h = popup.pendingH;
+            popup.positionPending = false;
+            s.srv->scene->needsFrame = true;
+        }
+
+        if (xs->toplevel && (xs->toplevel->pendingMinSet || xs->toplevel->pendingMaxSet)) {
+            ToplevelImpl& toplevel = *xs->toplevel;
+            int minW = toplevel.pendingMinSet ? toplevel.pendingMinW : toplevel.minW;
+            int minH = toplevel.pendingMinSet ? toplevel.pendingMinH : toplevel.minH;
+            int maxW = toplevel.pendingMaxSet ? toplevel.pendingMaxW : toplevel.maxW;
+            int maxH = toplevel.pendingMaxSet ? toplevel.pendingMaxH : toplevel.maxH;
+
+            if ((minW && maxW && minW > maxW) || (minH && maxH && minH > maxH)) {
+                wl_resource_post_error(toplevel.res, XDG_TOPLEVEL_ERROR_INVALID_SIZE,
+                                       "minimum size exceeds maximum size");
+
+                return;
+            }
+
+            toplevel.minW = minW;
+            toplevel.minH = minH;
+            toplevel.maxW = maxW;
+            toplevel.maxH = maxH;
+            toplevel.pendingMinSet = false;
+            toplevel.pendingMaxSet = false;
+        }
+
         if (xs->pendGeomSet) {
             s.geom = xs->pendGeom;
             s.hasGeom = true;
@@ -1915,10 +2843,6 @@ namespace {
         }
 
         if (!xs->initialConfigureSent) {
-            if (s.hasContent) {
-                sysE << "imway: client attached a buffer before configure (spec violation)"_sv << endL;
-            }
-
             sendConfigure(*xs);
 
             return;
@@ -1936,6 +2860,12 @@ namespace {
             xs->toplevel->mapped = false;
             s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
+
+            for (Popup* popup : s.srv->scene->popups) {
+                if (popup->parent == &s && popup->mapped) {
+                    dismissPopupTree(*(PopupImpl*)popup);
+                }
+            }
         }
 
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
@@ -1951,6 +2881,12 @@ namespace {
         if (xs->popup && xs->popup->mapped && !s.hasContent) {
             xs->popup->mapped = false;
             s.srv->scene->needsFrame = true;
+
+            for (Popup* popup : s.srv->scene->popups) {
+                if (popup->parent == &s && popup->mapped) {
+                    dismissPopupTree(*(PopupImpl*)popup);
+                }
+            }
         }
     }
 
@@ -1965,6 +2901,18 @@ namespace {
         p.srv->seat.popupGone(&p);
 
         xdg_popup_send_popup_done(p.res);
+    }
+
+    void dismissPopupTree(PopupImpl& popup) {
+        for (size_t i = popup.srv->scene->popups.length(); i > 0; i--) {
+            Popup* child = popup.srv->scene->popups[i - 1];
+
+            if (child != &popup && child->parent == popup.surface) {
+                dismissPopupTree(*(PopupImpl*)child);
+            }
+        }
+
+        xdgPopupDismiss(popup);
     }
 
     void outputRelease(wl_client*, wl_resource* res) {
@@ -1985,7 +2933,13 @@ namespace {
 
         wl_resource_set_implementation(res, &outputImpl, srv, nullptr);
 
-        wl_output_send_geometry(res, 0, 0, 340, 210, WL_OUTPUT_SUBPIXEL_UNKNOWN, "imway", "headless", WL_OUTPUT_TRANSFORM_NORMAL);
+        Buffer make(srv->output ? srv->output->make() : "imway"_sv);
+        Buffer model(srv->output ? srv->output->model() : "unknown"_sv);
+        Buffer name(srv->output ? srv->output->outputName() : "UNKNOWN-1"_sv);
+
+        wl_output_send_geometry(res, 0, 0, srv->output ? srv->output->physicalWidthMm() : 0,
+                                srv->output ? srv->output->physicalHeightMm() : 0,
+                                WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
         wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
@@ -1993,7 +2947,16 @@ namespace {
         }
 
         if (version >= WL_OUTPUT_NAME_SINCE_VERSION) {
-            wl_output_send_name(res, "HEADLESS-1");
+            wl_output_send_name(res, name.cStr());
+        }
+
+        if (version >= WL_OUTPUT_DESCRIPTION_SINCE_VERSION) {
+            auto& description = sb();
+
+            description << sv(make) << " "_sv << sv(model);
+            Buffer text(sv(description));
+
+            wl_output_send_description(res, text.cStr());
         }
 
         if (version >= WL_OUTPUT_DONE_SINCE_VERSION) {
@@ -2022,7 +2985,26 @@ namespace {
 
     void sourceSetActions(wl_client*, wl_resource* res, u32 actions) {
         if (DataSource* src = sourceFrom(res)) {
+            constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY |
+                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE |
+                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
+
+            if (actions & ~valid) {
+                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_ACTION_MASK,
+                                       "drag action mask contains unknown bits");
+
+                return;
+            }
+
+            if (src->actionsSet || src->usedForSelection || src->usedForDrag) {
+                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
+                                       "set_actions is only valid once before start_drag");
+
+                return;
+            }
+
             src->dndActions = actions;
+            src->actionsSet = true;
         }
     }
 
@@ -2039,10 +3021,11 @@ namespace {
             return;
         }
 
-        for (wl_resource* o : src->offers) {
-            wl_resource_set_user_data(o, nullptr);
+        for (Offer* offer = src->offersHead; offer; offer = offer->sourceNext) {
+            offer->source = nullptr;
         }
 
+        src->offersHead = nullptr;
         src->srv->seat.sourceGone(src);
         src->srv->dataSourceAlloc.release(src);
     }
@@ -2059,16 +3042,41 @@ namespace {
         return WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE;
     }
 
-    void offerAccept(wl_client*, wl_resource* res, u32, const char* mime) {
-        DataSource* src = sourceFrom(res);
+    Offer* offerFrom(wl_resource* res) {
+        return res ? (Offer*)wl_resource_get_user_data(res) : nullptr;
+    }
 
-        if (src && !src->primary) {
+    void offerAccept(wl_client*, wl_resource* res, u32, const char* mime) {
+        Offer* offer = offerFrom(res);
+        DataSource* src = offer ? offer->source : nullptr;
+
+        if (offer && offer->finished) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
+                                   "offer was already finished");
+
+            return;
+        }
+
+        if (offer) {
+            offer->accepted = mime != nullptr;
+        }
+
+        if (src && offer->dnd && !src->primary) {
             wl_data_source_send_target(src->res, mime);
         }
     }
 
     void offerReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
-        DataSource* src = sourceFrom(res);
+        Offer* offer = offerFrom(res);
+        DataSource* src = offer ? offer->source : nullptr;
+
+        if (offer && offer->finished) {
+            close(fd);
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
+                                   "offer was already finished");
+
+            return;
+        }
 
         if (src) {
             if (src->primary) {
@@ -2082,21 +3090,67 @@ namespace {
     }
 
     void offerFinish(wl_client*, wl_resource* res) {
-        DataSource* src = sourceFrom(res);
+        Offer* offer = offerFrom(res);
+        DataSource* src = offer ? offer->source : nullptr;
 
-        if (src && !src->primary && src->dropPerformed && wl_resource_get_version(src->res) >= 3) {
+        if (!offer || !offer->dnd || offer->finished || !src || !src->dropPerformed ||
+            !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_FINISH,
+                                   "finish is not valid for this offer state");
+
+            return;
+        }
+
+        offer->finished = true;
+
+        if (wl_resource_get_version(src->res) >= 3) {
             wl_data_source_send_dnd_finished(src->res);
         }
     }
 
-    void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32) {
-        DataSource* src = sourceFrom(res);
+    void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32 preferred) {
+        Offer* offer = offerFrom(res);
+        DataSource* src = offer ? offer->source : nullptr;
+        constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY |
+                              WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE |
+                              WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
-        if (!src || src->primary) {
+        if (!offer || !offer->dnd || offer->finished || !src || src->primary) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
+                                   "set_actions requires an active drag offer");
+
             return;
         }
 
-        u32 action = chooseDndAction(actions & src->dndActions);
+        if (actions & ~valid) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION_MASK,
+                                   "drag action mask contains unknown bits");
+
+            return;
+        }
+
+        if (preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE &&
+            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY &&
+            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE &&
+            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION,
+                                   "preferred drag action must contain one bit");
+
+            return;
+        }
+
+        u32 available = actions & src->dndActions;
+
+        if (preferred && !(preferred & available)) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION,
+                                   "preferred drag action is unavailable");
+
+            return;
+        }
+
+        u32 action = preferred ? preferred : chooseDndAction(available);
+
+        offer->action = action;
 
         if (wl_resource_get_version(res) >= 3) {
             wl_data_offer_send_action(res, action);
@@ -2116,9 +3170,25 @@ namespace {
     };
 
     void offerResourceDestroyed(wl_resource* res) {
-        if (DataSource* src = sourceFrom(res)) {
-            removeOne(src->offers, res);
+        Offer* offer = offerFrom(res);
+
+        if (!offer) {
+            return;
         }
+
+        if (DataSource* src = offer->source) {
+            Offer** link = &src->offersHead;
+
+            while (*link && *link != offer) {
+                link = &(*link)->sourceNext;
+            }
+
+            if (*link) {
+                *link = offer->sourceNext;
+            }
+        }
+
+        offer->srv->offerAlloc.release(offer);
     }
 
     const struct zwp_primary_selection_offer_v1_interface primaryOfferImpl = {
@@ -2129,64 +3199,132 @@ namespace {
     wl_resource* makeOffer(wl_resource* device, DataSource* src, bool dnd) {
         wl_client* client = wl_resource_get_client(device);
         u32 version = (u32)wl_resource_get_version(device);
-        wl_resource* offer;
+        wl_resource* resource;
+        Offer* offer = src->srv->offerAlloc.make();
+
+        offer->srv = src->srv;
+        offer->source = src;
+        offer->dnd = dnd;
+        offer->sourceNext = src->offersHead;
+        src->offersHead = offer;
 
         if (src->primary) {
-            offer = wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0);
+            resource = wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0);
 
-            if (!offer) {
+            if (!resource) {
+                src->offersHead = offer->sourceNext;
+                src->srv->offerAlloc.release(offer);
+
                 return nullptr;
             }
 
-            wl_resource_set_implementation(offer, &primaryOfferImpl, src, offerResourceDestroyed);
-            src->offers.pushBack(offer);
-            zwp_primary_selection_device_v1_send_data_offer(device, offer);
+            offer->res = resource;
+            wl_resource_set_implementation(resource, &primaryOfferImpl, offer, offerResourceDestroyed);
+            zwp_primary_selection_device_v1_send_data_offer(device, resource);
 
             for (const Mime& m : src->mimes) {
-                zwp_primary_selection_offer_v1_send_offer(offer, m.s);
+                zwp_primary_selection_offer_v1_send_offer(resource, m.s);
             }
 
-            return offer;
+            return resource;
         }
 
-        offer = wl_resource_create(client, &wl_data_offer_interface, (int)version, 0);
+        resource = wl_resource_create(client, &wl_data_offer_interface, (int)version, 0);
 
-        if (!offer) {
+        if (!resource) {
+            src->offersHead = offer->sourceNext;
+            src->srv->offerAlloc.release(offer);
+
             return nullptr;
         }
 
-        wl_resource_set_implementation(offer, &dataOfferImpl, src, offerResourceDestroyed);
-        src->offers.pushBack(offer);
-        wl_data_device_send_data_offer(device, offer);
+        offer->res = resource;
+        wl_resource_set_implementation(resource, &dataOfferImpl, offer, offerResourceDestroyed);
+        wl_data_device_send_data_offer(device, resource);
 
         for (const Mime& m : src->mimes) {
-            wl_data_offer_send_offer(offer, m.s);
+            wl_data_offer_send_offer(resource, m.s);
         }
 
         if (dnd && version >= 3) {
-            wl_data_offer_send_source_actions(offer, src->dndActions);
+            wl_data_offer_send_source_actions(resource, src->dndActions);
         }
 
-        return offer;
+        return resource;
     }
 
-    void deviceStartDrag(wl_client*, wl_resource* res, wl_resource* sourceRes, wl_resource* originRes, wl_resource* iconRes, u32) {
+    void deviceStartDrag(wl_client* client, wl_resource* res, wl_resource* sourceRes, wl_resource* originRes, wl_resource* iconRes, u32 serial) {
         auto* seat = (SeatState*)wl_resource_get_user_data(res);
         DataSource* src = sourceFrom(sourceRes);
 
-        if (!src || !seat) {
+        if (!seat || !originRes) {
             return;
         }
 
-        Surface* icon = iconRes ? (Surface*)surfaceFrom(iconRes) : nullptr;
+        SurfaceImpl* origin = surfaceFrom(originRes);
 
-        (void)originRes;
-        seat->startDrag(src, icon);
+        if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial ||
+            client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin) {
+            if (src && wl_resource_get_version(src->res) >= 3) {
+                wl_data_source_send_cancelled(src->res);
+            }
+
+            return;
+        }
+
+        if (src && (src->usedForDrag || src->usedForSelection)) {
+            wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE,
+                                   "data source was already used");
+
+            return;
+        }
+
+        SurfaceImpl* icon = iconRes ? surfaceFrom(iconRes) : nullptr;
+
+        if (icon && icon->role != SurfaceRole::none && icon->role != SurfaceRole::dragIcon) {
+            wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_ROLE, "drag icon surface already has another role");
+
+            return;
+        }
+
+        if (icon) {
+            icon->role = SurfaceRole::dragIcon;
+        }
+
+        if (src) {
+            src->usedForDrag = true;
+        }
+
+        seat->startDrag(client, serial, src, origin, icon);
     }
 
-    void deviceSetSelection(wl_client*, wl_resource* res, wl_resource* sourceRes, u32) {
+    void deviceSetSelection(wl_client* client, wl_resource* res, wl_resource* sourceRes, u32 serial) {
         if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            seat->setSelection(sourceFrom(sourceRes), false);
+            DataSource* src = sourceFrom(sourceRes);
+
+            if (!seat->validSelectionSerial(client, serial)) {
+                return;
+            }
+
+            if (src && (src->usedForDrag || src->usedForSelection)) {
+                wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE,
+                                       "data source was already used");
+
+                return;
+            }
+
+            if (src && src->actionsSet) {
+                wl_resource_post_error(src->res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
+                                       "drag data source cannot become a selection");
+
+                return;
+            }
+
+            if (src) {
+                src->usedForSelection = true;
+            }
+
+            seat->setSelection(client, serial, src, false);
         }
     }
 
@@ -2218,9 +3356,12 @@ namespace {
         src->res = s;
         src->primary = false;
         src->mimes.clear();
-        src->offers.clear();
+        src->offersHead = nullptr;
         src->dndActions = 0;
         src->dropPerformed = false;
+        src->actionsSet = false;
+        src->usedForDrag = false;
+        src->usedForSelection = false;
         wl_resource_set_implementation(s, &dataSourceImpl, src, sourceResourceDestroyed);
     }
 
@@ -2264,9 +3405,9 @@ namespace {
         .destroy = resDestroy,
     };
 
-    void primaryDeviceSetSelection(wl_client*, wl_resource* res, wl_resource* sourceRes, u32) {
+    void primaryDeviceSetSelection(wl_client* client, wl_resource* res, wl_resource* sourceRes, u32 serial) {
         if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            seat->setSelection(sourceFrom(sourceRes), true);
+            seat->setSelection(client, serial, sourceFrom(sourceRes), true);
         }
     }
 
@@ -2297,9 +3438,12 @@ namespace {
         src->res = s;
         src->primary = true;
         src->mimes.clear();
-        src->offers.clear();
+        src->offersHead = nullptr;
         src->dndActions = 0;
         src->dropPerformed = false;
+        src->actionsSet = false;
+        src->usedForDrag = false;
+        src->usedForSelection = false;
         wl_resource_set_implementation(s, &primarySourceImpl, src, sourceResourceDestroyed);
     }
 
@@ -2411,6 +3555,7 @@ namespace {
 
         if (dx == -1 && dy == -1 && dw == -1 && dh == -1) {
             s->pendSw = s->pendSh = -1;
+            s->pendSrcSet = true;
 
             return;
         }
@@ -2425,6 +3570,7 @@ namespace {
         s->pendSy = dy;
         s->pendSw = dw;
         s->pendSh = dh;
+        s->pendSrcSet = true;
     }
 
     void viewportSetDestination(wl_client*, wl_resource* res, i32 w, i32 h) {
@@ -2438,6 +3584,7 @@ namespace {
 
         if (w == -1 && h == -1) {
             s->pendDw = s->pendDh = -1;
+            s->pendDstSet = true;
 
             return;
         }
@@ -2450,6 +3597,7 @@ namespace {
 
         s->pendDw = w;
         s->pendDh = h;
+        s->pendDstSet = true;
     }
 
     const struct wp_viewport_interface viewportImpl = {
@@ -2468,6 +3616,7 @@ namespace {
         s->vpRes = nullptr;
         s->pendSw = s->pendSh = -1;
         s->pendDw = s->pendDh = -1;
+        s->pendSrcSet = s->pendDstSet = true;
     }
 
     void viewporterDestroy(wl_client*, wl_resource* res) {
@@ -2513,20 +3662,28 @@ namespace {
     }
 
     void viewportApplyPending(SurfaceImpl& s) {
-        s.vp.hasSrc = s.pendSw > 0;
+        if (s.pendSrcSet) {
+            s.vp.hasSrc = s.pendSw > 0;
 
-        if (s.vp.hasSrc) {
-            s.vp.sx = s.pendSx;
-            s.vp.sy = s.pendSy;
-            s.vp.sw = s.pendSw;
-            s.vp.sh = s.pendSh;
+            if (s.vp.hasSrc) {
+                s.vp.sx = s.pendSx;
+                s.vp.sy = s.pendSy;
+                s.vp.sw = s.pendSw;
+                s.vp.sh = s.pendSh;
+            }
+
+            s.pendSrcSet = false;
         }
 
-        s.vp.hasDst = s.pendDw > 0;
+        if (s.pendDstSet) {
+            s.vp.hasDst = s.pendDw > 0;
 
-        if (s.vp.hasDst) {
-            s.vp.dw = s.pendDw;
-            s.vp.dh = s.pendDh;
+            if (s.vp.hasDst) {
+                s.vp.dw = s.pendDw;
+                s.vp.dh = s.pendDh;
+            }
+
+            s.pendDstSet = false;
         }
     }
 
@@ -2560,7 +3717,9 @@ namespace {
         zxdg_output_v1_send_logical_size(xres, srv->scene->outW, srv->scene->outH);
 
         if (version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION) {
-            zxdg_output_v1_send_name(xres, "HEADLESS-1");
+            Buffer name(srv->output ? srv->output->outputName() : "UNKNOWN-1"_sv);
+
+            zxdg_output_v1_send_name(xres, name.cStr());
         }
 
         // since v3 xdg_output.done is deprecated in favor of wl_output.done
@@ -2919,6 +4078,8 @@ namespace {
     void kbInhibitorResourceDestroyed(wl_resource* res) {
         if (SurfaceImpl* s = surfaceFrom(res)) {
             s->kbInhibitRes = nullptr;
+            s->kbInhibitActive = false;
+            s->srv->seat.updateShortcutInhibit();
         }
     }
 
@@ -2942,10 +4103,9 @@ namespace {
         }
 
         s->kbInhibitRes = r;
+        s->kbInhibitActive = false;
         wl_resource_set_implementation(r, &kbInhibitorImpl, s, kbInhibitorResourceDestroyed);
-
-        // imway has no compositor shortcuts to suspend, so this is always on
-        zwp_keyboard_shortcuts_inhibitor_v1_send_active(r);
+        s->srv->seat.updateShortcutInhibit();
     }
 
     const struct zwp_keyboard_shortcuts_inhibit_manager_v1_interface kbInhibitManagerImpl = {
@@ -2969,16 +4129,25 @@ namespace {
         if (s.kbInhibitRes) {
             wl_resource_set_user_data(s.kbInhibitRes, nullptr);
         }
+
+        s.kbInhibitActive = false;
     }
 
     // ---- idle-inhibit ----
     void idleInhibitorResourceDestroyed(wl_resource* res) {
-        ((WaylandImpl*)wl_resource_get_user_data(res))->idleInhibitors--;
+        auto* inhibitor = (IdleInhibitor*)wl_resource_get_user_data(res);
+
+        if (!inhibitor) {
+            return;
+        }
+
+        removeOne(inhibitor->srv->idleInhibitors, inhibitor);
+        inhibitor->srv->idleInhibitorAlloc.release(inhibitor);
     }
 
     const struct zwp_idle_inhibitor_v1_interface idleInhibitorImpl = {.destroy = relPointerDestroy};
 
-    void idleInhibitManagerCreateInhibitor(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+    void idleInhibitManagerCreateInhibitor(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* r = wl_resource_create(client, &zwp_idle_inhibitor_v1_interface, wl_resource_get_version(res), id);
 
@@ -2988,8 +4157,13 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(r, &idleInhibitorImpl, srv, idleInhibitorResourceDestroyed);
-        srv->idleInhibitors++;
+        auto* inhibitor = srv->idleInhibitorAlloc.make();
+
+        inhibitor->srv = srv;
+        inhibitor->surface = surfaceFrom(surfaceRes);
+        inhibitor->res = r;
+        srv->idleInhibitors.pushBack(inhibitor);
+        wl_resource_set_implementation(r, &idleInhibitorImpl, inhibitor, idleInhibitorResourceDestroyed);
     }
 
     const struct zwp_idle_inhibit_manager_v1_interface idleInhibitManagerImpl = {
@@ -3013,7 +4187,7 @@ namespace {
     void idleNotifCb(struct ev_loop* l, ev_timer* w, int) {
         auto* n = (WaylandImpl::IdleNotif*)w->data;
 
-        if (n->srv->idleInhibitors > 0) {
+        if (n->srv->idleBlocked()) {
             ev_timer_again(l, w);
 
             return;
@@ -3227,7 +4401,7 @@ namespace {
     void dpmsTimerCb(struct ev_loop* l, ev_timer* w, int) {
         auto* srv = (WaylandImpl*)w->data;
 
-        if (srv->idleInhibitors > 0) {
+        if (srv->idleBlocked()) {
             ev_timer_again(l, w);
 
             return;
@@ -3457,22 +4631,81 @@ namespace {
         wp_presentation_send_clock_id(res, CLOCK_MONOTONIC);
     }
 
-    void activationTokenSetSerial(wl_client*, wl_resource*, u32, wl_resource*) {
+    bool activationTokenMutable(wl_resource* res, ActivationTokenRequest* request) {
+        if (request->committed) {
+            wl_resource_post_error(res, XDG_ACTIVATION_TOKEN_V1_ERROR_ALREADY_USED, "activation token was already committed");
+
+            return false;
+        }
+
+        return true;
     }
 
-    void activationTokenSetAppId(wl_client*, wl_resource*, const char*) {
+    void activationTokenSetSerial(wl_client*, wl_resource* res, u32 serial, wl_resource* seatRes) {
+        auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
+
+        if (!activationTokenMutable(res, request)) {
+            return;
+        }
+
+        auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
+
+        if (seat == &request->srv->seat) {
+            request->serial = serial;
+            request->serialSet = true;
+        }
     }
 
-    void activationTokenSetSurface(wl_client*, wl_resource*, wl_resource*) {
+    void activationTokenSetAppId(wl_client*, wl_resource* res, const char* appId) {
+        auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
+
+        if (!activationTokenMutable(res, request)) {
+            return;
+        }
+
+        request->appId.reset();
+        request->appId << appId;
     }
 
+    void activationTokenSetSurface(wl_client*, wl_resource* res, wl_resource* surfaceRes) {
+        auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
+
+        if (activationTokenMutable(res, request)) {
+            request->surface = surfaceFrom(surfaceRes);
+            request->surfaceSet = true;
+        }
+    }
 
     void activationTokenCommit(wl_client*, wl_resource* res) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        auto& token = sb();
+        auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
-        token << "imway-"_sv << (u64)++srv->tokenCounter;
-        xdg_activation_token_v1_send_done(res, token.cStr());
+        if (!activationTokenMutable(res, request)) {
+            return;
+        }
+
+        request->committed = true;
+        ActivationGrant grant;
+        u64 random = 0;
+
+        if (getrandom(&random, sizeof(random), GRND_NONBLOCK) != sizeof(random)) {
+            random = ((u64)nowMsec() << 32) ^ ++request->srv->tokenCounter;
+        }
+
+        snprintf(grant.token, sizeof(grant.token), "imway-%016llx-%016llx",
+                 (unsigned long long)++request->srv->tokenCounter, (unsigned long long)random);
+        grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) &&
+                           (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface)) == request->client));
+
+        if (request->srv->activationGrants.length() == 64) {
+            for (size_t i = 1; i < request->srv->activationGrants.length(); i++) {
+                request->srv->activationGrants.mut(i - 1) = request->srv->activationGrants[i];
+            }
+
+            request->srv->activationGrants.popBack();
+        }
+
+        request->srv->activationGrants.pushBack(grant);
+        xdg_activation_token_v1_send_done(res, grant.token);
     }
 
     const struct xdg_activation_token_v1_interface activationTokenImpl = {
@@ -3483,6 +4716,13 @@ namespace {
         .destroy = resDestroy,
     };
 
+    void activationTokenResourceDestroyed(wl_resource* res) {
+        auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
+
+        removeOne(request->srv->activationTokenRequests, request);
+        request->srv->activationTokenAlloc.release(request);
+    }
+
     void activationGetToken(wl_client* client, wl_resource* res, u32 id) {
         wl_resource* t = wl_resource_create(client, &xdg_activation_token_v1_interface, 1, id);
 
@@ -3492,15 +4732,32 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(t, &activationTokenImpl, wl_resource_get_user_data(res), nullptr);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        auto* request = srv->activationTokenAlloc.make();
+
+        request->srv = srv;
+        request->client = client;
+        srv->activationTokenRequests.pushBack(request);
+        wl_resource_set_implementation(t, &activationTokenImpl, request, activationTokenResourceDestroyed);
     }
 
     void activationActivate(wl_client*, wl_resource* res, const char* token, wl_resource* surfRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfRes);
         Toplevel* tl = s ? s->rootToplevel() : nullptr;
+        bool authorized = false;
 
-        if (!tl || !tl->mapped) {
+        for (size_t i = 0; i < srv->activationGrants.length(); i++) {
+            if (strcmp(srv->activationGrants[i].token, token) == 0) {
+                authorized = srv->activationGrants[i].authorized;
+                srv->activationGrants.mut(i) = srv->activationGrants.back();
+                srv->activationGrants.popBack();
+
+                break;
+            }
+        }
+
+        if (!authorized || !tl || !tl->mapped) {
             return;
         }
 
@@ -3545,19 +4802,14 @@ namespace {
             return nullptr;
         }
 
-        return &((BufferBox*)wl_resource_get_user_data(res))->buf;
+        return ((BufferBox*)wl_resource_get_user_data(res))->buf;
     }
 
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
 
-        box->srv->scene->deadDmabufs.pushBack(&box->buf);
-
-        for (int i = 0; i < box->buf.nplanes; i++) {
-            if (box->buf.fds[i] >= 0) {
-                close(box->buf.fds[i]);
-            }
-        }
+        box->buf->resourceAlive = false;
+        box->srv->scene->needsFrame = true;
 
         box->srv->dmabufBoxAlloc.release(box);
     }
@@ -3570,12 +4822,6 @@ namespace {
         Params* p = paramsFrom(res);
 
         if (p->pending) {
-            for (int i = 0; i < kDmabufMaxPlanes; i++) {
-                if (p->pending->buf.fds[i] >= 0) {
-                    close(p->pending->buf.fds[i]);
-                }
-            }
-
             p->srv->dmabufBoxAlloc.release(p->pending);
         }
 
@@ -3599,7 +4845,7 @@ namespace {
             return;
         }
 
-        DmabufBuffer& b = p->pending->buf;
+        DmabufBuffer& b = *p->pending->buf;
 
         if (b.fds[planeIdx] >= 0) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET, "plane %u already set", planeIdx);
@@ -3608,13 +4854,31 @@ namespace {
             return;
         }
 
+        u64 modifier = ((u64)modifierHi << 32) | modifierLo;
+
+        for (int i = 0; i < kDmabufMaxPlanes; i++) {
+            if (b.fds[i] >= 0 && b.modifier != modifier) {
+                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "all planes must use the same modifier");
+                close(fd);
+
+                return;
+            }
+        }
+
+        if (stride == 0) {
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_OUT_OF_BOUNDS, "plane stride must be nonzero");
+            close(fd);
+
+            return;
+        }
+
         b.fds[planeIdx] = fd;
         b.offsets[planeIdx] = offset;
         b.strides[planeIdx] = stride;
-        b.modifier = ((u64)modifierHi << 32) | modifierLo;
+        b.modifier = modifier;
 
         if ((int)planeIdx + 1 > b.nplanes) {
-            b.nplanes = planeIdx + 1;
+            b.nplanes = (int)planeIdx + 1;
         }
     }
 
@@ -3633,12 +4897,28 @@ namespace {
             return nullptr;
         }
 
-        DmabufBuffer& b = p->pending->buf;
+        DmabufBuffer& b = *p->pending->buf;
 
         if (b.nplanes == 0 || b.fds[0] < 0) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "plane 0 missing");
 
             return nullptr;
+        }
+
+        for (int i = 0; i < b.nplanes; i++) {
+            if (b.fds[i] < 0) {
+                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "plane %d missing", i);
+
+                return nullptr;
+            }
+
+            u64 lastRow = (u64)b.offsets[i] + (u64)b.strides[i] * (u64)(height - 1);
+
+            if (lastRow > 0xffffffffull) {
+                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_OUT_OF_BOUNDS, "plane %d offset/stride overflows", i);
+
+                return nullptr;
+            }
         }
 
         if (!p->srv->formatSupported(format, b.modifier)) {
@@ -3658,9 +4938,9 @@ namespace {
         BufferBox* box = p->pending;
 
         p->pending = nullptr;
-        box->buf.width = width;
-        box->buf.height = height;
-        box->buf.format = format;
+        box->buf->width = width;
+        box->buf->height = height;
+        box->buf->format = format;
         wl_resource_set_implementation(bres, &dmabufWlBufferImpl, box, dmabufBufferResourceDestroyed);
 
         return bres;
@@ -3702,6 +4982,8 @@ namespace {
         p->srv = srv;
         p->pending = srv->dmabufBoxAlloc.make();
         p->pending->srv = srv;
+        p->pending->buf = new DmabufBuffer;
+        dmabufRef(p->pending->buf);
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
 
@@ -3893,10 +5175,10 @@ namespace {
         return (SeatState*)wl_resource_get_user_data(res);
     }
 
-    void pointerSetCursor(wl_client* client, wl_resource* res, u32, wl_resource* surfRes, i32 hotX, i32 hotY) {
+    void pointerSetCursor(wl_client* client, wl_resource* res, u32 serial, wl_resource* surfRes, i32 hotX, i32 hotY) {
         SeatState* seat = seatOf(res);
 
-        if (!seat || !seat->ptrFocus) {
+        if (!seat || !seat->ptrFocus || !seat->validSerial(client, serial)) {
             return;
         }
 
@@ -3904,9 +5186,21 @@ namespace {
             return;
         }
 
+        SurfaceImpl* cursor = surfRes ? surfaceFrom(surfRes) : nullptr;
+
+        if (cursor && cursor->role != SurfaceRole::none && cursor->role != SurfaceRole::cursor) {
+            wl_resource_post_error(res, WL_POINTER_ERROR_ROLE, "cursor surface already has another role");
+
+            return;
+        }
+
+        if (cursor) {
+            cursor->role = SurfaceRole::cursor;
+        }
+
         Scene* scn = seat->srv->scene;
 
-        scn->cursorSurface = surfRes ? (Surface*)surfaceFrom(surfRes) : nullptr;
+        scn->cursorSurface = cursor;
         scn->cursorShape = surfRes ? CursorKind::unset : CursorKind::hidden;
         scn->cursorHotX = hotX;
         scn->cursorHotY = hotY;
@@ -3947,7 +5241,10 @@ namespace {
         SeatState& st = *seat;
 
         if (st.ptrFocus && wl_resource_get_client(resOf(st.ptrFocus)) == client) {
-            wl_pointer_send_enter(p, wl_display_next_serial(st.srv->display), resOf(st.ptrFocus), wl_fixed_from_double(st.curX - st.ptrFocus->imgX), wl_fixed_from_double(st.curY - st.ptrFocus->imgY));
+            u32 serial = wl_display_next_serial(st.srv->display);
+
+            st.rememberSerial(serial, client, st.ptrFocus);
+            wl_pointer_send_enter(p, serial, resOf(st.ptrFocus), wl_fixed_from_double(st.curX - st.ptrFocus->imgX), wl_fixed_from_double(st.curY - st.ptrFocus->imgY));
 
             if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                 wl_pointer_send_frame(p);
@@ -3985,7 +5282,10 @@ namespace {
                 *(u32*)wl_array_add(&keys, sizeof(u32)) = kc;
             }
 
-            wl_keyboard_send_enter(k, wl_display_next_serial(s.srv->display), resOf(s.kbFocus->surface), &keys);
+            u32 serial = wl_display_next_serial(s.srv->display);
+
+            s.rememberSerial(serial, client, s.kbFocus->surface);
+            wl_keyboard_send_enter(k, serial, resOf(s.kbFocus->surface), &keys);
             wl_array_release(&keys);
             wl_keyboard_send_modifiers(k, wl_display_next_serial(s.srv->display), s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
         }
@@ -4033,77 +5333,179 @@ bool SubsurfaceImpl::effectiveSync() const {
     return false;
 }
 
-void Positioner::place(int& outX, int& outY) const {
-    int px = ax, py = ay;
+static u32 flipPositionerX(u32 value) {
+    switch (value) {
+        case XDG_POSITIONER_ANCHOR_LEFT: return XDG_POSITIONER_ANCHOR_RIGHT;
+        case XDG_POSITIONER_ANCHOR_RIGHT: return XDG_POSITIONER_ANCHOR_LEFT;
+        case XDG_POSITIONER_ANCHOR_TOP_LEFT: return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT: return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+        case XDG_POSITIONER_ANCHOR_TOP_RIGHT: return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT: return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+        default: return value;
+    }
+}
+
+static u32 flipPositionerY(u32 value) {
+    switch (value) {
+        case XDG_POSITIONER_ANCHOR_TOP: return XDG_POSITIONER_ANCHOR_BOTTOM;
+        case XDG_POSITIONER_ANCHOR_BOTTOM: return XDG_POSITIONER_ANCHOR_TOP;
+        case XDG_POSITIONER_ANCHOR_TOP_LEFT: return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT: return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+        case XDG_POSITIONER_ANCHOR_TOP_RIGHT: return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT: return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+        default: return value;
+    }
+}
+
+static void placePositionerRaw(const Positioner& p, u32 anchor, u32 gravity, int& outX, int& outY) {
+    i64 px = p.ax, py = p.ay;
 
     switch (anchor) {
         case XDG_POSITIONER_ANCHOR_TOP:
-            px += aw / 2;
+            px += p.aw / 2;
             break;
         case XDG_POSITIONER_ANCHOR_BOTTOM:
-            px += aw / 2;
-            py += ah;
+            px += p.aw / 2;
+            py += p.ah;
             break;
         case XDG_POSITIONER_ANCHOR_LEFT:
-            py += ah / 2;
+            py += p.ah / 2;
             break;
         case XDG_POSITIONER_ANCHOR_RIGHT:
-            px += aw;
-            py += ah / 2;
+            px += p.aw;
+            py += p.ah / 2;
             break;
         case XDG_POSITIONER_ANCHOR_TOP_LEFT:
             break;
         case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
-            py += ah;
+            py += p.ah;
             break;
         case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
-            px += aw;
+            px += p.aw;
             break;
         case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
-            px += aw;
-            py += ah;
+            px += p.aw;
+            py += p.ah;
             break;
         default:
-            px += aw / 2;
-            py += ah / 2;
+            px += p.aw / 2;
+            py += p.ah / 2;
             break;
     }
 
     switch (gravity) {
         case XDG_POSITIONER_GRAVITY_TOP:
-            px -= w / 2;
-            py -= h;
+            px -= p.w / 2;
+            py -= p.h;
             break;
         case XDG_POSITIONER_GRAVITY_BOTTOM:
-            px -= w / 2;
+            px -= p.w / 2;
             break;
         case XDG_POSITIONER_GRAVITY_LEFT:
-            px -= w;
-            py -= h / 2;
+            px -= p.w;
+            py -= p.h / 2;
             break;
         case XDG_POSITIONER_GRAVITY_RIGHT:
-            py -= h / 2;
+            py -= p.h / 2;
             break;
         case XDG_POSITIONER_GRAVITY_TOP_LEFT:
-            px -= w;
-            py -= h;
+            px -= p.w;
+            py -= p.h;
             break;
         case XDG_POSITIONER_GRAVITY_BOTTOM_LEFT:
-            px -= w;
+            px -= p.w;
             break;
         case XDG_POSITIONER_GRAVITY_TOP_RIGHT:
-            py -= h;
+            py -= p.h;
             break;
         case XDG_POSITIONER_GRAVITY_BOTTOM_RIGHT:
             break;
         default:
-            px -= w / 2;
-            py -= h / 2;
+            px -= p.w / 2;
+            py -= p.h / 2;
             break;
     }
 
-    outX = px + dx;
-    outY = py + dy;
+    outX = clampPosition(px + p.dx);
+    outY = clampPosition(py + p.dy);
+}
+
+void Positioner::place(int& outX, int& outY, int& outW, int& outH,
+                       int minX, int minY, int maxX, int maxY) const {
+    placePositionerRaw(*this, anchor, gravity, outX, outY);
+    outW = w;
+    outH = h;
+
+    bool badX = outX < minX || (i64)outX + outW > maxX;
+    bool badY = outY < minY || (i64)outY + outH > maxY;
+
+    if (badX && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_X)) {
+        int flippedX = 0, ignoredY = 0;
+
+        placePositionerRaw(*this, flipPositionerX(anchor), flipPositionerX(gravity), flippedX, ignoredY);
+
+        if (flippedX >= minX && (i64)flippedX + outW <= maxX) {
+            outX = flippedX;
+            badX = false;
+        }
+    }
+
+    if (badY && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_FLIP_Y)) {
+        int ignoredX = 0, flippedY = 0;
+
+        placePositionerRaw(*this, flipPositionerY(anchor), flipPositionerY(gravity), ignoredX, flippedY);
+
+        if (flippedY >= minY && (i64)flippedY + outH <= maxY) {
+            outY = flippedY;
+            badY = false;
+        }
+    }
+
+    if (badX && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X) && outW <= maxX - minX) {
+        if (outX < minX) {
+            outX = minX;
+        } else if ((i64)outX + outW > maxX) {
+            outX = maxX - outW;
+        }
+
+        badX = false;
+    }
+
+    if (badY && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y) && outH <= maxY - minY) {
+        if (outY < minY) {
+            outY = minY;
+        } else if ((i64)outY + outH > maxY) {
+            outY = maxY - outH;
+        }
+
+        badY = false;
+    }
+
+    if (badX && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_X) && maxX > minX) {
+        i64 left = outX > minX ? outX : minX;
+        i64 right = (i64)outX + outW < maxX ? (i64)outX + outW : maxX;
+
+        if (right <= left) {
+            left = minX;
+            right = maxX;
+        }
+
+        outX = (int)left;
+        outW = (int)(right - left);
+    }
+
+    if (badY && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_RESIZE_Y) && maxY > minY) {
+        i64 top = outY > minY ? outY : minY;
+        i64 bottom = (i64)outY + outH < maxY ? (i64)outY + outH : maxY;
+
+        if (bottom <= top) {
+            top = minY;
+            bottom = maxY;
+        }
+
+        outY = (int)top;
+        outH = (int)(bottom - top);
+    }
 }
 
 SeatState::SeatState(WaylandImpl& impl)
@@ -4209,15 +5611,22 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 
     if (s) {
         u32 serial = wl_display_next_serial(srv->display);
+        wl_client* client = wl_resource_get_client(resOf(s));
+        bool delivered = false;
 
         for (wl_resource* p : pointers) {
             if (sameClientS(p, s)) {
                 wl_pointer_send_enter(p, serial, resOf(s), wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+                delivered = true;
 
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                     wl_pointer_send_frame(p);
                 }
             }
+        }
+
+        if (delivered) {
+            rememberSerial(serial, client, s);
         }
     }
 
@@ -4459,12 +5868,36 @@ void WaylandImpl::activity() {
     }
 }
 
+bool WaylandImpl::idleBlocked() const {
+    for (IdleInhibitor* inhibitor : idleInhibitors) {
+        Surface* surface = inhibitor->surface;
+
+        if (!surface || !surface->hasContent) {
+            continue;
+        }
+
+        Surface* root = surface->rootSurface();
+
+        if (root->toplevel && root->toplevel->mapped) {
+            return true;
+        }
+
+        for (Popup* popup : scene->popups) {
+            if (popup->surface == root && popup->mapped) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 void SeatState::handleMotion(double x, double y) {
     curX = x;
     curY = y;
     srv->scene->needsFrame = true;
 
-    if (dragSource) {
+    if (dragClient) {
         dragMotion();
 
         return;
@@ -4522,10 +5955,13 @@ void SeatState::handleButton(u32 button, bool pressed) {
         removeOne(pressedButtons, button);
     }
 
-    if (dragSource) {
+    if (dragClient) {
         buttonsDown += pressed ? 1 : -1;
 
         if (!pressed && buttonsDown <= 0) {
+            pointerGrabSerial = 0;
+            pointerGrabClient = nullptr;
+            pointerGrabOrigin = nullptr;
             endDrag();
         }
 
@@ -4567,14 +6003,27 @@ void SeatState::handleButton(u32 button, bool pressed) {
     if (ptrFocus) {
         u32 serial = wl_display_next_serial(srv->display);
         u32 t = nowMsec();
+        wl_client* client = wl_resource_get_client(resOf(ptrFocus));
+        bool delivered = false;
 
         for (wl_resource* p : pointers) {
             if (sameClientS(p, ptrFocus)) {
                 wl_pointer_send_button(p, serial, t, button, pressed ? WL_POINTER_BUTTON_STATE_PRESSED : WL_POINTER_BUTTON_STATE_RELEASED);
+                delivered = true;
 
                 if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
                     wl_pointer_send_frame(p);
                 }
+            }
+        }
+
+        if (delivered) {
+            rememberSerial(serial, client, ptrFocus);
+
+            if (pressed && buttonsDown == 0) {
+                pointerGrabSerial = serial;
+                pointerGrabClient = client;
+                pointerGrabOrigin = ptrFocus;
             }
         }
     }
@@ -4584,9 +6033,15 @@ void SeatState::handleButton(u32 button, bool pressed) {
     if (buttonsDown < 0) {
         buttonsDown = 0;
     }
+
+    if (buttonsDown == 0) {
+        pointerGrabSerial = 0;
+        pointerGrabClient = nullptr;
+        pointerGrabOrigin = nullptr;
+    }
 }
 
-void SeatState::handleScroll(double dx, double dy) {
+void SeatState::handleScroll(const ScrollEvent& ev) {
     srv->scene->needsFrame = true;
 
     if (!ptrFocus) {
@@ -4601,21 +6056,34 @@ void SeatState::handleScroll(double dx, double dy) {
         }
 
         bool discrete = wl_resource_get_version(p) >= WL_POINTER_AXIS_DISCRETE_SINCE_VERSION;
+        bool source = wl_resource_get_version(p) >= WL_POINTER_AXIS_SOURCE_SINCE_VERSION;
 
-        if (dy != 0) {
-            if (discrete && (i32)dy != 0) {
-                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_VERTICAL_SCROLL, (i32)dy);
-            }
+        if (source) {
+            u32 wlSource = ev.source == ScrollSource::wheel ? WL_POINTER_AXIS_SOURCE_WHEEL
+                         : ev.source == ScrollSource::finger ? WL_POINTER_AXIS_SOURCE_FINGER
+                                                            : WL_POINTER_AXIS_SOURCE_CONTINUOUS;
 
-            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(dy * 15.0));
+            wl_pointer_send_axis_source(p, wlSource);
         }
 
-        if (dx != 0) {
-            if (discrete && (i32)dx != 0) {
-                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, (i32)dx);
+        if (ev.dy != 0) {
+            if (discrete && ev.source == ScrollSource::wheel && ev.discreteY != 0) {
+                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_VERTICAL_SCROLL, ev.discreteY);
             }
 
-            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_double(dx * 15.0));
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(ev.dy * 15.0));
+        } else if (ev.stopY && wl_resource_get_version(p) >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
+            wl_pointer_send_axis_stop(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL);
+        }
+
+        if (ev.dx != 0) {
+            if (discrete && ev.source == ScrollSource::wheel && ev.discreteX != 0) {
+                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, ev.discreteX);
+            }
+
+            wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_double(ev.dx * 15.0));
+        } else if (ev.stopX && wl_resource_get_version(p) >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
+            wl_pointer_send_axis_stop(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL);
         }
 
         if (wl_resource_get_version(p) >= WL_POINTER_FRAME_SINCE_VERSION) {
@@ -4657,6 +6125,7 @@ void SeatState::kbSendEnter(wl_resource* target) {
 
     u32 serial = wl_display_next_serial(srv->display);
     wl_array keys;
+    bool delivered = false;
 
     wl_array_init(&keys);
 
@@ -4668,7 +6137,12 @@ void SeatState::kbSendEnter(wl_resource* target) {
         if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
             wl_keyboard_send_enter(k, serial, target, &keys);
             wl_keyboard_send_modifiers(k, wl_display_next_serial(srv->display), modsDepressed, modsLatched, modsLocked, modsGroup);
+            delivered = true;
         }
+    }
+
+    if (delivered) {
+        rememberSerial(serial, wl_resource_get_client(target), (Surface*)surfaceFrom(target));
     }
 
     wl_array_release(&keys);
@@ -4756,16 +6230,89 @@ void SeatState::handleKey(u32 code, bool pressed) {
     if (wl_resource* target = kbTargetRes()) {
         u32 serial = wl_display_next_serial(srv->display);
         u32 t = nowMsec();
+        wl_client* client = wl_resource_get_client(target);
+        bool delivered = false;
 
         for (wl_resource* k : keyboards) {
-            if (wl_resource_get_client(k) == wl_resource_get_client(target)) {
+            if (wl_resource_get_client(k) == client) {
                 wl_keyboard_send_key(k, serial, t, code, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+                delivered = true;
             }
+        }
+
+        if (delivered) {
+            rememberSerial(serial, client, (Surface*)surfaceFrom(target));
         }
     }
 }
 
-void SeatState::setSelection(DataSource* src, bool primary) {
+void SeatState::updateShortcutInhibit() {
+    Surface* target = kbOverride ? kbOverride : kbFocus ? kbFocus->surface : nullptr;
+    Surface* root = target ? target->rootSurface() : nullptr;
+    bool inhibited = false;
+
+    for (Surface* surface : srv->scene->surfaces) {
+        auto* s = (SurfaceImpl*)surface;
+
+        if (!s->kbInhibitRes) {
+            continue;
+        }
+
+        bool active = surface == root;
+
+        if (active != s->kbInhibitActive) {
+            s->kbInhibitActive = active;
+
+            if (active) {
+                zwp_keyboard_shortcuts_inhibitor_v1_send_active(s->kbInhibitRes);
+            } else {
+                zwp_keyboard_shortcuts_inhibitor_v1_send_inactive(s->kbInhibitRes);
+            }
+        }
+
+        inhibited = inhibited || active;
+    }
+
+    srv->scene->shortcutsInhibited = inhibited;
+}
+
+void SeatState::rememberSerial(u32 serial, wl_client* client, Surface* surface) {
+    constexpr size_t maxSerials = 64;
+
+    if (inputSerials.length() == maxSerials) {
+        for (size_t i = 1; i < inputSerials.length(); i++) {
+            inputSerials.mut(i - 1) = inputSerials[i];
+        }
+
+        inputSerials.popBack();
+    }
+
+    inputSerials.pushBack({serial, client, surface});
+}
+
+bool SeatState::validSerial(wl_client* client, u32 serial) const {
+    for (size_t i = inputSerials.length(); i > 0; i--) {
+        const InputSerial& entry = inputSerials[i - 1];
+
+        if (entry.value == serial) {
+            return entry.client == client;
+        }
+    }
+
+    return false;
+}
+
+bool SeatState::validSelectionSerial(wl_client* client, u32 serial) {
+    wl_resource* target = kbTargetRes();
+
+    return target && wl_resource_get_client(target) == client && validSerial(client, serial);
+}
+
+void SeatState::setSelection(wl_client* client, u32 serial, DataSource* src, bool primary) {
+    if (!validSelectionSerial(client, serial)) {
+        return;
+    }
+
     DataSource*& slot = primary ? primarySel : clipboard;
 
     if (slot == src) {
@@ -4820,8 +6367,10 @@ void SeatState::sourceGone(DataSource* src) {
 
     if (dragSource == src) {
         dragSource = nullptr;
+        dragClient = nullptr;
         dragTarget = nullptr;
         srv->scene->dragIcon = nullptr;
+        srv->scene->needsFrame = true;
     }
 
     if (resend) {
@@ -4831,9 +6380,9 @@ void SeatState::sourceGone(DataSource* src) {
     }
 }
 
-void SeatState::startDrag(DataSource* src, Surface* icon) {
-    if (buttonsDown <= 0) {
-        if (wl_resource_get_version(src->res) >= 3) {
+void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon) {
+    if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin) {
+        if (src && wl_resource_get_version(src->res) >= 3) {
             wl_data_source_send_cancelled(src->res);
         }
 
@@ -4841,6 +6390,7 @@ void SeatState::startDrag(DataSource* src, Surface* icon) {
     }
 
     dragSource = src;
+    dragClient = client;
     dragTarget = nullptr;
     srv->scene->dragIcon = icon;
     srv->scene->needsFrame = true;
@@ -4850,6 +6400,10 @@ void SeatState::startDrag(DataSource* src, Surface* icon) {
 
 void SeatState::dragMotion() {
     Surface* target = pickPointerTarget();
+
+    if (!dragSource && target && wl_resource_get_client(resOf(target)) != dragClient) {
+        target = nullptr;
+    }
 
     if (target != dragTarget) {
         if (dragTarget) {
@@ -4870,7 +6424,7 @@ void SeatState::dragMotion() {
                     continue;
                 }
 
-                wl_resource* offer = makeOffer(d, dragSource, true);
+                wl_resource* offer = dragSource ? makeOffer(d, dragSource, true) : nullptr;
 
                 wl_data_device_send_enter(d, serial, resOf(target), wl_fixed_from_double(curX - target->imgX), wl_fixed_from_double(curY - target->imgY), offer);
             }
@@ -4896,6 +6450,7 @@ void SeatState::endDrag() {
     DataSource* src = dragSource;
 
     dragSource = nullptr;
+    dragClient = nullptr;
     srv->scene->dragIcon = nullptr;
     srv->scene->needsFrame = true;
 
@@ -4906,12 +6461,14 @@ void SeatState::endDrag() {
             }
         }
 
-        src->dropPerformed = true;
+        if (src) {
+            src->dropPerformed = true;
+        }
 
-        if (wl_resource_get_version(src->res) >= 3) {
+        if (src && wl_resource_get_version(src->res) >= 3) {
             wl_data_source_send_dnd_drop_performed(src->res);
         }
-    } else {
+    } else if (src) {
         wl_data_source_send_cancelled(src->res);
     }
 
@@ -4976,6 +6533,8 @@ void SeatState::focusToplevel(Toplevel* t) {
         kbSendEnter(resOf(t->surface));
         sysO << "imway: focus -> "_sv << sv(t->title) << endL;
     }
+
+    updateShortcutInhibit();
 }
 
 void SeatState::popupGrabStart(Popup* p) {
@@ -4986,20 +6545,25 @@ void SeatState::popupGrabStart(Popup* p) {
     kbSendLeave(kbTargetRes());
     kbOverride = p->surface;
     kbSendEnter(resOf(kbOverride));
+    updateShortcutInhibit();
 }
 
 void SeatState::popupGone(Popup* p) {
     Surface* s = p->surface;
 
     if (s && ptrFocus && ptrFocus->rootSurface() == s) {
-        ptrFocus = nullptr;
+        pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
+        pointerGrabSerial = 0;
+        pointerGrabClient = nullptr;
+        pointerGrabOrigin = nullptr;
     }
 
     if (s && kbOverride == s) {
         kbSendLeave(resOf(kbOverride));
         kbOverride = nullptr;
         kbSendEnter(kbTargetRes());
+        updateShortcutInhibit();
     }
 }
 
@@ -5007,6 +6571,24 @@ void SeatState::surfaceGone(Surface* s) {
     if (ptrFocus == s) {
         ptrFocus = nullptr;
         buttonsDown = 0;
+    }
+
+    size_t keep = 0;
+
+    for (size_t i = 0; i < inputSerials.length(); i++) {
+        if (inputSerials[i].surface != s) {
+            inputSerials.mut(keep++) = inputSerials[i];
+        }
+    }
+
+    while (inputSerials.length() > keep) {
+        inputSerials.popBack();
+    }
+
+    if (pointerGrabOrigin == s) {
+        pointerGrabSerial = 0;
+        pointerGrabClient = nullptr;
+        pointerGrabOrigin = nullptr;
     }
 }
 
@@ -5047,14 +6629,18 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , regionAlloc(comp.pool)
     , positionerAlloc(comp.pool)
     , dmabufBoxAlloc(comp.pool)
+    , pendingReleaseAlloc(comp.pool)
     , dataSourceAlloc(comp.pool)
+    , offerAlloc(comp.pool)
     , spbAlloc(comp.pool)
     , dmabufParamsAlloc(comp.pool)
     , constraintAlloc(comp.pool)
     , iconAlloc(comp.pool)
+    , activationTokenAlloc(comp.pool)
     , cimgAlloc(comp.pool)
     , cparAlloc(comp.pool)
     , idleAlloc(comp.pool)
+    , idleInhibitorAlloc(comp.pool)
     , timelineAlloc(comp.pool)
 {
     formats.append(cfg.formats, cfg.formatCount);
@@ -5070,6 +6656,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     icons = comp.icons;
     comp.iconListeners.pushBack(this);
     drmFd = cfg.drmFd;
+    explicitSyncSupported = cfg.explicitSync;
 
     if (output && dpmsSec > 0) {
         ev_timer_init(&dpmsTimer, dpmsTimerCb, dpmsSec, dpmsSec);
@@ -5153,6 +6740,13 @@ WaylandImpl::~WaylandImpl() noexcept {
     // build an image description resource carrying `d`, sent ready
     wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, const CImgDesc& d) {
         wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return nullptr;
+        }
+
         CImgDesc* obj = srv->cimgAlloc.make();
 
         *obj = d;
@@ -5322,11 +6916,23 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         wl_resource* out = wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id);
 
+        if (!out) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         wl_resource_set_implementation(out, &cmOutputImpl, wl_resource_get_user_data(res), nullptr);
     }
 
     void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
+
+        if (!cs) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
 
         wl_resource_set_implementation(cs, &cmSurfaceImpl, wl_resource_get_user_data(surfaceRes), nullptr);
     }
@@ -5334,12 +6940,25 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
 
+        if (!fb) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         wl_resource_set_implementation(fb, &cmFeedbackImpl, wl_resource_get_user_data(res), nullptr);
     }
 
     void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* pr = wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id);
+
+        if (!pr) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         CParams* p = srv->cparAlloc.make();
 
         p->srv = srv;
@@ -5351,12 +6970,20 @@ WaylandImpl::~WaylandImpl() noexcept {
 
     void cmManagerCreateIccCreator(wl_client* client, wl_resource*, u32 id) {
         // icc is not advertised; hand back an object that only errors
-        wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, 1, id);
+        if (!wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, 1, id)) {
+            wl_client_post_no_memory(client);
+        }
     }
 
     void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* d = wl_resource_create(client, &wp_image_description_v1_interface, wl_resource_get_version(res), id);
+
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
 
         wl_resource_set_implementation(d, &cmImageDescImpl, nullptr, nullptr);
         wp_image_description_v1_send_failed(d, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "windows scrgb not supported");
@@ -5375,6 +7002,12 @@ WaylandImpl::~WaylandImpl() noexcept {
 
     void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
         wl_resource* res = wl_resource_create(client, &wp_color_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
 
         wl_resource_set_implementation(res, &cmManagerImpl, data, nullptr);
         wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
@@ -5412,11 +7045,15 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
-    wl_global_create(display, &wp_color_manager_v1_interface, 1, this, colorManagerBind);
+    // Color-management is deliberately not advertised yet. The renderer can
+    // configure an HDR output, but it does not currently perform the
+    // per-surface transfer-function/primaries conversion required by the
+    // protocol. Advertising it would make clients send PQ/BT.2020 pixels that
+    // are then composited as SDR.
 
     u64 syncCap = 0;
 
-    if (drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
+    if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
         wl_global_create(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
     }
 
@@ -5475,6 +7112,26 @@ void WaylandImpl::frameShown(u32 msec) {
         }
     }
 
+    for (Popup* popupBase : scene->popups) {
+        auto* popup = (PopupImpl*)popupBase;
+
+        if (!popup->mapped || !popup->parent || !popup->xdg || !popup->positioner.reactive) {
+            continue;
+        }
+
+        int x = 0, y = 0, w = 0, h = 0;
+
+        placePopup(*popup, popup->positioner, x, y, w, h);
+        int compareX = popup->positionPending ? popup->pendingX : popup->x;
+        int compareY = popup->positionPending ? popup->pendingY : popup->y;
+        int compareW = popup->positionPending ? popup->pendingW : popup->w;
+        int compareH = popup->positionPending ? popup->pendingH : popup->h;
+
+        if (x != compareX || y != compareY || w != compareW || h != compareH) {
+            configurePopupPosition(*popup, popup->positioner, false, 0);
+        }
+    }
+
     for (Toplevel* tl : scene->toplevels) {
         if (tl->mapped && tl->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
@@ -5482,7 +7139,7 @@ void WaylandImpl::frameShown(u32 msec) {
     }
 
     for (Popup* p : scene->popups) {
-        if (p->surface) {
+        if (p->mapped && p->surface) {
             fireFrameCallbacks(*(SurfaceImpl*)p->surface, msec);
         }
     }
@@ -5550,6 +7207,10 @@ SessionListener* WaylandImpl::sessionListener() {
     return this;
 }
 
+void WaylandImpl::gpuCompleted() {
+    drainPendingReleases(*this);
+}
+
 void WaylandImpl::sessionEnabled() {
 }
 
@@ -5572,9 +7233,9 @@ void WaylandImpl::key(u32 code, bool pressed) {
     seat.handleKey(code, pressed);
 }
 
-void WaylandImpl::scroll(double dx, double dy) {
+void WaylandImpl::scroll(const ScrollEvent& ev) {
     activity();
-    seat.handleScroll(dx, dy);
+    seat.handleScroll(ev);
 }
 
 // called by the renderer after every key event: keeps client-visible

@@ -114,6 +114,10 @@ static void draw(void) {
     wl_surface_attach(surface, buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
+    // A wl_buffer object is only a protocol handle. Destroying it after the
+    // commit must not invalidate the storage retained by the compositor.
+    wl_buffer_destroy(buffer);
+    buffer = NULL;
     drawn = 1;
     printf("client_dmabuf: committed dmabuf %dx%d\n", W, H);
 }

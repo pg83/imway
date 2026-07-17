@@ -165,9 +165,19 @@ void ControlImpl::handleLine(StringView cmd) {
             }
         }
     } else if (verb == "hscroll"_sv) {
-        sink->scroll(parseFloat(args), 0);
+        ScrollEvent ev;
+
+        ev.dx = parseFloat(args);
+        ev.discreteX = (i32)ev.dx;
+        ev.source = ScrollSource::wheel;
+        sink->scroll(ev);
     } else if (verb == "scroll"_sv) {
-        sink->scroll(0, parseFloat(args));
+        ScrollEvent ev;
+
+        ev.dy = parseFloat(args);
+        ev.discreteY = (i32)ev.dy;
+        ev.source = ScrollSource::wheel;
+        sink->scroll(ev);
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;

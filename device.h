@@ -22,6 +22,7 @@ struct Session;
 struct Device {
     virtual unsigned long long renderDevice() const = 0;
     virtual int drmFd() const = 0;
+    virtual bool explicitSyncSupported() const = 0;
 
     // enumerate the dmabuf formats the render device can sample
     virtual void dmabufFormatsImpl(stl::VisitorFace&& vis) = 0;

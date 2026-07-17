@@ -6,6 +6,13 @@ add_executable(wayland_smoke wayland_smoke.cpp)
 target_link_libraries(wayland_smoke PRIVATE PkgConfig::WAYLAND_SERVER)
 add_test(NAME wayland_smoke COMMAND wayland_smoke)
 
+add_executable(client_protocol_errors client_protocol_errors.c)
+target_link_libraries(client_protocol_errors PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+add_test(NAME headless_protocol_errors
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_protocol_errors.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_protocol_errors>)
+set_tests_properties(headless_protocol_errors PROPERTIES TIMEOUT 60)
+
 add_executable(ev_smoke ev_smoke.cpp)
 target_link_libraries(ev_smoke PRIVATE ev::ev)
 add_test(NAME ev_smoke COMMAND ev_smoke)
@@ -33,6 +40,14 @@ add_test(NAME headless_viewport
     COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_viewport.sh
             $<TARGET_FILE:imway> $<TARGET_FILE:client_viewport>)
 set_tests_properties(headless_viewport PROPERTIES TIMEOUT 60)
+
+add_executable(client_transform client_transform.c)
+target_link_libraries(client_transform PRIVATE protocols PkgConfig::WAYLAND_CLIENT)
+
+add_test(NAME headless_transform
+    COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/headless_transform.sh
+            $<TARGET_FILE:imway> $<TARGET_FILE:client_transform>)
+set_tests_properties(headless_transform PROPERTIES TIMEOUT 60)
 
 add_executable(client_popup client_popup.c)
 target_link_libraries(client_popup PRIVATE protocols PkgConfig::WAYLAND_CLIENT)

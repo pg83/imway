@@ -2,5 +2,7 @@
 dev/vm/.state/
 build/
 build-boot/
+build-asan/
+build-sanitize/
 .claude/settings.local.json
 .#*

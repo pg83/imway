@@ -117,6 +117,22 @@ IconStoreImpl::~IconStoreImpl() noexcept {
         ev_timer_stop(loop, &reloadTimer);
         close(inoFd);
     }
+
+    for (CachedIcon* cached : cache) {
+        if (cached->icon) {
+            icons->release(cached->icon);
+        }
+
+        cacheAlloc.release(cached);
+    }
+
+    cache.clear();
+
+    for (DesktopIcon* desktop : index) {
+        indexAlloc.release(desktop);
+    }
+
+    index.clear();
 }
 
 void IconStoreImpl::buildIndex() {
