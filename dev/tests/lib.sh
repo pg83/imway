@@ -127,6 +127,24 @@ point_at_color() { # <r> <g> <b>
     return 1
 }
 
+# dump compositor state (toplevels/popups/focus, see control.cpp dumpState)
+# to stdout. The compositor renames the file into place, so existence means
+# a complete read.
+dump_state() {
+    local out="$XDG_RUNTIME_DIR/_dump.$$"
+    rm -f "$out"
+    ctl "dump $out"
+    await 100 test -e "$out" || { echo "state dump did not arrive" >&2; return 1; }
+    cat "$out"
+    rm -f "$out"
+}
+
+# echo the value of <field> from the dump line matching <pattern> (first hit)
+dump_field() { # <pattern> <field>
+    dump_state | awk -v pat="$1" -v f="$2" '
+        $0 ~ pat { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
+}
+
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
 screenshot() {

@@ -17,6 +17,7 @@ import glob
 import os
 import random
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -39,6 +40,7 @@ class Test:
     path: str          # scenario .sh path
     client: str        # client binary path ("" if none)
     xfail: str | None  # reason string if the test is expected to fail
+    args: list         # extra compositor argv from "# imway-args: ..."
 
 
 @dataclass
@@ -59,13 +61,16 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> list[Test]:
         if not (os.path.isfile(client) and os.access(client, os.X_OK)):
             client = ""
         xfail = None
+        args = []
         with open(path) as f:
             for line in f.read(2048).splitlines():
                 m = re.match(r"\s*#\s*xfail:\s*(.*)", line)
-                if m:
+                if m and xfail is None:
                     xfail = m.group(1).strip() or "expected failure"
-                    break
-        out.append(Test(name, path, client, xfail))
+                m = re.match(r"\s*#\s*imway-args:\s*(.*)", line)
+                if m:
+                    args = shlex.split(m.group(1))
+        out.append(Test(name, path, client, xfail, args))
     return out
 
 
@@ -133,7 +138,7 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
 
     logf = open(log, "w")
     proc = subprocess.Popen(
-        [imway, "--device", "headless", "--socket", "imway-test", "--control", ctl],
+        [imway, "--device", "headless", "--socket", "imway-test", "--control", ctl] + t.args,
         cwd=rt, env=env, stdout=logf, stderr=subprocess.STDOUT,
     )
     env["IMWAY_PID"] = str(proc.pid)

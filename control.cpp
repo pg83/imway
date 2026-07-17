@@ -2,18 +2,22 @@
 #include "control.h"
 #include "input_sink.h"
 #include "renderer.h"
+#include "scene.h"
 #include "util.h"
 
 #include <ev.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #include <linux/input-event-codes.h>
 
 #include <std/dbg/verify.h>
+#include <std/ios/out_fd.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+#include <std/sys/fd.h>
 
 using namespace stl;
 
@@ -68,6 +72,7 @@ namespace {
         struct ev_loop* loop = nullptr;
         InputSink* sink = nullptr;
         Renderer* renderer = nullptr;
+        Scene* scene = nullptr;
         int fd = -1;
         ev_io io{};
         StringBuilder path;
@@ -80,6 +85,7 @@ namespace {
         void handleLine(StringView cmd);
         void handleInput();
         void reopen();
+        void dumpState(StringView outPath);
     };
 
     void controlIoCb(struct ev_loop*, ev_io* w, int) {
@@ -91,6 +97,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     : loop(c.loop)
     , sink(c.renderer->sink())
     , renderer(c.renderer)
+    , scene(c.scene)
 {
     path << fifoPath;
     unlink(path.cStr());
@@ -241,11 +248,87 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;
+    } else if (verb == "dump"_sv) {
+        dumpState(args);
     } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
     } else {
         sysE << "imway: unknown command: "_sv << cmd << endL;
     }
+}
+
+// one line per entity, key=value fields, free-text (title) strictly last;
+// written to <path>.tmp and renamed so the scenario can poll for the final
+// path and read a complete file
+void ControlImpl::dumpState(StringView outPath) {
+    StringBuilder out;
+
+    for (Toplevel* t : scene->toplevels) {
+        Surface* s = t->surface;
+
+        out << "toplevel id="_sv << t->id
+            << " mapped="_sv << (int)t->mapped
+            << " csd="_sv << (int)t->csd
+            << " fullscreen="_sv << (int)t->fullscreen
+            << " activated="_sv << (int)t->activated
+            << " docked="_sv << (int)t->docked
+            << " focused="_sv << (int)(scene->focusedToplevel == t)
+            << " x="_sv << (int)t->curX
+            << " y="_sv << (int)t->curY
+            << " w="_sv << (int)t->applyW
+            << " h="_sv << (int)t->applyH;
+
+        if (s) {
+            out << " imgx="_sv << (int)s->imgX
+                << " imgy="_sv << (int)s->imgY
+                << " client_w="_sv << s->geomW()
+                << " client_h="_sv << s->geomH();
+        }
+
+        out << " app_id="_sv << sv(t->appId)
+            << " title="_sv << sv(t->title)
+            << "\n"_sv;
+    }
+
+    for (Popup* p : scene->popups) {
+        Surface* s = p->surface;
+
+        out << "popup mapped="_sv << (int)p->mapped
+            << " grab="_sv << (int)p->grab
+            << " x="_sv << p->x
+            << " y="_sv << p->y;
+
+        if (s) {
+            out << " imgx="_sv << (int)s->imgX
+                << " imgy="_sv << (int)s->imgY
+                << " w="_sv << s->viewW()
+                << " h="_sv << s->viewH();
+        }
+
+        out << "\n"_sv;
+    }
+
+    out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
+    out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
+    out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
+
+    StringBuilder tmpPath;
+
+    tmpPath << outPath << ".tmp"_sv;
+
+    ScopedFD f(open(tmpPath.cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
+
+    if (f.get() < 0) {
+        sysE << "imway: dump: cannot open "_sv << sv(tmpPath) << endL;
+
+        return;
+    }
+
+    FDRegular w(f);
+
+    w.write(out.data(), out.used());
+    w.finish();
+    STD_VERIFY(rename(tmpPath.cStr(), Buffer(outPath).cStr()) == 0);
 }
 
 void ControlImpl::handleInput() {
