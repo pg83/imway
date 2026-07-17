@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include <float.h>
+#include <math.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -624,8 +625,10 @@ namespace {
 
     // view state: the on-screen zoom (percent, view-only — save/copy always use
     // full-res image px) plus the current selection
+    constexpr int kInitialZoom = 50;
+
     struct Viewer {
-        int zoom = 50; // 50% so a full frame fits the window out of the box
+        int zoom = kInitialZoom;
         Crop crop;
     };
 
@@ -967,15 +970,29 @@ int mainScreenshot(StringView path) {
 
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 
-    // open at the image's on-screen size (50% zoom) plus the panel, so the
-    // window matches the viewport instead of filling the screen; a bare error
-    // panel gets a small fixed size. clamp to 90% of the monitor.
+    // Prepare the exact style that drawUi will use before sizing the native
+    // window. The canvas child consumes WindowPadding around the image, and
+    // SameLine inserts ItemSpacing between it and the panel; deriving the
+    // chrome from those metrics keeps the initial viewport flush with the
+    // image at every UI scale.
+    ImGuiStyle uiStyle;
+
+    if (gUiScale != 1.f) {
+        uiStyle.FontScaleMain = gUiScale;
+        uiStyle.ScaleAllSizes(gUiScale);
+    }
+
+    // Open at the image's on-screen size (50% zoom) plus the actual ImGui
+    // chrome. A bare error panel gets a small fixed size. Clamp to 90% of the
+    // monitor.
     const float panelW = 200.f * gUiScale;
     int winW, winH;
 
     if (loaded) {
-        winW = (int)(panelW + img.w * 0.5f + 44.f * gUiScale);
-        winH = (int)(img.h * 0.5f + 24.f * gUiScale);
+        float zoom = (float)kInitialZoom / 100.f;
+
+        winW = (int)ceilf(panelW + uiStyle.ItemSpacing.x + img.w * zoom + uiStyle.WindowPadding.x * 2.f);
+        winH = (int)ceilf(img.h * zoom + uiStyle.WindowPadding.y * 2.f);
 
         int minH = (int)(220.f * gUiScale);
 
@@ -1030,14 +1047,7 @@ int mainScreenshot(StringView path) {
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
-        ImGui::StyleColorsDark();
-
-        if (gUiScale != 1.f) {
-            ImGuiStyle& st = ImGui::GetStyle();
-
-            st.FontScaleMain = gUiScale;
-            st.ScaleAllSizes(gUiScale);
-        }
+        ImGui::GetStyle() = uiStyle;
 
         ImGui_ImplGlfw_InitForVulkan(window, true);
 
