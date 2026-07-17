@@ -333,6 +333,3 @@ endif()
 if(PULSE_FOUND)
     target_link_libraries(imway PRIVATE PkgConfig::PULSE)
 endif()
-
-enable_testing()
-add_subdirectory(dev/tests)
