@@ -23,7 +23,6 @@ namespace {
         SessionFDBox(Session& s, int f);
         ~SessionFDBox() noexcept;
     };
-
 }
 
 FDBox::FDBox(int f)
