@@ -139,7 +139,7 @@ namespace {
 }
 
 void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChromeResult& result) {
-    const ImVec4 chrome = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
+    const ImVec4 chrome = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
 
     drawOuterShadow();
 
@@ -147,6 +147,7 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     // caller sees one widget; the two rectangles are only ImGui's internal
     // representation of the non-rectangular Г shape.
     ImGui::PushStyleColor(ImGuiCol_WindowBg, chrome);
+    ImGui::PushStyleColor(ImGuiCol_MenuBarBg, chrome);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
 
     DockResult dock;
@@ -157,7 +158,7 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     drawTop(info, result);
 
     ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    ImGui::PopStyleColor(2);
 
     result.launcher = dock.launcher;
     result.launcherX = dock.launcherX;
