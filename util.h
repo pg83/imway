@@ -7,6 +7,7 @@
 #include <std/lib/buffer.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
+#include <std/sys/types.h>
 
 inline stl::StringView operator""_sv(const char* s, size_t len) {
     return {(const u8*)s, len};
@@ -25,6 +26,15 @@ inline stl::StringView sv(const stl::Buffer& b) {
 double parseFloat(stl::StringView s);
 
 u32 nowMsec();
+
+// i32 addition that clamps instead of overflowing: hostile clients feed
+// INT32_MIN/MAX into accumulating protocol values (attach offsets)
+inline i32 satAddI32(i32 a, i32 b) {
+    constexpr i64 lo = -0x80000000ll, hi = 0x7fffffff;
+    i64 s = (i64)a + b;
+
+    return (i32)(s < lo ? lo : s > hi ? hi : s);
+}
 
 template <typename T>
 bool removeOne(stl::Vector<T>& v, const T& t) {

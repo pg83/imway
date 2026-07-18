@@ -1194,8 +1194,8 @@ namespace {
             sub.cache.colorChanged = false;
         }
 
-        s.bufferOffsetX += sub.cache.offsetX;
-        s.bufferOffsetY += sub.cache.offsetY;
+        s.bufferOffsetX = satAddI32(s.bufferOffsetX, sub.cache.offsetX);
+        s.bufferOffsetY = satAddI32(s.bufferOffsetY, sub.cache.offsetY);
         sub.cache.offsetX = sub.cache.offsetY = 0;
 
         if (sub.cache.vpSrcSet) {
@@ -1413,11 +1413,11 @@ namespace {
         if (s.pending.newlyAttached) {
             if (s.pending.buffer) {
                 if (toCache) {
-                    sub->cache.offsetX += s.pending.attachX;
-                    sub->cache.offsetY += s.pending.attachY;
+                    sub->cache.offsetX = satAddI32(sub->cache.offsetX, s.pending.attachX);
+                    sub->cache.offsetY = satAddI32(sub->cache.offsetY, s.pending.attachY);
                 } else {
-                    s.bufferOffsetX += s.pending.attachX;
-                    s.bufferOffsetY += s.pending.attachY;
+                    s.bufferOffsetX = satAddI32(s.bufferOffsetX, s.pending.attachX);
+                    s.bufferOffsetY = satAddI32(s.bufferOffsetY, s.pending.attachY);
                 }
             }
 
