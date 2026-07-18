@@ -1,6 +1,6 @@
 #pragma once
 
-// the settings menu state: the caller owns one of these, the widget edits
+// the settings dialog model: the caller owns one of these, the widget edits
 // the values in place and raises the *Changed flags for whatever moved this
 // frame — the caller applies the side effects (rescale, kms sdr white,
 // gamma ramp) and the flags reset on the next draw
@@ -20,8 +20,6 @@ struct Settings {
     bool hasDnd = false;   // in: a notifier exists, else the row is hidden
     bool dnd = false;      // do-not-disturb, edited in place
 
-    bool open = false;     // menu visible this frame — the osd keeps quiet
-
     bool volumeChanged = false;
     bool muteChanged = false;
     bool brightnessChanged = false;
@@ -35,5 +33,7 @@ struct Settings {
     }
 };
 
-// imgui calls inside an open main menu bar
-void drawSettingsMenu(Settings& s);
+struct Composer;
+
+// Plain pool-owned ImGui dialog. nullptr state means closed; toggle flips it.
+void drawSettings(Composer& c, Settings& s, bool toggle, void** state);

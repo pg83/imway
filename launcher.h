@@ -9,6 +9,8 @@ struct Composer;
 // picking one yields the action (in `action`) instead of a command line
 enum class LauncherAction {
     none,
+    lockScreen,
+    settings,
     notifications,
     inspector,
     colorPicker,

@@ -1,26 +1,36 @@
 #include "settings.h"
+#include "composer.h"
+#include "dialog.h"
 
 #include <imgui.h>
 
-void drawSettingsMenu(Settings& s) {
-    s.volumeChanged = false;
-    s.muteChanged = false;
-    s.brightnessChanged = false;
-    s.scaleChanged = false;
-    s.sdrChanged = false;
-    s.nightChanged = false;
-    s.dndChanged = false;
-    s.open = false;
+using namespace stl;
+
+namespace {
+    struct Dialog {
+        ObjPool* pool = nullptr;
+
+        Dialog(ObjPool* p)
+            : pool(p)
+        {
+        }
+
+        void draw(Settings& s, bool& open);
+    };
+}
+
+void Dialog::draw(Settings& s, bool& open) {
+    ImGui::SetNextWindowSize(ImVec2(300.f * s.uiScale, 260.f * s.uiScale), ImGuiCond_FirstUseEver);
+
+    if (!ImGui::Begin("settings", &open, ImGuiWindowFlags_NoDocking)) {
+        ImGui::End();
+
+        return;
+    }
 
     if (s.scaleEdit == 0.f) {
         s.scaleEdit = s.uiScale;
     }
-
-    if (!ImGui::BeginMenu("settings")) {
-        return;
-    }
-
-    s.open = true;
 
     if (s.volume >= 0.f) {
         bool m = s.volMuted;
@@ -78,5 +88,19 @@ void drawSettingsMenu(Settings& s) {
         s.dndChanged = ImGui::Checkbox("do not disturb", &s.dnd);
     }
 
-    ImGui::EndMenu();
+    ImGui::End();
+}
+
+void drawSettings(Composer& c, Settings& s, bool toggle, void** state) {
+    s.volumeChanged = false;
+    s.muteChanged = false;
+    s.brightnessChanged = false;
+    s.scaleChanged = false;
+    s.sdrChanged = false;
+    s.nightChanged = false;
+    s.dndChanged = false;
+
+    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+        d.draw(s, open);
+    });
 }

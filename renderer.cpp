@@ -252,7 +252,10 @@ namespace {
         StringView fontPath;
         float uiScale = 1.f;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
-        Settings settings;         // menu state incl. change flags, see settings.h
+        // settings: renderer-owned values plus a pool-owned dialog handle
+        Settings settings;
+        void* settingsState = nullptr;
+        bool settingsToggle = false;
         ShadowSprite shadow;       // window drop shadows, see shadow.h
 
         // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
@@ -288,7 +291,7 @@ namespace {
         void* historyState = nullptr;
         bool historyToggle = false;
 
-        // color picker (eyedropper): armed from the view menu, the next
+        // color picker (eyedropper): armed from the launcher, the next
         // click samples the framebuffer pixel under the cursor
         bool pickArmed = false;
         bool pickPending = false;
@@ -1159,7 +1162,7 @@ void RendererImpl::wifiChanged() {
 }
 
 void RendererImpl::volumeChanged() {
-    if (!settings.open) {
+    if (!settingsState) {
         osdMs = nowMsec() + 1500;
         osdKind = 1;
     }
@@ -1948,7 +1951,7 @@ Surface* RendererImpl::scanoutCandidate() {
 
     // any open compositor ui needs composition
     if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || pickPending ||
-        altTabActive || osdMs || settings.open) {
+        settingsState || altTabActive || osdMs) {
         return nullptr;
     }
 
@@ -2990,62 +2993,6 @@ void RendererImpl::buildUi(Scene& scene) {
     scene.focusedToplevel = nullptr;
 
     if (ImGui::BeginMainMenuBar()) {
-        if (settings.sdrNits < 0.f) {
-            settings.sdrNits = (float)output->sdrWhiteNits();
-        }
-
-        settings.uiScale = uiScale;
-
-        if (comp->mixer) {
-            settings.volume = comp->mixer->volume();
-            settings.volMuted = comp->mixer->muted();
-        } else {
-            settings.volume = -1.f;
-        }
-
-        settings.brightness = output->hasBrightness() ? output->brightness() : -1.f;
-
-        if (notifier) {
-            settings.hasDnd = true;
-            settings.dnd = notifier->dnd();
-        } else {
-            settings.hasDnd = false;
-        }
-
-        drawSettingsMenu(settings);
-
-        if (settings.dndChanged && notifier) {
-            notifier->setDnd(settings.dnd);
-        }
-
-        if (settings.volumeChanged && comp->mixer) {
-            comp->mixer->setVolume(settings.volume);
-        }
-
-        if (settings.muteChanged && comp->mixer) {
-            comp->mixer->setMuted(settings.volMuted);
-        }
-
-        if (settings.brightnessChanged) {
-            output->setBrightness(settings.brightness);
-        }
-
-        if (settings.scaleChanged) {
-            nextUiScale = settings.scale;
-        }
-
-        if (settings.sdrChanged) {
-            output->setSdrWhite(settings.sdrNits);
-        }
-
-        if (settings.nightChanged) {
-            output->setColorTemp(settings.nightOn ? settings.nightK : 0);
-        }
-
-        if (settings.changed()) {
-            scene.needsFrame = true;
-        }
-
         time_t now = time(nullptr);
         tm lt{};
 
@@ -3136,6 +3083,61 @@ void RendererImpl::buildUi(Scene& scene) {
 
     if (notifier) {
         drawToasts(*notifier, *icons, *this, width, uiScale);
+    }
+
+    if (settings.sdrNits < 0.f) {
+        settings.sdrNits = (float)output->sdrWhiteNits();
+    }
+
+    settings.uiScale = uiScale;
+
+    if (comp->mixer) {
+        settings.volume = comp->mixer->volume();
+        settings.volMuted = comp->mixer->muted();
+    } else {
+        settings.volume = -1.f;
+    }
+
+    settings.brightness = output->hasBrightness() ? output->brightness() : -1.f;
+    settings.hasDnd = notifier != nullptr;
+
+    if (notifier) {
+        settings.dnd = notifier->dnd();
+    }
+
+    drawSettings(*comp, settings, settingsToggle, &settingsState);
+    settingsToggle = false;
+
+    if (settings.dndChanged && notifier) {
+        notifier->setDnd(settings.dnd);
+    }
+
+    if (settings.volumeChanged && comp->mixer) {
+        comp->mixer->setVolume(settings.volume);
+    }
+
+    if (settings.muteChanged && comp->mixer) {
+        comp->mixer->setMuted(settings.volMuted);
+    }
+
+    if (settings.brightnessChanged) {
+        output->setBrightness(settings.brightness);
+    }
+
+    if (settings.scaleChanged) {
+        nextUiScale = settings.scale;
+    }
+
+    if (settings.sdrChanged) {
+        output->setSdrWhite(settings.sdrNits);
+    }
+
+    if (settings.nightChanged) {
+        output->setColorTemp(settings.nightOn ? settings.nightK : 0);
+    }
+
+    if (settings.changed()) {
+        scene.needsFrame = true;
     }
 
     if (osdMs) {
@@ -3493,6 +3495,12 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act)) {
             switch (act) {
+                case LauncherAction::lockScreen:
+                    openLockOverlay(*comp, &lockState, &currentInput);
+                    break;
+                case LauncherAction::settings:
+                    settingsToggle = true;
+                    break;
                 case LauncherAction::notifications:
                     historyToggle = true;
                     break;

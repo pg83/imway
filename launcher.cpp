@@ -104,6 +104,8 @@ void Dialog::addAction(StringView name, StringView icon, LauncherAction action) 
 }
 
 void Dialog::rescan() {
+    addAction("lock screen"_sv, "system-lock-screen"_sv, LauncherAction::lockScreen);
+    addAction("settings"_sv, "preferences-system"_sv, LauncherAction::settings);
     addAction("notifications"_sv, "preferences-system-notifications"_sv, LauncherAction::notifications);
     addAction("inspector"_sv, "utilities-system-monitor"_sv, LauncherAction::inspector);
     addAction("color picker"_sv, "color-select"_sv, LauncherAction::colorPicker);
