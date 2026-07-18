@@ -42,6 +42,7 @@ class Test:
     xfail: str | None  # reason string if the test is expected to fail
     args: list         # extra compositor argv from "# imway-args: ..."
     env: dict          # extra compositor environment from "# imway-env: K=V ..."
+    expect_exit: bool  # scenario intentionally lets the compositor exit
 
 
 @dataclass
@@ -68,6 +69,7 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
         xfail = None
         args = []
         extra_env = {}
+        expect_exit = False
         with open(path) as f:
             for line in f.read(2048).splitlines():
                 m = re.match(r"\s*#\s*xfail:\s*(.*)", line)
@@ -83,7 +85,9 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
                         if not sep or not key:
                             raise ValueError(f"{path}: bad imway-env item: {item}")
                         extra_env[key] = value
-        out.append(Test(name, path, client, xfail, args, extra_env))
+                if re.match(r"\s*#\s*expect-compositor-exit\s*$", line):
+                    expect_exit = True
+        out.append(Test(name, path, client, xfail, args, extra_env, expect_exit))
     return out, unbuilt
 
 
@@ -220,6 +224,15 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     # control FIFO races the compositor's reopen cycle and can be silently
     # dropped, leaving the compositor running.
     died = proc.poll() is not None
+    expected_exit_missing = False
+
+    if t.expect_exit and not died:
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and proc.poll() is None:
+            time.sleep(0.05)
+        died = proc.poll() is not None
+        expected_exit_missing = not died
+
     if not died:
         proc.terminate()
     hung = False
@@ -260,7 +273,9 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         if milestone:
             detail += f" [client: {milestone}]"
         return finish(FAIL, detail)
-    if died:
+    if expected_exit_missing:
+        return finish(FAIL, "compositor did not exit with its watched child")
+    if died and not t.expect_exit:
         return finish(FAIL, "compositor died mid-test")
     if hung:
         return finish(FAIL, "compositor hung after quit")

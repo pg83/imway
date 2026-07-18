@@ -282,6 +282,7 @@ target_link_libraries(imgui PUBLIC Vulkan::Vulkan PkgConfig::GLFW)
 add_executable(imway
     main.cpp
     main_composer.cpp
+    main_supervisor.cpp
     main_screenshot.cpp
     composer.cpp
     scene.cpp

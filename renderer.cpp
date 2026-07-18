@@ -14,6 +14,7 @@
 #include "inspector.h"
 #include "launcher.h"
 #include "listener.h"
+#include "main_supervisor.h"
 #include "mixer.h"
 #include "history.h"
 #include "notifier.h"
@@ -39,7 +40,6 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -2903,28 +2903,28 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     }
 }
 
-static void spawnClient(StringView cmd, StringView sock) {
+static void spawnClient(Composer& comp, StringView cmd, StringView sock) {
     if (cmd.empty() || sock.empty()) {
         return;
     }
 
-    // materialize before the fork, both live until the exec
-    Buffer c(cmd), s(sock);
-    pid_t pid = fork();
+    StringView args[] = {"sh"_sv, "-c"_sv, cmd};
+    StringBuilder display;
 
-    if (pid == 0) {
-        // double fork: the command reparents to init, no zombies
-        if (fork() != 0) {
-            _exit(0);
-        }
+    display << "WAYLAND_DISPLAY="_sv << sock;
 
-        setenv("WAYLAND_DISPLAY", s.cStr(), 1);
-        execlp("sh", "sh", "-c", c.cStr(), (char*)nullptr);
-        _exit(127);
-    }
+    StringView env[] = {sv(display)};
+    SupervisorSpawn spawn;
 
-    if (pid > 0) {
-        waitpid(pid, nullptr, 0);
+    spawn.args = args;
+    spawn.argCount = 3;
+    spawn.env = env;
+    spawn.envCount = 1;
+
+    i32 pid = comp.supervisor->spawn(spawn);
+
+    if (pid < 0) {
+        sysE << "imway: launcher spawn failed: "_sv << (const char*)strerror(-pid) << endL;
     }
 }
 
@@ -3503,7 +3503,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     pickArmed = true;
                     break;
                 case LauncherAction::none:
-                    spawnClient(sv(cmd), scene.socketName);
+                    spawnClient(*comp, sv(cmd), scene.socketName);
                     break;
             }
         }
@@ -4274,9 +4274,7 @@ void RendererImpl::captureScreenshot() {
         return;
     }
 
-    // non-cloexec: the memfd must survive fork+exec so the tool can read it
-    // through /proc/self/fd
-    int mfd = memfd_create("imway-shot", 0);
+    int mfd = memfd_create("imway-shot", MFD_CLOEXEC);
 
     if (mfd < 0) {
         return;
@@ -4320,30 +4318,31 @@ void RendererImpl::captureScreenshot() {
         (void)!write(mfd, row.data(), row.length());
     }
 
-    auto& proc = sb();
+    StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, "/proc/self/fd/3"_sv};
+    StringBuilder display;
 
-    proc << "/proc/self/fd/"_sv << mfd;
+    display << "WAYLAND_DISPLAY="_sv << scene->socketName;
 
-    Buffer arg(sv(proc)), sock(scene->socketName);
     // hand our ui scale down: the tool is a plain client and would otherwise
     // render its imgui at scale 1
-    Buffer scale(sv(StringBuilder() << (long double)uiScale));
-    pid_t pid = fork();
+    StringBuilder scale;
 
-    if (pid == 0) {
-        if (fork() != 0) {
-            _exit(0);
-        }
+    scale << "IMGUI_SCALE="_sv << (long double)uiScale;
 
-        setenv("WAYLAND_DISPLAY", sock.cStr(), 1);
-        setenv("IMGUI_SCALE", scale.cStr(), 1);
-        // re-exec this very binary as the crop tool; the memfd rides along
-        execl("/proc/self/exe", "imway", "screenshot", arg.cStr(), (char*)nullptr);
-        _exit(127);
-    }
+    StringView env[] = {sv(display), sv(scale)};
+    SupervisorSpawn spawn;
 
-    if (pid > 0) {
-        waitpid(pid, nullptr, 0);
+    spawn.args = args;
+    spawn.argCount = 3;
+    spawn.env = env;
+    spawn.envCount = 2;
+    spawn.passFd = mfd;
+    spawn.targetFd = 3;
+
+    i32 pid = comp->supervisor->spawn(spawn);
+
+    if (pid < 0) {
+        sysE << "imway: screenshot spawn failed: "_sv << (const char*)strerror(-pid) << endL;
     }
 
     close(mfd);

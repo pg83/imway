@@ -22,6 +22,7 @@ struct Output;
 struct Renderer;
 struct Scene;
 struct Session;
+struct Supervisor;
 struct Wayland;
 
 // the wiring board: main owns one, fills the fields as the entities come
@@ -36,6 +37,7 @@ struct Composer {
     Scene* scene = nullptr;
 
     Session* session = nullptr;
+    Supervisor* supervisor = nullptr;
     Output* output = nullptr;
     Keyboard* kb = nullptr;
     IconPool* iconPool = nullptr;

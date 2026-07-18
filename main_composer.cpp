@@ -10,6 +10,7 @@
 #include "icon_store.h"
 #include "input.h"
 #include "keyboard.h"
+#include "main_supervisor.h"
 #include "mixer.h"
 #include "notifications.h"
 #include "notifier.h"
@@ -57,13 +58,15 @@ namespace {
         sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
-    void childCb(struct ev_loop* loop, ev_child* w, int) {
-        ev_child_stop(loop, w);
-        ev_break(loop, EVBREAK_ALL);
-    }
 }
 
 int mainComposer(int argc, char** argv) {
+    // stdin/stdout initially name the same full-duplex supervisor socket.
+    // Protocol traffic stays on stdin; ordinary output belongs in the IX log.
+    if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
+        return 1;
+    }
+
     Config cfg;
 
     for (int i = 1; i < argc; i++) {
@@ -145,6 +148,7 @@ int mainComposer(int argc, char** argv) {
 
     c.pool = pool.mutPtr();
     c.loop = loop;
+    c.supervisor = Supervisor::create(c);
 
     try {
         auto* scene = pool->make<Scene>();
@@ -245,31 +249,31 @@ int mainComposer(int argc, char** argv) {
             Control::create(c, cfg.controlPath);
         }
 
-        ev_child child;
-
         if (cfg.cmdArgv) {
-            pid_t pid = fork();
+            Vector<StringView> args;
 
-            STD_VERIFY(pid >= 0);
-
-            if (pid == 0) {
-                const char* cmd = cfg.cmdArgv[0];
-
-                setenv("WAYLAND_DISPLAY", Buffer(cfg.socketName).cStr(), 1);
-                execvp(cmd, cfg.cmdArgv);
-
-                try {
-                    Errno().raise(StringBuilder() << "imway: exec "_sv << cmd);
-                } catch (...) {
-                    sysE << Exception::current() << endL;
-                }
-
-                _exit(127);
+            for (char** arg = cfg.cmdArgv; *arg; arg++) {
+                args.pushBack(StringView(*arg));
             }
 
-            // the compositor lives as long as the command does
-            ev_child_init(&child, childCb, pid, 0);
-            ev_child_start(loop, &child);
+            StringBuilder display;
+
+            display << "WAYLAND_DISPLAY="_sv << cfg.socketName;
+
+            StringView env[] = {sv(display)};
+            SupervisorSpawn spawn;
+
+            spawn.args = args.data();
+            spawn.argCount = args.length();
+            spawn.env = env;
+            spawn.envCount = 1;
+            spawn.exitWithChild = true;
+
+            i32 pid = c.supervisor->spawn(spawn);
+
+            if (pid < 0) {
+                Errno(-pid).raise(StringBuilder() << "imway: exec "_sv << args[0]);
+            }
         }
 
         wayland->run();

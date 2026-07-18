@@ -87,6 +87,7 @@ third_party/imgui/imgui_impl_glfw.cpp
 IMWAY_SRC="
 main.cpp
 main_composer.cpp
+main_supervisor.cpp
 main_screenshot.cpp
 composer.cpp
 frame_resource.cpp

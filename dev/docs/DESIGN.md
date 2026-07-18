@@ -389,8 +389,10 @@ parallel, a fresh headless compositor per run, three shuffled runs per test),
 `dev/tests/` (the scenarios and their clients),
 `dev/docs/` (this document). Vendored code stays in `third_party/`.
 
-Dependencies point strictly downward: `main` → `control` → {`wayland`, `renderer`} →
-{`scene`, `device`, `output`, `input`, `session`} → `util`. One .h — one .cpp,
+Dependencies point strictly downward: `main` dispatches to {`main_supervisor`,
+`main_composer`, `main_screenshot`}; the composer graph continues through
+`control` → {`wayland`, `renderer`} → {`scene`, `device`, `output`, `input`,
+`session`} → `util`. One .h — one .cpp,
 with no exceptions: pure interfaces (`output.h`, `input_sink.h`,
 `frame_listener.h`, `device_vk.h` aside — it is a data contract) get a .cpp
 that is just `#include` of their header, so every header is compile-checked
@@ -461,12 +463,21 @@ standalone.
   press|release | key CODE press|release | type TEXT | scroll N |
   screenshot PATH | quit`; input injection via InputSink, screenshots via
   Renderer, quit via ev_break. Inside — an ascii→evdev table (us layout).
-- `main.cpp` — assembles the graph into a single `ObjPool`: creation order = reverse
-  death order, the scene dies last. Clients die first (in the epilogue of
-  `run()`); subsystems die together with the pool. Escaping per-frame resources
-  use the ref-counted arenas from `frame_resource.{h,cpp}`. Errors —
-  `stl::Exception` exceptions (`STD_VERIFY`/`Errno().raise`),
-  caught at the main boundary.
+- `main.cpp` — the multicall dispatch: plain `imway` enters
+  `main_supervisor.{h,cpp}`, `imway composer` enters `main_composer`, and
+  `imway screenshot` is the crop tool. The supervisor is the only code that
+  forks or execs. It starts the composer as the first external program, then
+  serves a private `SOCK_SEQPACKET` socket duplicated onto its stdin/stdout;
+  spawn requests carry packed argv/environment and optionally one fd via
+  `SCM_RIGHTS`. Every child closes all unlisted descriptors with `close_range`,
+  and the supervisor reaps and tracks it. Supervisor, composer and children
+  share the supervisor's process group; composer exit terminates that group
+  and ends the supervisor. `main_composer.cpp` assembles the graph into one
+  `ObjPool`: creation order = reverse death order, the scene dies last. Clients
+  die first (in the epilogue of `run()`); subsystems die with the pool.
+  Escaping per-frame resources use the ref-counted arenas from
+  `frame_resource.{h,cpp}`. Errors are `stl::Exception` exceptions
+  (`STD_VERIFY`/`Errno().raise`), caught at the composer boundary.
 
 ### 14.2 Contracts between layers
 
