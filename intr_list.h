@@ -75,6 +75,28 @@ IntrListEachRev<T, N> eachRev(stl::IntrusiveList& l) {
     return {l};
 }
 
+template <typename T, typename N = T, typename F>
+void forEach(stl::IntrusiveList& l, F f) {
+    // step first so the callback may unlink the current element
+    for (stl::IntrusiveNode* n = l.mutFront(); n != l.mutEnd();) {
+        stl::IntrusiveNode* cur = n;
+
+        n = n->next;
+        f(*(T*)(N*)cur);
+    }
+}
+
+template <typename T, typename N = T, typename F>
+void forEachRev(stl::IntrusiveList& l, F f) {
+    // same guarantee in reverse
+    for (stl::IntrusiveNode* n = l.mutBack(); n != l.mutEnd();) {
+        stl::IntrusiveNode* cur = n;
+
+        n = n->prev;
+        f(*(T*)(N*)cur);
+    }
+}
+
 // membership by pointer compare — the candidate is never dereferenced, so a
 // dangling pointer is a legal input (the classic "is it still alive" probe)
 template <typename T, typename N = T>

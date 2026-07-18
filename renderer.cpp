@@ -1763,17 +1763,15 @@ Surface* RendererImpl::scanoutCandidate() {
     Toplevel* fs = nullptr;
     int mapped = 0;
 
-    for (Toplevel* t : each<Toplevel>(scene->toplevels)) {
-        if (!t->mapped) {
-            continue;
-        }
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+        if (t.mapped) {
+            mapped++;
 
-        mapped++;
-
-        if (t->fullscreen) {
-            fs = t;
+            if (t.fullscreen) {
+                fs = &t;
+            }
         }
-    }
+    });
 
     if (!fs || mapped != 1) {
         return nullptr;
@@ -2138,11 +2136,11 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
-    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
-        if (c->surface && c->surface->hasContent) {
-            drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
+    forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            drawSurfaceTree(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
-    }
+    });
 
     if (s.texture) {
         ImGui::SetCursorScreenPos(ImVec2(x, y));
@@ -2168,11 +2166,11 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         s.hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
     }
 
-    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
-        if (c->surface && c->surface->hasContent) {
-            drawSurfaceTree(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
+    forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            drawSurfaceTree(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
-    }
+    });
 }
 
 void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
@@ -2202,11 +2200,11 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
-    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
-        if (c->surface && c->surface->hasContent) {
-            drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
+    forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            drawSurfaceTreeOverlay(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
-    }
+    });
 
     if (s.texture) {
         ImVec2 uv[4];
@@ -2222,27 +2220,27 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         s.hovered = m.x >= x && m.y >= y && m.x < x + w && m.y < y + h;
     }
 
-    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
-        if (c->surface && c->surface->hasContent) {
-            drawSurfaceTreeOverlay(*c->surface, x - gx + (float)c->x, y - gy + (float)c->y);
+    forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            drawSurfaceTreeOverlay(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
-    }
+    });
 }
 
 void RendererImpl::markTreeUnhovered(Surface& s) {
     s.hovered = false;
 
-    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
-        if (c->surface) {
-            markTreeUnhovered(*c->surface);
+    forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
+        if (c.surface) {
+            markTreeUnhovered(*c.surface);
         }
-    }
+    });
 
-    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
-        if (c->surface) {
-            markTreeUnhovered(*c->surface);
+    forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
+        if (c.surface) {
+            markTreeUnhovered(*c.surface);
         }
-    }
+    });
 }
 
 namespace {
@@ -2992,7 +2990,8 @@ void RendererImpl::buildUi(Scene& scene) {
 
     int i = 0;
 
-    for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
+    forEach<Toplevel>(scene.toplevels, [&](Toplevel& value) {
+        Toplevel* t = &value;
         Surface* root = t->surface;
 
         if (!t->mapped || !root || !root->texture) {
@@ -3000,7 +2999,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 markTreeUnhovered(*root);
             }
 
-            continue;
+            return;
         }
 
         StringView title = sv(t->title);
@@ -3216,23 +3215,21 @@ void RendererImpl::buildUi(Scene& scene) {
         if (!stayOpen) {
             t->closeRequested = true;
         }
-    }
+    });
 
     ImGui::PopStyleVar();
 
-    for (Popup* p : each<Popup>(scene.popups)) {
-        Surface* ps = p->surface;
+    forEach<Popup>(scene.popups, [&](Popup& p) {
+        Surface* ps = p.surface;
 
-        if (!p->mapped || !ps || !ps->texture || !p->parent) {
+        if (!p.mapped || !ps || !ps->texture || !p.parent) {
             if (ps) {
                 markTreeUnhovered(*ps);
             }
-
-            continue;
+        } else {
+            drawSurfaceTreeOverlay(*ps, p.parent->imgX + (float)p.parent->geomX() + (float)p.x, p.parent->imgY + (float)p.parent->geomY() + (float)p.y);
         }
-
-        drawSurfaceTreeOverlay(*ps, p->parent->imgX + (float)p->parent->geomX() + (float)p->x, p->parent->imgY + (float)p->parent->geomY() + (float)p->y);
-    }
+    });
 
     if (scene.dragIcon && scene.dragIcon->texture) {
         ImVec2 mp = ImGui::GetMousePos();
@@ -3242,19 +3239,15 @@ void RendererImpl::buildUi(Scene& scene) {
 
     bool overClient = false;
 
-    for (Surface* s : each<Surface, SceneNode>(scene.surfaces)) {
+    forEach<Surface, SceneNode>(scene.surfaces, [&](Surface& s) {
         // decoration surfaces (cursor image, drag icon) ride the pointer:
         // their hover flags go stale the moment they stop being drawn and
         // would pin this true forever; contentless surfaces likewise keep
         // the flag from their last drawn frame
-        if (s == scene.cursorSurface || s == scene.dragIcon) {
-            continue;
-        }
-
-        if (s->hovered && s->hasContent) {
+        if (&s != scene.cursorSurface && &s != scene.dragIcon && s.hovered && s.hasContent) {
             overClient = true;
         }
-    }
+    });
 
     if (altTabActive && !intrListContains<Toplevel>(scene.toplevels, altTabSel)) {
         // the selected window died under the overlay
@@ -3306,9 +3299,11 @@ void RendererImpl::buildUi(Scene& scene) {
         float total = pad;
         int count = 0;
 
-        for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
+        forEach<Toplevel>(scene.toplevels, [&](Toplevel& value) {
+            Toplevel* t = &value;
+
             if (!t->mapped || !t->surface || !t->surface->texture) {
-                continue;
+                return;
             }
 
             float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
@@ -3316,7 +3311,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
             total += (tw > th * 2.f ? th * 2.f : tw) + pad;
             count++;
-        }
+        });
 
         if (count) {
             float lineH = ImGui::GetFontSize();
@@ -3327,9 +3322,11 @@ void RendererImpl::buildUi(Scene& scene) {
             dl->AddRectFilled(ImVec2(x, y0), ImVec2(x + total, y0 + boxH), IM_COL32(18, 18, 24, 235), 8.f * uiScale);
             x += pad;
 
-            for (Toplevel* t : each<Toplevel>(scene.toplevels)) {
+            forEach<Toplevel>(scene.toplevels, [&](Toplevel& value) {
+                Toplevel* t = &value;
+
                 if (!t->mapped || !t->surface || !t->surface->texture) {
-                    continue;
+                    return;
                 }
 
                 float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
@@ -3367,7 +3364,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 lbl << title;
                 dl->AddText(ImVec2(x, y + th + pad * 0.75f), IM_COL32(230, 230, 230, 255), lbl.cStr());
                 x += tw + pad;
-            }
+            });
         }
     }
 
@@ -3547,9 +3544,11 @@ bool RendererImpl::renderFrame(int scanIdx) {
     };
 
     if (hasSyncFd) {
-        for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
+        forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& value) {
+            Surface* s = &value;
+
             if (!surfaceVisible(s) || !s->dmabuf || !s->texture || !s->texture->external) {
-                continue;
+                return;
             }
 
             if (s->explicitSync) {
@@ -3577,19 +3576,19 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
                         scene->needsFrame = true;
 
-                        continue;
+                        return;
                     }
 
                     if (!waitOnSyncFile(syncFd)) {
                         scene->needsFrame = true;
 
-                        continue;
+                        return;
                     }
 
                     explicitSurfaces.pushBack(s);
                 }
 
-                continue;
+                return;
             }
 
             for (int i = 0; i < s->dmabuf->nplanes; i++) {
@@ -3612,7 +3611,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
                 waitOnSyncFile(exp.fd);
             }
-        }
+        });
     }
 
     buildUi(*scene);
@@ -3624,9 +3623,11 @@ bool RendererImpl::renderFrame(int scanIdx) {
     bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     vkBeginCommandBuffer(cmd, &bi);
 
-    for (SurfaceTexture* tex : each<SurfaceTexture>(textures)) {
+    forEach<SurfaceTexture>(textures, [&](SurfaceTexture& value) {
+        SurfaceTexture* tex = &value;
+
         if (!tex->external || !tex->firstUse) {
-            continue;
+            return;
         }
 
         VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -3640,11 +3641,13 @@ bool RendererImpl::renderFrame(int scanIdx) {
         toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
         externalFirstUses.pushBack(tex);
-    }
+    });
 
-    for (SurfaceTexture* tex : each<SurfaceTexture>(textures)) {
+    forEach<SurfaceTexture>(textures, [&](SurfaceTexture& value) {
+        SurfaceTexture* tex = &value;
+
         if (!tex->needsUpload) {
-            continue;
+            return;
         }
 
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -3727,15 +3730,15 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
         tex->needsUpload = false;
         tex->firstUse = false;
-    }
+    });
 
     // color-managed surfaces: convert their (now uploaded) source into the
     // sRGB composition space before ImGui samples the converted texture
-    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-        if (s->texture && s->texture->converted && surfaceVisible(s)) {
-            recordConversion(cmd, s->texture, *s);
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
+        if (s.texture && s.texture->converted && surfaceVisible(&s)) {
+            recordConversion(cmd, s.texture, s);
         }
-    }
+    });
 
     VkClearValue clear{};
 
@@ -3811,16 +3814,14 @@ bool RendererImpl::renderFrame(int scanIdx) {
         tex->firstUse = false;
     }
 
-    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-        FrameResource* frame = s->frame;
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
+        FrameResource* frame = s.frame;
 
-        if (!surfaceVisible(s) || !frame || contains(inFlightFrames, frame)) {
-            continue;
+        if (surfaceVisible(&s) && frame && !contains(inFlightFrames, frame)) {
+            frameRef(frame);
+            inFlightFrames.pushBack(frame);
         }
-
-        frameRef(frame);
-        inFlightFrames.pushBack(frame);
-    }
+    });
 
     if (signalOut) {
         VkSemaphoreGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_SEMAPHORE_GET_FD_INFO_KHR};
@@ -4128,36 +4129,36 @@ void RendererImpl::frameNow() {
     scene->needsFrame = false;
     settleFrames--;
 
-    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-        if (s->dirty && s->hasContent) {
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
+        if (s.dirty && s.hasContent) {
             bool ready = true;
 
-            if (s->dmabuf) {
-                ready = importDmabuf(*s);
+            if (s.dmabuf) {
+                ready = importDmabuf(s);
             } else {
-                uploadSurface(*s);
+                uploadSurface(s);
             }
 
-            if (s == scene->cursorSurface) {
+            if (&s == scene->cursorSurface) {
                 hwSurfStale = true;
             }
 
-            s->dirty = !ready;
+            s.dirty = !ready;
 
             if (!ready) {
                 scene->needsFrame = true;
             }
         }
-    }
+    });
 
     // point each surface's ImGui descriptor at a converted texture (or back to
     // the plain one) before buildUi captures it — runs only when the image
     // description changed, no-op for the common uncolor-managed case
-    for (Surface* s : each<Surface, SceneNode>(scene->surfaces)) {
-        if (s->texture) {
-            ensureConversion(s->texture, *s);
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
+        if (s.texture) {
+            ensureConversion(s.texture, s);
         }
-    }
+    });
 
     Surface* cand = scanoutCandidate();
     bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);

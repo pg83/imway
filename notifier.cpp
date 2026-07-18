@@ -165,18 +165,18 @@ void NotifierImpl::dismiss(u32 id) {
 }
 
 void NotifierImpl::activeImpl(VisitorFace&& vis) {
-    for (Toast* t : each<Toast>(toasts)) {
-        if (t->onScreen) {
-            vis.visit(t);
+    forEach<Toast>(toasts, [&](Toast& t) {
+        if (t.onScreen) {
+            vis.visit(&t);
         }
-    }
+    });
 }
 
 void NotifierImpl::historyImpl(VisitorFace&& vis) {
     // newest first
-    for (Toast* t : eachRev<Toast>(toasts)) {
-        vis.visit(t);
-    }
+    forEachRev<Toast>(toasts, [&](Toast& t) {
+        vis.visit(&t);
+    });
 }
 
 void NotifierImpl::clearHistory() {
@@ -203,12 +203,12 @@ void NotifierImpl::setDnd(bool v) {
 
     if (v) {
         // pull everything off screen, keep it in history
-        for (Toast* t : each<Toast>(toasts)) {
-            if (t->onScreen) {
-                ev_timer_stop(loop, &((ToastImpl*)t)->timer);
-                t->onScreen = false;
+        forEach<Toast>(toasts, [&](Toast& t) {
+            if (t.onScreen) {
+                ev_timer_stop(loop, &((ToastImpl&)t).timer);
+                t.onScreen = false;
             }
-        }
+        });
     }
 
     c->scene->needsFrame = true;

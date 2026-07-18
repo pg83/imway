@@ -723,13 +723,13 @@ namespace {
     void wmBaseResourceDestroyed(wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
-            auto* impl = (SurfaceImpl*)surface;
+        forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+            auto& impl = (SurfaceImpl&)surface;
 
-            if (impl->xdg && impl->xdg->wmBaseRes == res) {
-                impl->xdg->wmBaseRes = nullptr;
+            if (impl.xdg && impl.xdg->wmBaseRes == res) {
+                impl.xdg->wmBaseRes = nullptr;
             }
-        }
+        });
 
         for (size_t i = 0; i < srv->wmBases.length(); i++) {
             if (srv->wmBases[i].res == res) {
@@ -797,17 +797,17 @@ namespace {
             }
         }
 
-        for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
-            if (c->surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
+        forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
+            if (c.surface) {
+                fireFrameCallbacks(*(SurfaceImpl*)c.surface, t);
             }
-        }
+        });
 
-        for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
-            if (c->surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c->surface, t);
+        forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
+            if (c.surface) {
+                fireFrameCallbacks(*(SurfaceImpl*)c.surface, t);
             }
-        }
+        });
     }
 
     void resDestroy(wl_client*, wl_resource* res) {
@@ -1099,8 +1099,8 @@ namespace {
         IntrusiveList* stacks[] = {&s.stackBelow, &s.stackAbove};
 
         for (auto* stack : stacks) {
-            for (Subsurface* c : each<Subsurface>(*stack)) {
-                SubsurfaceImpl& sub = impl(c);
+            forEach<Subsurface>(*stack, [&](Subsurface& c) {
+                SubsurfaceImpl& sub = impl(&c);
 
                 if (sub.pendingPos) {
                     sub.x = sub.pendingX;
@@ -1111,7 +1111,7 @@ namespace {
                 if (sub.sync) {
                     applySubsurfaceCache(sub);
                 }
-            }
+            });
         }
     }
 
@@ -1236,17 +1236,17 @@ namespace {
             sub.pendingPos = false;
         }
 
-        for (Subsurface* c : each<Subsurface>(sub.surface->stackBelow)) {
-            if (impl(c).sync) {
-                applySubsurfaceCache(impl(c));
+        forEach<Subsurface>(sub.surface->stackBelow, [&](Subsurface& c) {
+            if (impl(&c).sync) {
+                applySubsurfaceCache(impl(&c));
             }
-        }
+        });
 
-        for (Subsurface* c : each<Subsurface>(sub.surface->stackAbove)) {
-            if (impl(c).sync) {
-                applySubsurfaceCache(impl(c));
+        forEach<Subsurface>(sub.surface->stackAbove, [&](Subsurface& c) {
+            if (impl(&c).sync) {
+                applySubsurfaceCache(impl(&c));
             }
-        }
+        });
     }
 
     bool syncCommitOk(SurfaceImpl& s) {
@@ -1725,13 +1725,13 @@ namespace {
             s->sub->surface = nullptr;
         }
 
-        for (Subsurface* c : each<Subsurface>(s->stackBelow)) {
-            c->parent = nullptr;
-        }
+        forEach<Subsurface>(s->stackBelow, [](Subsurface& c) {
+            c.parent = nullptr;
+        });
 
-        for (Subsurface* c : each<Subsurface>(s->stackAbove)) {
-            c->parent = nullptr;
-        }
+        forEach<Subsurface>(s->stackAbove, [](Subsurface& c) {
+            c.parent = nullptr;
+        });
 
         // the list heads die with this surface: detach them so the orphaned
         // children keep a valid ring among themselves and their own later
@@ -1739,27 +1739,27 @@ namespace {
         s->stackBelow.clear();
         s->stackAbove.clear();
 
-        for (Popup* p : each<Popup>(srv->scene->popups)) {
-            if (p->parent == s) {
-                p->parent = nullptr;
+        forEach<Popup>(srv->scene->popups, [&](Popup& p) {
+            if (p.parent == s) {
+                p.parent = nullptr;
 
-                if (p->mapped) {
-                    dismissPopupTree(*(PopupImpl*)p);
+                if (p.mapped) {
+                    dismissPopupTree((PopupImpl&)p);
                 }
             }
-        }
+        });
 
-        for (IdleInhibitor* inhibitor : each<IdleInhibitor>(srv->idleInhibitors)) {
-            if (inhibitor->surface == s) {
-                inhibitor->surface = nullptr;
+        forEach<IdleInhibitor>(srv->idleInhibitors, [&](IdleInhibitor& inhibitor) {
+            if (inhibitor.surface == s) {
+                inhibitor.surface = nullptr;
             }
-        }
+        });
 
-        for (ActivationTokenRequest* request : each<ActivationTokenRequest>(srv->activationTokenRequests)) {
-            if (request->surface == s) {
-                request->surface = nullptr;
+        forEach<ActivationTokenRequest>(srv->activationTokenRequests, [&](ActivationTokenRequest& request) {
+            if (request.surface == s) {
+                request.surface = nullptr;
             }
-        }
+        });
 
         srv->seat.surfaceGone(s);
 
@@ -3008,11 +3008,11 @@ namespace {
             s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
 
-            for (Popup* popup : each<Popup>(s.srv->scene->popups)) {
-                if (popup->parent == &s && popup->mapped) {
-                    dismissPopupTree(*(PopupImpl*)popup);
+            forEach<Popup>(s.srv->scene->popups, [&](Popup& popup) {
+                if (popup.parent == &s && popup.mapped) {
+                    dismissPopupTree((PopupImpl&)popup);
                 }
-            }
+            });
 
             s.srv->seat.toplevelUnmapped(xs->toplevel);
 
@@ -3038,11 +3038,11 @@ namespace {
             xs->popup->mapped = false;
             s.srv->scene->needsFrame = true;
 
-            for (Popup* popup : each<Popup>(s.srv->scene->popups)) {
-                if (popup->parent == &s && popup->mapped) {
-                    dismissPopupTree(*(PopupImpl*)popup);
+            forEach<Popup>(s.srv->scene->popups, [&](Popup& popup) {
+                if (popup.parent == &s && popup.mapped) {
+                    dismissPopupTree((PopupImpl&)popup);
                 }
-            }
+            });
         }
     }
 
@@ -3060,12 +3060,11 @@ namespace {
     }
 
     void dismissPopupTree(PopupImpl& popup) {
-        for (Popup* child : eachRev<Popup>(popup.srv->scene->popups)) {
-
-            if (child != &popup && child->parent == popup.surface) {
-                dismissPopupTree(*(PopupImpl*)child);
+        forEachRev<Popup>(popup.srv->scene->popups, [&](Popup& child) {
+            if (&child != &popup && child.parent == popup.surface) {
+                dismissPopupTree((PopupImpl&)child);
             }
-        }
+        });
 
         xdgPopupDismiss(popup);
     }
@@ -3081,9 +3080,9 @@ namespace {
 
         removeOne(srv->outputResources, res);
 
-        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
-            removeOne(((SurfaceImpl*)surface)->enteredOutputs, res);
-        }
+        forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+            removeOne(((SurfaceImpl&)surface).enteredOutputs, res);
+        });
     }
 
     bool surfaceVisibleOnOutput(SurfaceImpl& surface) {
@@ -3231,9 +3230,9 @@ namespace {
             return;
         }
 
-        for (Offer* offer : each<Offer>(src->offers)) {
-            offer->source = nullptr;
-        }
+        forEach<Offer>(src->offers, [](Offer& offer) {
+            offer.source = nullptr;
+        });
 
         // the orphans keep a valid ring among themselves for their unlinks
         src->offers.clear();
@@ -5880,25 +5879,25 @@ bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
 Surface* SeatState::pickInTree(Surface& s) {
     Surface* found = nullptr;
 
-    for (Subsurface* c : each<Subsurface>(s.stackBelow)) {
-        if (c->surface && c->surface->hasContent) {
-            if (Surface* f = pickInTree(*c->surface)) {
+    forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            if (Surface* f = pickInTree(*c.surface)) {
                 found = f;
             }
         }
-    }
+    });
 
     if (s.hovered && s.inputContains(curX - s.imgX, curY - s.imgY)) {
         found = &s;
     }
 
-    for (Subsurface* c : each<Subsurface>(s.stackAbove)) {
-        if (c->surface && c->surface->hasContent) {
-            if (Surface* f = pickInTree(*c->surface)) {
+    forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
+        if (c.surface && c.surface->hasContent) {
+            if (Surface* f = pickInTree(*c.surface)) {
                 found = f;
             }
         }
-    }
+    });
 
     return found;
 }
@@ -6218,14 +6217,14 @@ void SeatState::handleHoldEnd(bool cancelled) {
 }
 
 void WaylandImpl::activity() {
-    for (IdleNotif* n : each<IdleNotif>(idleNotifs)) {
-        if (n->idled) {
-            n->idled = false;
-            ext_idle_notification_v1_send_resumed(n->res);
+    forEach<IdleNotif>(idleNotifs, [&](IdleNotif& n) {
+        if (n.idled) {
+            n.idled = false;
+            ext_idle_notification_v1_send_resumed(n.res);
         }
 
-        ev_timer_again(loop, &n->timer);
-    }
+        ev_timer_again(loop, &n.timer);
+    });
 
     if (dpmsSec > 0 && output) {
         ev_timer_again(loop, &dpmsTimer);
@@ -6652,27 +6651,25 @@ void SeatState::updateShortcutInhibit() {
     Surface* root = target ? target->rootSurface() : nullptr;
     bool inhibited = false;
 
-    for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
-        auto* s = (SurfaceImpl*)surface;
+    forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+        auto& s = (SurfaceImpl&)surface;
 
-        if (!s->kbInhibitRes) {
-            continue;
-        }
+        if (s.kbInhibitRes) {
+            bool active = &surface == root;
 
-        bool active = surface == root;
+            if (active != s.kbInhibitActive) {
+                s.kbInhibitActive = active;
 
-        if (active != s->kbInhibitActive) {
-            s->kbInhibitActive = active;
-
-            if (active) {
-                zwp_keyboard_shortcuts_inhibitor_v1_send_active(s->kbInhibitRes);
-            } else {
-                zwp_keyboard_shortcuts_inhibitor_v1_send_inactive(s->kbInhibitRes);
+                if (active) {
+                    zwp_keyboard_shortcuts_inhibitor_v1_send_active(s.kbInhibitRes);
+                } else {
+                    zwp_keyboard_shortcuts_inhibitor_v1_send_inactive(s.kbInhibitRes);
+                }
             }
-        }
 
-        inhibited = inhibited || active;
-    }
+            inhibited = inhibited || active;
+        }
+    });
 
     srv->scene->shortcutsInhibited = inhibited;
 }
@@ -6935,11 +6932,11 @@ void SeatState::endDrag() {
     bool accepted = !src;
 
     if (src) {
-        for (Offer* offer : each<Offer>(src->offers)) {
-            if (offer->dnd && offer->accepted) {
+        forEach<Offer>(src->offers, [&](Offer& offer) {
+            if (offer.dnd && offer.accepted) {
                 accepted = true;
             }
-        }
+        });
     }
 
     if (dragTarget && accepted) {
@@ -7799,27 +7796,27 @@ void WaylandImpl::frameShown(u32 msec) {
         seat.focusToplevel(scene->focusedToplevel);
     }
 
-    for (Surface* surface : each<Surface, SceneNode>(scene->surfaces)) {
-        syncSurfaceOutputs(*(SurfaceImpl*)surface);
-    }
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+        syncSurfaceOutputs((SurfaceImpl&)surface);
+    });
 
-    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
-        auto* ti = (ToplevelImpl*)tl;
+    forEach<Toplevel>(scene->toplevels, [](Toplevel& tl) {
+        auto& ti = (ToplevelImpl&)tl;
 
-        if (ti->closeRequested) {
-            ti->closeRequested = false;
+        if (ti.closeRequested) {
+            ti.closeRequested = false;
 
-            if (ti->res) {
-                xdg_toplevel_send_close(ti->res);
+            if (ti.res) {
+                xdg_toplevel_send_close(ti.res);
             }
         }
-    }
+    });
 
-    for (Popup* popupBase : each<Popup>(scene->popups)) {
-        auto* popup = (PopupImpl*)popupBase;
+    forEach<Popup>(scene->popups, [&](Popup& value) {
+        auto* popup = (PopupImpl*)&value;
 
         if (!popup->mapped || !popup->parent || !popup->xdg || !popup->positioner.reactive) {
-            continue;
+            return;
         }
 
         int x = 0, y = 0, w = 0, h = 0;
@@ -7833,19 +7830,19 @@ void WaylandImpl::frameShown(u32 msec) {
         if (x != compareX || y != compareY || w != compareW || h != compareH) {
             configurePopupPosition(*popup, popup->positioner, false, 0);
         }
-    }
+    });
 
-    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
-        if (tl->mapped && tl->surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)tl->surface, msec);
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
+        if (tl.mapped && tl.surface) {
+            fireFrameCallbacks(*(SurfaceImpl*)tl.surface, msec);
         }
-    }
+    });
 
-    for (Popup* p : each<Popup>(scene->popups)) {
-        if (p->mapped && p->surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)p->surface, msec);
+    forEach<Popup>(scene->popups, [&](Popup& p) {
+        if (p.mapped && p.surface) {
+            fireFrameCallbacks(*(SurfaceImpl*)p.surface, msec);
         }
-    }
+    });
 
     if (scene->dragIcon) {
         fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon, msec);
@@ -7855,11 +7852,11 @@ void WaylandImpl::frameShown(u32 msec) {
         fireFrameCallbacks(*(SurfaceImpl*)scene->cursorSurface, msec);
     }
 
-    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
-        auto* ti = (ToplevelImpl*)tl;
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& value) {
+        auto* ti = (ToplevelImpl*)&value;
 
         if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
-            continue;
+            return;
         }
 
         bool differsView = ti->desiredW != ti->surface->geomW() || ti->desiredH != ti->surface->geomH();
@@ -7875,7 +7872,7 @@ void WaylandImpl::frameShown(u32 msec) {
         if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
         }
-    }
+    });
 }
 
 void WaylandImpl::run() {
@@ -7889,11 +7886,11 @@ void WaylandImpl::run() {
 // icon store reload: re-resolve every window still on a .desktop
 // match; client-set icons are not ours to touch
 void WaylandImpl::iconsReloaded() {
-    for (Toplevel* tl : each<Toplevel>(scene->toplevels)) {
-        if (!tl->iconFromClient) {
-            tl->icon = icons->forAppId(sv(tl->appId));
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
+        if (!tl.iconFromClient) {
+            tl.icon = icons->forAppId(sv(tl.appId));
         }
-    }
+    });
 
     scene->needsFrame = true;
 }

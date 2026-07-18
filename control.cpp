@@ -264,20 +264,20 @@ void ControlImpl::handleLine(StringView cmd) {
 void ControlImpl::dumpState(StringView outPath) {
     StringBuilder out;
 
-    for (Toplevel* t : each<Toplevel>(scene->toplevels)) {
-        Surface* s = t->surface;
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+        Surface* s = t.surface;
 
-        out << "toplevel id="_sv << t->id
-            << " mapped="_sv << (int)t->mapped
-            << " csd="_sv << (int)t->csd
-            << " fullscreen="_sv << (int)t->fullscreen
-            << " activated="_sv << (int)t->activated
-            << " docked="_sv << (int)t->docked
-            << " focused="_sv << (int)(scene->focusedToplevel == t)
-            << " x="_sv << (int)t->curX
-            << " y="_sv << (int)t->curY
-            << " w="_sv << (int)t->applyW
-            << " h="_sv << (int)t->applyH;
+        out << "toplevel id="_sv << t.id
+            << " mapped="_sv << (int)t.mapped
+            << " csd="_sv << (int)t.csd
+            << " fullscreen="_sv << (int)t.fullscreen
+            << " activated="_sv << (int)t.activated
+            << " docked="_sv << (int)t.docked
+            << " focused="_sv << (int)(scene->focusedToplevel == &t)
+            << " x="_sv << (int)t.curX
+            << " y="_sv << (int)t.curY
+            << " w="_sv << (int)t.applyW
+            << " h="_sv << (int)t.applyH;
 
         if (s) {
             out << " imgx="_sv << (int)s->imgX
@@ -286,18 +286,18 @@ void ControlImpl::dumpState(StringView outPath) {
                 << " client_h="_sv << s->geomH();
         }
 
-        out << " app_id="_sv << sv(t->appId)
-            << " title="_sv << sv(t->title)
+        out << " app_id="_sv << sv(t.appId)
+            << " title="_sv << sv(t.title)
             << "\n"_sv;
-    }
+    });
 
-    for (Popup* p : each<Popup>(scene->popups)) {
-        Surface* s = p->surface;
+    forEach<Popup>(scene->popups, [&](Popup& p) {
+        Surface* s = p.surface;
 
-        out << "popup mapped="_sv << (int)p->mapped
-            << " grab="_sv << (int)p->grab
-            << " x="_sv << p->x
-            << " y="_sv << p->y;
+        out << "popup mapped="_sv << (int)p.mapped
+            << " grab="_sv << (int)p.grab
+            << " x="_sv << p.x
+            << " y="_sv << p.y;
 
         if (s) {
             out << " imgx="_sv << (int)s->imgX
@@ -307,7 +307,7 @@ void ControlImpl::dumpState(StringView outPath) {
         }
 
         out << "\n"_sv;
-    }
+    });
 
     out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
     out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
