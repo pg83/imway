@@ -287,6 +287,7 @@ namespace {
         u32 cfgSerial = 0;
         int prevW = 0, prevH = 0;
         bool cfgDocked = false;
+        bool cfgMaximized = false;
         int pendingMinW = 0, pendingMinH = 0;
         int pendingMaxW = 0, pendingMaxH = 0;
         bool pendingMinSet = false, pendingMaxSet = false;
@@ -2302,22 +2303,24 @@ namespace {
         ti->pendingMinSet = true;
     }
 
-    // maximization is not a state this compositor keeps (docking covers it),
-    // but the spec requires answering with a configure either way — a silent
-    // drop leaves the client waiting forever
     void toplevelSetMaximized(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti) {
-            xdgToplevelReconfigure(*ti);
+        if (ti && !ti->maximized) {
+            ti->maximized = true;
+            ti->minimized = false;
+            ti->restoreRequested = false;
+            ti->srv->scene->needsFrame = true;
         }
     }
 
     void toplevelUnsetMaximized(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti) {
-            xdgToplevelReconfigure(*ti);
+        if (ti && ti->maximized) {
+            ti->maximized = false;
+            ti->restoreRequested = ti->restoreW > 0 && ti->restoreH > 0;
+            ti->srv->scene->needsFrame = true;
         }
     }
 
@@ -2350,7 +2353,18 @@ namespace {
         ti->srv->scene->needsFrame = true;
     }
 
-    void toplevelSetMinimized(wl_client*, wl_resource*) {
+    void toplevelSetMinimized(wl_client*, wl_resource* res) {
+        auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        if (ti) {
+            ti->minimized = true;
+
+            if (ti->srv->scene->focusedToplevel == ti) {
+                ti->srv->scene->focusedToplevel = nullptr;
+            }
+
+            ti->srv->scene->needsFrame = true;
+        }
     }
 
     const struct xdg_toplevel_interface toplevelImpl = {
@@ -2944,6 +2958,10 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_FULLSCREEN;
         }
 
+        if (t.maximized) {
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_MAXIMIZED;
+        }
+
         // csd windows are "tiled": the toolkits (GTK) then drop their drop
         // shadows, invisible resize margins and rounded corners, which we
         // would otherwise have to crop via window geometry; ssd clients must
@@ -2964,6 +2982,7 @@ namespace {
         t.cfgW = w;
         t.cfgH = h;
         t.cfgDocked = t.docked;
+        t.cfgMaximized = t.maximized;
         sysO << "imway: configure "_sv << sv(t.title) << " -> "_sv << w << "x"_sv << h << endL;
     }
 
@@ -7931,7 +7950,10 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 void WaylandImpl::onListen(void* arg) {
     u32 msec = ((FrameEvent*)arg)->msec;
 
-    if (scene->focusedToplevel && scene->focusedToplevel != seat.kbFocus) {
+    if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
+        seat.focusToplevel(nullptr);
+    } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized &&
+        scene->focusedToplevel->mapped && scene->focusedToplevel != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel);
     }
 
@@ -7972,7 +7994,7 @@ void WaylandImpl::onListen(void* arg) {
     });
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
-        if (tl.mapped && tl.surface) {
+        if (tl.mapped && !tl.minimized && tl.surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl.surface, msec);
         }
     });
@@ -8008,7 +8030,8 @@ void WaylandImpl::onListen(void* arg) {
         bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
 
         // dock state changes alone need a configure: TILED comes and goes
-        if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked) {
+        if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked ||
+            ti->maximized != ti->cfgMaximized) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
         }
     });

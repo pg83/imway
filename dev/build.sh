@@ -103,6 +103,7 @@ intr_list.cpp
 listener.cpp
 keyboard.cpp
 dialog.cpp
+dock.cpp
 lock_screen.cpp
 launcher.cpp
 calendar.cpp
@@ -114,6 +115,7 @@ history.cpp
 dbus_conn.cpp
 notifications.cpp
 notifier.cpp
+status_notifier.cpp
 mixer.cpp
 mixer_sndio.cpp
 mixer_pulse.cpp
@@ -226,8 +228,8 @@ for src in dev/tests/client_*.c dev/tests/client_*.cpp; do
     name=${name%.*}
 
     case "$src" in
-        *.cpp) CMDS+="$CXX $CXXFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm ${LDFLAGS:-}"$'\n' ;;
-        *)     CMDS+="$CC $CFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm ${LDFLAGS:-}"$'\n' ;;
+        *.cpp) CMDS+="$CXX $CXXFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm -ldbus-1 ${LDFLAGS:-}"$'\n' ;;
+        *)     CMDS+="$CC $CFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm -ldbus-1 ${LDFLAGS:-}"$'\n' ;;
     esac
 done
 

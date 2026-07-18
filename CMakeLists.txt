@@ -299,6 +299,7 @@ add_executable(imway
     listener.cpp
     keyboard.cpp
     dialog.cpp
+    dock.cpp
     lock_screen.cpp
     launcher.cpp
     calendar.cpp
@@ -311,6 +312,7 @@ add_executable(imway
     dbus_conn.cpp
     notifications.cpp
     notifier.cpp
+    status_notifier.cpp
     mixer.cpp
     mixer_sndio.cpp
     mixer_pulse.cpp

@@ -207,6 +207,12 @@ struct Toplevel: stl::IntrusiveNode {
     bool closeRequested = false;
 
     bool fullscreen = false;
+    bool minimized = false;
+    bool maximized = false;
+    bool maximizedApplied = false;
+    bool restoreRequested = false;
+    float restoreX = 0, restoreY = 0;
+    int restoreW = 0, restoreH = 0;
     bool activated = false;
     bool raiseRequested = false;
 
@@ -246,11 +252,13 @@ struct Scene {
     stl::IntrusiveList popups;
 
     int outW = 1280, outH = 800;
+    int workX = 0, workY = 0, workW = 1280, workH = 800;
     double hz = 60.0;
     int framesDone = 0;
 
     bool needsFrame = true;
     bool drawCursor = false;
+    bool dockVisible = true;
 
     // short active-layout name for the menu bar, written by wayland;
     // fixed 2-3 letter code, filled by the keyboard API

@@ -16,7 +16,10 @@ w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
 orange = magenta = 0
 pts = []
 for y in range(h):
-    for x in range(w):
+    # The fixed dock owns x<58 and its anti-aliased active marker overlaps
+    # this test's broad orange threshold.  Window geometry is evaluated in
+    # the reserved work area only.
+    for x in range(58, w):
         r, g, b = d[(y*w+x)*3:(y*w+x)*3+3]
         if r > 200 and 100 < g < 160 and b < 60:
             orange += 1

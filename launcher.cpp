@@ -55,7 +55,7 @@ namespace {
 
         // pure drawing: state transitions stay in drawLauncher, the only
         // outward signs are run/action/picked and the open flag dropping
-        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action);
+        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, float anchorX, float anchorY);
     };
 }
 
@@ -223,7 +223,7 @@ void Dialog::refilter() {
     }
 }
 
-bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action) {
+bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, float anchorX, float anchorY) {
     IconStore& icons = *c.icons;
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
@@ -255,7 +255,11 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action) 
 
     float lw = (float)screenW / 4.f < 320.f ? 320.f : (float)screenW / 4.f;
 
-    ImGui::SetNextWindowPos(ImVec2((float)screenW / 2.f, (float)screenH / 4.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
+    if (anchorX >= 0.f) {
+        ImGui::SetNextWindowPos(ImVec2(anchorX, anchorY), ImGuiCond_Always);
+    } else {
+        ImGui::SetNextWindowPos(ImVec2((float)screenW / 2.f, (float)screenH / 4.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
+    }
     ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH / 2.f));
 
     if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
@@ -336,12 +340,13 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action) 
     return picked;
 }
 
-bool drawLauncher(Composer& c, bool toggle, void** state, Buffer& run, LauncherAction& action) {
+bool drawLauncher(Composer& c, bool toggle, void** state, Buffer& run,
+                  LauncherAction& action, float anchorX, float anchorY) {
     action = LauncherAction::none;
     bool picked = false;
 
     dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
-        picked = d.draw(c, open, run, action);
+        picked = d.draw(c, open, run, action, anchorX, anchorY);
     });
 
     return picked;

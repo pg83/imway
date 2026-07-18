@@ -43,6 +43,7 @@ class Test:
     args: list         # extra compositor argv from "# imway-args: ..."
     env: dict          # extra compositor environment from "# imway-env: K=V ..."
     expect_exit: bool  # scenario intentionally lets the compositor exit
+    private_bus: bool  # isolate session D-Bus (watcher names are singleton)
 
 
 @dataclass
@@ -70,6 +71,7 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
         args = []
         extra_env = {}
         expect_exit = False
+        private_bus = False
         with open(path) as f:
             for line in f.read(2048).splitlines():
                 m = re.match(r"\s*#\s*xfail:\s*(.*)", line)
@@ -87,7 +89,9 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
                         extra_env[key] = value
                 if re.match(r"\s*#\s*expect-compositor-exit\s*$", line):
                     expect_exit = True
-        out.append(Test(name, path, client, xfail, args, extra_env, expect_exit))
+                if re.match(r"\s*#\s*private-session-bus\s*$", line):
+                    private_bus = True
+        out.append(Test(name, path, client, xfail, args, extra_env, expect_exit, private_bus))
     return out, unbuilt
 
 
@@ -139,6 +143,61 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     client_log = os.path.join(rt, "client.log")
 
     env = dict(os.environ)
+
+    bus_pid = 0
+
+    if t.private_bus:
+        try:
+            dbus_daemon = shutil.which("dbus-daemon")
+
+            if not dbus_daemon:
+                for candidate in ("/usr/bin/dbus-daemon", "/ix/realm/pg/bin/dbus-daemon"):
+                    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                        dbus_daemon = candidate
+                        break
+
+            if not dbus_daemon:
+                raise FileNotFoundError("dbus-daemon")
+
+            # Some hermetic dev realms expose the daemon binary but omit its
+            # compiled-in session.conf closure.  A test bus only needs local
+            # EXTERNAL auth and an unrestricted same-user policy.
+            bus_config = os.path.join(rt, "session-bus.conf")
+            with open(bus_config, "w") as f:
+                f.write(f"""<!DOCTYPE busconfig PUBLIC '-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN'
+ 'http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd'>
+<busconfig>
+  <type>session</type>
+  <listen>unix:tmpdir={rt}</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow send_destination="*" eavesdrop="true"/>
+    <allow eavesdrop="true"/>
+    <allow own="*"/>
+  </policy>
+</busconfig>
+""")
+
+            bus = subprocess.run(
+                [dbus_daemon, f"--config-file={bus_config}", "--fork", "--print-address=1", "--print-pid=1"],
+                timeout=5, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            lines = bus.stdout.strip().splitlines()
+            env["DBUS_SESSION_BUS_ADDRESS"] = lines[0]
+            bus_pid = int(lines[1])
+        except Exception as e:
+            stderr = getattr(e, "stderr", "") or ""
+            return RunResult(FAIL, 0.0, f"private session bus failed: {e} {stderr.strip()}", rt)
+
+    def stop_bus() -> None:
+        nonlocal bus_pid
+        if bus_pid:
+            try:
+                os.kill(bus_pid, 15)
+            except ProcessLookupError:
+                pass
+            bus_pid = 0
+
     env.update(
         XDG_RUNTIME_DIR=rt,
         WAYLAND_DISPLAY="imway-test",
@@ -167,6 +226,7 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             logf.close()
+            stop_bus()
             return fail(f"compositor exited during startup (rc={proc.returncode})")
         if is_sock(sock) and is_fifo(ctl) and "control FIFO:" in tail(log, 200):
             ready = True
@@ -176,6 +236,7 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         proc.kill()
         proc.wait()
         logf.close()
+        stop_bus()
         return fail("compositor did not come up")
 
     # run the scenario
@@ -256,6 +317,8 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     logf.close()
 
     def finish(status: str, detail: str = "") -> RunResult:
+        stop_bus()
+
         if status in (PASS, SKIP) and not keep:
             shutil.rmtree(rt, ignore_errors=True)
             art = ""

@@ -22,6 +22,7 @@ struct Output;
 struct Renderer;
 struct Scene;
 struct Session;
+struct StatusNotifier;
 struct Supervisor;
 struct Wayland;
 
@@ -46,6 +47,7 @@ struct Composer {
     DBusConn* bus = nullptr;
     Notifier* notifier = nullptr;
     Notifications* notes = nullptr;
+    StatusNotifier* statusNotifier = nullptr;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
     Mixer* mixer = nullptr;

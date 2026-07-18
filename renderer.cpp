@@ -4,6 +4,7 @@
 
 #include "calendar.h"
 #include "device_vk.h"
+#include "dock.h"
 #include "tex_pool.h"
 #include "frame_listener.h"
 #include "input_sink.h"
@@ -326,6 +327,7 @@ namespace {
         // widget; non-null = open
         void* launcherState = nullptr;
         bool launcherToggle = false;
+        float launcherX = -1.f, launcherY = -1.f;
         IconStore* icons = nullptr;
 
         // hardware cursor plane state
@@ -908,7 +910,7 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
 
     Surface* root = s->rootSurface();
 
-    if (root->toplevel && root->toplevel->mapped) {
+    if (root->toplevel && root->toplevel->mapped && !root->toplevel->minimized) {
         return true;
     }
 
@@ -1184,6 +1186,7 @@ bool RendererImpl::chordAction(u32 mask, u32 sym) {
     }
 
     if (mask == kModLogo && sym == XKB_KEY_F2) {
+        launcherX = launcherY = -1.f;
         launcherToggle = true;
         scene->needsFrame = true;
 
@@ -1945,7 +1948,9 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
 // a fullscreen client whose dmabuf can go straight to the plane, with no
 // compositor chrome that would need composition over it
 Surface* RendererImpl::scanoutCandidate() {
-    if (forceComposition || lockState || !scene->popups.empty() || scene->dragIcon) {
+    // The fixed Unity-style dock reserves and paints the left edge, so a
+    // client can never own the complete scanout while it is visible.
+    if (scene->dockVisible || forceComposition || lockState || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
 
@@ -1981,7 +1986,7 @@ Surface* RendererImpl::scanoutCandidate() {
     int mapped = 0;
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
-        if (t.mapped) {
+        if (t.mapped && !t.minimized) {
             mapped++;
 
             if (t.fullscreen) {
@@ -2944,6 +2949,10 @@ static StringView wifiGlyph(WifiState s) {
 }
 
 void RendererImpl::buildUi(Scene& scene) {
+    if (scene.focusedToplevel && (scene.focusedToplevel->minimized || !scene.focusedToplevel->mapped)) {
+        scene.focusedToplevel = nullptr;
+    }
+
     ImGuiIO& io = ImGui::GetIO();
 
     io.DisplaySize = ImVec2((float)width, (float)height);
@@ -3071,6 +3080,17 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         ImGui::EndMainMenuBar();
+    }
+
+    DockResult dockResult;
+
+    drawDock(*comp, dockResult);
+
+    if (dockResult.launcher) {
+        launcherX = dockResult.launcherX;
+        launcherY = dockResult.launcherY;
+        launcherToggle = true;
+        scene.needsFrame = true;
     }
 
     drawCalendar(*comp, calendarToggle, &calendarState);
@@ -3222,7 +3242,7 @@ void RendererImpl::buildUi(Scene& scene) {
         Toplevel* t = &value;
         Surface* root = t->surface;
 
-        if (!t->mapped || !root || !root->texture) {
+        if (!t->mapped || t->minimized || !root || !root->texture) {
             if (root) {
                 markTreeUnhovered(*root);
             }
@@ -3239,7 +3259,10 @@ void RendererImpl::buildUi(Scene& scene) {
         auto& label = sb();
 
         label << title << "###toplevel"_sv << (u64)t->id;
-        ImGui::SetNextWindowPos(ImVec2(40.f + 30.f * i, 60.f + 30.f * i), ImGuiCond_FirstUseEver);
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.f + 30.f * i,
+            viewport->WorkPos.y + 30.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
 
         const ImGuiStyle& st = ImGui::GetStyle();
@@ -3258,7 +3281,22 @@ void RendererImpl::buildUi(Scene& scene) {
         t->lastApplyW = t->applyW;
         t->lastApplyH = t->applyH;
 
-        if (!t->docked && !t->fullscreen) {
+        if (t->maximized && !t->maximizedApplied) {
+            t->restoreX = t->curX;
+            t->restoreY = t->curY;
+            t->restoreW = root->geomW();
+            t->restoreH = root->geomH();
+            t->maximizedApplied = true;
+        } else if (!t->maximized && t->maximizedApplied) {
+            t->maximizedApplied = false;
+            t->restoreRequested = t->restoreW > 0 && t->restoreH > 0;
+        }
+
+        if (t->restoreRequested) {
+            ImGui::SetNextWindowPos(ImVec2(t->restoreX, t->restoreY), ImGuiCond_Always);
+        }
+
+        if (!t->docked && !t->fullscreen && !t->maximized) {
             // when the size steps to a client-committed buffer during a left/top
             // drag, move the top-left by the same delta so the opposite edge
             // stays put and the window grows toward the hand
@@ -3281,6 +3319,13 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+        if (t->maximized) {
+            ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
+            ImGui::SetNextWindowPos(viewport->WorkPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(viewport->WorkSize, ImGuiCond_Always);
+            flags |= ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+        }
 
         // csd clients (gtk) bring their own header bar; ours would double it.
         // without a title bar imgui exempts the window from
@@ -3382,12 +3427,19 @@ void RendererImpl::buildUi(Scene& scene) {
                 }
             }
 
-            if (t->docked || t->fullscreen) {
+            if (t->docked || t->fullscreen || t->maximized) {
                 // the node/screen dictates the size, the client must fill it
                 ImVec2 avail = ImGui::GetContentRegionAvail();
 
                 t->desiredW = (int)avail.x;
                 t->desiredH = (int)avail.y;
+            } else if (t->restoreRequested) {
+                t->desiredW = t->restoreW;
+                t->desiredH = t->restoreH;
+
+                if (root->geomW() == t->restoreW && root->geomH() == t->restoreH) {
+                    t->restoreRequested = false;
+                }
             } else if (t->dragW > 0.f) {
                 // floating drag: the request, in client pixels
                 t->desiredW = (int)(t->dragW - chromeW);
@@ -3493,7 +3545,7 @@ void RendererImpl::buildUi(Scene& scene) {
         Buffer cmd;
         LauncherAction act = LauncherAction::none;
 
-        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act)) {
+        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, launcherX, launcherY)) {
             switch (act) {
                 case LauncherAction::lockScreen:
                     openLockOverlay(*comp, &lockState, &currentInput);

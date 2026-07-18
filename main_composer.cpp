@@ -17,6 +17,7 @@
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
+#include "status_notifier.h"
 #include "session.h"
 #include "util.h"
 #include "wayland.h"
@@ -177,6 +178,8 @@ int mainComposer(int argc, char** argv) {
 
         scene->outW = output->width();
         scene->outH = output->height();
+        scene->workW = scene->outW;
+        scene->workH = scene->outH;
         scene->hz = output->refresh();
         scene->drawCursor = kms || getenv("IMWAY_FORCE_CURSOR");
         scene->socketName = cfg.socketName;
@@ -215,6 +218,7 @@ int mainComposer(int argc, char** argv) {
 
         if (c.bus) {
             c.notes = Notifications::create(c);
+            c.statusNotifier = StatusNotifier::create(c);
         }
 
         c.mixer = Mixer::create(c);
