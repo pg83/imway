@@ -643,18 +643,14 @@ void Dialog::draw(Composer& c, bool& open) {
 
         draw->AddRectFilled(min, max, IM_COL32(4, 7, 14, 105));
 
-        float panelW = 360.f * scale;
-        float panelH = 132.f * scale;
-        ImVec2 p0((w - panelW) * 0.5f, (h - panelH) * 0.5f);
-        ImVec2 p1(p0.x + panelW, p0.y + panelH);
+        float fieldW = 360.f * scale;
+        float contentH = 78.f * scale;
+        ImVec2 p0((w - fieldW) * 0.5f, (h - contentH) * 0.5f);
 
-        draw->AddRectFilled(p0, p1, IM_COL32(14, 18, 28, 225), 14.f * scale);
-        draw->AddRect(p0, p1, IM_COL32(255, 255, 255, 38), 14.f * scale, 0, scale);
-
-        ImGui::SetCursorScreenPos(ImVec2(p0.x + 24.f * scale, p0.y + 20.f * scale));
+        ImGui::SetCursorScreenPos(p0);
         ImGui::TextUnformatted("locked");
-        ImGui::SetCursorScreenPos(ImVec2(p0.x + 24.f * scale, p0.y + 54.f * scale));
-        ImGui::SetNextItemWidth(panelW - 48.f * scale);
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 28.f * scale));
+        ImGui::SetNextItemWidth(fieldW);
 
         if (focusField) {
             ImGui::SetKeyboardFocusHere();
@@ -669,7 +665,7 @@ void Dialog::draw(Composer& c, bool& open) {
             ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
 
         if (failed) {
-            ImGui::SetCursorScreenPos(ImVec2(p0.x + 24.f * scale, p0.y + 94.f * scale));
+            ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));
             ImGui::TextColored(ImVec4(1.f, 0.42f, 0.42f, 1.f), "wrong password");
         }
 
