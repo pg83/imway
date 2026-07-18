@@ -10,6 +10,7 @@
 #define WL_UTIL_H
 
 #define _GNU_SOURCE
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -228,6 +229,30 @@ static int wl_boot(void) {
     }
     xdg_wm_base_add_listener(wl_wm, &wl_wm_listener, NULL);
     wl_display_roundtrip(wl_dpy); // let seat capabilities arrive
+    return 0;
+}
+
+// A protocol error kills only this client connection. Negative clients use
+// this to assert the exact interface/code; the scenario separately checks
+// that the compositor stayed alive.
+static int wl_expect_error(const char* want_iface, uint32_t want_code) {
+    if (wl_display_roundtrip(wl_dpy) >= 0) {
+        fprintf(stderr, "request unexpectedly succeeded\n");
+        return 1;
+    }
+
+    const struct wl_interface* iface = NULL;
+    uint32_t object_id = 0;
+    uint32_t code = wl_display_get_protocol_error(wl_dpy, &iface, &object_id);
+
+    if (wl_display_get_error(wl_dpy) != EPROTO || !iface ||
+        strcmp(iface->name, want_iface) || code != want_code) {
+        fprintf(stderr, "wrong/no error: %s code %u, want %s code %u (id=%u errno=%d)\n",
+                iface ? iface->name : "?", code, want_iface, want_code,
+                object_id, wl_display_get_error(wl_dpy));
+        return 1;
+    }
+
     return 0;
 }
 
