@@ -8,6 +8,6 @@ struct DockResult {
     float launcherY = -1.f;
 };
 
-// Unity-style left sidebar. It reserves viewport work area and mutates the
-// selected Toplevel's public compositor state for standard window actions.
+// Vertical section of desktop_chrome; not a standalone renderer widget.
+// It reserves the left viewport edge and applies standard window actions.
 void drawDock(Composer& c, DockResult& result);

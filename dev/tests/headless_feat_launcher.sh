@@ -66,9 +66,13 @@ pick_action "lock screen"
 screenshot "$XDG_RUNTIME_DIR/locked.ppm"
 locked=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/locked.ppm" 0 30 1280 780)
 # The procedural desktop is deliberately close to the lockscreen's dark
-# tint, so the stable signal here is the dialog itself rather than a large
-# flat-background delta.
-[[ "$locked" -gt 2000 ]] || { echo "launcher did not lock screen ($locked)"; exit 1; }
+# tint.  Assert the visible dialog and the actual security boundary instead
+# of coupling this test to shadows/flat-background pixel counts.
+[[ "$locked" -gt 1000 ]] || { echo "launcher did not show lock dialog ($locked)"; exit 1; }
+[[ "$(dump_field '^captured ' kb)" = 1 && "$(dump_field '^captured ' ptr)" = 1 ]] || {
+    echo "launcher lock screen did not capture input"
+    exit 1
+}
 
 ctl "type xxx"
 sleep 0.4

@@ -3,8 +3,8 @@
 #include "wayland.h"
 
 #include "calendar.h"
+#include "desktop_chrome.h"
 #include "device_vk.h"
-#include "dock.h"
 #include "tex_pool.h"
 #include "frame_listener.h"
 #include "input_sink.h"
@@ -3013,97 +3013,30 @@ void RendererImpl::buildUi(Scene& scene) {
 
     scene.focusedToplevel = nullptr;
 
-    if (ImGui::BeginMainMenuBar()) {
-        time_t now = time(nullptr);
-        tm lt{};
+    sampleStats();
 
-        localtime_r(&now, &lt);
+    DesktopChromeInfo chromeInfo;
 
-        auto& clock = sb();
-        auto pad2 = [&clock](int v) {
-            if (v < 10) {
-                clock << 0;
-            }
+    chromeInfo.layout = StringView(scene.layout);
+    chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
+    chromeInfo.cpuPct = cpuPct;
+    chromeInfo.memUsedMb = memUsedMb;
+    chromeInfo.batteryPct = batPct;
+    chromeInfo.batteryCharging = batCharging;
 
-            clock << v;
-        };
+    DesktopChromeResult chromeResult;
 
-        pad2(lt.tm_mday);
-        clock << "."_sv;
-        pad2(lt.tm_mon + 1);
-        clock << " "_sv;
-        pad2(lt.tm_hour);
-        clock << ":"_sv;
-        pad2(lt.tm_min);
+    drawDesktopChrome(*comp, chromeInfo, chromeResult);
 
-        const ImGuiStyle& st = ImGui::GetStyle();
-        float cw = ImGui::CalcTextSize(clock.cStr()).x;
-        float x = ImGui::GetWindowWidth() - cw - st.ItemSpacing.x;
-
-        ImGui::SetCursorPosX(x);
-        ImGui::TextUnformatted(clock.cStr());
-
-        if (ImGui::IsItemClicked()) {
-            calendarToggle = true;
-        }
-
-        float xl = x;
-
-        if (scene.layout[0]) {
-            float lw = ImGui::CalcTextSize(scene.layout).x;
-
-            xl = x - lw - st.ItemSpacing.x * 2;
-            ImGui::SameLine(xl);
-            ImGui::TextUnformatted(scene.layout);
-        }
-
-        // clock is on screen, the shared builder is free again
-        sampleStats();
-
-        auto& stat = sb();
-
-        stat << "cpu "_sv << cpuPct << "%  "_sv << memUsedMb / 1024 << "."_sv << memUsedMb % 1024 * 10 / 1024 << "G"_sv;
-
-        if (batPct >= 0) {
-            stat << "  bat "_sv << batPct << "%"_sv;
-
-            if (batCharging) {
-                stat << "+"_sv;
-            }
-        }
-
-        float sw = ImGui::CalcTextSize(stat.cStr()).x;
-        float xs = xl - sw - st.ItemSpacing.x * 2;
-
-        ImGui::SameLine(xs);
-        ImGui::TextUnformatted(stat.cStr());
-
-        if (comp->wifi) {
-            StringView wl = wifiGlyph(comp->wifi->state());
-            float ww = ImGui::CalcTextSize((const char*)wl.begin(), (const char*)wl.end()).x;
-            float xw = xs - ww - st.ItemSpacing.x * 2;
-
-            ImGui::SameLine(xw);
-            ImGui::TextUnformatted((const char*)wl.begin(), (const char*)wl.end());
-
-            if (ImGui::IsItemClicked()) {
-                wifiToggle = true;
-            }
-        }
-
-        ImGui::EndMainMenuBar();
-    }
-
-    DockResult dockResult;
-
-    drawDock(*comp, dockResult);
-
-    if (dockResult.launcher) {
-        launcherX = dockResult.launcherX;
-        launcherY = dockResult.launcherY;
+    if (chromeResult.launcher) {
+        launcherX = chromeResult.launcherX;
+        launcherY = chromeResult.launcherY;
         launcherToggle = true;
         scene.needsFrame = true;
     }
+
+    calendarToggle |= chromeResult.calendar;
+    wifiToggle |= chromeResult.wifi;
 
     drawCalendar(*comp, calendarToggle, &calendarState);
     calendarToggle = false;

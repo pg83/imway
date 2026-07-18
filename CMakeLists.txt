@@ -300,6 +300,7 @@ add_executable(imway
     keyboard.cpp
     theme.cpp
     dialog.cpp
+    desktop_chrome.cpp
     dock.cpp
     lock_screen.cpp
     launcher.cpp

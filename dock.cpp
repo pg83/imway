@@ -173,8 +173,14 @@ void drawDock(Composer& c, DockResult& result) {
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2((width - iconSize) * 0.5f, 5.f * scale));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 5.f * scale));
+    ImGuiIO& io = ImGui::GetIO();
+    ImGuiWindowShadowCallback shadow = io.WindowShadowCallback;
 
-    if (ImGui::BeginViewportSideBar("##dock", ImGui::GetMainViewport(), ImGuiDir_Left, width, flags)) {
+    io.WindowShadowCallback = nullptr;
+    bool open = ImGui::BeginViewportSideBar("##dock", ImGui::GetMainViewport(), ImGuiDir_Left, width, flags);
+    io.WindowShadowCallback = shadow;
+
+    if (open) {
         ImGui::PushID("launcher");
 
         if (iconButton(c.theme, "##icon", 0, iconSize, false)) {
@@ -370,10 +376,4 @@ void drawDock(Composer& c, DockResult& result) {
     ImGui::End();
     ImGui::PopStyleVar(2);
 
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
-
-    scene.workX = (int)viewport->WorkPos.x;
-    scene.workY = (int)viewport->WorkPos.y;
-    scene.workW = (int)viewport->WorkSize.x;
-    scene.workH = (int)viewport->WorkSize.y;
 }
