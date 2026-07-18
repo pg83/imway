@@ -138,9 +138,10 @@ namespace {
         seed.c = seed.c < chromaCap ? seed.c : chromaCap;
 
         for (int i = 0; i < ThemePalette::toneCount; i++) {
-            float l = i <= 5 ? seed.l * (float)i / 5.f : seed.l + (1.f - seed.l) * (float)(i - 5) / 5.f;
+            float distance = i <= 5 ? (float)i / 5.f : (float)(10 - i) / 5.f;
+            float l = i <= 5 ? seed.l * distance : seed.l + (1.f - seed.l) * (float)(i - 5) / 5.f;
 
-            palette.tones[i] = fromLch({l, seed.c, seed.h});
+            palette.tones[i] = fromLch({l, seed.c * distance, seed.h});
         }
     }
 
