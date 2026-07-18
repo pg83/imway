@@ -2,6 +2,7 @@
 #include "mixer.h"
 #include "mixer_sndio.h"
 #include "pooled.h"
+#include "pooled_ev.h"
 
 #if __has_include(<sndio.h>)
 

@@ -273,6 +273,10 @@ add_executable(imway
     composer.cpp
     scene.cpp
     frame_resource.cpp
+    pooled.cpp
+    pooled_ev.cpp
+    pooled_fd.cpp
+    pooled_vk.cpp
     wayland.cpp
     control.cpp
     input.cpp

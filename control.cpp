@@ -2,6 +2,8 @@
 #include "control.h"
 #include "input_sink.h"
 #include "pooled.h"
+#include "pooled_ev.h"
+#include "pooled_fd.h"
 #include "renderer.h"
 #include "intr_list.h"
 #include "scene.h"

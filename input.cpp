@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "input.h"
-#include "pooled.h"
+#include "pooled_ev.h"
+#include "pooled_fd.h"
 #include "renderer.h"
 #include "input_sink.h"
 #include "session.h"

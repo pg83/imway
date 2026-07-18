@@ -90,6 +90,8 @@ main_screenshot.cpp
 composer.cpp
 frame_resource.cpp
 pooled.cpp
+pooled_ev.cpp
+pooled_fd.cpp
 pooled_vk.cpp
 scene.cpp
 wayland.cpp

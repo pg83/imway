@@ -16,7 +16,7 @@
 #include "history.h"
 #include "notifier.h"
 #include "osd.h"
-#include "pooled.h"
+#include "pooled_ev.h"
 #include "pooled_vk.h"
 #include "settings.h"
 #include "wifi.h"

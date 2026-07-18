@@ -43,6 +43,8 @@
 #include <std/sys/throw.h>
 #include "device_kms.h"
 #include "pooled.h"
+#include "pooled_ev.h"
+#include "pooled_fd.h"
 
 using namespace stl;
 

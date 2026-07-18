@@ -38,7 +38,7 @@
 #include <std/str/view.h>
 #include <std/sys/throw.h>
 #include "device_headless.h"
-#include "pooled.h"
+#include "pooled_fd.h"
 
 #include <stdlib.h>
 
