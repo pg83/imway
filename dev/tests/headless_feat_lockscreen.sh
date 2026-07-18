@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Super+L opens a live blurred lockscreen; desktop shortcuts and client input
 # stay below its input sink, invalid passwords stay locked, and xxx unlocks.
+# imway-env: IMWAY_FORCE_CURSOR=1
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

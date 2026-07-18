@@ -180,6 +180,7 @@ namespace {
 
     struct LockFilter: Filter {
         ImDrawList* overlayDrawList = nullptr;
+        ImDrawList* foregroundDrawList = nullptr; // software/client cursor, drawn after the dialog
 
         VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
         VkDevice device = VK_NULL_HANDLE;
@@ -585,7 +586,7 @@ void LockFilter::apply(RenderContext& ctx) {
     initDrawData(overlayData, *ctx.drawData);
 
     for (ImDrawList* list : ctx.drawData->CmdLists) {
-        (list == overlayDrawList ? overlayData : baseData).AddDrawList(list);
+        (list == overlayDrawList || list == foregroundDrawList ? overlayData : baseData).AddDrawList(list);
     }
 
     VkClearValue clear{};
@@ -630,6 +631,7 @@ void Dialog::draw(Composer& c, bool& open) {
 
     if (ImGui::Begin("##lock-overlay", nullptr, flags)) {
         filter.overlayDrawList = ImGui::GetWindowDrawList();
+        filter.foregroundDrawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
 
         ImDrawList* draw = filter.overlayDrawList;
         ImVec2 min = ImGui::GetWindowPos();

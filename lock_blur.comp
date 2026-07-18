@@ -25,7 +25,7 @@ void main() {
     vec4 color = texelFetch(sourceImage, at, 0) * weights[0];
 
     for (int i = 1; i <= 8; i++) {
-        ivec2 delta = pc.direction * (i * 2);
+        ivec2 delta = pc.direction * i;
         ivec2 lo = clamp(at - delta, ivec2(0), size - 1);
         ivec2 hi = clamp(at + delta, ivec2(0), size - 1);
 
