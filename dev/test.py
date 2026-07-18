@@ -168,8 +168,11 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
     shell_out = ""
     rc = 0
     try:
+        # hard 30s ceiling via coreutil timeout so a wedged scenario (a client
+        # blocked on the compositor) can never hang the run; the python timeout
+        # stays as an outer backstop
         cp = subprocess.run(
-            ["bash", t.path], cwd=rt, env=env, timeout=timeout,
+            ["timeout", "30s", "bash", t.path], cwd=rt, env=env, timeout=timeout,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         rc, shell_out = cp.returncode, cp.stdout
@@ -180,18 +183,27 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
 
     # post-mortem: on a failed scenario grab a final state dump while the
     # compositor is still alive (best effort — the FIFO write may race its
-    # reopen cycle and get dropped)
+    # reopen cycle and get dropped). The open is NON-BLOCKING: opening a FIFO
+    # for write blocks forever when there is no reader, and a compositor that
+    # just crashed (segfault) is exactly that — a plain open() here would turn
+    # a crash into a hung run instead of a reported FAIL.
     if rc not in (0, 127) and proc.poll() is None and is_fifo(ctl):
         final_state = os.path.join(rt, "final-state.txt")
         try:
-            with open(ctl, "w") as f:
-                f.write(f"dump {final_state}\n")
-            for _ in range(20):
-                if os.path.exists(final_state):
-                    break
-                time.sleep(0.05)
+            fd = os.open(ctl, os.O_WRONLY | os.O_NONBLOCK)
         except OSError:
-            pass
+            fd = -1  # ENXIO: no reader (compositor gone) — skip the dump
+        if fd >= 0:
+            try:
+                os.write(fd, f"dump {final_state}\n".encode())
+                for _ in range(20):
+                    if os.path.exists(final_state):
+                        break
+                    time.sleep(0.05)
+            except OSError:
+                pass
+            finally:
+                os.close(fd)
 
     # teardown: clean shutdown is part of every test. SIGTERM (the compositor
     # breaks its event loop on it) rather than a FIFO "quit" — writing to the
