@@ -187,7 +187,12 @@ void Theme::rebuild() {
     float desktopC = 0.055f * (s.c + a.c) * 0.5f;
 
     desktopC = desktopC < 0.006f ? 0.006f : desktopC > 0.018f ? 0.018f : desktopC;
-    desktop = fromLch({n.l - 0.05f, desktopC, atan2f(y, x)});
+    // Desktop is the deepest plane in the hierarchy.  Reduce perceptual
+    // lightness after separating it from the neutral surface; doing this in
+    // OKLCH avoids the hue-dependent result of simply halving sRGB channels.
+    float desktopL = (n.l - 0.05f) * 0.8f;
+
+    desktop = fromLch({desktopL, desktopC, atan2f(y, x)});
 
     makeTones(neutral, n, 0.025f);
     makeTones(selection, s, 0.20f);
