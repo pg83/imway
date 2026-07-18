@@ -24,15 +24,6 @@ namespace {
         ~SessionFDBox() noexcept;
     };
 
-    struct PooledFDImpl: public PooledFD {
-        int fd = -1;
-
-        PooledFDImpl(int f);
-        ~PooledFDImpl() noexcept;
-
-        int get() const override;
-        void reset(int newFd) override;
-    };
 }
 
 FDBox::FDBox(int f)
@@ -46,8 +37,8 @@ FDBox::~FDBox() noexcept {
     }
 }
 
-void pooledFD(ObjPool& pool, int fd) {
-    pool.make<FDBox>(fd);
+int* pooledFD(ObjPool& pool, int fd) {
+    return &pool.make<FDBox>(fd)->fd;
 }
 
 SessionFDBox::SessionFDBox(Session& s, int f)
@@ -64,29 +55,4 @@ SessionFDBox::~SessionFDBox() noexcept {
 
 void pooledSessionFD(ObjPool& pool, Session& session, int fd) {
     pool.make<SessionFDBox>(session, fd);
-}
-
-PooledFDImpl::PooledFDImpl(int f)
-    : fd(f)
-{
-}
-
-PooledFDImpl::~PooledFDImpl() noexcept {
-    reset(-1);
-}
-
-int PooledFDImpl::get() const {
-    return fd;
-}
-
-void PooledFDImpl::reset(int newFd) {
-    if (fd >= 0) {
-        close(fd);
-    }
-
-    fd = newFd;
-}
-
-PooledFD* PooledFD::create(ObjPool& pool, int fd) {
-    return pool.make<PooledFDImpl>(fd);
 }

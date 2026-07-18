@@ -79,7 +79,7 @@ namespace {
         InputSink* sink = nullptr;
         Renderer* renderer = nullptr;
         Scene* scene = nullptr;
-        PooledFD* fd = nullptr;
+        int* fd = nullptr;
         ev_io* io = nullptr;
         StringBuilder path;
         char line[1024] = "";
@@ -117,12 +117,12 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
         unlink(Buffer(stored).cStr());
     });
 
-    fd = PooledFD::create(pool, -1);
+    fd = pooledFD(pool, -1);
     io = createEvIo(pool, loop);
-    fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
-    STD_VERIFY(fd->get() >= 0);
+    *fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    STD_VERIFY(*fd >= 0);
 
-    ev_io_init(io, controlIoCb, fd->get(), EV_READ);
+    ev_io_init(io, controlIoCb, *fd, EV_READ);
     io->data = this;
     ev_io_start(loop, io);
     sysO << "imway: control FIFO: "_sv << sv(path) << endL;
@@ -342,7 +342,7 @@ void ControlImpl::handleInput() {
     char tmp[512];
 
     for (;;) {
-        ssize_t n = read(fd->get(), tmp, sizeof tmp);
+        ssize_t n = read(*fd, tmp, sizeof tmp);
 
         if (n > 0) {
             for (ssize_t i = 0; i < n; i++) {
@@ -368,13 +368,18 @@ void ControlImpl::handleInput() {
 
 void ControlImpl::reopen() {
     ev_io_stop(loop, io);
-    fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
 
-    if (fd->get() < 0) {
+    if (*fd >= 0) {
+        close(*fd);
+    }
+
+    *fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+
+    if (*fd < 0) {
         return;
     }
 
-    ev_io_set(io, fd->get(), EV_READ);
+    ev_io_set(io, *fd, EV_READ);
     ev_io_start(loop, io);
 }
 
