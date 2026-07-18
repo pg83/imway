@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "listener.h"
 #include "notifications.h"
 #include "notifier.h"
 #include "dbus_conn.h"
@@ -21,13 +22,13 @@ namespace {
 
     DBusHandlerResult busMessage(DBusConnection* conn, DBusMessage* msg, void* data);
 
-    struct NotificationsImpl: public Notifications, public NotifierListener {
+    struct NotificationsImpl: public Notifications, public Listener {
         DBusConnection* conn = nullptr;
         Notifier* notifier = nullptr;
 
         NotificationsImpl(Composer& c);
 
-        void notificationClosed(u32 id, u32 reason) override;
+        void onListen(void* arg) override;
 
         void notify(DBusMessage* msg);
         void closeCall(DBusMessage* msg);
@@ -57,11 +58,14 @@ NotificationsImpl::NotificationsImpl(Composer& c)
 
     vt.message_function = busMessage;
     dbus_connection_register_object_path(conn, kPath, &vt, this);
-    c.notifierListeners.pushBack((NotifierListener*)this);
+    c.notifierListeners.pushBack((Listener*)this);
     sysO << "imway: notifications on the session bus"_sv << endL;
 }
 
-void NotificationsImpl::notificationClosed(u32 id, u32 reason) {
+void NotificationsImpl::onListen(void* arg) {
+    auto& event = *(NotificationClosedEvent*)arg;
+    u32 id = event.id;
+    u32 reason = event.reason;
     DBusMessage* sig = dbus_message_new_signal(kPath, kIface, "NotificationClosed");
 
     dbus_message_append_args(sig, DBUS_TYPE_UINT32, &id, DBUS_TYPE_UINT32, &reason, DBUS_TYPE_INVALID);

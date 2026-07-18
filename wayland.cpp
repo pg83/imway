@@ -578,24 +578,24 @@ namespace {
         WaylandImpl* parent;
 
         CallIconsReloaded(WaylandImpl* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct CallWaylandSessionEnabled: Listener {
         WaylandImpl* parent;
 
         CallWaylandSessionEnabled(WaylandImpl* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct CallWaylandSessionDisabled: Listener {
         WaylandImpl* parent;
 
         CallWaylandSessionDisabled(WaylandImpl* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
-    struct WaylandImpl: public Wayland, public InputSink, public FrameListener {
+    struct WaylandImpl: public Wayland, public InputSink, public Listener {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
@@ -702,7 +702,7 @@ namespace {
         void holdBegin(u32 fingers) override;
         void holdEnd(bool cancelled) override;
 
-        void frameShown(u32 msec) override;
+        void onListen(void* arg) override;
 
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
@@ -713,7 +713,7 @@ namespace {
     {
     }
 
-    void CallIconsReloaded::onListen() {
+    void CallIconsReloaded::onListen(void*) {
         parent->iconsReloaded();
     }
 
@@ -722,7 +722,7 @@ namespace {
     {
     }
 
-    void CallWaylandSessionEnabled::onListen() {
+    void CallWaylandSessionEnabled::onListen(void*) {
         parent->sessionEnabled();
     }
 
@@ -731,7 +731,7 @@ namespace {
     {
     }
 
-    void CallWaylandSessionDisabled::onListen() {
+    void CallWaylandSessionDisabled::onListen(void*) {
         parent->sessionDisabled();
     }
 
@@ -2376,7 +2376,7 @@ namespace {
 
         srv->seat.toplevelGone(t);
 
-        // the renderer stashes this between buildUi and frameShown; the client
+        // the renderer stashes this between buildUi and the frame event; the client
         // can destroy the toplevel in that window (KMS: render -> page flip)
         if (srv->scene->focusedToplevel == t) {
             srv->scene->focusedToplevel = nullptr;
@@ -7341,7 +7341,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.iconListeners.pushBack(comp.pool->make<CallIconsReloaded>(this));
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
     comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
-    comp.frameListeners.pushBack((FrameListener*)this);
+    comp.frameListeners.pushBack((Listener*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;
 
@@ -7380,7 +7380,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 }
 
 WaylandImpl::~WaylandImpl() noexcept {
-    ((FrameListener*)this)->unlink();
     ev_timer_stop(loop, &pingTimer);
 
     if (watchersStarted) {
@@ -7929,7 +7928,9 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
     return false;
 }
 
-void WaylandImpl::frameShown(u32 msec) {
+void WaylandImpl::onListen(void* arg) {
+    u32 msec = ((FrameEvent*)arg)->msec;
+
     if (scene->focusedToplevel && scene->focusedToplevel != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel);
     }

@@ -39,14 +39,14 @@ namespace {
         LibinputSource* parent;
 
         CallInputSessionEnabled(LibinputSource* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct CallInputSessionDisabled: Listener {
         LibinputSource* parent;
 
         CallInputSessionDisabled(LibinputSource* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct LibinputSource: public InputSource {
@@ -85,7 +85,7 @@ namespace {
     {
     }
 
-    void CallInputSessionEnabled::onListen() {
+    void CallInputSessionEnabled::onListen(void*) {
         parent->sessionEnabled();
     }
 
@@ -94,7 +94,7 @@ namespace {
     {
     }
 
-    void CallInputSessionDisabled::onListen() {
+    void CallInputSessionDisabled::onListen(void*) {
         parent->sessionDisabled();
     }
 

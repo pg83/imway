@@ -1,5 +1,6 @@
 #include "composer.h"
 #include "intr_list.h"
+#include "listener.h"
 #include "notifier.h"
 #include "scene.h"
 #include "util.h"
@@ -152,8 +153,10 @@ void NotifierImpl::close(u32 id, u32 reason) {
     t->onScreen = false;
 
     if (t->fromBus) {
-        forEach<NotifierListener>(c->notifierListeners, [&](NotifierListener& listener) {
-            listener.notificationClosed(id, reason);
+        NotificationClosedEvent event{id, reason};
+
+        forEach<Listener>(c->notifierListeners, [&event](Listener& listener) {
+            listener.onListen(&event);
         });
     }
 

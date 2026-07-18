@@ -4,6 +4,7 @@
 #include "device_vk.h"
 #include "frame_listener.h"
 #include "intr_list.h"
+#include "listener.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -225,8 +226,10 @@ bool HeadlessOutput::presentNeedsPixels() const {
 void HeadlessOutput::present(const void*) {
     u32 msec = nowMsec();
 
-    forEach<FrameListener>(c->frameListeners, [msec](FrameListener& listener) {
-        listener.frameShown(msec);
+    FrameEvent event{msec};
+
+    forEach<Listener>(c->frameListeners, [&event](Listener& listener) {
+        listener.onListen(&event);
     });
 }
 

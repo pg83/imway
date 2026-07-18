@@ -488,14 +488,14 @@ standalone.
   `needsFrame` is empty (perfect idle = 0 frames; lavapipe is a CPU), after
   activity 3 settle frames are drawn (hover/ImGui animations). A full frame:
   retire the previous frame refs → upload dirty textures → the ImGui frame → `Output::present`
-  → `FrameListener::frameShown(msec)`. On it, the SM sends frame callbacks — to all
+  → `Listener::onListen(&FrameEvent)`. On it, the SM sends frame callbacks — to all
   trees shown in the frame, including popups (GTK doesn't draw menu content until it
   gets frame done) — and configures per the view feedback.
 - **GPU dmabuf formats** — knowledge belonging to Device (`dmabufFormatCount/dmabufFormat`),
   passed into `WaylandConfig` as data: the SM depends on neither the device nor the
   renderer. An empty list = the dmabuf global isn't brought up. Since the formats are
   known before the renderer is born, the graph is built in a single pass: Scene → Device →
-  Output → Wayland → Renderer (the FrameListener arrives via the constructor,
+  Output → Wayland → Renderer (the frame listener arrives via the constructor,
   no assemble-later setters).
 - Any input and any key press wakes a frame (`needsFrame`), even if ImGui doesn't
   consume the keys.

@@ -142,17 +142,17 @@ namespace {
         RendererImpl* parent;
 
         CallVolumeChanged(RendererImpl* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct CallWifiChanged: Listener {
         RendererImpl* parent;
 
         CallWifiChanged(RendererImpl* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public FrameListener {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public Listener {
         // The renderer is the input frontend (coordinates, XKB, ImGui). This
         // default route owns desktop policy and is replaceable as one unit by
         // modal UI such as the lockscreen.
@@ -436,7 +436,7 @@ namespace {
         bool wantFrame() const;
 
         void frameNow();
-        void frameShown(u32 msec) override;
+        void onListen(void* arg) override;
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
@@ -449,7 +449,7 @@ namespace {
     {
     }
 
-    void CallVolumeChanged::onListen() {
+    void CallVolumeChanged::onListen(void*) {
         parent->volumeChanged();
     }
 
@@ -458,7 +458,7 @@ namespace {
     {
     }
 
-    void CallWifiChanged::onListen() {
+    void CallWifiChanged::onListen(void*) {
         parent->wifiChanged();
     }
 
@@ -553,7 +553,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.iconResolver = this;
-    comp.frameListeners.pushFront((FrameListener*)this);
+    comp.frameListeners.pushFront((Listener*)this);
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
     setup(scene->outW, scene->outH);
@@ -585,8 +585,6 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 }
 
 RendererImpl::~RendererImpl() noexcept {
-    ((FrameListener*)this)->unlink();
-
     // the device must be idle before the pooled handles unwind (they die
     // right after this destructor); imgui and the churn-class resources
     // (textures, the recreatable syncOut, the present fence) are tied to
@@ -978,8 +976,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     return true;
 }
 
-void RendererImpl::frameShown(u32 msec) {
-    (void)msec;
+void RendererImpl::onListen(void*) {
     finishGpuFrame(false);
 }
 
@@ -4468,7 +4465,7 @@ void RendererImpl::frameNow() {
 }
 
 void RendererImpl::tick() {
-    // headless present() reports frameShown before the GPU is done, so the
+    // headless present() reports the frame event before the GPU is done, so the
     // frame retires here instead; without this, dmabuf releases to clients
     // wait for the next needed frame or the 2s clock tick
     finishGpuFrame(false);

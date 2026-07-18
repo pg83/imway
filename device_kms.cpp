@@ -439,14 +439,14 @@ namespace {
         KmsOutput* parent;
 
         CallKmsSessionEnabled(KmsOutput* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct CallKmsSessionDisabled: Listener {
         KmsOutput* parent;
 
         CallKmsSessionDisabled(KmsOutput* p);
-        void onListen() override;
+        void onListen(void*) override;
     };
 
     struct DirectFbOwner {
@@ -625,7 +625,7 @@ namespace {
     {
     }
 
-    void CallKmsSessionEnabled::onListen() {
+    void CallKmsSessionEnabled::onListen(void*) {
         parent->sessionEnabled();
     }
 
@@ -634,7 +634,7 @@ namespace {
     {
     }
 
-    void CallKmsSessionDisabled::onListen() {
+    void CallKmsSessionDisabled::onListen(void*) {
         parent->sessionDisabled();
     }
 
@@ -652,8 +652,10 @@ namespace {
 
         u32 msec = (u32)(out->flipNs / 1000000ull);
 
-        forEach<FrameListener>(out->c->frameListeners, [msec](FrameListener& listener) {
-            listener.frameShown(msec);
+        FrameEvent event{msec};
+
+        forEach<Listener>(out->c->frameListeners, [&event](Listener& listener) {
+            listener.onListen(&event);
         });
     }
 

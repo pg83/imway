@@ -37,10 +37,11 @@ struct Post {
     u32 replacesId = 0;
 };
 
-// fired when a toast leaves the screen; the dbus adapter turns it into the
-// spec's NotificationClosed signal
-struct NotifierListener: stl::IntrusiveNode {
-    virtual void notificationClosed(u32 id, u32 reason) = 0;
+// listener payload fired when a toast leaves the screen; the dbus adapter
+// turns it into the spec's NotificationClosed signal
+struct NotificationClosedEvent {
+    u32 id = 0;
+    u32 reason = 0;
 };
 
 // the notification store — the single UI-facing model both producers write
