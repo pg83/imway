@@ -108,12 +108,12 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     });
 
     pooledFD(*c->pool, inoFd);
-    ev_io* ino = PooledEvIo::create(*c->pool, loop);
+    ev_io* ino = createEvIo(*c->pool, loop);
 
     ev_io_init(ino, inoCb, inoFd, EV_READ);
     ino->data = this;
     ev_io_start(loop, ino);
-    reloadTimer = PooledEvTimer::create(*c->pool, loop);
+    reloadTimer = createEvTimer(*c->pool, loop);
     ev_timer_init(reloadTimer, reloadCb, 0.5, 0.5);
     reloadTimer->data = this;
 }

@@ -109,7 +109,7 @@ LibinputSource::LibinputSource(Composer& c)
 
     if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
         pooledFD(*c.pool, inoFd);
-        ev_io* inotifyIo = PooledEvIo::create(*c.pool, loop);
+        ev_io* inotifyIo = createEvIo(*c.pool, loop);
 
         ev_io_init(inotifyIo, inotifyCb, inoFd, EV_READ);
         inotifyIo->data = this;
@@ -120,7 +120,7 @@ LibinputSource::LibinputSource(Composer& c)
 
     session->addListener(this);
 
-    ev_io* inputIo = PooledEvIo::create(*c.pool, loop);
+    ev_io* inputIo = createEvIo(*c.pool, loop);
 
     ev_io_init(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
     inputIo->data = this;

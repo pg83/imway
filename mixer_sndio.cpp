@@ -63,7 +63,7 @@ SndioMixer::SndioMixer(Composer& comp, struct sioctl_hdl* h)
     pooledGuard(*comp.pool, [h] {
         sioctl_close(h);
     });
-    io = PooledEvIo::create(*comp.pool, comp.loop);
+    io = createEvIo(*comp.pool, comp.loop);
     sioctl_ondesc(hdl, onDesc, this);
     sioctl_onval(hdl, onVal, this);
     rearm();

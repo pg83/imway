@@ -712,7 +712,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
         vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
     }
 
-    ev_io* drmIo = PooledEvIo::create(*pool, loop);
+    ev_io* drmIo = createEvIo(*pool, loop);
 
     ev_io_init(drmIo, drmIoCb, fd, EV_READ);
     drmIo->data = (void*)(intptr_t)fd;
@@ -739,7 +739,7 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
         });
         udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
         udev_monitor_enable_receiving(mon);
-        ev_io* udevIo = PooledEvIo::create(*pool, loop);
+        ev_io* udevIo = createEvIo(*pool, loop);
 
         ev_io_init(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
         udevIo->data = this;
@@ -1807,7 +1807,7 @@ void KmsOutput::initDdc(StringView connName) {
     ddcMax = max;
     ddcCur = cur;
     pooledFD(*pool, ddcFd);
-    ddcTimer = PooledEvTimer::create(*pool, loop);
+    ddcTimer = createEvTimer(*pool, loop);
     sysO << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
 

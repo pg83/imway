@@ -118,7 +118,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     });
 
     fd = PooledFD::create(pool, -1);
-    io = PooledEvIo::create(pool, loop);
+    io = createEvIo(pool, loop);
     fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
     STD_VERIFY(fd->get() >= 0);
 

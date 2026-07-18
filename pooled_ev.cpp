@@ -51,7 +51,7 @@ IoBox::~IoBox() noexcept {
     }
 }
 
-ev_io* PooledEvIo::create(ObjPool& pool, struct ev_loop* loop) {
+ev_io* createEvIo(ObjPool& pool, struct ev_loop* loop) {
     return &pool.make<IoBox>(loop)->value;
 }
 
@@ -66,7 +66,7 @@ TimerBox::~TimerBox() noexcept {
     }
 }
 
-ev_timer* PooledEvTimer::create(ObjPool& pool, struct ev_loop* loop) {
+ev_timer* createEvTimer(ObjPool& pool, struct ev_loop* loop) {
     return &pool.make<TimerBox>(loop)->value;
 }
 
@@ -81,7 +81,7 @@ PrepareBox::~PrepareBox() noexcept {
     }
 }
 
-ev_prepare* PooledEvPrepare::create(ObjPool& pool, struct ev_loop* loop) {
+ev_prepare* createEvPrepare(ObjPool& pool, struct ev_loop* loop) {
     return &pool.make<PrepareBox>(loop)->value;
 }
 
@@ -96,6 +96,6 @@ SignalBox::~SignalBox() noexcept {
     }
 }
 
-ev_signal* PooledEvSignal::create(ObjPool& pool, struct ev_loop* loop) {
+ev_signal* createEvSignal(ObjPool& pool, struct ev_loop* loop) {
     return &pool.make<SignalBox>(loop)->value;
 }
