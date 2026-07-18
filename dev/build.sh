@@ -222,8 +222,8 @@ for src in dev/tests/client_*.c dev/tests/client_*.cpp; do
     name=${name%.*}
 
     case "$src" in
-        *.cpp) CMDS+="$CXX $CXXFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client ${LDFLAGS:-}"$'\n' ;;
-        *)     CMDS+="$CC $CFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client ${LDFLAGS:-}"$'\n' ;;
+        *.cpp) CMDS+="$CXX $CXXFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm ${LDFLAGS:-}"$'\n' ;;
+        *)     CMDS+="$CC $CFLAGS -I$B/tests -o $B/tests/$name $src $CLIENT_GLUE_OBJS -lwayland-client -ldrm ${LDFLAGS:-}"$'\n' ;;
     esac
 done
 
