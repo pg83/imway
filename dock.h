@@ -2,6 +2,8 @@
 
 struct Composer;
 
+float dockBarWidth();
+
 struct DockResult {
     bool launcher = false;
     float launcherX = -1.f;

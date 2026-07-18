@@ -53,6 +53,8 @@ def pixel(x, y):
 # must be exactly the same material — no border and no per-window shadow seam.
 samples = [pixel(10, 400), pixel(100, 10), pixel(55, 10), pixel(60, 10)]
 assert len(set(samples)) == 1, f'desktop chrome has a seam: {samples}'
+assert pixel(57, 400) != samples[0], 'desktop chrome outer border is missing'
+assert sum(pixel(65, 400)) < sum(pixel(100, 400)), 'desktop chrome outer shadow is missing'
 bright = [(x, y) for y in range(h) for x in range(58)
           if min(pixel(x, y)) > 180]
 assert bright and min(y for _, y in bright) < 20, 'launcher icon does not own the upper-left corner'

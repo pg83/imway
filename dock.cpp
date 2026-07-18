@@ -163,10 +163,14 @@ namespace {
     }
 }
 
+float dockBarWidth() {
+    return 58.f * ImGui::GetStyle().FontScaleMain;
+}
+
 void drawDock(Composer& c, DockResult& result) {
     Scene& scene = *c.scene;
     float scale = ImGui::GetStyle().FontScaleMain;
-    float width = 58.f * scale;
+    float width = dockBarWidth();
     float iconSize = 48.f * scale;
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
