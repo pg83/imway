@@ -20,6 +20,7 @@ struct RenderContext {
     VkFramebuffer outputFramebuffer = VK_NULL_HANDLE;
     VkTexturePool* textures = nullptr;
     ImDrawData* drawData = nullptr;
+    float clearColor[4] = {0.08f, 0.08f, 0.10f, 1.f};
     int width = 0, height = 0;
     bool handled = false;
 

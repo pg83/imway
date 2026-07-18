@@ -1,5 +1,7 @@
 #pragma once
 
+#include "theme.h"
+
 // the settings dialog model: the caller owns one of these, the widget edits
 // the values in place and raises the *Changed flags for whatever moved this
 // frame — the caller applies the side effects (rescale, kms sdr white,
@@ -16,6 +18,8 @@ struct Settings {
     float sdrNits = -1.f;  // sdr white; <= 0 renders the hdr row disabled
     bool nightOn = false;  // night light toggle + temperature
     float nightK = 3400.f;
+    ThemeColor neutral;
+    ThemeColor selection;
 
     bool hasDnd = false;   // in: a notifier exists, else the row is hidden
     bool dnd = false;      // do-not-disturb, edited in place
@@ -27,9 +31,10 @@ struct Settings {
     bool sdrChanged = false;
     bool nightChanged = false;
     bool dndChanged = false;
+    bool themeChanged = false;
 
     bool changed() const {
-        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged || dndChanged;
+        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged || dndChanged || themeChanged;
     }
 };
 

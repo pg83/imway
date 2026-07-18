@@ -20,7 +20,7 @@ namespace {
 }
 
 void Dialog::draw(Settings& s, bool& open) {
-    ImGui::SetNextWindowSize(ImVec2(300.f * s.uiScale, 260.f * s.uiScale), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(340.f * s.uiScale, 340.f * s.uiScale), ImGuiCond_FirstUseEver);
 
     if (!ImGui::Begin("settings", &open, ImGuiWindowFlags_NoDocking)) {
         ImGui::End();
@@ -88,6 +88,12 @@ void Dialog::draw(Settings& s, bool& open) {
         s.dndChanged = ImGui::Checkbox("do not disturb", &s.dnd);
     }
 
+    ImGui::SeparatorText("appearance");
+    ImGui::SetNextItemWidth(220.f * s.uiScale);
+    s.themeChanged |= ImGui::ColorEdit3("neutral", &s.neutral.r, ImGuiColorEditFlags_DisplayRGB);
+    ImGui::SetNextItemWidth(220.f * s.uiScale);
+    s.themeChanged |= ImGui::ColorEdit3("selection", &s.selection.r, ImGuiColorEditFlags_DisplayRGB);
+
     ImGui::End();
 }
 
@@ -99,6 +105,7 @@ void drawSettings(Composer& c, Settings& s, bool toggle, void** state) {
     s.sdrChanged = false;
     s.nightChanged = false;
     s.dndChanged = false;
+    s.themeChanged = false;
 
     dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
         d.draw(s, open);

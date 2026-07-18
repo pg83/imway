@@ -65,7 +65,10 @@ settings_closed=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/sett
 pick_action "lock screen"
 screenshot "$XDG_RUNTIME_DIR/locked.ppm"
 locked=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/locked.ppm" 0 30 1280 780)
-[[ "$locked" -gt 5000 ]] || { echo "launcher did not lock screen ($locked)"; exit 1; }
+# The procedural desktop is deliberately close to the lockscreen's dark
+# tint, so the stable signal here is the dialog itself rather than a large
+# flat-background delta.
+[[ "$locked" -gt 2000 ]] || { echo "launcher did not lock screen ($locked)"; exit 1; }
 
 ctl "type xxx"
 sleep 0.4

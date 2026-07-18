@@ -78,7 +78,7 @@ namespace {
         }
     }
 
-    bool iconButton(const char* id, u64 texture, float size, bool active, bool attention = false) {
+    bool iconButton(const Theme& theme, const char* id, u64 texture, float size, bool active, bool attention = false) {
         ImVec2 p = ImGui::GetCursorScreenPos();
 
         ImGui::InvisibleButton(id, ImVec2(size, size));
@@ -87,7 +87,7 @@ namespace {
         ImVec2 max(p.x + size, p.y + size);
 
         if (ImGui::IsItemHovered()) {
-            draw->AddRectFilled(p, max, IM_COL32(255, 255, 255, 20), 6.f);
+            draw->AddRectFilled(p, max, themeColorU32(themeAlpha(theme.neutral[10], 0.08f)), 6.f);
         }
 
         if (texture) {
@@ -95,11 +95,11 @@ namespace {
 
             draw->AddImage((ImTextureID)texture, ImVec2(p.x + pad, p.y + pad), ImVec2(max.x - pad, max.y - pad));
         } else {
-            drawLauncherGlyph(draw, p, max, IM_COL32(225, 225, 235, 255));
+            drawLauncherGlyph(draw, p, max, themeColorU32(theme.neutral[9]));
         }
 
         if (active) {
-            draw->AddRectFilled(ImVec2(p.x, p.y + size * 0.25f), ImVec2(p.x + 3.f, p.y + size * 0.75f), IM_COL32(238, 180, 52, 255), 1.5f);
+            draw->AddRectFilled(ImVec2(p.x, p.y + size * 0.25f), ImVec2(p.x + 3.f, p.y + size * 0.75f), themeColorU32(theme.accent), 1.5f);
         }
 
         if (attention) {
@@ -177,7 +177,7 @@ void drawDock(Composer& c, DockResult& result) {
     if (ImGui::BeginViewportSideBar("##dock", ImGui::GetMainViewport(), ImGuiDir_Left, width, flags)) {
         ImGui::PushID("launcher");
 
-        if (iconButton("##icon", 0, iconSize, false)) {
+        if (iconButton(c.theme, "##icon", 0, iconSize, false)) {
             ImVec2 min = ImGui::GetItemRectMin();
             ImVec2 max = ImGui::GetItemRectMax();
 
@@ -274,7 +274,7 @@ void drawDock(Composer& c, DockResult& result) {
             ImGui::PushID(t ? (void*)t : (void*)tray);
 
             u64 texture = c.iconResolver ? c.iconResolver->iconTexture(icon) : 0;
-            bool clicked = iconButton("##icon", texture, iconSize, t && t->activated && !t->minimized, attention);
+            bool clicked = iconButton(c.theme, "##icon", texture, iconSize, t && t->activated && !t->minimized, attention);
 
             if (clicked) {
                 if (t) {

@@ -40,6 +40,8 @@ await 50 field_is activated 1 || {
 }
 
 screenshot "$XDG_RUNTIME_DIR/before-launcher.ppm"
+read -r ax ay < <(centroid "$XDG_RUNTIME_DIR/before-launcher.ppm" 248 156 42)
+[[ "$ax" -lt 10 ]] || { echo "procedural accent is not on active dock item: $ax $ay"; exit 1; }
 click_at 29 45
 screenshot "$XDG_RUNTIME_DIR/launcher.ppm"
 launcher_diff=$(region_diff "$XDG_RUNTIME_DIR/before-launcher.ppm" \

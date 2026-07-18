@@ -124,7 +124,7 @@ void Dialog::draw(Composer& c, bool& open) {
             bool isToday = today.tm_year + 1900 == year && today.tm_mon == mon && today.tm_mday == day;
 
             if (isToday) {
-                ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 60, 255));
+                ImGui::PushStyleColor(ImGuiCol_Text, themeColorU32(c.theme.accent));
             }
 
             ImGui::TextUnformatted(ds.cStr());

@@ -102,6 +102,7 @@ input.cpp
 intr_list.cpp
 listener.cpp
 keyboard.cpp
+theme.cpp
 dialog.cpp
 dock.cpp
 lock_screen.cpp

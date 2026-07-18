@@ -591,7 +591,7 @@ void LockFilter::apply(RenderContext& ctx) {
 
     VkClearValue clear{};
 
-    clear.color = {{0.08f, 0.08f, 0.10f, 1.f}};
+    clear.color = {{ctx.clearColor[0], ctx.clearColor[1], ctx.clearColor[2], ctx.clearColor[3]}};
 
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
@@ -641,7 +641,7 @@ void Dialog::draw(Composer& c, bool& open) {
             draw->AddImage(background, min, max);
         }
 
-        draw->AddRectFilled(min, max, IM_COL32(4, 7, 14, 105));
+        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, 0.42f)));
 
         float fieldW = 360.f * scale;
         float contentH = 78.f * scale;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "theme.h"
+
 #include <std/lib/list.h>
 
 namespace stl {
@@ -33,6 +35,7 @@ struct Wayland;
 // (bus, notes, session, mixer) stay nullable forever — a missing subsystem
 // is a normal mode, check on every use
 struct Composer {
+    Theme theme;
     stl::ObjPool* pool = nullptr;
     struct ev_loop* loop = nullptr;
     Scene* scene = nullptr;

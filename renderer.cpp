@@ -252,6 +252,8 @@ namespace {
 
         StringView fontPath;
         float uiScale = 1.f;
+        u64 themeRevision = 0;
+        ThemeColor desktopColor;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
         // settings: renderer-owned values plus a pool-owned dialog handle
         Settings settings;
@@ -505,7 +507,7 @@ void RenderContext::finish() {
 
     VkClearValue clear{};
 
-    clear.color = {{0.08f, 0.08f, 0.10f, 1.f}};
+    clear.color = {{clearColor[0], clearColor[1], clearColor[2], clearColor[3]}};
 
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
@@ -1464,6 +1466,9 @@ void RendererImpl::setup(int w, int h) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    applyImGuiTheme(ImGui::GetStyle(), comp->theme);
+    themeRevision = comp->theme.revision;
+    desktopColor = comp->theme.desktop;
 
     ImGuiIO& io = ImGui::GetIO();
 
@@ -2958,6 +2963,12 @@ void RendererImpl::buildUi(Scene& scene) {
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.DeltaTime = (float)(1.0 / scene.hz);
 
+    if (themeRevision != comp->theme.revision) {
+        applyImGuiTheme(ImGui::GetStyle(), comp->theme);
+        themeRevision = comp->theme.revision;
+        desktopColor = comp->theme.desktop;
+    }
+
     // the ui only writes nextUiScale: the scale flips here and nowhere
     // else, so a whole frame never mixes the new scale with the old style
     if (nextUiScale != uiScale) {
@@ -2966,6 +2977,7 @@ void RendererImpl::buildUi(Scene& scene) {
         // restyle from a pristine copy: ScaleAllSizes compounds otherwise
         ImGuiStyle fresh;
 
+        applyImGuiTheme(fresh, comp->theme);
         fresh.FontScaleMain = uiScale;
         fresh.ScaleAllSizes(uiScale);
         ImGui::GetStyle() = fresh;
@@ -3110,6 +3122,8 @@ void RendererImpl::buildUi(Scene& scene) {
     }
 
     settings.uiScale = uiScale;
+    settings.neutral = comp->theme.neutralSeed;
+    settings.selection = comp->theme.selectionSeed;
 
     if (comp->mixer) {
         settings.volume = comp->mixer->volume();
@@ -3154,6 +3168,10 @@ void RendererImpl::buildUi(Scene& scene) {
 
     if (settings.nightChanged) {
         output->setColorTemp(settings.nightOn ? settings.nightK : 0);
+    }
+
+    if (settings.themeChanged) {
+        comp->theme.setSeeds(settings.neutral, settings.selection);
     }
 
     if (settings.changed()) {
@@ -3630,7 +3648,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th), tuv0, tuv1);
 
                 if (t == altTabSel) {
-                    dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), IM_COL32(255, 200, 60, 255), 0.f, 0, 3.f);
+                    dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
                 }
 
                 if (u64 tabIcon = iconTexture(t->icon)) {
@@ -4044,6 +4062,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
     renderCtx.outputFramebuffer = scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer;
     renderCtx.textures = texPool;
     renderCtx.drawData = ImGui::GetDrawData();
+    renderCtx.clearColor[0] = desktopColor.r;
+    renderCtx.clearColor[1] = desktopColor.g;
+    renderCtx.clearColor[2] = desktopColor.b;
+    renderCtx.clearColor[3] = desktopColor.a;
     renderCtx.width = width;
     renderCtx.height = height;
 
