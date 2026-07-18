@@ -12,20 +12,19 @@
 using namespace stl;
 
 namespace {
-    void drawOuterChrome() {
+    void drawOuterShadow() {
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGuiIO& io = ImGui::GetIO();
-        const ImGuiStyle& style = ImGui::GetStyle();
         ImVec2 pos = viewport->Pos;
         ImVec2 size = viewport->Size;
         float dockW = dockBarWidth();
         float topH = ImGui::GetFrameHeight();
+        ImDrawList* background = ImGui::GetBackgroundDrawList(viewport);
 
         // Submit both rectangular shadows before either material rectangle.
         // Their internal halves are subsequently covered by chrome itself;
         // only the union's outer shadow remains visible.
         if (io.WindowShadowCallback) {
-            ImDrawList* background = ImGui::GetBackgroundDrawList(viewport);
             ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
 
@@ -35,8 +34,19 @@ namespace {
                 ImVec2(size.x - dockW, topH), 0.f, flags, io.WindowShadowCallbackUserData);
         }
 
-        // One six-segment outline describes the Г union.  Unlike two window
-        // borders it has no edge at the private dock/top joint.
+    }
+
+    void drawOuterBorder(ImDrawList& draw) {
+        ImGuiViewport* viewport = ImGui::GetMainViewport();
+        const ImGuiStyle& style = ImGui::GetStyle();
+        ImVec2 pos = viewport->Pos;
+        ImVec2 size = viewport->Size;
+        float dockW = dockBarWidth();
+        float topH = ImGui::GetFrameHeight();
+
+        // One six-segment outline describes the Г union.  It lives in the
+        // top sidebar's ordinary draw list: after both chrome materials, but
+        // before the client windows submitted later in the frame.
         ImVec2 outline[] = {
             pos,
             ImVec2(pos.x + size.x, pos.y),
@@ -46,9 +56,11 @@ namespace {
             ImVec2(pos.x, pos.y + size.y),
         };
 
-        ImGui::GetForegroundDrawList(viewport)->AddPolyline(outline, 6,
+        draw.PushClipRectFullScreen();
+        draw.AddPolyline(outline, 6,
             ImGui::GetColorU32(ImGuiCol_Border), ImDrawFlags_Closed,
             style.WindowBorderSize);
+        draw.PopClipRect();
     }
 
     void drawTop(const DesktopChromeInfo& info, DesktopChromeResult& result) {
@@ -121,6 +133,7 @@ namespace {
             }
         }
 
+        drawOuterBorder(*ImGui::GetWindowDrawList());
         ImGui::EndMainMenuBar();
     }
 }
@@ -128,7 +141,7 @@ namespace {
 void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChromeResult& result) {
     const ImVec4 chrome = ImGui::GetStyleColorVec4(ImGuiCol_MenuBarBg);
 
-    drawOuterChrome();
+    drawOuterShadow();
 
     // Both sidebar windows paint the exact same borderless material.  The
     // caller sees one widget; the two rectangles are only ImGui's internal
