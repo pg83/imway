@@ -26,6 +26,10 @@
 #define REG_DDM_VERSION 3
 #endif
 
+#ifndef REG_XDG_VERSION
+#define REG_XDG_VERSION 3
+#endif
+
 __attribute__((unused)) static struct wl_display* wl_dpy;
 __attribute__((unused)) static struct wl_compositor* wl_comp;
 __attribute__((unused)) static struct wl_subcompositor* wl_subcomp;
@@ -40,6 +44,7 @@ __attribute__((unused)) static struct wl_pointer* wl_ptr;
 __attribute__((unused)) static int wlk_keymap_fd = -1;
 __attribute__((unused)) static uint32_t wlk_keymap_size;
 __attribute__((unused)) static uint32_t wlk_key_serial;   // last wl_keyboard.key
+__attribute__((unused)) static uint32_t wlk_press_serial; // last pressed-key serial
 __attribute__((unused)) static uint32_t wlk_last_key;     // its keycode
 __attribute__((unused)) static uint32_t wlk_enter_serial; // last wl_keyboard.enter
 __attribute__((unused)) static int wlk_enters, wlk_leaves;
@@ -97,6 +102,7 @@ static void wlk_key(void* d, struct wl_keyboard* k, uint32_t serial, uint32_t t,
                     uint32_t state) {
     (void)d; (void)k; (void)t; (void)state;
     wlk_key_serial = serial;
+    if (state == WL_KEYBOARD_KEY_STATE_PRESSED) wlk_press_serial = serial;
     wlk_last_key = key;
     if (key == wlk_watch_key) wlk_watch_hits++;
 }
@@ -193,7 +199,7 @@ static void wl_reg_global(void* d, struct wl_registry* r, uint32_t name, const c
     else if (!strcmp(iface, wl_shm_interface.name))
         wl_shm_g = wl_registry_bind(r, name, &wl_shm_interface, 1);
     else if (!strcmp(iface, xdg_wm_base_interface.name))
-        wl_wm = wl_registry_bind(r, name, &xdg_wm_base_interface, 3);
+        wl_wm = wl_registry_bind(r, name, &xdg_wm_base_interface, REG_XDG_VERSION);
     else if (!strcmp(iface, wl_seat_interface.name)) {
         wl_seat_g = wl_registry_bind(r, name, &wl_seat_interface, 5);
         wl_seat_add_listener(wl_seat_g, &wl_seat_listener, NULL);

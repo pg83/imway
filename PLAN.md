@@ -267,7 +267,7 @@
 12. После каждого сценария следующий здоровый клиент должен получать pointer и
     keyboard events.
 
-## Serial и focus isolation (частично сделано)
+## Serial и focus isolation (сделано)
 
 1. Pointer enter serial нельзя использовать другим pointer binding того же клиента.
 2. Cursor serial нельзя использовать после leave/re-enter.
@@ -279,7 +279,7 @@
 8. Activation token с surface другого клиента и с уничтоженным surface.
 9. Повторное использование уже активированного token ничего не меняет.
 
-## Version negotiation (частично сделано)
+## Version negotiation (сделано)
 
 Для versioned core interfaces нужны отдельные клиенты, bindящие минимальную и
 максимальную поддерживаемую версию:
@@ -334,9 +334,8 @@
 4. [x] Добавить arithmetic boundary scenarios и исправить signed overflow.
 5. [x] Добавить depth/region/icon resource tests; определить и зафиксировать лимиты.
 6. [x] Дополнить data-device state machine.
-7. [ ] Завершить serial isolation и version negotiation (output/seat и stale
-   focus serial уже покрыты; остаются остальные interface/version pairs).
-8. [x] Прогнать полный обычный suite на musl-хосте (`236 ok`, `0 fail`,
+7. [x] Завершить serial isolation и version negotiation.
+8. [x] Прогнать полный обычный suite на musl-хосте (`251 ok`, `0 fail`,
    необязательные возможности дали `6 skip`, известный HiDPI case — `1 xfail`).
 9. Прогнать полный sanitizer suite на отдельном glibc-хосте.
 

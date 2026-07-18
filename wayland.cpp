@@ -496,6 +496,7 @@ namespace {
         // (menu key, shift+F10)
         u32 keyGrabSerial = 0;
         wl_client* keyGrabClient = nullptr;
+        u64 keyGrabGeneration = 0;
 
         void releaseAllKeys();
         void rememberSerial(u32 serial, wl_client* client, Surface* surface);
@@ -2732,7 +2733,9 @@ namespace {
         }
 
         bool pointerOk = seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
-        bool keyOk = seat->keyGrabClient == client && seat->keyGrabSerial == serial;
+        bool keyOk = seat->keyGrabClient == client &&
+                     seat->keyGrabSerial == serial &&
+                     seat->keyGrabGeneration == seat->focusGeneration;
 
         // keyboard-opened menus (Menu key, Shift+F10) grab with a key-press
         // serial; a stale serial is not an error per xdg-shell — dismiss the
@@ -6765,6 +6768,7 @@ void SeatState::handleKey(u32 code, bool pressed) {
             if (pressed) {
                 keyGrabSerial = serial;
                 keyGrabClient = client;
+                keyGrabGeneration = focusGeneration;
             }
         }
     }
