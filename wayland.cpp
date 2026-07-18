@@ -5187,6 +5187,34 @@ namespace {
         return (Params*)wl_resource_get_user_data(res);
     }
 
+    void paramsDropPending(Params& p) {
+        BufferBox* box = p.pending;
+
+        p.pending = nullptr;
+        p.srv->dmabufBoxAlloc.release(box);
+    }
+
+    bool dmabufFdsImportable(WaylandImpl& srv, const DmabufBuffer& b) {
+        if (srv.drmFd < 0) {
+            return true;
+        }
+
+        for (int i = 0; i < b.nplanes; i++) {
+            u32 handle = 0;
+
+            if (drmPrimeFDToHandle(srv.drmFd, b.fds[i], &handle) != 0) {
+                return false;
+            }
+
+            drm_gem_close gc{};
+
+            gc.handle = handle;
+            drmIoctl(srv.drmFd, DRM_IOCTL_GEM_CLOSE, &gc);
+        }
+
+        return true;
+    }
+
     void paramsDestroyResource(wl_resource* res) {
         Params* p = paramsFrom(res);
 
@@ -5251,7 +5279,9 @@ namespace {
         }
     }
 
-    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format) {
+    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId,
+                                  i32 width, i32 height, u32 format, u32 flags,
+                                  bool immediate) {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
@@ -5281,9 +5311,9 @@ namespace {
                 return nullptr;
             }
 
-            u64 lastRow = (u64)b.offsets[i] + (u64)b.strides[i] * (u64)(height - 1);
+            u64 end = (u64)b.offsets[i] + (u64)b.strides[i] * (u64)height;
 
-            if (lastRow > 0xffffffffull) {
+            if (end > 0xffffffffull) {
                 wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_OUT_OF_BOUNDS, "plane %d offset/stride overflows", i);
 
                 return nullptr;
@@ -5292,6 +5322,32 @@ namespace {
 
         if (!p->srv->formatSupported(format, b.modifier)) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "format 0x%x not supported", format);
+
+            return nullptr;
+        }
+
+        // DeviceVk currently advertises only packed ARGB/XRGB formats.
+        if (b.nplanes != 1) {
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE,
+                                   "packed format requires exactly one plane");
+
+            return nullptr;
+        }
+
+        if (flags != 0) {
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT,
+                                   "interlaced and y-inverted buffers are unsupported");
+
+            return nullptr;
+        }
+
+        if (!dmabufFdsImportable(*p->srv, b)) {
+            paramsDropPending(*p);
+
+            if (immediate) {
+                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_WL_BUFFER,
+                                       "fd cannot be imported as a dmabuf");
+            }
 
             return nullptr;
         }
@@ -5315,8 +5371,8 @@ namespace {
         return bres;
     }
 
-    void paramsCreate(wl_client* client, wl_resource* res, i32 width, i32 height, u32 format, u32) {
-        wl_resource* buf = paramsMakeBuffer(client, res, 0, width, height, format);
+    void paramsCreate(wl_client* client, wl_resource* res, i32 width, i32 height, u32 format, u32 flags) {
+        wl_resource* buf = paramsMakeBuffer(client, res, 0, width, height, format, flags, false);
 
         if (buf) {
             zwp_linux_buffer_params_v1_send_created(res, buf);
@@ -5325,8 +5381,8 @@ namespace {
         }
     }
 
-    void paramsCreateImmed(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format, u32) {
-        paramsMakeBuffer(client, res, bufferId, width, height, format);
+    void paramsCreateImmed(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format, u32 flags) {
+        paramsMakeBuffer(client, res, bufferId, width, height, format, flags, true);
     }
 
     const struct zwp_linux_buffer_params_v1_interface paramsImpl = {
