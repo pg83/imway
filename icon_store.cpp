@@ -57,6 +57,12 @@ namespace {
         int inoFd = -1;
         ev_timer* reloadTimer = nullptr;
 
+        // scratch for case-folding an app_id and each candidate file id in
+        // forAppId; a client can set an arbitrarily long app_id, so these must
+        // grow rather than overflow a fixed stack buffer
+        Buffer appIdLower;
+        Buffer fileIdLower;
+
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
 
@@ -354,13 +360,10 @@ Icon* IconStoreImpl::forAppId(StringView appId) {
         return nullptr;
     }
 
-    u8 ab[128];
-    StringView al = appId.lower(ab);
+    StringView al = appId.lower(appIdLower);
 
     for (const DesktopIcon* di : index) {
-        u8 fb[128];
-
-        if (sv(di->fileId).lower(fb) == al) {
+        if (sv(di->fileId).lower(fileIdLower) == al) {
             return forIconValue(sv(di->icon));
         }
     }

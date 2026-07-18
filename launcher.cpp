@@ -39,6 +39,11 @@ namespace {
         Vector<Row> rows;
         Vector<u32> vis;
 
+        // case-folding scratch for refilter; a .desktop Name can be longer
+        // than any fixed buffer, so grow instead of overflowing the stack
+        Buffer queryLower;
+        Buffer nameLower;
+
         Dialog(ObjPool* p);
 
         StringView view(u32 off, u32 len) const;
@@ -205,13 +210,10 @@ void Dialog::parseDesktop(StringBuilder& file) {
 void Dialog::refilter() {
     vis.clear();
 
-    StringView q(query);
-    u8 qbuf[256];
-    StringView ql = q.lower(qbuf);
+    StringView ql = StringView(query).lower(queryLower);
 
     for (size_t i = 0; i < rows.length(); i++) {
-        u8 nbuf[128];
-        StringView nl = view(rows[i].name, rows[i].nameLen).lower(nbuf);
+        StringView nl = view(rows[i].name, rows[i].nameLen).lower(nameLower);
 
         if (ql.empty() || nl.search(ql)) {
             vis.pushBack((u32)i);

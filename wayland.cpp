@@ -350,12 +350,19 @@ namespace {
     // xdg-toplevel-icon: pixels are copied out of the wl_shm buffer at
     // add_buffer time, while destroy listeners enforce the protocol's source
     // buffer lifetime until the icon object itself dies.
+    //
+    // explicit limits: adds beyond them are ignored, not errors — the icon
+    // then resolves through the name/store path
+    constexpr int kIconMaxSize = 1024;
+    constexpr int kIconMaxBuffers = 64;
+
     struct IconBox {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         StringBuilder name;
         Vector<u32> pixels;
         IntrusiveList bufferWatches;
+        int bufferWatchCount = 0;
         int w = 0, h = 0;
         int effectiveSize = 0;
         bool immutable = false;
@@ -4853,6 +4860,14 @@ namespace {
 
             return;
         }
+
+        if (w > kIconMaxSize || box->bufferWatchCount >= kIconMaxBuffers) {
+            sysO << "imway: ignoring toplevel icon buffer ("_sv << w << "x"_sv << h << ", "_sv << box->bufferWatchCount << " buffers already)"_sv << endL;
+
+            return;
+        }
+
+        box->bufferWatchCount++;
 
         IconBufferWatch* watch = box->srv->iconBufferWatchAlloc.make();
 

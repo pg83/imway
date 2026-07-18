@@ -4,6 +4,7 @@
 
 #include "calendar.h"
 #include "device_vk.h"
+#include "tex_pool.h"
 #include "frame_listener.h"
 #include "input_sink.h"
 #include "keyboard.h"
@@ -83,6 +84,9 @@ struct SurfaceTexture: stl::IntrusiveNode {
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
     void* stagingMap = nullptr;
     VkDescriptorSet ds = VK_NULL_HANDLE;
+    // which pool in the renderer's growable chain ds was allocated from, so it
+    // can be returned to the right pool on teardown
+    VkDescriptorPool dsPool = VK_NULL_HANDLE;
     RectI uploadRect;
     u32 mips = 1;
     bool needsUpload = false;
@@ -114,6 +118,18 @@ struct TextureLease {
 
 
 namespace {
+    // the imgui vulkan backend swallows every VkResult unless this hook is
+    // set (it only ever calls it, never acts on the code): an exhausted
+    // descriptor pool would otherwise return VK_ERROR_OUT_OF_POOL_MEMORY,
+    // leave the descriptor set uninitialized, and segfault in the driver on
+    // the next vkUpdateDescriptorSets. Abort at the failing call instead.
+    void imguiVkCheck(VkResult err) {
+        if (err < 0) {
+            sysE << "imway: fatal: imgui vulkan call failed ("_sv << (long)err << ")"_sv << endL;
+            abort();
+        }
+    }
+
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
@@ -171,6 +187,12 @@ namespace {
         bool frameInFlight = false;
         Vector<FrameResource*> inFlightFrames;
         VkSampler sampler = VK_NULL_HANDLE;
+
+        // surface/icon texture descriptor sets are allocated by VkTexturePool
+        // from our own growable pool chain, not imgui's single fixed pool, so
+        // a client cannot exhaust it and crash us. imgui keeps its own small
+        // pool only for its font atlas.
+        VkTexturePool* texPool = nullptr;
 
         // color-management conversion compute pipeline
         VkDescriptorSetLayout cmSetLayout = VK_NULL_HANDLE;
@@ -733,7 +755,7 @@ SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
     vci.format = kVkFormat;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
     VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
-    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
 
     memcpy(tex->stagingMap, argb, (size_t)w * h * 4);
     tex->uploadRect = {0, 0, w, h};
@@ -1297,6 +1319,8 @@ void RendererImpl::setup(int w, int h) {
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VK_CHECK(vkCreateSampler(device, &sci, nullptr, &sampler));
 
+    texPool = VkTexturePool::create(*pool, device, sampler);
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
 
@@ -1350,9 +1374,12 @@ void RendererImpl::setup(int w, int h) {
     ii.Device = device;
     ii.QueueFamily = queueFamily;
     ii.Queue = queue;
-    ii.DescriptorPoolSize = 512;
+    // imgui's own pool now serves only its font atlas — surface/icon textures
+    // come from VkTexturePool — so a small fixed size is plenty
+    ii.DescriptorPoolSize = 64;
     ii.MinImageCount = 2;
     ii.ImageCount = 2;
+    ii.CheckVkResultFn = imguiVkCheck;
     ii.PipelineInfoMain.RenderPass = renderPass;
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
@@ -1520,8 +1547,8 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
     if (!s.colorManaged) {
         if (tex->converted) {
             freeConversion(tex);
-            ImGui_ImplVulkan_RemoveTexture(tex->ds);
-            tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            texPool->free(tex->ds, tex->dsPool);
+            tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
             tex->converted = false;
         }
         return;
@@ -1570,9 +1597,9 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
     vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
 
     if (tex->converted) {
-        ImGui_ImplVulkan_RemoveTexture(tex->ds);
+        texPool->free(tex->ds, tex->dsPool);
     }
-    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->convView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->ds = texPool->alloc(tex->convView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
     tex->converted = true;
     tex->convGen = s.colorGeneration;
     tex->convFresh = true;
@@ -1697,7 +1724,18 @@ void RendererImpl::uploadSurface(Surface& s) {
         vci.format = kVkFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCreateImageView(device, &vci, nullptr, &tex->view);
-        tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
+
+        if (!tex->ds) {
+            // only genuine device OOM reaches here; drop the half-built texture
+            // and leave the surface untextured (drawing skips it) this frame
+            destroyTexture(tex);
+            s.frame = nullptr;
+            frameUnref(frame);
+
+            return;
+        }
+
         tex->lease = frame->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
             ((RendererImpl*)owner)->destroyTexture(texture);
         });
@@ -1855,7 +1893,9 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     }
 
     if (tex->ds) {
-        ImGui_ImplVulkan_RemoveTexture(tex->ds);
+        texPool->free(tex->ds, tex->dsPool);
+        tex->ds = VK_NULL_HANDLE;
+        tex->dsPool = VK_NULL_HANDLE;
     }
 
     freeConversion(tex);
@@ -2117,7 +2157,15 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vkCreateImageView(device, &vci, nullptr, &tex->view);
 
-    tex->ds = ImGui_ImplVulkan_AddTexture(sampler, tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
+
+    if (!tex->ds) {
+        // genuine device OOM: drop this import, the surface stays untextured
+        destroyTexture(tex);
+
+        return false;
+    }
+
     tex->lease = b->lifetime->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
         ((RendererImpl*)owner)->destroyTexture(texture);
     });

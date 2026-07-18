@@ -123,6 +123,7 @@ icon_store.cpp
 icon_pool.cpp
 icon.cpp
 device_vk.cpp
+tex_pool.cpp
 input_sink.cpp
 xdg_utils.cpp
 session.cpp
