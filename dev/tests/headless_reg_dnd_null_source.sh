@@ -18,4 +18,5 @@ ctl "button left release"
 
 expect_client_ok "source-less drag did not complete"
 expect_alive "source-less drag killed the compositor"
+input_health_probe
 echo "OK: source-less drag entered and dropped without crashing"

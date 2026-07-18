@@ -93,10 +93,22 @@
 - drag icon с занятой role;
 - offer после уничтожения source.
 
-Последний DnD-сценарий нужно повторно собрать и прогнать: он был добавлен после
-первого запуска тематической пачки.
+Вся тематическая пачка повторно собрана и входит в полный suite.
 
-## Следующая пачка: explicit sync
+### Аудит последующих пачек
+
+- `18c1381`: explicit-sync errors и lifetime;
+- `5fec611`: wire transport corruption, fd cleanup и health probe;
+- `073b98d`: hostile buffer lifetime;
+- `f5f7180`: arithmetic boundaries и насыщение attach offsets;
+- `6f69238`: depth/region/resource limits, growable Vulkan descriptor pools и
+  исправления переполнений строковых scratch buffers;
+- текущая data-device пачка: post-finish state errors, drag/selection source
+  isolation, serial scope, teardown и SIGKILL source/target во всех фазах;
+- текущий version/serial аудит: `wl_output` v1/v2/v4, `wl_seat` v1/v2/v5 и
+  запрет replay старых selection/activation serial после focus transfer.
+
+## Explicit sync (сделано: `18c1381`)
 
 Каждый пункт — отдельный test/scenario. При отсутствии
 `wp_linux_drm_syncobj_manager_v1` сценарий делает `SKIP`.
@@ -136,7 +148,7 @@
     - установить points и уничтожить surface до commit;
     - закрытие клиента и compositor должны завершиться чисто.
 
-## Transport и повреждённые Wayland messages
+## Transport и повреждённые Wayland messages (сделано: `5fec611`)
 
 Каждый malformed message запускается отдельным тестом. После отключения клиента
 обязательно запускается canary client.
@@ -156,7 +168,7 @@
 11. Отключение после создания registry, surface и callback, но до полного request.
 12. Отключение сразу после flush большого числа корректных requests.
 
-## Buffer lifetime
+## Buffer lifetime (сделано: `073b98d`)
 
 Отдельные сценарии:
 
@@ -178,7 +190,7 @@
     release последнего GPU/frame use.
 12. Один dmabuf используется parent и sync subsurface одновременно.
 
-## Surface arithmetic и размеры
+## Surface arithmetic и размеры (сделано: `f5f7180`)
 
 1. `wl_surface.damage` с `INT32_MIN/MAX` по всем четырём аргументам.
 2. `damage_buffer` с теми же крайними значениями.
@@ -195,7 +207,7 @@
 10. Большой, но ограниченный buffer должен либо корректно обрабатываться, либо
     детерминированно отвергаться; compositor не должен падать от allocation failure.
 
-## Глубина и алгоритмическая нагрузка
+## Глубина и алгоритмическая нагрузка (сделано: `6f69238`)
 
 Эти тесты не должны пытаться съесть всю память машины. Используются фиксированные
 разумные пределы и timeout.
@@ -220,7 +232,7 @@
 Если текущая реализация не выдерживает выбранный предел, сначала вводится явный
 лимит или итеративный обход, затем тест фиксирует новый контракт.
 
-## Resource limits и крупные payloads
+## Resource limits и крупные payloads (сделано: `6f69238`)
 
 1. Toplevel icon:
    - слишком большой квадратный shm buffer;
@@ -236,7 +248,7 @@
 6. Большое число pointer gesture/relative-pointer objects и их массовое уничтожение.
 7. Fd-bearing requests в цикле с проверкой `/proc/$pid/fd` после каждой группы.
 
-## Data-device state machine
+## Data-device state machine (сделано в текущей пачке)
 
 Дополнить отдельными тестами:
 
@@ -255,7 +267,7 @@
 12. После каждого сценария следующий здоровый клиент должен получать pointer и
     keyboard events.
 
-## Serial и focus isolation
+## Serial и focus isolation (частично сделано)
 
 1. Pointer enter serial нельзя использовать другим pointer binding того же клиента.
 2. Cursor serial нельзя использовать после leave/re-enter.
@@ -267,7 +279,7 @@
 8. Activation token с surface другого клиента и с уничтоженным surface.
 9. Повторное использование уже активированного token ничего не меняет.
 
-## Version negotiation
+## Version negotiation (частично сделано)
 
 Для versioned core interfaces нужны отдельные клиенты, bindящие минимальную и
 максимальную поддерживаемую версию:
@@ -280,7 +292,7 @@
 5. linux-dmabuf v3/v4: modifier events и feedback semantics.
 6. Pointer gestures v1/v3: hold gesture только в версии, где он существует.
 
-## Проверка восстановления compositor
+## Проверка восстановления compositor (сделано)
 
 Добавить `client_health_probe` без собственного scenario:
 
@@ -316,14 +328,16 @@
 
 ## Порядок реализации
 
-1. Завершить и проверить explicit-sync пачку.
-2. Завершить transport/canary/fd cleanup пачку.
-3. Добавить buffer lifetime scenarios.
-4. Добавить arithmetic boundary scenarios и исправить signed overflow.
-5. Добавить depth/region/icon resource tests; определить и зафиксировать лимиты.
-6. Дополнить data-device state machine.
-7. Добавить serial isolation и version negotiation.
-8. Прогнать полный обычный suite на musl-хосте.
+1. [x] Завершить и проверить explicit-sync пачку.
+2. [x] Завершить transport/canary/fd cleanup пачку.
+3. [x] Добавить buffer lifetime scenarios.
+4. [x] Добавить arithmetic boundary scenarios и исправить signed overflow.
+5. [x] Добавить depth/region/icon resource tests; определить и зафиксировать лимиты.
+6. [x] Дополнить data-device state machine.
+7. [ ] Завершить serial isolation и version negotiation (output/seat и stale
+   focus serial уже покрыты; остаются остальные interface/version pairs).
+8. [x] Прогнать полный обычный suite на musl-хосте (`236 ok`, `0 fail`,
+   необязательные возможности дали `6 skip`, известный HiDPI case — `1 xfail`).
 9. Прогнать полный sanitizer suite на отдельном glibc-хосте.
 
 Каждая тематическая пачка коммитится только после собственного filtered run. После

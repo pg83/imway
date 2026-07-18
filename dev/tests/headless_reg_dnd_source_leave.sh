@@ -13,4 +13,5 @@ ctl "button left press"
 
 expect_client_ok "drag target never got leave after the source died"
 ctl "button left release" 2>/dev/null || true
+input_health_probe
 echo "OK: source death delivered a leave to the drag target"

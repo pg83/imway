@@ -465,9 +465,15 @@ namespace {
             u32 value = 0;
             wl_client* client = nullptr;
             Surface* surface = nullptr;
+            u64 focusGeneration = 0;
         };
 
         Vector<InputSerial> inputSerials;
+        // Input serials authorizing selection/activation are valid only for
+        // the effective keyboard-focus epoch in which they were delivered.
+        // Otherwise a client can retain a serial, lose focus, regain it much
+        // later and replay the old authority.
+        u64 focusGeneration = 1;
         u32 pointerGrabSerial = 0;
         wl_client* pointerGrabClient = nullptr;
         Surface* pointerGrabOrigin = nullptr;
@@ -6803,7 +6809,7 @@ void SeatState::rememberSerial(u32 serial, wl_client* client, Surface* surface) 
         inputSerials.popBack();
     }
 
-    inputSerials.pushBack({serial, client, surface});
+    inputSerials.pushBack({serial, client, surface, focusGeneration});
 }
 
 bool SeatState::validSerial(wl_client* client, u32 serial) const {
@@ -6811,7 +6817,8 @@ bool SeatState::validSerial(wl_client* client, u32 serial) const {
         const InputSerial& entry = inputSerials[i - 1];
 
         if (entry.value == serial) {
-            return entry.client == client;
+            return entry.client == client &&
+                   entry.focusGeneration == focusGeneration;
         }
     }
 
@@ -7093,6 +7100,8 @@ void SeatState::focusToplevel(Toplevel* t) {
         return;
     }
 
+    focusGeneration++;
+
     // the layout belongs to the window: park the current group with the
     // window that loses focus
     if (kbFocus) {
@@ -7185,6 +7194,7 @@ void SeatState::popupGrabStart(Popup* p) {
     }
 
     kbSendLeave(kbTargetRes());
+    focusGeneration++;
     grabStack.pushBack((GrabNode*)p->surface);
     kbOverride = p->surface;
     kbSendEnter(resOf(kbOverride));
@@ -7209,6 +7219,7 @@ void SeatState::grabGone(Surface* s, bool sendLeave) {
         kbSendLeave(resOf(s));
     }
 
+    focusGeneration++;
     kbOverride = grabStack.empty() ? nullptr : (Surface*)(GrabNode*)grabStack.mutBack();
     kbSendEnter(kbTargetRes());
     updateShortcutInhibit();
@@ -7267,6 +7278,7 @@ void SeatState::toplevelGone(Toplevel* t) {
 
     if (kbFocus == t) {
         kbFocus = nullptr;
+        focusGeneration++;
 
         for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
             if (other != t && other->mapped) {

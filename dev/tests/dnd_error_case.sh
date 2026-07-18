@@ -14,3 +14,4 @@ ctl "motion $((imgx + 105)) $((imgy + 82))"
 expect_client_ok "malformed drag request was accepted"
 ctl "button left release"
 expect_alive "compositor died on malformed drag request"
+input_health_probe

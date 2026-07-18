@@ -4,6 +4,10 @@ static struct wl_toplevel_ctx dnd_top;
 static struct wl_data_device* dnd_device;
 static struct wl_data_source* dnd_source;
 static struct wl_data_offer* dnd_offer;
+static int dnd_auto_accept;
+static int dnd_entered;
+static int dnd_dropped;
+static int dnd_cancelled;
 
 static void offer_offer(void* d, struct wl_data_offer* offer, const char* mime) {
     (void)d; (void)offer; (void)mime;
@@ -27,14 +31,24 @@ static void device_data_offer(void* d, struct wl_data_device* device,
 static void device_enter(void* d, struct wl_data_device* device, uint32_t serial,
                          struct wl_surface* surface, wl_fixed_t x, wl_fixed_t y,
                          struct wl_data_offer* offer) {
-    (void)d; (void)device; (void)serial; (void)surface; (void)x; (void)y; (void)offer;
+    (void)d; (void)device; (void)surface; (void)x; (void)y;
+    dnd_entered = 1;
+    if (dnd_auto_accept && offer) {
+        wl_data_offer_accept(offer, serial, "text/plain");
+        wl_data_offer_set_actions(offer, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY,
+                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+        printf("entered\n");
+    }
 }
 static void device_leave(void* d, struct wl_data_device* device) { (void)d; (void)device; }
 static void device_motion(void* d, struct wl_data_device* device, uint32_t time,
                           wl_fixed_t x, wl_fixed_t y) {
     (void)d; (void)device; (void)time; (void)x; (void)y;
 }
-static void device_drop(void* d, struct wl_data_device* device) { (void)d; (void)device; }
+static void device_drop(void* d, struct wl_data_device* device) {
+    (void)d; (void)device;
+    dnd_dropped = 1;
+}
 static void device_selection(void* d, struct wl_data_device* device,
                              struct wl_data_offer* offer) {
     (void)d; (void)device; (void)offer;
@@ -53,6 +67,7 @@ static void source_send(void* d, struct wl_data_source* source, const char* mime
 }
 static void source_cancelled(void* d, struct wl_data_source* source) {
     (void)d; (void)source;
+    dnd_cancelled = 1;
 }
 static void source_drop(void* d, struct wl_data_source* source) { (void)d; (void)source; }
 static void source_finished(void* d, struct wl_data_source* source) { (void)d; (void)source; }
@@ -85,4 +100,18 @@ static void dnd_error_start(struct wl_surface* icon) {
     wl_display_flush(wl_dpy);
     while (!dnd_offer && wl_display_dispatch(wl_dpy) != -1) {
     }
+}
+
+static int dnd_finished_boot(void) {
+    int rc = dnd_error_boot();
+    if (rc) return rc;
+    dnd_auto_accept = 1;
+    dnd_error_start(NULL);
+    while ((!dnd_entered || !dnd_dropped) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    if (!dnd_dropped) return 1;
+    wl_data_offer_finish(dnd_offer);
+    if (wl_display_roundtrip(wl_dpy) < 0) return 1;
+    printf("finished\n");
+    return 0;
 }

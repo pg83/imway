@@ -41,4 +41,5 @@ wait_client "source finished"
 CLIENT_LOG="$TARGET_LOG" wait_client "target received"
 wait "$TARGET_PID" || { echo "target failed"; cat "$TARGET_LOG"; exit 1; }
 expect_client_ok "cross-client dnd broke"
+input_health_probe
 echo "OK: dnd crossed client boundaries with the payload intact"

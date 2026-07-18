@@ -48,4 +48,5 @@ wait_client "entered"
 ctl "button left release"
 expect_client_ok "unaccepted drag was not cancelled"
 expect_alive "compositor died on an unaccepted drop"
+input_health_probe
 echo "OK: mid-drag source death is clean, unaccepted drops cancel"

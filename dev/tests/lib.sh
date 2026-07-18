@@ -64,6 +64,31 @@ expect_alive() { # [message]
     kill -0 "$IMWAY_PID" 2>/dev/null || { echo "${1:-compositor died}"; cat "$IMWAY_LOG" 2>/dev/null; exit 1; }
 }
 
+# Start a fresh client after a hostile input/data-device scenario and prove
+# that both pointer and keyboard routing still work. A live process alone is
+# not enough: a dead grab can leave the compositor running but input wedged.
+input_health_probe() {
+    local probe log pid x y rc=0
+
+    probe="$(dirname "$IMWAY_CLIENT")/client_input_health_probe"
+    log="$XDG_RUNTIME_DIR/input-health.log"
+    "$probe" >"$log" 2>&1 &
+    pid=$!
+
+    await 100 grep -q "input-health ready" "$log" || {
+        echo "input health probe did not map"; cat "$log" "$IMWAY_LOG" 2>/dev/null; return 1; }
+    point_at_color 0 255 0 || {
+        echo "input health probe window not found"; cat "$log" 2>/dev/null; return 1; }
+    read -r x y < <(centroid "$XDG_RUNTIME_DIR/_pt.ppm" 0 255 0)
+    click_at "$x" "$y"
+    ctl "key 2 press"
+    ctl "key 2 release"
+    wait "$pid" || rc=$?
+
+    [[ $rc -eq 0 ]] || {
+        echo "pointer/keyboard input did not recover (rc=$rc)"; cat "$log" 2>/dev/null; return 1; }
+}
+
 # await <tries> <cmd...> — poll at 0.1s until the command succeeds
 await() {
     local i

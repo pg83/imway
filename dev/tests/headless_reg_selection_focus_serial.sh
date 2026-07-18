@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
-
-"$IMWAY_CLIENT"
-expect_alive "compositor died on reused selection source"
+. "$(dirname "$0")/hostile_case.sh"
 input_health_probe
