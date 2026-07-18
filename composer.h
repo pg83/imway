@@ -12,6 +12,7 @@ struct DBusConn;
 struct IconPool;
 struct IconResolver;
 struct FrameListener;
+struct Filter;
 struct Wifi;
 struct IconStore;
 struct Keyboard;
@@ -60,4 +61,5 @@ struct Composer {
     stl::IntrusiveList sessionEnabledListeners;
     stl::IntrusiveList sessionDisabledListeners;
     stl::IntrusiveList frameListeners;
+    stl::IntrusiveList filters;
 };

@@ -24,6 +24,7 @@ endif()
 
 find_package(PkgConfig REQUIRED)
 find_package(Vulkan REQUIRED)
+find_program(GLSLANG_VALIDATOR glslangValidator REQUIRED)
 
 pkg_check_modules(WAYLAND_SERVER REQUIRED IMPORTED_TARGET wayland-server)
 pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
@@ -251,6 +252,18 @@ add_library(protocols STATIC
     "${PROTO_DIR}/xdg-activation-v1-server-protocol.h")
 target_include_directories(protocols PUBLIC "${PROTO_DIR}")
 
+# ---- embedded compute shaders ----
+set(SHADER_DIR "${CMAKE_BINARY_DIR}/shaders")
+file(MAKE_DIRECTORY "${SHADER_DIR}")
+
+foreach(SHADER cm_convert lock_blur)
+    add_custom_command(OUTPUT "${SHADER_DIR}/${SHADER}.spv.h"
+        COMMAND ${GLSLANG_VALIDATOR} -V "${CMAKE_SOURCE_DIR}/${SHADER}.comp"
+                --variable-name "${SHADER}_spv" -o "${SHADER_DIR}/${SHADER}.spv.h"
+        DEPENDS "${CMAKE_SOURCE_DIR}/${SHADER}.comp")
+    list(APPEND SHADER_HEADERS "${SHADER_DIR}/${SHADER}.spv.h")
+endforeach()
+
 # ---- Dear ImGui (vendored) ----
 add_library(imgui STATIC
     third_party/imgui/imgui.cpp
@@ -285,6 +298,7 @@ add_executable(imway
     listener.cpp
     keyboard.cpp
     dialog.cpp
+    overlay.cpp
     launcher.cpp
     calendar.cpp
     inspector.cpp
@@ -315,7 +329,9 @@ add_executable(imway
     util.cpp
     output.cpp
     frame_listener.cpp
-    renderer.cpp)
+    renderer.cpp
+    ${SHADER_HEADERS})
+target_include_directories(imway PRIVATE "${SHADER_DIR}")
 target_link_libraries(imway PRIVATE
     imgui
     protocols
@@ -334,6 +350,12 @@ target_link_libraries(imway PRIVATE
     PkgConfig::PNG
     ev::ev
 )
+
+# crypt is part of musl libc and a separate library on common glibc systems.
+find_library(CRYPT_LIBRARY crypt)
+if(CRYPT_LIBRARY)
+    target_link_libraries(imway PRIVATE ${CRYPT_LIBRARY})
+endif()
 
 if(HAVE_SNDIO)
     target_link_libraries(imway PRIVATE sndio::sndio)

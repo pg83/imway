@@ -1,0 +1,36 @@
+#version 450
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(binding = 0) uniform sampler2D sourceImage;
+layout(rgba8, binding = 1) writeonly uniform image2D destinationImage;
+
+layout(push_constant) uniform BlurPush {
+    ivec2 direction;
+} pc;
+
+const float weights[9] = float[](
+    0.0997356, 0.0966670, 0.0879910, 0.0752844, 0.0605980,
+    0.0458878, 0.0327570, 0.0219740, 0.0138610
+);
+
+void main() {
+    ivec2 size = imageSize(destinationImage);
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+
+    if (any(greaterThanEqual(at, size))) {
+        return;
+    }
+
+    vec4 color = texelFetch(sourceImage, at, 0) * weights[0];
+
+    for (int i = 1; i <= 8; i++) {
+        ivec2 delta = pc.direction * (i * 2);
+        ivec2 lo = clamp(at - delta, ivec2(0), size - 1);
+        ivec2 hi = clamp(at + delta, ivec2(0), size - 1);
+
+        color += (texelFetch(sourceImage, lo, 0) + texelFetch(sourceImage, hi, 0)) * weights[i];
+    }
+
+    imageStore(destinationImage, at, color);
+}

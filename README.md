@@ -30,6 +30,8 @@ Raw, no frameworks (no wlroots/Smithay):
   page-flip driven frame clock, libinput, libseat session with VT switching,
   connector hotplug)
 - foot, mc and Firefox inside ImGui windows, interactive with mouse/keyboard
+- live lockscreen on `Super+L`: GPU-blurred desktop, exclusive input routing,
+  Unix password verification (`xxx` is the temporary development password)
 
 ## Development
 

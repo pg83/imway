@@ -17,9 +17,11 @@
 #include "mixer.h"
 #include "history.h"
 #include "notifier.h"
+#include "overlay.h"
 #include "osd.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
+#include "render_filter.h"
 #include "settings.h"
 #include "wifi.h"
 #include "wifi_ui.h"
@@ -151,8 +153,31 @@ namespace {
     };
 
     struct RendererImpl: public Renderer, public InputSink, public IconResolver, public FrameListener {
-        InputSink* sink() override;
+        // The renderer is the input frontend (coordinates, XKB, ImGui). This
+        // default route owns desktop policy and is replaceable as one unit by
+        // modal UI such as the lockscreen.
+        struct DesktopSink: InputSink {
+            RendererImpl* owner = nullptr;
+            InputSink* next = nullptr;
 
+            void motion(double x, double y) override;
+            void relMotion(double dx, double dy, double dxRaw, double dyRaw) override;
+            void absMotion(double nx, double ny) override;
+            void button(u32 button, bool pressed) override;
+            void key(u32 code, bool pressed) override;
+            void modsChanged() override;
+            void scroll(const ScrollEvent& ev) override;
+            void swipeBegin(u32 fingers) override;
+            void swipeUpdate(double dx, double dy) override;
+            void swipeEnd(bool cancelled) override;
+            void pinchBegin(u32 fingers) override;
+            void pinchUpdate(double dx, double dy, double scale, double rotation) override;
+            void pinchEnd(bool cancelled) override;
+            void holdBegin(u32 fingers) override;
+            void holdEnd(bool cancelled) override;
+        };
+
+        InputSink* sink() override;
 
         void modsChanged() override;
 
@@ -275,9 +300,10 @@ namespace {
         float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
 
-        // input mastering: imgui first, leftovers to the wayland slave sink
+        // input mastering: frontend -> replaceable mode -> Wayland
         Keyboard* keyboard = nullptr;
-        InputSink* next = nullptr;
+        DesktopSink desktopInput;
+        InputSink* currentInput = nullptr;
 
         // the cursor position lives here: sources emit raw deltas, this is
         // the code that integrates them and applies lock/confine policy
@@ -288,6 +314,10 @@ namespace {
         // alt-tab overlay: selection commits on Alt release
         bool altTabActive = false;
         Toplevel* altTabSel = nullptr;
+
+        // lockscreen is an ordinary pool-owned dialog; its arena swaps
+        // currentInput for the program-wide swallowing sink.
+        void* lockState = nullptr;
 
         // launcher: opaque dialog handle owned here, state lives in the
         // widget; non-null = open
@@ -463,18 +493,42 @@ TextureLease::~TextureLease() noexcept {
     }
 }
 
+void RenderContext::finish() {
+    if (handled) {
+        return;
+    }
+
+    VkClearValue clear{};
+
+    clear.color = {{0.08f, 0.08f, 0.10f, 1.f}};
+
+    VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+
+    begin.renderPass = outputPass;
+    begin.framebuffer = outputFramebuffer;
+    begin.renderArea = {{0, 0}, {(u32)width, (u32)height}};
+    begin.clearValueCount = 1;
+    begin.pClearValues = &clear;
+    vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    ImGui_ImplVulkan_RenderDrawData(drawData, commands);
+    vkCmdEndRenderPass(commands);
+    handled = true;
+}
+
 InputSink* RendererImpl::sink() {
     return this;
 }
 
 void RendererImpl::modsChanged() {
+    if (currentInput) {
+        currentInput->modsChanged();
+    }
 }
 
 RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
     : comp(&comp)
     , loop(comp.loop)
     , keyboard(comp.kb)
-    , next(comp.wayland->sink())
     , pool(comp.pool)
     , scene(comp.scene)
     , output(comp.output)
@@ -490,6 +544,9 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
+    desktopInput.owner = this;
+    desktopInput.next = comp.wayland->sink();
+    currentInput = &desktopInput;
     fontPath = font;
     uiScale = scale;
     nextUiScale = scale;
@@ -546,6 +603,7 @@ RendererImpl::~RendererImpl() noexcept {
         destroyTexture((SurfaceTexture*)textures.mutBack());
     }
 
+    closeLockOverlay(&lockState);
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();
 
@@ -597,43 +655,20 @@ void RendererImpl::motion(double x, double y) {
         output->setCursorPos((int)posX - hwHotX, (int)posY - hwHotY, true);
     }
 
-    // the slave always needs the position: it turns ui capture into
-    // a proper pointer leave on its own
-    if (next) {
-        next->motion(posX, posY);
+    if (currentInput) {
+        currentInput->motion(posX, posY);
     }
 }
 
 void RendererImpl::button(u32 btn, bool pressed) {
-    if (pickArmed && pressed && btn == BTN_LEFT) {
-        pickArmed = false;
-        pickPending = true;
-        pickX = (int)posX;
-        pickY = (int)posY;
-        scene->needsFrame = true;
-
-        return; // the click is the sample, not a click for anyone
-    }
-
-    // side/extra buttons mean nothing to ImGui; mapping them onto MIDDLE
-    // both faked middle clicks in the ui and swallowed them under capture
-    if (btn != BTN_LEFT && btn != BTN_RIGHT && btn != BTN_MIDDLE) {
-        if (next) {
-            next->button(btn, pressed);
-        }
-
-        return;
-    }
-
-    int imguiBtn = btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2;
-
     scene->needsFrame = true;
-    ImGui::GetIO().AddMouseButtonEvent(imguiBtn, pressed);
 
-    // presses over our ui stay ours; releases always go through, the
-    // slave drops the ones whose press it never saw
-    if (next && (!pressed || !scene->ptrCaptured)) {
-        next->button(btn, pressed);
+    if (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) {
+        ImGui::GetIO().AddMouseButtonEvent(btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2, pressed);
+    }
+
+    if (currentInput) {
+        currentInput->button(btn, pressed);
     }
 }
 
@@ -641,14 +676,14 @@ void RendererImpl::scroll(const ScrollEvent& ev) {
     scene->needsFrame = true;
     ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
-    if (next && !scene->ptrCaptured) {
-        next->scroll(ev);
+    if (currentInput) {
+        currentInput->scroll(ev);
     }
 }
 
 void RendererImpl::relMotion(double dx, double dy, double dxRaw, double dyRaw) {
-    if (next) {
-        next->relMotion(dx, dy, dxRaw, dyRaw);
+    if (currentInput) {
+        currentInput->relMotion(dx, dy, dxRaw, dyRaw);
     }
 
     if (!scene->pointerLocked) {
@@ -663,50 +698,146 @@ void RendererImpl::absMotion(double nx, double ny) {
 }
 
 void RendererImpl::swipeBegin(u32 fingers) {
+    if (currentInput) {
+        currentInput->swipeBegin(fingers);
+    }
+}
+
+void RendererImpl::swipeUpdate(double dx, double dy) {
+    if (currentInput) {
+        currentInput->swipeUpdate(dx, dy);
+    }
+}
+
+void RendererImpl::swipeEnd(bool cancelled) {
+    if (currentInput) {
+        currentInput->swipeEnd(cancelled);
+    }
+}
+
+void RendererImpl::pinchBegin(u32 fingers) {
+    if (currentInput) {
+        currentInput->pinchBegin(fingers);
+    }
+}
+
+void RendererImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
+    if (currentInput) {
+        currentInput->pinchUpdate(dx, dy, scale, rotation);
+    }
+}
+
+void RendererImpl::pinchEnd(bool cancelled) {
+    if (currentInput) {
+        currentInput->pinchEnd(cancelled);
+    }
+}
+
+void RendererImpl::holdBegin(u32 fingers) {
+    if (currentInput) {
+        currentInput->holdBegin(fingers);
+    }
+}
+
+void RendererImpl::holdEnd(bool cancelled) {
+    if (currentInput) {
+        currentInput->holdEnd(cancelled);
+    }
+}
+
+void RendererImpl::DesktopSink::motion(double x, double y) {
+    if (next) {
+        next->motion(x, y);
+    }
+}
+
+void RendererImpl::DesktopSink::button(u32 button, bool pressed) {
+    RendererImpl& r = *owner;
+
+    if (r.pickArmed && pressed && button == BTN_LEFT) {
+        r.pickArmed = false;
+        r.pickPending = true;
+        r.pickX = (int)r.posX;
+        r.pickY = (int)r.posY;
+        r.scene->needsFrame = true;
+
+        return;
+    }
+
+    // Releases always flow through; Wayland drops one whose press it never
+    // saw, while a withheld release would leave the client stuck.
+    if (next && (button != BTN_LEFT && button != BTN_RIGHT && button != BTN_MIDDLE ||
+                 !pressed || !r.scene->ptrCaptured)) {
+        next->button(button, pressed);
+    }
+}
+
+void RendererImpl::DesktopSink::scroll(const ScrollEvent& ev) {
+    if (next && !owner->scene->ptrCaptured) {
+        next->scroll(ev);
+    }
+}
+
+void RendererImpl::DesktopSink::relMotion(double dx, double dy, double dxRaw, double dyRaw) {
+    if (next) {
+        next->relMotion(dx, dy, dxRaw, dyRaw);
+    }
+}
+
+void RendererImpl::DesktopSink::absMotion(double, double) {
+}
+
+void RendererImpl::DesktopSink::swipeBegin(u32 fingers) {
     if (next) {
         next->swipeBegin(fingers);
     }
 }
 
-void RendererImpl::swipeUpdate(double dx, double dy) {
+void RendererImpl::DesktopSink::swipeUpdate(double dx, double dy) {
     if (next) {
         next->swipeUpdate(dx, dy);
     }
 }
 
-void RendererImpl::swipeEnd(bool cancelled) {
+void RendererImpl::DesktopSink::swipeEnd(bool cancelled) {
     if (next) {
         next->swipeEnd(cancelled);
     }
 }
 
-void RendererImpl::pinchBegin(u32 fingers) {
+void RendererImpl::DesktopSink::pinchBegin(u32 fingers) {
     if (next) {
         next->pinchBegin(fingers);
     }
 }
 
-void RendererImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
+void RendererImpl::DesktopSink::pinchUpdate(double dx, double dy, double scale, double rotation) {
     if (next) {
         next->pinchUpdate(dx, dy, scale, rotation);
     }
 }
 
-void RendererImpl::pinchEnd(bool cancelled) {
+void RendererImpl::DesktopSink::pinchEnd(bool cancelled) {
     if (next) {
         next->pinchEnd(cancelled);
     }
 }
 
-void RendererImpl::holdBegin(u32 fingers) {
+void RendererImpl::DesktopSink::holdBegin(u32 fingers) {
     if (next) {
         next->holdBegin(fingers);
     }
 }
 
-void RendererImpl::holdEnd(bool cancelled) {
+void RendererImpl::DesktopSink::holdEnd(bool cancelled) {
     if (next) {
         next->holdEnd(cancelled);
+    }
+}
+
+void RendererImpl::DesktopSink::modsChanged() {
+    if (next) {
+        next->modsChanged();
     }
 }
 
@@ -902,95 +1033,29 @@ void RendererImpl::key(u32 code, bool pressed) {
         keyboard->updateKey(code, pressed);
     }
 
+    // Desktop policy sees the key before ImGui so a chord which changes the
+    // route (Super+L) cannot leak its printable keysym into the newly focused
+    // password field. A lock route does not change and is still fed below.
+    InputSink* route = currentInput;
+
+    if (route) {
+        route->key(code, pressed);
+    }
+
+    if (route != currentInput) {
+        return;
+    }
+
     ImGuiIO& io = ImGui::GetIO();
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
-    // modifiers reach imgui even for consumed keys
     io.AddKeyEvent(ImGuiMod_Ctrl, mask & kModCtrl);
     io.AddKeyEvent(ImGuiMod_Shift, mask & kModShift);
     io.AddKeyEvent(ImGuiMod_Alt, mask & kModAlt);
     io.AddKeyEvent(ImGuiMod_Super, mask & kModLogo);
 
-    // media keys are compositor-global regardless of focus or capture;
-    // releases fall through — the slave drops unmatched ones
-    if (pressed && output->hasBrightness() && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
-        float d = code == KEY_BRIGHTNESSUP ? 0.05f : -0.05f;
-
-        output->setBrightness(output->brightness() + d);
-        osdMs = nowMsec() + 1500;
-        osdKind = 2;
-        scene->needsFrame = true;
-
-        return;
-    }
-
-    if (pressed && comp->mixer) {
-        Mixer* mx = comp->mixer;
-
-        if (code == KEY_VOLUMEUP || code == KEY_VOLUMEDOWN) {
-            float d = code == KEY_VOLUMEUP ? 0.05f : -0.05f;
-            float v = mx->volume() + d;
-
-            mx->setVolume(v < 0.f ? 0.f : v > 1.f ? 1.f : v);
-            // the osd shows even when the value pinned at a limit: mashing
-            // volume-up at max still deserves feedback
-            volumeChanged();
-
-            return;
-        }
-
-        if (code == KEY_MUTE) {
-            mx->setMuted(!mx->muted());
-            volumeChanged();
-
-            return;
-        }
-    }
-
-    if (altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
-        altTabActive = false;
-        altTabSel = nullptr;
-        scene->needsFrame = true;
-    }
-
-    // 1. compositor-global chords are sacred: consumed before anyone,
-    // imgui included, matched on the group-0 keysym so they work in
-    // any layout
-    if (!scene->shortcutsInhibited && next && keyboard && code < 256) {
-        if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
-            altTabActive = false;
-            altTabSel = nullptr;
-            scene->needsFrame = true;
-            chordDown[code] = true;
-            next->modsChanged();
-
-            return;
-        }
-
-        if (pressed && chordAction(mask, keyboard->keysymBase(code))) {
-            chordDown[code] = true;
-            next->modsChanged();
-
-            return;
-        }
-
-        if (!pressed && chordDown[code]) {
-            chordDown[code] = false;
-
-            // switching happens on Tab release; Alt only holds the overlay
-            if (altTabActive && keyboard->keysymBase(code) == XKB_KEY_Tab) {
-                altTabCommit();
-            }
-
-            next->modsChanged();
-
-            return;
-        }
-    }
-
-    // 2. imgui is fed the rest unconditionally: physical key + text
-    if (ImGuiKey k = evdevToImGuiKey(code); k != ImGuiKey_None) {
-        io.AddKeyEvent(k, pressed);
+    if (ImGuiKey key = evdevToImGuiKey(code); key != ImGuiKey_None) {
+        io.AddKeyEvent(key, pressed);
     }
 
     if (pressed && keyboard) {
@@ -1000,24 +1065,91 @@ void RendererImpl::key(u32 code, bool pressed) {
             io.AddInputCharactersUTF8(buf);
         }
     }
+}
+
+void RendererImpl::DesktopSink::key(u32 code, bool pressed) {
+    RendererImpl& r = *owner;
+    Keyboard* keyboard = r.keyboard;
+    u32 mask = keyboard ? keyboard->modMask() : 0;
+
+    if (pressed && r.output->hasBrightness() && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
+        float delta = code == KEY_BRIGHTNESSUP ? 0.05f : -0.05f;
+
+        r.output->setBrightness(r.output->brightness() + delta);
+        r.osdMs = nowMsec() + 1500;
+        r.osdKind = 2;
+        r.scene->needsFrame = true;
+
+        return;
+    }
+
+    if (pressed && r.comp->mixer) {
+        Mixer* mixer = r.comp->mixer;
+
+        if (code == KEY_VOLUMEUP || code == KEY_VOLUMEDOWN) {
+            float delta = code == KEY_VOLUMEUP ? 0.05f : -0.05f;
+            float volume = mixer->volume() + delta;
+
+            mixer->setVolume(volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume);
+            r.volumeChanged();
+
+            return;
+        }
+
+        if (code == KEY_MUTE) {
+            mixer->setMuted(!mixer->muted());
+            r.volumeChanged();
+
+            return;
+        }
+    }
+
+    if (r.altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
+        r.altTabActive = false;
+        r.altTabSel = nullptr;
+        r.scene->needsFrame = true;
+    }
+
+    if (!r.scene->shortcutsInhibited && next && keyboard && code < 256) {
+        if (r.altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
+            r.altTabActive = false;
+            r.altTabSel = nullptr;
+            r.scene->needsFrame = true;
+            r.chordDown[code] = true;
+            next->modsChanged();
+
+            return;
+        }
+
+        if (pressed && r.chordAction(mask, keyboard->keysymBase(code))) {
+            r.chordDown[code] = true;
+            next->modsChanged();
+
+            return;
+        }
+
+        if (!pressed && r.chordDown[code]) {
+            r.chordDown[code] = false;
+
+            if (r.altTabActive && keyboard->keysymBase(code) == XKB_KEY_Tab) {
+                r.altTabCommit();
+            }
+
+            next->modsChanged();
+
+            return;
+        }
+    }
 
     if (!next) {
         return;
     }
 
-    // 3. ui capture gate (last-frame imgui truth, kwin-style edge handling
-    // lives in the slave's modsChanged). NOT WantCaptureKeyboard: imgui keys
-    // that off ActiveId, and any mouse-hold over a window parks ActiveId on
-    // the window's MoveId — even a press inside client content — which would
-    // swallow every key typed during a drag. What matters is typing intent:
-    // an active text field, or one of our own overlays.
-    bool capture = launcherState || altTabActive || io.WantTextInput;
+    ImGuiIO& io = ImGui::GetIO();
+    bool capture = r.launcherState || r.altTabActive || io.WantTextInput;
 
-    scene->kbCaptured = capture;
+    r.scene->kbCaptured = capture;
 
-    // presses under capture stay ours; releases always go through — the
-    // slave drops the ones whose press the client never saw, and a release
-    // lost to a capture window would leave the client with a stuck key
     if (!capture || !pressed) {
         next->key(code, pressed);
     }
@@ -1041,6 +1173,12 @@ void RendererImpl::volumeChanged() {
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
     if (sym == XKB_KEY_Print) {
         captureScreenshot();
+
+        return true;
+    }
+
+    if (mask == kModLogo && sym == XKB_KEY_l) {
+        openLockOverlay(*comp, &lockState, &currentInput);
 
         return true;
     }
@@ -1807,7 +1945,7 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
 // a fullscreen client whose dmabuf can go straight to the plane, with no
 // compositor chrome that would need composition over it
 Surface* RendererImpl::scanoutCandidate() {
-    if (forceComposition || !scene->popups.empty() || scene->dragIcon) {
+    if (forceComposition || lockState || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
 
@@ -3457,6 +3595,13 @@ void RendererImpl::buildUi(Scene& scene) {
         }
     }
 
+    drawLockOverlay(*comp, &lockState);
+
+    if (lockState) {
+        scene.kbCaptured = true;
+        scene.ptrCaptured = true;
+    }
+
     cursorUi(scene, overClient);
     ImGui::Render();
 }
@@ -3829,20 +3974,25 @@ bool RendererImpl::renderFrame(int scanIdx) {
         }
     });
 
-    VkClearValue clear{};
+    RenderContext renderCtx;
 
-    clear.color = {{0.08f, 0.08f, 0.10f, 1.f}};
+    renderCtx.physicalDevice = phys;
+    renderCtx.device = device;
+    renderCtx.commands = cmd;
+    renderCtx.format = fmt;
+    renderCtx.sampler = sampler;
+    renderCtx.outputPass = renderPass;
+    renderCtx.outputFramebuffer = scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer;
+    renderCtx.textures = texPool;
+    renderCtx.drawData = ImGui::GetDrawData();
+    renderCtx.width = width;
+    renderCtx.height = height;
 
-    VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    forEach<Filter>(comp->filters, [&](Filter& filter) {
+        filter.apply(renderCtx);
+    });
 
-    rbi.renderPass = renderPass;
-    rbi.framebuffer = scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer;
-    rbi.renderArea = {{0, 0}, {(u32)width, (u32)height}};
-    rbi.clearValueCount = 1;
-    rbi.pClearValues = &clear;
-    vkCmdBeginRenderPass(cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
-    ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), cmd);
-    vkCmdEndRenderPass(cmd);
+    renderCtx.finish();
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;
     lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;

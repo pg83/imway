@@ -67,6 +67,7 @@ done
 # GLSL compute shaders → embedded SPIR-V C arrays (glslangValidator)
 SHADERS="
 cm_convert.comp
+lock_blur.comp
 "
 
 for shader in $SHADERS; do
@@ -101,6 +102,7 @@ intr_list.cpp
 listener.cpp
 keyboard.cpp
 dialog.cpp
+overlay.cpp
 launcher.cpp
 calendar.cpp
 inspector.cpp

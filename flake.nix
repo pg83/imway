@@ -58,6 +58,7 @@
               dbus
               glfw
               libpng
+              libxcrypt
               lunasvg
               plutovg
               libev
