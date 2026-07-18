@@ -976,6 +976,14 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             scanFourcc = DRM_FORMAT_XRGB2101010;
             scanVk = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv << hdrNits << " nits"_sv << endL;
+
+            if (cursorPlaneId) {
+                // AMD cursor planes consume ARGB8888 outside the primary
+                // plane's HDR color path; light cursor pixels consequently
+                // arrive black. Composite into XR30 so UI and cursors share
+                // the same DEGAMMA/CTM/GAMMA pipeline.
+                sysO << "imway: hardware cursor disabled under HDR, software cursor"_sv << endL;
+            }
         } else {
             sysE << "imway: HDR unsupported here, staying SDR"_sv << endL;
             hdrNits = 0;
@@ -1565,8 +1573,8 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
     drmModeAtomicAddProperty(req, planeId, plCrtcW, mode.hdisplay);
     drmModeAtomicAddProperty(req, planeId, plCrtcH, mode.vdisplay);
 
-    if (cursorPlaneId && cursorEnabled) {
-        if (withCursor) {
+    if (cursorPlaneId && (cursorEnabled || doModeset)) {
+        if (withCursor && cursorEnabled) {
             addCursorProps(req);
         } else {
             // shut the plane off explicitly, otherwise the kernel keeps
@@ -1655,11 +1663,11 @@ void KmsOutput::addCursorProps(drmModeAtomicReq* req) {
 }
 
 int KmsOutput::cursorCapW() const {
-    return curW;
+    return hdrActive ? 0 : curW;
 }
 
 int KmsOutput::cursorCapH() const {
-    return curH;
+    return hdrActive ? 0 : curH;
 }
 
 void KmsOutput::setCursorImage(const u32* argb) {

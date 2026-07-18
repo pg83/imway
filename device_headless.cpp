@@ -143,14 +143,27 @@ int HeadlessOutput::physicalWidthMm() const { return 0; }
 int HeadlessOutput::physicalHeightMm() const { return 0; }
 
 int HeadlessOutput::cursorCapW() const {
-    return 0;
+    return curCap;
 }
 
 int HeadlessOutput::cursorCapH() const {
-    return 0;
+    return curCap;
 }
 
-void HeadlessOutput::setCursorImage(const u32*) {
+void HeadlessOutput::setCursorImage(const u32* argb) {
+    if (getenv("IMWAY_DEBUG_CURSOR") && curCap) {
+        size_t visible = 0;
+        u32 rgbOr = 0;
+        u32 alphaOr = 0;
+
+        for (int i = 0; i < curCap * curCap; i++) {
+            visible += (argb[i] >> 24) != 0;
+            rgbOr |= argb[i] & 0x00ffffff;
+            alphaOr |= argb[i] >> 24;
+        }
+
+        sysE << "cursor image: visible "_sv << visible << ", rgb "_sv << rgbOr << ", alpha "_sv << alphaOr << endL;
+    }
 }
 
 void HeadlessOutput::setCursorPos(int, int, bool) {

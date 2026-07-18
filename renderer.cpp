@@ -2562,6 +2562,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     ImDrawList dl(ImGui::GetDrawListSharedData());
 
     dl._ResetForNewFrame();
+    dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
     dl.PushClipRect(ImVec2(0.f, 0.f), ImVec2((float)hwCapW, (float)hwCapH), false);
 
     float s = uiScale;
@@ -2574,6 +2575,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
 
     drawMouseCursor(&dl, ImVec2((float)hwCapW * 0.5f, (float)hwCapH * 0.5f), s, kind);
     dl.PopClipRect();
+    dl.PopTexture();
 
     ImDrawData dd;
 

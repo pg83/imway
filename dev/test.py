@@ -41,6 +41,7 @@ class Test:
     client: str        # client binary path ("" if none)
     xfail: str | None  # reason string if the test is expected to fail
     args: list         # extra compositor argv from "# imway-args: ..."
+    env: dict          # extra compositor environment from "# imway-env: K=V ..."
 
 
 @dataclass
@@ -66,6 +67,7 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
             client = ""
         xfail = None
         args = []
+        extra_env = {}
         with open(path) as f:
             for line in f.read(2048).splitlines():
                 m = re.match(r"\s*#\s*xfail:\s*(.*)", line)
@@ -74,7 +76,14 @@ def discover(tests_dir: str, bindir: str, pattern: str) -> tuple[list[Test], lis
                 m = re.match(r"\s*#\s*imway-args:\s*(.*)", line)
                 if m:
                     args = shlex.split(m.group(1))
-        out.append(Test(name, path, client, xfail, args))
+                m = re.match(r"\s*#\s*imway-env:\s*(.*)", line)
+                if m:
+                    for item in shlex.split(m.group(1)):
+                        key, sep, value = item.partition("=")
+                        if not sep or not key:
+                            raise ValueError(f"{path}: bad imway-env item: {item}")
+                        extra_env[key] = value
+        out.append(Test(name, path, client, xfail, args, extra_env))
     return out, unbuilt
 
 
@@ -134,6 +143,7 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         IMWAY_CLIENT=t.client,
         IMWAY_CLIENT_LOG=client_log,
     )
+    env.update(t.env)
 
     started = time.monotonic()
 
