@@ -38,7 +38,5 @@ struct Wayland {
     virtual void run() = 0;
     virtual InputSink* sink() = 0;
     virtual FrameListener* frameListener() = 0;
-    virtual SessionListener* sessionListener() = 0;
-
     static Wayland* create(Composer& c, const WaylandConfig&);
 };

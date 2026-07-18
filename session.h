@@ -3,11 +3,7 @@
 #include <std/lib/node.h>
 #include <std/str/view.h>
 
-namespace stl {
-    class ObjPool;
-}
-
-struct ev_loop;
+struct Composer;
 
 struct SessionListener: stl::IntrusiveNode {
     virtual void sessionEnabled() = 0;
@@ -20,8 +16,6 @@ struct Session {
     virtual int openDevice(const char* path) = 0;
     virtual void closeDevice(int fd) = 0;
 
-    virtual void addListener(SessionListener*) = 0;
-
-    static Session* create(stl::ObjPool* pool, struct ev_loop* loop);
-    static Session* createDirect(stl::ObjPool* pool);
+    static Session* create(Composer& c);
+    static Session* createDirect(Composer& c);
 };

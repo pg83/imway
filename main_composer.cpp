@@ -155,17 +155,17 @@ int mainComposer(int argc, char** argv) {
 
         if (kms) {
             try {
-                session = Session::create(pool.mutPtr(), loop);
+                session = Session::create(c);
                 sysO << "imway: libseat session on "_sv << session->seatName() << endL;
             } catch (...) {
                 sysE << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
-                session = Session::createDirect(pool.mutPtr());
+                session = Session::createDirect(c);
             }
         }
 
         c.session = session;
 
-        Device* device = kms ? DeviceKms::create(pool.mutPtr(), loop, *session, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(pool.mutPtr(), loop);
+        Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(pool.mutPtr(), loop);
 
         ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.hdrNits);
 
@@ -232,10 +232,6 @@ int mainComposer(int argc, char** argv) {
         Renderer* renderer = device->createRenderer(c, cfg.fontPath, cfg.uiScale, cfg.framesLimit);
 
         c.renderer = renderer;
-
-        if (session) {
-            session->addListener(wayland->sessionListener());
-        }
 
         if (kms) {
             try {

@@ -649,7 +649,6 @@ namespace {
         void iconsReloaded() override;
         InputSink* sink() override;
         FrameListener* frameListener() override;
-        SessionListener* sessionListener() override;
         void sessionEnabled() override;
         void sessionDisabled() override;
         void motion(double x, double y) override;
@@ -7205,6 +7204,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     iconPool = comp.iconPool;
     icons = comp.icons;
     comp.iconListeners.pushBack((IconStoreListener*)this);
+    comp.sessionListeners.pushBack((SessionListener*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;
 
@@ -7900,10 +7900,6 @@ InputSink* WaylandImpl::sink() {
 }
 
 FrameListener* WaylandImpl::frameListener() {
-    return this;
-}
-
-SessionListener* WaylandImpl::sessionListener() {
     return this;
 }
 

@@ -25,6 +25,7 @@ struct Output;
 struct Renderer;
 struct Scene;
 struct Session;
+struct SessionListener;
 struct Wayland;
 
 // the wiring board: main owns one, fills the fields as the entities come
@@ -59,4 +60,5 @@ struct Composer {
     stl::IntrusiveList mixerListeners;
     stl::IntrusiveList wifiListeners;
     stl::IntrusiveList notifierListeners;
+    stl::IntrusiveList sessionListeners;
 };

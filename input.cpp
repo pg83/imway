@@ -118,7 +118,7 @@ LibinputSource::LibinputSource(Composer& c)
         pooledFD(*c.pool, inoFd);
     }
 
-    session->addListener(this);
+    c.sessionListeners.pushBack((SessionListener*)this);
 
     ev_io* inputIo = createEvIo(*c.pool, loop);
 

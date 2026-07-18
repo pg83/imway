@@ -1,5 +1,6 @@
 #include "session.h"
 
+#include "composer.h"
 #include "intr_list.h"
 #include "util.h"
 
@@ -27,7 +28,6 @@ namespace {
         StringView seatName() const override;
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
-        void addListener(SessionListener*) override;
     };
 
     void seatEnableCb(libseat*, void* data);
@@ -40,22 +40,20 @@ namespace {
     };
 
     struct SeatSession: public Session {
+        Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
         libseat* seat = nullptr;
         bool active = false;
         ev_io io{};
-        IntrusiveList listeners;
         Vector<SeatDevice> devices;
 
-        SeatSession(struct ev_loop* evLoop);
+        SeatSession(Composer& comp);
         ~SeatSession() noexcept;
 
         StringView seatName() const override;
 
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
-
-        void addListener(SessionListener* l) override;
 
         void enable();
         void disable();
@@ -99,11 +97,9 @@ void DirectSession::closeDevice(int fd) {
     close(fd);
 }
 
-void DirectSession::addListener(SessionListener*) {
-}
-
-SeatSession::SeatSession(struct ev_loop* evLoop)
-    : loop(evLoop)
+SeatSession::SeatSession(Composer& comp)
+    : c(&comp)
+    , loop(comp.loop)
 {
     seat = libseat_open_seat(&kSeatListener, this);
 
@@ -169,14 +165,10 @@ void SeatSession::closeDevice(int fd) {
     close(fd);
 }
 
-void SeatSession::addListener(SessionListener* l) {
-    listeners.pushBack(l);
-}
-
 void SeatSession::enable() {
     active = true;
 
-    forEach<SessionListener>(listeners, [](SessionListener& listener) {
+    forEach<SessionListener>(c->sessionListeners, [](SessionListener& listener) {
         listener.sessionEnabled();
     });
 }
@@ -184,17 +176,17 @@ void SeatSession::enable() {
 void SeatSession::disable() {
     active = false;
 
-    forEach<SessionListener>(listeners, [](SessionListener& listener) {
+    forEach<SessionListener>(c->sessionListeners, [](SessionListener& listener) {
         listener.sessionDisabled();
     });
 
     libseat_disable_seat(seat);
 }
 
-Session* Session::create(ObjPool* pool, struct ev_loop* loop) {
-    return pool->make<SeatSession>(loop);
+Session* Session::create(Composer& c) {
+    return c.pool->make<SeatSession>(c);
 }
 
-Session* Session::createDirect(ObjPool* pool) {
-    return pool->make<DirectSession>();
+Session* Session::createDirect(Composer& c) {
+    return c.pool->make<DirectSession>();
 }

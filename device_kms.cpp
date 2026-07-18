@@ -539,7 +539,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(ObjPool* pool, struct ev_loop* loop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits);
+        KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits);
 
         void sessionEnabled() override;
         void sessionDisabled() override;
@@ -633,6 +633,7 @@ namespace {
     void udevIoCb(struct ev_loop*, ev_io* w, int);
 
     struct KmsDevice: public Device {
+        Composer* c = nullptr;
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
@@ -644,7 +645,7 @@ namespace {
         udev_monitor* mon = nullptr;
         KmsOutput* output = nullptr;
 
-        KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView devPath);
+        KmsDevice(Composer& comp, StringView devPath);
 
         int drmFd() const override;
         bool explicitSyncSupported() const override;
@@ -695,13 +696,14 @@ namespace {
     }
 }
 
-KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView devPath)
-    : pool(p)
-    , loop(evLoop)
-    , session(&s)
+KmsDevice::KmsDevice(Composer& comp, StringView devPath)
+    : c(&comp)
+    , pool(comp.pool)
+    , loop(comp.loop)
+    , session(comp.session)
 {
-    fd = openKmsNode(s, devPath, path);
-    pooledSessionFD(*pool, s, fd);
+    fd = openKmsNode(*session, devPath, path);
+    pooledSessionFD(*pool, *session, fd);
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
@@ -768,7 +770,7 @@ void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {
-    output = pool->make<KmsOutput>(pool, loop, fd, vk, *session, connector, modeStr, hdrNits);
+    output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, hdrNits);
 
     return output;
 }
@@ -853,15 +855,15 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(ObjPool* pool, struct ev_loop* evLoop, int drmFd, const DeviceVk* v, Session& session, StringView connector, StringView modeStr, double hdrWhiteNits)
-    : pool(pool)
-    , loop(evLoop)
+KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits)
+    : pool(c.pool)
+    , loop(c.loop)
     , fd(drmFd)
     , vk(v)
-    , gemHandles(pool)
+    , gemHandles(c.pool)
     , hdrNits(hdrWhiteNits)
 {
-    session.addListener(this);
+    c.sessionListeners.pushBack((SessionListener*)this);
     pickPipe(connector, modeStr);
 
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
@@ -2316,8 +2318,8 @@ void KmsOutput::present(const void* pixels) {
     }
 }
 
-Device* DeviceKms::create(ObjPool* pool, struct ev_loop* loop, Session& session, StringView devPath) {
-    return pool->make<KmsDevice>(pool, loop, session, devPath);
+Device* DeviceKms::create(Composer& c, StringView devPath) {
+    return c.pool->make<KmsDevice>(c, devPath);
 }
 
 void DeviceKms::list() {
