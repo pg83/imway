@@ -67,7 +67,11 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection
     dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
     dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, timeoutToggle, this, nullptr);
 
-    PooledEvPrepare::create(*pool)->start(loop, prepareCb, this);
+    ev_prepare* prepare = PooledEvPrepare::create(*pool, loop);
+
+    ev_prepare_init(prepare, prepareCb);
+    prepare->data = this;
+    ev_prepare_start(loop, prepare);
 }
 
 DBusConnImpl::~DBusConnImpl() noexcept {

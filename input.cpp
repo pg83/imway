@@ -109,14 +109,22 @@ LibinputSource::LibinputSource(Composer& c)
 
     if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
         pooledFD(*c.pool, inoFd);
-        PooledEvIo::create(*c.pool)->start(loop, inotifyCb, inoFd, EV_READ, this);
+        ev_io* inotifyIo = PooledEvIo::create(*c.pool, loop);
+
+        ev_io_init(inotifyIo, inotifyCb, inoFd, EV_READ);
+        inotifyIo->data = this;
+        ev_io_start(loop, inotifyIo);
     } else if (inoFd >= 0) {
         pooledFD(*c.pool, inoFd);
     }
 
     session->addListener(this);
 
-    PooledEvIo::create(*c.pool)->start(loop, inputIoCb, libinput_get_fd(li), EV_READ, this);
+    ev_io* inputIo = PooledEvIo::create(*c.pool, loop);
+
+    ev_io_init(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
+    inputIo->data = this;
+    ev_io_start(loop, inputIo);
     dispatch();
     sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }

@@ -80,7 +80,7 @@ namespace {
         Renderer* renderer = nullptr;
         Scene* scene = nullptr;
         PooledFD* fd = nullptr;
-        PooledEvIo* io = nullptr;
+        ev_io* io = nullptr;
         StringBuilder path;
         char line[1024] = "";
         size_t lineLen = 0;
@@ -118,11 +118,13 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     });
 
     fd = PooledFD::create(pool, -1);
-    io = PooledEvIo::create(pool);
+    io = PooledEvIo::create(pool, loop);
     fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
     STD_VERIFY(fd->get() >= 0);
 
-    io->start(loop, controlIoCb, fd->get(), EV_READ, this);
+    ev_io_init(io, controlIoCb, fd->get(), EV_READ);
+    io->data = this;
+    ev_io_start(loop, io);
     sysO << "imway: control FIFO: "_sv << sv(path) << endL;
 }
 
@@ -365,14 +367,15 @@ void ControlImpl::handleInput() {
 }
 
 void ControlImpl::reopen() {
-    io->stop();
+    ev_io_stop(loop, io);
     fd->reset(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
 
     if (fd->get() < 0) {
         return;
     }
 
-    io->start(loop, controlIoCb, fd->get(), EV_READ, this);
+    ev_io_set(io, fd->get(), EV_READ);
+    ev_io_start(loop, io);
 }
 
 Control* Control::create(Composer& c, StringView fifoPath) {

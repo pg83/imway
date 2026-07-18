@@ -7,146 +7,95 @@
 using namespace stl;
 
 namespace {
-    struct PooledEvIoImpl: public PooledEvIo {
+    struct IoBox {
         struct ev_loop* loop = nullptr;
-        ev_io io{};
+        ev_io value{};
 
-        ~PooledEvIoImpl() noexcept;
-
-        void start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_io*, int), int fd, int events, void* data) override;
-        void stop() override;
+        IoBox(struct ev_loop* l);
+        ~IoBox() noexcept;
     };
 
-    struct PooledEvTimerImpl: public PooledEvTimer {
+    struct TimerBox {
         struct ev_loop* loop = nullptr;
-        ev_timer timer{};
+        ev_timer value{};
 
-        ~PooledEvTimerImpl() noexcept;
-
-        void start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_timer*, int), double after, double repeat, void* data) override;
-        void set(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_timer*, int), double after, double repeat, void* data) override;
-        void again() override;
-        void stop() override;
+        TimerBox(struct ev_loop* l);
+        ~TimerBox() noexcept;
     };
 
-    struct PooledEvPrepareImpl: public PooledEvPrepare {
+    struct PrepareBox {
         struct ev_loop* loop = nullptr;
-        ev_prepare prep{};
+        ev_prepare value{};
 
-        ~PooledEvPrepareImpl() noexcept;
-
-        void start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_prepare*, int), void* data) override;
-        void stop() override;
+        PrepareBox(struct ev_loop* l);
+        ~PrepareBox() noexcept;
     };
 
-    struct PooledEvSignalImpl: public PooledEvSignal {
+    struct SignalBox {
         struct ev_loop* loop = nullptr;
-        ev_signal sig{};
+        ev_signal value{};
 
-        ~PooledEvSignalImpl() noexcept;
-
-        void start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_signal*, int), int signum, void* data) override;
-        void stop() override;
+        SignalBox(struct ev_loop* l);
+        ~SignalBox() noexcept;
     };
 }
 
-PooledEvIoImpl::~PooledEvIoImpl() noexcept {
-    stop();
+IoBox::IoBox(struct ev_loop* l)
+    : loop(l)
+{
 }
 
-void PooledEvIoImpl::start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_io*, int), int fd, int events, void* data) {
-    stop();
-    loop = l;
-    ev_io_init(&io, cb, fd, events);
-    io.data = data;
-    ev_io_start(loop, &io);
-}
-
-void PooledEvIoImpl::stop() {
-    if (loop) {
-        ev_io_stop(loop, &io);
+IoBox::~IoBox() noexcept {
+    if (ev_is_active(&value)) {
+        ev_io_stop(loop, &value);
     }
 }
 
-PooledEvIo* PooledEvIo::create(ObjPool& pool) {
-    return pool.make<PooledEvIoImpl>();
+ev_io* PooledEvIo::create(ObjPool& pool, struct ev_loop* loop) {
+    return &pool.make<IoBox>(loop)->value;
 }
 
-PooledEvTimerImpl::~PooledEvTimerImpl() noexcept {
-    stop();
+TimerBox::TimerBox(struct ev_loop* l)
+    : loop(l)
+{
 }
 
-void PooledEvTimerImpl::start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_timer*, int), double after, double repeat, void* data) {
-    stop();
-    loop = l;
-    ev_timer_init(&timer, cb, after, repeat);
-    timer.data = data;
-    ev_timer_start(loop, &timer);
-}
-
-void PooledEvTimerImpl::set(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_timer*, int), double after, double repeat, void* data) {
-    stop();
-    loop = l;
-    ev_timer_init(&timer, cb, after, repeat);
-    timer.data = data;
-}
-
-void PooledEvTimerImpl::again() {
-    if (loop) {
-        ev_timer_again(loop, &timer);
+TimerBox::~TimerBox() noexcept {
+    if (ev_is_active(&value)) {
+        ev_timer_stop(loop, &value);
     }
 }
 
-void PooledEvTimerImpl::stop() {
-    if (loop) {
-        ev_timer_stop(loop, &timer);
+ev_timer* PooledEvTimer::create(ObjPool& pool, struct ev_loop* loop) {
+    return &pool.make<TimerBox>(loop)->value;
+}
+
+PrepareBox::PrepareBox(struct ev_loop* l)
+    : loop(l)
+{
+}
+
+PrepareBox::~PrepareBox() noexcept {
+    if (ev_is_active(&value)) {
+        ev_prepare_stop(loop, &value);
     }
 }
 
-PooledEvTimer* PooledEvTimer::create(ObjPool& pool) {
-    return pool.make<PooledEvTimerImpl>();
+ev_prepare* PooledEvPrepare::create(ObjPool& pool, struct ev_loop* loop) {
+    return &pool.make<PrepareBox>(loop)->value;
 }
 
-PooledEvPrepareImpl::~PooledEvPrepareImpl() noexcept {
-    stop();
+SignalBox::SignalBox(struct ev_loop* l)
+    : loop(l)
+{
 }
 
-void PooledEvPrepareImpl::start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_prepare*, int), void* data) {
-    stop();
-    loop = l;
-    ev_prepare_init(&prep, cb);
-    prep.data = data;
-    ev_prepare_start(loop, &prep);
-}
-
-void PooledEvPrepareImpl::stop() {
-    if (loop) {
-        ev_prepare_stop(loop, &prep);
+SignalBox::~SignalBox() noexcept {
+    if (ev_is_active(&value)) {
+        ev_signal_stop(loop, &value);
     }
 }
 
-PooledEvPrepare* PooledEvPrepare::create(ObjPool& pool) {
-    return pool.make<PooledEvPrepareImpl>();
-}
-
-PooledEvSignalImpl::~PooledEvSignalImpl() noexcept {
-    stop();
-}
-
-void PooledEvSignalImpl::start(struct ev_loop* l, void (*cb)(struct ev_loop*, ev_signal*, int), int signum, void* data) {
-    stop();
-    loop = l;
-    ev_signal_init(&sig, cb, signum);
-    sig.data = data;
-    ev_signal_start(loop, &sig);
-}
-
-void PooledEvSignalImpl::stop() {
-    if (loop) {
-        ev_signal_stop(loop, &sig);
-    }
-}
-
-PooledEvSignal* PooledEvSignal::create(ObjPool& pool) {
-    return pool.make<PooledEvSignalImpl>();
+ev_signal* PooledEvSignal::create(ObjPool& pool, struct ev_loop* loop) {
+    return &pool.make<SignalBox>(loop)->value;
 }

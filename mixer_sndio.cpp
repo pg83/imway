@@ -32,7 +32,7 @@ namespace {
     struct SndioMixer: public Mixer {
         Composer* c = nullptr;
         struct sioctl_hdl* hdl = nullptr;
-        PooledEvIo* io = nullptr;
+        ev_io* io = nullptr;
 
         int levelAddr = -1;
         int muteAddr = -1;
@@ -63,7 +63,7 @@ SndioMixer::SndioMixer(Composer& comp, struct sioctl_hdl* h)
     pooledGuard(*comp.pool, [h] {
         sioctl_close(h);
     });
-    io = PooledEvIo::create(*comp.pool);
+    io = PooledEvIo::create(*comp.pool, comp.loop);
     sioctl_ondesc(hdl, onDesc, this);
     sioctl_onval(hdl, onVal, this);
     rearm();
@@ -131,7 +131,13 @@ void SndioMixer::rearm() {
 
     int ev = (pfd.events & POLLIN ? EV_READ : 0) | (pfd.events & POLLOUT ? EV_WRITE : 0);
 
-    io->start(c->loop, ioCb, pfd.fd, ev, this);
+    if (ev_is_active(io)) {
+        ev_io_stop(c->loop, io);
+    }
+
+    ev_io_init(io, ioCb, pfd.fd, ev);
+    io->data = this;
+    ev_io_start(c->loop, io);
 }
 
 void SndioMixer::notify() {
@@ -189,7 +195,7 @@ namespace {
 
         if (sioctl_eof(m->hdl)) {
             sysE << "imway: sndiod went away, volume control disabled"_sv << endL;
-            m->io->stop();
+            ev_io_stop(m->c->loop, m->io);
             m->levelAddr = -1;
             m->muteAddr = -1;
 

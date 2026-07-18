@@ -504,7 +504,7 @@ namespace {
         int ddcCur = 0;
         int ddcPending = -1;
         bool ddcTimerOn = false;
-        PooledEvTimer* ddcTimer = nullptr;
+        ev_timer* ddcTimer = nullptr;
 
         double hdrNits = 0;
         bool hdrActive = false;
@@ -712,7 +712,11 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
         vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
     }
 
-    PooledEvIo::create(*pool)->start(loop, drmIoCb, fd, EV_READ, (void*)(intptr_t)fd);
+    ev_io* drmIo = PooledEvIo::create(*pool, loop);
+
+    ev_io_init(drmIo, drmIoCb, fd, EV_READ);
+    drmIo->data = (void*)(intptr_t)fd;
+    ev_io_start(loop, drmIo);
 
     ud = udev_new();
 
@@ -735,7 +739,11 @@ KmsDevice::KmsDevice(ObjPool* p, struct ev_loop* evLoop, Session& s, StringView 
         });
         udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
         udev_monitor_enable_receiving(mon);
-        PooledEvIo::create(*pool)->start(loop, udevIoCb, udev_monitor_get_fd(mon), EV_READ, this);
+        ev_io* udevIo = PooledEvIo::create(*pool, loop);
+
+        ev_io_init(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
+        udevIo->data = this;
+        ev_io_start(loop, udevIo);
     }
 
     sysO << "imway: device "_sv << sv(path) << endL;
@@ -1799,7 +1807,7 @@ void KmsOutput::initDdc(StringView connName) {
     ddcMax = max;
     ddcCur = cur;
     pooledFD(*pool, ddcFd);
-    ddcTimer = PooledEvTimer::create(*pool);
+    ddcTimer = PooledEvTimer::create(*pool, loop);
     sysO << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
 
@@ -1898,7 +1906,9 @@ void KmsOutput::setBrightness(float v) {
 
         if (!ddcTimerOn) {
             ddcTimerOn = true;
-            ddcTimer->start(loop, ddcTimerCb, 0.06, 0., this);
+            ev_timer_init(ddcTimer, ddcTimerCb, 0.06, 0.);
+            ddcTimer->data = this;
+            ev_timer_start(loop, ddcTimer);
         }
 
         return;

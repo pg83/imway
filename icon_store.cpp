@@ -53,7 +53,7 @@ namespace {
         Vector<CachedIcon*> cache;
 
         int inoFd = -1;
-        PooledEvTimer* reloadTimer = nullptr;
+        ev_timer* reloadTimer = nullptr;
 
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
@@ -108,9 +108,14 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     });
 
     pooledFD(*c->pool, inoFd);
-    PooledEvIo::create(*c->pool)->start(loop, inoCb, inoFd, EV_READ, this);
-    reloadTimer = PooledEvTimer::create(*c->pool);
-    reloadTimer->set(loop, reloadCb, 0.5, 0.5, this);
+    ev_io* ino = PooledEvIo::create(*c->pool, loop);
+
+    ev_io_init(ino, inoCb, inoFd, EV_READ);
+    ino->data = this;
+    ev_io_start(loop, ino);
+    reloadTimer = PooledEvTimer::create(*c->pool, loop);
+    ev_timer_init(reloadTimer, reloadCb, 0.5, 0.5);
+    reloadTimer->data = this;
 }
 
 // the caches walk the impl's own members, so their teardown lives in the
@@ -222,11 +227,11 @@ void IconStoreImpl::drainInotify() {
     }
 
     // installs come in bursts: reload once things settle
-    reloadTimer->again();
+    ev_timer_again(loop, reloadTimer);
 }
 
 void IconStoreImpl::reload() {
-    reloadTimer->stop();
+    ev_timer_stop(loop, reloadTimer);
 
     // the old icons go back to the pool only after the subscriber
     // has re-resolved everything onto fresh ones

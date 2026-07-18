@@ -453,12 +453,24 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
     if (output->vsynced()) {
-        PooledEvPrepare::create(*pool)->start(loop, prepareCb, this);
+        ev_prepare* prepare = PooledEvPrepare::create(*pool, loop);
+
+        ev_prepare_init(prepare, prepareCb);
+        prepare->data = this;
+        ev_prepare_start(loop, prepare);
     } else {
-        PooledEvTimer::create(*pool)->start(loop, frameTimerCb, 0., 1.0 / scene->hz, this);
+        ev_timer* frameTimer = PooledEvTimer::create(*pool, loop);
+
+        ev_timer_init(frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
+        frameTimer->data = this;
+        ev_timer_start(loop, frameTimer);
     }
 
-    PooledEvTimer::create(*pool)->start(loop, clockTimerCb, 2., 2., this);
+    ev_timer* clockTimer = PooledEvTimer::create(*pool, loop);
+
+    ev_timer_init(clockTimer, clockTimerCb, 2., 2.);
+    clockTimer->data = this;
+    ev_timer_start(loop, clockTimer);
 }
 
 RendererImpl::~RendererImpl() noexcept {
