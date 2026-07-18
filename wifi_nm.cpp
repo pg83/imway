@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "intr_list.h"
 #include "wifi.h"
 #include "wifi_nm.h"
 #include "dbus_conn.h"
@@ -284,9 +285,9 @@ void NmWifi::notify() {
 
     wifiNotifyTransition(*c, notified, st, ssid);
 
-    for (WifiListener* l : c->wifiListeners) {
-        l->wifiChanged();
-    }
+    forEach<WifiListener>(c->wifiListeners, [](WifiListener& listener) {
+        listener.wifiChanged();
+    });
 
     c->scene->needsFrame = true;
 }

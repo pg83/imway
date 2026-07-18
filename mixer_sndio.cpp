@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "intr_list.h"
 #include "mixer.h"
 #include "mixer_sndio.h"
 #include "pooled.h"
@@ -141,9 +142,9 @@ void SndioMixer::rearm() {
 }
 
 void SndioMixer::notify() {
-    for (MixerListener* l : c->mixerListeners) {
-        l->volumeChanged();
-    }
+    forEach<MixerListener>(c->mixerListeners, [](MixerListener& listener) {
+        listener.volumeChanged();
+    });
 
     c->scene->needsFrame = true;
 }

@@ -1,5 +1,6 @@
 #include "session.h"
 
+#include "intr_list.h"
 #include "util.h"
 
 #include <errno.h>
@@ -43,7 +44,7 @@ namespace {
         libseat* seat = nullptr;
         bool active = false;
         ev_io io{};
-        Vector<SessionListener*> listeners;
+        IntrusiveList listeners;
         Vector<SeatDevice> devices;
 
         SeatSession(struct ev_loop* evLoop);
@@ -175,17 +176,17 @@ void SeatSession::addListener(SessionListener* l) {
 void SeatSession::enable() {
     active = true;
 
-    for (SessionListener* l : listeners) {
-        l->sessionEnabled();
-    }
+    forEach<SessionListener>(listeners, [](SessionListener& listener) {
+        listener.sessionEnabled();
+    });
 }
 
 void SeatSession::disable() {
     active = false;
 
-    for (SessionListener* l : listeners) {
-        l->sessionDisabled();
-    }
+    forEach<SessionListener>(listeners, [](SessionListener& listener) {
+        listener.sessionDisabled();
+    });
 
     libseat_disable_seat(seat);
 }

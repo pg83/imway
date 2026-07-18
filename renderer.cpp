@@ -442,8 +442,8 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.iconResolver = this;
-    comp.mixerListeners.pushBack(this);
-    comp.wifiListeners.pushBack(this);
+    comp.mixerListeners.pushBack((MixerListener*)this);
+    comp.wifiListeners.pushBack((WifiListener*)this);
     setup(scene->outW, scene->outH);
     output->setFrameListener(this);
 

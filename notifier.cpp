@@ -35,7 +35,6 @@ namespace {
         IntrusiveList toasts; // newest last
         u32 lastId = 0;
         bool dndOn = false;
-        NotifierListener* listener = nullptr;
 
         NotifierImpl(Composer& comp);
 
@@ -47,7 +46,6 @@ namespace {
         void clearHistory() override;
         bool dnd() override;
         void setDnd(bool v) override;
-        void setListener(NotifierListener* l) override;
 
         ToastImpl* byId(u32 id);
         void armTimer(ToastImpl& t, i32 expireMs);
@@ -153,8 +151,10 @@ void NotifierImpl::close(u32 id, u32 reason) {
     ev_timer_stop(loop, &t->timer);
     t->onScreen = false;
 
-    if (t->fromBus && listener) {
-        listener->notificationClosed(id, reason);
+    if (t->fromBus) {
+        forEach<NotifierListener>(c->notifierListeners, [&](NotifierListener& listener) {
+            listener.notificationClosed(id, reason);
+        });
     }
 
     c->scene->needsFrame = true;
@@ -212,10 +212,6 @@ void NotifierImpl::setDnd(bool v) {
     }
 
     c->scene->needsFrame = true;
-}
-
-void NotifierImpl::setListener(NotifierListener* l) {
-    listener = l;
 }
 
 namespace {

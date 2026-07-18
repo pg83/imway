@@ -1,6 +1,6 @@
 #pragma once
 
-#include <std/lib/vector.h>
+#include <std/lib/list.h>
 
 namespace stl {
     class ObjPool;
@@ -20,6 +20,7 @@ struct Keyboard;
 struct Mixer;
 struct Notifications;
 struct Notifier;
+struct NotifierListener;
 struct Output;
 struct Renderer;
 struct Scene;
@@ -52,10 +53,10 @@ struct Composer {
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;
 
-    // listener slots: interfaces stay narrow, the slots solve the creation
-    // order — the producer walks the vector at event time, subscribers
-    // pushBack whenever they come up
-    stl::Vector<IconStoreListener*> iconListeners;
-    stl::Vector<MixerListener*> mixerListeners;
-    stl::Vector<WifiListener*> wifiListeners;
+    // listener slots solve the creation order: subscribers link themselves
+    // whenever they come up, producers walk the intrusive lists at event time
+    stl::IntrusiveList iconListeners;
+    stl::IntrusiveList mixerListeners;
+    stl::IntrusiveList wifiListeners;
+    stl::IntrusiveList notifierListeners;
 };

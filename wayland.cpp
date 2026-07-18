@@ -7204,7 +7204,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
     icons = comp.icons;
-    comp.iconListeners.pushBack(this);
+    comp.iconListeners.pushBack((IconStoreListener*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;
 

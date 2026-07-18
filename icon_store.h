@@ -1,5 +1,6 @@
 #pragma once
 
+#include <std/lib/node.h>
 #include <std/str/view.h>
 
 struct Composer;
@@ -7,7 +8,7 @@ struct Icon;
 
 // fired after an inotify-driven reload: the index and cache are fresh, the
 // subscriber re-resolves whatever it mapped onto store icons
-struct IconStoreListener {
+struct IconStoreListener: stl::IntrusiveNode {
     virtual void iconsReloaded() = 0;
 };
 

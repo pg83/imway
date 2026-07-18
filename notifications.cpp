@@ -57,7 +57,7 @@ NotificationsImpl::NotificationsImpl(Composer& c)
 
     vt.message_function = busMessage;
     dbus_connection_register_object_path(conn, kPath, &vt, this);
-    notifier->setListener(this);
+    c.notifierListeners.pushBack((NotifierListener*)this);
     sysO << "imway: notifications on the session bus"_sv << endL;
 }
 

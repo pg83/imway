@@ -1,6 +1,7 @@
 #include "icon.h"
 #include "composer.h"
 #include "icon_store.h"
+#include "intr_list.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
 #include "icon_pool.h"
@@ -248,9 +249,9 @@ void IconStoreImpl::reload() {
     cache.clear();
     buildIndex();
 
-    for (IconStoreListener* l : c->iconListeners) {
-        l->iconsReloaded();
-    }
+    forEach<IconStoreListener>(c->iconListeners, [](IconStoreListener& listener) {
+        listener.iconsReloaded();
+    });
 
     for (Icon* ic : old) {
         icons->release(ic);

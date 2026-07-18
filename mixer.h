@@ -1,10 +1,12 @@
 #pragma once
 
+#include <std/lib/node.h>
+
 struct Composer;
 
 // any volume change — media keys, the settings slider, an external mixer —
 // lands here; the osd is the subscriber
-struct MixerListener {
+struct MixerListener: stl::IntrusiveNode {
     virtual void volumeChanged() = 0;
 };
 

@@ -39,7 +39,7 @@ struct Post {
 
 // fired when a toast leaves the screen; the dbus adapter turns it into the
 // spec's NotificationClosed signal
-struct NotifierListener {
+struct NotifierListener: stl::IntrusiveNode {
     virtual void notificationClosed(u32 id, u32 reason) = 0;
 };
 
@@ -59,8 +59,6 @@ struct Notifier {
     // do-not-disturb: posts still land in history, but never pop on screen
     virtual bool dnd() = 0;
     virtual void setDnd(bool v) = 0;
-
-    virtual void setListener(NotifierListener* l) = 0;
 
     template <typename F>
     void active(F f) {

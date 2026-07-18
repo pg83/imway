@@ -1,5 +1,6 @@
 #pragma once
 
+#include <std/lib/node.h>
 #include <std/str/view.h>
 
 namespace stl {
@@ -8,7 +9,7 @@ namespace stl {
 
 struct ev_loop;
 
-struct SessionListener {
+struct SessionListener: stl::IntrusiveNode {
     virtual void sessionEnabled() = 0;
     virtual void sessionDisabled() = 0;
 };

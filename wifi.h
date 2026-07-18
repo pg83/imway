@@ -2,6 +2,7 @@
 
 #include "visitor.h"
 
+#include <std/lib/node.h>
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
 #include <std/sys/types.h>
@@ -10,7 +11,7 @@ struct Composer;
 
 // any state change — scan results, connection progress, a passphrase
 // request — lands here; the wifi dialog is the subscriber
-struct WifiListener {
+struct WifiListener: stl::IntrusiveNode {
     virtual void wifiChanged() = 0;
 };
 
