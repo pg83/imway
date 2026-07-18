@@ -139,16 +139,16 @@ int mainComposer(int argc, char** argv) {
         return 1;
     }
 
+    Composer c;
     ObjPool::Ref pool = ObjPool::fromMemory();
     struct ev_loop* loop = ev_default_loop(0);
+
+    c.pool = pool.mutPtr();
+    c.loop = loop;
 
     try {
         auto* scene = pool->make<Scene>();
 
-        Composer c;
-
-        c.pool = pool.mutPtr();
-        c.loop = loop;
         c.scene = scene;
 
         Session* session = nullptr;
@@ -165,7 +165,7 @@ int mainComposer(int argc, char** argv) {
 
         c.session = session;
 
-        Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(pool.mutPtr(), loop);
+        Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(c);
 
         ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.hdrNits);
 

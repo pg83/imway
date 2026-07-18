@@ -12,9 +12,8 @@ struct Scene;
 struct Output;
 struct DeviceVk;
 struct Keyboard;
-struct InputSink;
-struct FrameListener;
 struct Composer;
+struct InputSink;
 
 struct Renderer {
     virtual InputSink* sink() = 0;

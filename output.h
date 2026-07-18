@@ -7,7 +7,6 @@
 
 struct ScanoutBuffer;
 struct DmabufBuffer;
-struct FrameListener;
 
 struct Output {
     virtual int width() const = 0;
@@ -50,8 +49,6 @@ struct Output {
     // timestamp (CLOCK_MONOTONIC ns) and vblank sequence of the last
     // completed pageflip; false when the backend has no real flips
     virtual bool lastFlip(u64& nsec, u32& seq) const = 0;
-    virtual void setFrameListener(FrameListener* listener) = 0;
-
     virtual bool start() = 0;
 
     virtual bool ready() const = 0;

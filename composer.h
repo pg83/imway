@@ -11,6 +11,7 @@ struct ev_loop;
 struct DBusConn;
 struct IconPool;
 struct IconResolver;
+struct FrameListener;
 struct MixerListener;
 struct Wifi;
 struct WifiListener;
@@ -61,4 +62,5 @@ struct Composer {
     stl::IntrusiveList wifiListeners;
     stl::IntrusiveList notifierListeners;
     stl::IntrusiveList sessionListeners;
+    stl::IntrusiveList frameListeners;
 };

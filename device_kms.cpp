@@ -42,6 +42,7 @@
 #include <std/sym/i_map.h>
 #include <std/sys/throw.h>
 #include "device_kms.h"
+#include "intr_list.h"
 #include "pooled.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
@@ -442,6 +443,7 @@ namespace {
     };
 
     struct KmsOutput: public ::Output, public SessionListener {
+        Composer* c = nullptr;
         int fd = -1;
         int ttyFd = -1;
         // int, not long: the kernel writes exactly 4 bytes here and a
@@ -519,7 +521,6 @@ namespace {
         // last completed pageflip, for presentation-time feedback
         u64 flipNs = 0;
         u32 flipSeq = 0;
-        FrameListener* frameListener = nullptr;
 
         u32 cursorPlaneId = 0;
         u32 cuFbId = 0, cuCrtcId = 0;
@@ -562,7 +563,6 @@ namespace {
         void setSdrWhite(double nits) override;
         void setColorTemp(double kelvin) override;
         bool lastFlip(u64& nsec, u32& seq) const override;
-        void setFrameListener(FrameListener*) override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1);
         void drainPendingFlip();
@@ -617,9 +617,11 @@ namespace {
         out->queuedDirect = nullptr;
         out->queuedDirectFrame = nullptr;
 
-        if (out->frameListener) {
-            out->frameListener->frameShown((u32)(out->flipNs / 1000000ull));
-        }
+        u32 msec = (u32)(out->flipNs / 1000000ull);
+
+        forEach<FrameListener>(out->c->frameListeners, [msec](FrameListener& listener) {
+            listener.frameShown(msec);
+        });
     }
 
     void drmIoCb(struct ev_loop*, ev_io* w, int) {
@@ -856,7 +858,8 @@ void KmsOutput::hotplug() {
 }
 
 KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits)
-    : pool(c.pool)
+    : c(&c)
+    , pool(c.pool)
     , loop(c.loop)
     , fd(drmFd)
     , vk(v)
@@ -1435,16 +1438,6 @@ bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
     seq = flipSeq;
 
     return true;
-}
-
-void KmsOutput::setFrameListener(FrameListener* listener) {
-    if (!listener && frameListener) {
-        drainPendingFlip();
-        releaseDirectUse(queuedDirect, queuedDirectFrame);
-        releaseDirectUse(currentDirect, currentDirectFrame);
-    }
-
-    frameListener = listener;
 }
 
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {

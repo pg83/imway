@@ -16,7 +16,6 @@ struct Scene;
 struct Output;
 struct Renderer;
 struct DmabufFormat;
-struct FrameListener;
 struct Session;
 
 struct Device {

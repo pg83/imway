@@ -3,6 +3,7 @@
 
 #include "device_vk.h"
 #include "frame_listener.h"
+#include "intr_list.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -46,16 +47,16 @@ using namespace stl;
 
 namespace {
     struct HeadlessOutput: public ::Output {
+        Composer* c = nullptr;
         int w = 0, h = 0;
         double hz = 60.0;
-        FrameListener* frameListener = nullptr;
 
         // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
         // so headless exercises the renderer's hw-cursor rasterization path
         // (rasterizeShape) that a real headless output otherwise never hits
         int curCap = 0;
 
-        HeadlessOutput(int width, int height, double refresh);
+        HeadlessOutput(Composer& comp, int width, int height, double refresh);
 
         int width() const override;
         int height() const override;
@@ -79,7 +80,6 @@ namespace {
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
         bool lastFlip(u64&, u32&) const override;
-        void setFrameListener(FrameListener*) override;
         bool start() override;
         bool ready() const override;
         bool vsynced() const override;
@@ -95,13 +95,14 @@ namespace {
     };
 
     struct HeadlessDevice: public Device {
+        Composer* c = nullptr;
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         int syncFd = -1;
 
-        HeadlessDevice(ObjPool* p, struct ev_loop* evLoop);
+        HeadlessDevice(Composer& comp);
         int drmFd() const override;
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
@@ -111,8 +112,9 @@ namespace {
     };
 }
 
-HeadlessOutput::HeadlessOutput(int width, int height, double refresh)
-    : w(width)
+HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh)
+    : c(&comp)
+    , w(width)
     , h(height)
     , hz(refresh)
 {
@@ -185,10 +187,6 @@ bool HeadlessOutput::lastFlip(u64&, u32&) const {
     return false;
 }
 
-void HeadlessOutput::setFrameListener(FrameListener* listener) {
-    frameListener = listener;
-}
-
 bool HeadlessOutput::start() {
     return true;
 }
@@ -225,14 +223,17 @@ bool HeadlessOutput::presentNeedsPixels() const {
 }
 
 void HeadlessOutput::present(const void*) {
-    if (frameListener) {
-        frameListener->frameShown(nowMsec());
-    }
+    u32 msec = nowMsec();
+
+    forEach<FrameListener>(c->frameListeners, [msec](FrameListener& listener) {
+        listener.frameShown(msec);
+    });
 }
 
-HeadlessDevice::HeadlessDevice(ObjPool* p, struct ev_loop* evLoop)
-    : pool(p)
-    , loop(evLoop)
+HeadlessDevice::HeadlessDevice(Composer& comp)
+    : c(&comp)
+    , pool(comp.pool)
+    , loop(comp.loop)
 {
     vk = pool->make<DeviceVk>(-1);
 
@@ -289,15 +290,15 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
         STD_VERIFY(m.parse(modeStr));
     }
 
-    return pool->make<HeadlessOutput>(m.w, m.h, m.hz > 0 ? m.hz : 60.0);
+    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0);
 }
 
 Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
     return Renderer::create(c, *vk, fontPath, uiScale, framesLimit);
 }
 
-Device* DeviceHeadless::create(ObjPool* pool, struct ev_loop* loop) {
-    return pool->make<HeadlessDevice>(pool, loop);
+Device* DeviceHeadless::create(Composer& c) {
+    return c.pool->make<HeadlessDevice>(c);
 }
 
 bool HeadlessOutput::directScanout(DmabufBuffer*, FrameResource*) {

@@ -128,7 +128,6 @@ namespace {
         stl::ObjPool* pool = nullptr;
         Scene* scene = nullptr;
         ::Output* output = nullptr;
-        FrameListener* listener = nullptr;
         int framesLimit = 0;
         int settleFrames = 0;
 
@@ -423,7 +422,6 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , pool(comp.pool)
     , scene(comp.scene)
     , output(comp.output)
-    , listener(comp.wayland->frameListener())
     , icons(comp.icons)
     , notifier(comp.notifier)
     , framesLimit(limit)
@@ -442,10 +440,10 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.iconResolver = this;
+    comp.frameListeners.pushFront((FrameListener*)this);
     comp.mixerListeners.pushBack((MixerListener*)this);
     comp.wifiListeners.pushBack((WifiListener*)this);
     setup(scene->outW, scene->outH);
-    output->setFrameListener(this);
 
     // before any input arrives the cursor sits at the screen center
     posX = scene->outW / 2.0;
@@ -474,7 +472,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 }
 
 RendererImpl::~RendererImpl() noexcept {
-    output->setFrameListener(nullptr);
+    ((FrameListener*)this)->unlink();
 
     // the device must be idle before the pooled handles unwind (they die
     // right after this destructor); imgui and the churn-class resources
@@ -794,11 +792,8 @@ bool RendererImpl::finishGpuFrame(bool wait) {
 }
 
 void RendererImpl::frameShown(u32 msec) {
+    (void)msec;
     finishGpuFrame(false);
-
-    if (listener) {
-        listener->frameShown(msec);
-    }
 }
 
 namespace {
