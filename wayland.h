@@ -15,7 +15,6 @@ struct Output;
 struct Keyboard;
 struct InputSink;
 struct DmabufFormat;
-struct SessionListener;
 struct IconPool;
 struct IconStore;
 

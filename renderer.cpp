@@ -12,6 +12,7 @@
 #include "icon_store.h"
 #include "inspector.h"
 #include "launcher.h"
+#include "listener.h"
 #include "mixer.h"
 #include "history.h"
 #include "notifier.h"
@@ -117,8 +118,23 @@ namespace {
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
+    struct RendererImpl;
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public MixerListener, public WifiListener, public FrameListener {
+    struct CallVolumeChanged: Listener {
+        RendererImpl* parent;
+
+        CallVolumeChanged(RendererImpl* p);
+        void onListen() override;
+    };
+
+    struct CallWifiChanged: Listener {
+        RendererImpl* parent;
+
+        CallWifiChanged(RendererImpl* p);
+        void onListen() override;
+    };
+
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public FrameListener {
         InputSink* sink() override;
 
 
@@ -319,8 +335,8 @@ namespace {
         void markTreeUnhovered(Surface& s);
         void buildUi(Scene& scene);
         void sampleStats();
-        void volumeChanged() override;
-        void wifiChanged() override;
+        void volumeChanged();
+        void wifiChanged();
         void cursorUi(Scene& scene, bool overClient);
         void rasterizeShape(int kind, u32* out);
 
@@ -375,6 +391,24 @@ namespace {
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
     };
+
+    CallVolumeChanged::CallVolumeChanged(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallVolumeChanged::onListen() {
+        parent->volumeChanged();
+    }
+
+    CallWifiChanged::CallWifiChanged(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallWifiChanged::onListen() {
+        parent->wifiChanged();
+    }
 
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
         auto* r = (RendererImpl*)w->data;
@@ -441,8 +475,8 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     drmFd = vk.drmFd;
     comp.iconResolver = this;
     comp.frameListeners.pushFront((FrameListener*)this);
-    comp.mixerListeners.pushBack((MixerListener*)this);
-    comp.wifiListeners.pushBack((WifiListener*)this);
+    comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
+    comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
     setup(scene->outW, scene->outH);
 
     // before any input arrives the cursor sits at the screen center

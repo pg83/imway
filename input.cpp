@@ -4,6 +4,7 @@
 #include "pooled_fd.h"
 #include "renderer.h"
 #include "input_sink.h"
+#include "listener.h"
 #include "session.h"
 #include "util.h"
 
@@ -32,7 +33,23 @@ namespace {
 
     void inputIoCb(struct ev_loop*, ev_io* w, int);
 
-    struct LibinputSource: public InputSource, public SessionListener {
+    struct LibinputSource;
+
+    struct CallInputSessionEnabled: Listener {
+        LibinputSource* parent;
+
+        CallInputSessionEnabled(LibinputSource* p);
+        void onListen() override;
+    };
+
+    struct CallInputSessionDisabled: Listener {
+        LibinputSource* parent;
+
+        CallInputSessionDisabled(LibinputSource* p);
+        void onListen() override;
+    };
+
+    struct LibinputSource: public InputSource {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         InputSink* sink = nullptr;
@@ -57,11 +74,29 @@ namespace {
 
         void inotifyEvents();
 
-        void sessionEnabled() override;
-        void sessionDisabled() override;
+        void sessionEnabled();
+        void sessionDisabled();
 
         void dispatch();
     };
+
+    CallInputSessionEnabled::CallInputSessionEnabled(LibinputSource* p)
+        : parent(p)
+    {
+    }
+
+    void CallInputSessionEnabled::onListen() {
+        parent->sessionEnabled();
+    }
+
+    CallInputSessionDisabled::CallInputSessionDisabled(LibinputSource* p)
+        : parent(p)
+    {
+    }
+
+    void CallInputSessionDisabled::onListen() {
+        parent->sessionDisabled();
+    }
 
     int openRestricted(const char* path, int, void* data) {
         return ((LibinputSource*)data)->session->openDevice(path);
@@ -118,7 +153,8 @@ LibinputSource::LibinputSource(Composer& c)
         pooledFD(*c.pool, inoFd);
     }
 
-    c.sessionListeners.pushBack((SessionListener*)this);
+    c.sessionEnabledListeners.pushBack(c.pool->make<CallInputSessionEnabled>(this));
+    c.sessionDisabledListeners.pushBack(c.pool->make<CallInputSessionDisabled>(this));
 
     ev_io* inputIo = createEvIo(*c.pool, loop);
 

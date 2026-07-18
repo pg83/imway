@@ -2,6 +2,7 @@
 #include "composer.h"
 #include "icon_store.h"
 #include "intr_list.h"
+#include "listener.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
 #include "icon_pool.h"
@@ -249,8 +250,8 @@ void IconStoreImpl::reload() {
     cache.clear();
     buildIndex();
 
-    forEach<IconStoreListener>(c->iconListeners, [](IconStoreListener& listener) {
-        listener.iconsReloaded();
+    forEach<Listener>(c->iconListeners, [](Listener& listener) {
+        listener.onListen();
     });
 
     for (Icon* ic : old) {

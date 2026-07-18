@@ -1,5 +1,6 @@
 #include "composer.h"
 #include "intr_list.h"
+#include "listener.h"
 #include "mixer.h"
 #include "mixer_pulse.h"
 #include "pooled.h"
@@ -346,8 +347,8 @@ void PulseMixer::updateSink(const pa_sink_info* info) {
 }
 
 void PulseMixer::notify() {
-    forEach<MixerListener>(c->mixerListeners, [](MixerListener& listener) {
-        listener.volumeChanged();
+    forEach<Listener>(c->mixerListeners, [](Listener& listener) {
+        listener.onListen();
     });
 
     c->scene->needsFrame = true;

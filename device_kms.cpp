@@ -3,6 +3,7 @@
 
 #include "device_vk.h"
 #include "frame_listener.h"
+#include "listener.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -434,6 +435,20 @@ namespace {
 
     struct KmsOutput;
 
+    struct CallKmsSessionEnabled: Listener {
+        KmsOutput* parent;
+
+        CallKmsSessionEnabled(KmsOutput* p);
+        void onListen() override;
+    };
+
+    struct CallKmsSessionDisabled: Listener {
+        KmsOutput* parent;
+
+        CallKmsSessionDisabled(KmsOutput* p);
+        void onListen() override;
+    };
+
     struct DirectFbOwner {
         KmsOutput* output = nullptr;
         DmabufBuffer* buffer = nullptr;
@@ -442,7 +457,7 @@ namespace {
         ~DirectFbOwner() noexcept;
     };
 
-    struct KmsOutput: public ::Output, public SessionListener {
+    struct KmsOutput: public ::Output {
         Composer* c = nullptr;
         int fd = -1;
         int ttyFd = -1;
@@ -542,8 +557,8 @@ namespace {
 
         KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits);
 
-        void sessionEnabled() override;
-        void sessionDisabled() override;
+        void sessionEnabled();
+        void sessionDisabled();
         ~KmsOutput() noexcept;
 
         int width() const override;
@@ -604,6 +619,24 @@ namespace {
         void releaseDirectUse(DmabufBuffer*& buf, FrameResource*& frame);
         void present(const void* pixels) override;
     };
+
+    CallKmsSessionEnabled::CallKmsSessionEnabled(KmsOutput* p)
+        : parent(p)
+    {
+    }
+
+    void CallKmsSessionEnabled::onListen() {
+        parent->sessionEnabled();
+    }
+
+    CallKmsSessionDisabled::CallKmsSessionDisabled(KmsOutput* p)
+        : parent(p)
+    {
+    }
+
+    void CallKmsSessionDisabled::onListen() {
+        parent->sessionDisabled();
+    }
 
     void pageFlipHandler(int, unsigned seq, unsigned sec, unsigned usec, void* data) {
         auto* out = (KmsOutput*)data;
@@ -866,7 +899,8 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     , gemHandles(c.pool)
     , hdrNits(hdrWhiteNits)
 {
-    c.sessionListeners.pushBack((SessionListener*)this);
+    c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
+    c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
     pickPipe(connector, modeStr);
 
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");

@@ -12,11 +12,8 @@ struct DBusConn;
 struct IconPool;
 struct IconResolver;
 struct FrameListener;
-struct MixerListener;
 struct Wifi;
-struct WifiListener;
 struct IconStore;
-struct IconStoreListener;
 struct Keyboard;
 struct Mixer;
 struct Notifications;
@@ -26,7 +23,6 @@ struct Output;
 struct Renderer;
 struct Scene;
 struct Session;
-struct SessionListener;
 struct Wayland;
 
 // the wiring board: main owns one, fills the fields as the entities come
@@ -61,6 +57,7 @@ struct Composer {
     stl::IntrusiveList mixerListeners;
     stl::IntrusiveList wifiListeners;
     stl::IntrusiveList notifierListeners;
-    stl::IntrusiveList sessionListeners;
+    stl::IntrusiveList sessionEnabledListeners;
+    stl::IntrusiveList sessionDisabledListeners;
     stl::IntrusiveList frameListeners;
 };

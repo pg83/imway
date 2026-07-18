@@ -8,6 +8,7 @@
 #include "input_sink.h"
 #include "frame_listener.h"
 #include "keyboard.h"
+#include "listener.h"
 #include "output.h"
 #include "intr_list.h"
 #include "scene.h"
@@ -559,7 +560,28 @@ namespace {
         void toplevelGone(Toplevel* t);
     };
 
-    struct WaylandImpl: public Wayland, public InputSink, public FrameListener, public SessionListener, public IconStoreListener {
+    struct CallIconsReloaded: Listener {
+        WaylandImpl* parent;
+
+        CallIconsReloaded(WaylandImpl* p);
+        void onListen() override;
+    };
+
+    struct CallWaylandSessionEnabled: Listener {
+        WaylandImpl* parent;
+
+        CallWaylandSessionEnabled(WaylandImpl* p);
+        void onListen() override;
+    };
+
+    struct CallWaylandSessionDisabled: Listener {
+        WaylandImpl* parent;
+
+        CallWaylandSessionDisabled(WaylandImpl* p);
+        void onListen() override;
+    };
+
+    struct WaylandImpl: public Wayland, public InputSink, public FrameListener {
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
@@ -646,10 +668,10 @@ namespace {
 
         void run() override;
 
-        void iconsReloaded() override;
+        void iconsReloaded();
         InputSink* sink() override;
-        void sessionEnabled() override;
-        void sessionDisabled() override;
+        void sessionEnabled();
+        void sessionDisabled();
         void motion(double x, double y) override;
         void button(u32 btn, bool pressed) override;
         void key(u32 code, bool pressed) override;
@@ -671,6 +693,33 @@ namespace {
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
     };
+
+    CallIconsReloaded::CallIconsReloaded(WaylandImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallIconsReloaded::onListen() {
+        parent->iconsReloaded();
+    }
+
+    CallWaylandSessionEnabled::CallWaylandSessionEnabled(WaylandImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallWaylandSessionEnabled::onListen() {
+        parent->sessionEnabled();
+    }
+
+    CallWaylandSessionDisabled::CallWaylandSessionDisabled(WaylandImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallWaylandSessionDisabled::onListen() {
+        parent->sessionDisabled();
+    }
 
     wl_resource* resOf(Surface* s) {
         return ((SurfaceImpl*)s)->res;
@@ -7202,8 +7251,9 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
     icons = comp.icons;
-    comp.iconListeners.pushBack((IconStoreListener*)this);
-    comp.sessionListeners.pushBack((SessionListener*)this);
+    comp.iconListeners.pushBack(comp.pool->make<CallIconsReloaded>(this));
+    comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
+    comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
     comp.frameListeners.pushBack((FrameListener*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;

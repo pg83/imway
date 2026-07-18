@@ -2,6 +2,7 @@
 
 #include "composer.h"
 #include "intr_list.h"
+#include "listener.h"
 #include "util.h"
 
 #include <errno.h>
@@ -168,16 +169,16 @@ void SeatSession::closeDevice(int fd) {
 void SeatSession::enable() {
     active = true;
 
-    forEach<SessionListener>(c->sessionListeners, [](SessionListener& listener) {
-        listener.sessionEnabled();
+    forEach<Listener>(c->sessionEnabledListeners, [](Listener& listener) {
+        listener.onListen();
     });
 }
 
 void SeatSession::disable() {
     active = false;
 
-    forEach<SessionListener>(c->sessionListeners, [](SessionListener& listener) {
-        listener.sessionDisabled();
+    forEach<Listener>(c->sessionDisabledListeners, [](Listener& listener) {
+        listener.onListen();
     });
 
     libseat_disable_seat(seat);
