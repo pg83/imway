@@ -103,7 +103,7 @@ intr_list.cpp
 listener.cpp
 keyboard.cpp
 dialog.cpp
-overlay.cpp
+lock_screen.cpp
 launcher.cpp
 calendar.cpp
 inspector.cpp

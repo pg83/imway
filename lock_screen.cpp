@@ -1,4 +1,4 @@
-#include "overlay.h"
+#include "lock_screen.h"
 
 #include "composer.h"
 #include "device_vk.h"

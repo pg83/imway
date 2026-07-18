@@ -18,7 +18,7 @@
 #include "mixer.h"
 #include "history.h"
 #include "notifier.h"
-#include "overlay.h"
+#include "lock_screen.h"
 #include "osd.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
