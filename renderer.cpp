@@ -3019,7 +3019,7 @@ void RendererImpl::buildUi(Scene& scene) {
         float cw = ImGui::CalcTextSize(clock.cStr()).x;
         float x = ImGui::GetWindowWidth() - cw - st.ItemSpacing.x;
 
-        ImGui::SameLine(x);
+        ImGui::SetCursorPosX(x);
         ImGui::TextUnformatted(clock.cStr());
 
         if (ImGui::IsItemClicked()) {

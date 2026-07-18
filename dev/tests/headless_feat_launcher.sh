@@ -4,6 +4,10 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 screenshot "$XDG_RUNTIME_DIR/base.ppm"
+centroid "$XDG_RUNTIME_DIR/base.ppm" 255 255 255 >/dev/null 2>&1 || {
+    echo "right-side bar widgets are missing"
+    exit 1
+}
 
 ctl "key 125 press"  # Super
 ctl "key 60 press"   # F2
