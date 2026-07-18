@@ -180,9 +180,12 @@ void Theme::rebuild() {
     // warm accent vote for its hue.  With blue/orange both votes agree.
     float x = 2.f * cosf(s.h) + cosf(a.h + 3.14159265358979323846f);
     float y = 2.f * sinf(s.h) + sinf(a.h + 3.14159265358979323846f);
-    float desktopC = 0.12f * (s.c + a.c) * 0.5f;
+    // The desktop is a neutral surface with only a trace of the interaction
+    // palette.  Its huge area amplifies even small chroma, so keep the color
+    // vote deliberately much weaker than on widgets.
+    float desktopC = 0.055f * (s.c + a.c) * 0.5f;
 
-    desktopC = desktopC < 0.012f ? 0.012f : desktopC > 0.030f ? 0.030f : desktopC;
+    desktopC = desktopC < 0.006f ? 0.006f : desktopC > 0.018f ? 0.018f : desktopC;
     desktop = fromLch({n.l - 0.05f, desktopC, atan2f(y, x)});
 
     makeTones(neutral, n, 0.025f);
