@@ -1,20 +1,10 @@
 import build
 import os
-import shlex
 
 
-def words(value):
-    return shlex.split(value) if value else []
-
-
-common_cflags = ["-O2", "-g", *words(os.environ.get("CFLAGS")), *words(os.environ.get("CPPFLAGS"))]
-common_cxxflags = [
-    "-std=c++23", "-O2", "-g", "-DGLFW_INCLUDE_NONE",
-    *words(os.environ.get("CFLAGS")), *words(os.environ.get("CXXFLAGS")),
-    *words(os.environ.get("CPPFLAGS")),
-]
-common_ldflags = [*words(os.environ.get("LDFLAGS")), *words(os.environ.get("CTRFLAGS"))]
-
+build.cflags += ["-O2", "-g"]
+build.cxxflags += ["-std=c++23"]
+build.cppflags += ["-DGLFW_INCLUDE_NONE"]
 build.includes += [
     "$(S)/third_party/imgui",
     "$(B)/protocols",
@@ -96,7 +86,6 @@ protocols = library(
     name="protocols",
     srcs=server_sources,
     deps=[wayland_server],
-    cflags=common_cflags,
 )
 
 
@@ -116,8 +105,6 @@ for shader in ["cm_convert", "lock_blur"]:
 imgui = library(
     name="imgui",
     srcs=build.glob("$(S)/third_party/imgui/*.cpp"),
-    cflags=common_cxxflags,
-    public_cflags=["-DGLFW_INCLUDE_NONE"],
     deps=[vulkan, glfw],
 )
 
@@ -127,8 +114,6 @@ imway_sources = build.glob("$(S)/*.cpp")
 imway = program(
     name="imway",
     srcs=imway_sources,
-    cflags=common_cxxflags,
-    ldflags=common_ldflags,
     deps=[
         imgui, protocols,
         wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
@@ -171,20 +156,16 @@ client_protocols = library(
     name="client_protocols",
     srcs=client_sources,
     deps=[wayland_client],
-    cflags=common_cflags,
 )
 
 
 tests = []
 for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
-    flags = common_cxxflags if source.endswith(".cpp") else common_cflags
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",
         srcs=[source],
-        cflags=flags,
-        ldflags=common_ldflags,
         deps=[client_protocols, wayland_client, drm, dbus],
     ))
 

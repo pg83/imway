@@ -124,7 +124,11 @@ class Target:
     srcs: list[str] = dataclasses.field(default_factory=list)
     deps: list["Target"] = dataclasses.field(default_factory=list)
     cflags: list[str] = dataclasses.field(default_factory=list)
+    cxxflags: list[str] = dataclasses.field(default_factory=list)
+    cppflags: list[str] = dataclasses.field(default_factory=list)
     public_cflags: list[str] = dataclasses.field(default_factory=list)
+    public_cxxflags: list[str] = dataclasses.field(default_factory=list)
+    public_cppflags: list[str] = dataclasses.field(default_factory=list)
     ldflags: list[str] = dataclasses.field(default_factory=list)
     output: str | None = None
     commands: list[list[str]] = dataclasses.field(default_factory=list)
@@ -155,13 +159,20 @@ class BuildContext:
         self.target_names: dict[str, Target] = {}
         self.file_hashes: dict[str, str] = {}
         self.includes: list[str] = []
+        self.cflags = shlex.split(os.environ.get("CFLAGS", ""))
+        self.cxxflags = shlex.split(os.environ.get("CXXFLAGS", ""))
+        self.cppflags = shlex.split(os.environ.get("CPPFLAGS", ""))
+        self.ldflags = shlex.split(os.environ.get("LDFLAGS", ""))
+        self.ldflags += shlex.split(os.environ.get("CTRFLAGS", ""))
         self.cc = os.environ.get("CC", "cc")
         self.cxx = os.environ.get("CXX", "c++")
         self.ar = os.environ.get("AR") or shutil.which("ar") or shutil.which("llvm-ar") or "ar"
 
-    def interface(self, *, cflags=(), ldflags=(), enabled=True, name=None) -> Target:
+    def interface(self, *, cflags=(), cxxflags=(), cppflags=(), ldflags=(), enabled=True, name=None) -> Target:
         target = Target(
-            "interface", name=name, public_cflags=_items(cflags), ldflags=_items(ldflags),
+            "interface", name=name,
+            public_cflags=_items(cflags), public_cxxflags=_items(cxxflags),
+            public_cppflags=_items(cppflags), ldflags=_items(ldflags),
             enabled=enabled,
         )
         self.targets.append(target)
@@ -206,20 +217,34 @@ class BuildContext:
             return sorted(globlib.glob(pattern, recursive=True))
         raise BuildError(f"glob pattern must start with $(S)/ or be absolute: {pattern}")
 
-    def library(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), ldflags=(), output=None) -> Target:
+    def library(self, *, srcs, name=None, cflags=(), cxxflags=(), cppflags=(),
+                public_cflags=(), public_cxxflags=(), public_cppflags=(),
+                deps=(), ldflags=(), output=None) -> Target:
         return self._compiled_target(
-            "library", srcs, name, cflags, public_cflags, deps, ldflags, output, None,
+            "library", srcs, name, cflags, cxxflags, cppflags,
+            public_cflags, public_cxxflags, public_cppflags,
+            deps, ldflags, output, None,
         )
 
-    def program(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), ldflags=(), output=None, linker=None) -> Target:
+    def program(self, *, srcs, name=None, cflags=(), cxxflags=(), cppflags=(),
+                public_cflags=(), public_cxxflags=(), public_cppflags=(),
+                deps=(), ldflags=(), output=None, linker=None) -> Target:
         return self._compiled_target(
-            "program", srcs, name, cflags, public_cflags, deps, ldflags, output, linker,
+            "program", srcs, name, cflags, cxxflags, cppflags,
+            public_cflags, public_cxxflags, public_cppflags,
+            deps, ldflags, output, linker,
         )
 
-    def _compiled_target(self, kind, srcs, name, cflags, public_cflags, deps, ldflags, output, linker) -> Target:
+    def _compiled_target(self, kind, srcs, name, cflags, cxxflags, cppflags,
+                         public_cflags, public_cxxflags, public_cppflags,
+                         deps, ldflags, output, linker) -> Target:
         target = Target(
             kind, name=name, srcs=[_source_path(x) for x in _items(srcs)],
-            deps=_items(deps), cflags=_items(cflags), public_cflags=_items(public_cflags),
+            deps=_items(deps),
+            cflags=_items(cflags), cxxflags=_items(cxxflags), cppflags=_items(cppflags),
+            public_cflags=_items(public_cflags),
+            public_cxxflags=_items(public_cxxflags),
+            public_cppflags=_items(public_cppflags),
             ldflags=_items(ldflags), output=_output_path(output) if output else None,
             linker=linker,
         )
@@ -228,7 +253,7 @@ class BuildContext:
         return target
 
     def command(self, *, inputs=(), outputs, cmd, deps=(), name=None, cwd=B, env=None,
-                cflags=(), ldflags=(), descr="GEN", color="yellow") -> Target:
+                cflags=(), cxxflags=(), cppflags=(), ldflags=(), descr="GEN", color="yellow") -> Target:
         commands = cmd
         if not commands or isinstance(commands[0], (str, bytes)):
             commands = [commands]
@@ -236,7 +261,9 @@ class BuildContext:
             "command", name=name, deps=_items(deps), inputs=[_source_path(x) for x in _items(inputs)],
             outputs=[_output_path(x) for x in _items(outputs)],
             commands=[[str(x) for x in command] for command in commands], cwd=_cwd_path(cwd),
-            env=dict(env or {}), public_cflags=_items(cflags), ldflags=_items(ldflags),
+            env=dict(env or {}),
+            public_cflags=_items(cflags), public_cxxflags=_items(cxxflags),
+            public_cppflags=_items(cppflags), ldflags=_items(ldflags),
             descr=str(descr), color=str(color),
         )
         self._validate_deps(target)
@@ -263,6 +290,8 @@ class BuildContext:
         build_module = types.ModuleType("build")
         build_module.includes = []
         build_module.glob = self.glob
+        for name in ("cflags", "cxxflags", "cppflags", "ldflags"):
+            setattr(build_module, name, getattr(self, name).copy())
         module.__dict__.update({
             "pkg_config": self.pkg_config,
             "pkg_config_variable": self.pkg_config_variable,
@@ -284,6 +313,8 @@ class BuildContext:
             else:
                 sys.modules["build"] = previous_build
         self.includes = [_include_path(path) for path in _items(build_module.includes)]
+        for name in ("cflags", "cxxflags", "cppflags", "ldflags"):
+            setattr(self, name, [str(flag) for flag in _items(getattr(build_module, name))])
         self._infer_names(module)
         return module
 
@@ -349,10 +380,8 @@ class BuildContext:
 
     def _emit_compiled(self, target: Target) -> None:
         assert target.name is not None
-        dep_cflags = self._usage_cflags(target.deps)
         global_includes = _uniq([S, *[_include_path(path) for path in self.includes]])
-        common = dep_cflags + ["-I" + path for path in global_includes] + target.cflags
-        include_roots = _uniq([*global_includes, *self._include_roots_from_flags(common)])
+        include_flags = ["-I" + path for path in global_includes]
         objects: list[Node] = []
         uses_cxx = False
         for src in target.srcs:
@@ -360,6 +389,16 @@ class BuildContext:
             cxx = ext in (".cc", ".cpp", ".cxx", ".c++")
             uses_cxx |= cxx
             compiler = self.cxx if cxx else self.cc
+            common = [*self.cppflags, *self.cflags]
+            if cxx:
+                common.extend(self.cxxflags)
+            common.extend(include_flags)
+            common.extend(self._usage_compile_flags(target.deps, cxx))
+            common.extend(target.cppflags)
+            common.extend(target.cflags)
+            if cxx:
+                common.extend(target.cxxflags)
+            include_roots = _uniq([*global_includes, *self._include_roots_from_flags(common)])
             rel = src.replace(S + "/", "").replace(B + "/", "generated/")
             rel = re.sub(r"[^A-Za-z0-9_./+-]", "_", rel)
             obj = f"{B}/obj/{target.name}/{rel}.o"
@@ -390,7 +429,7 @@ class BuildContext:
             lib_nodes = [lib.root for lib in libraries if lib.root is not None]
             other_nodes = [dep.root for dep in target.deps if dep.root is not None and dep.kind != "library"]
             archives = [lib.root.outputs[0] for lib in libraries if lib.root is not None]
-            ldflags = self._link_flags(target.deps) + target.ldflags
+            ldflags = self.ldflags + self._link_flags(target.deps) + target.ldflags
             linker = target.linker or (self.cxx if target.uses_cxx else self.cc)
             command = [linker, "-o", output, *[node.outputs[0] for node in objects], *archives, *ldflags]
             root = Node(
@@ -401,7 +440,7 @@ class BuildContext:
         target.root = root
         target.nodes = [*objects, root]
 
-    def _usage_cflags(self, targets: Iterable[Target]) -> list[str]:
+    def _usage_compile_flags(self, targets: Iterable[Target], cxx: bool) -> list[str]:
         out: list[str] = []
         seen: set[Target] = set()
         def walk(target: Target) -> None:
@@ -410,7 +449,10 @@ class BuildContext:
             seen.add(target)
             for dep in target.deps:
                 walk(dep)
+            out.extend(target.public_cppflags)
             out.extend(target.public_cflags)
+            if cxx:
+                out.extend(target.public_cxxflags)
         for target in targets:
             walk(target)
         return _uniq(out)

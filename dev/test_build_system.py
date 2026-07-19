@@ -44,6 +44,21 @@ class BuildSystemTest(unittest.TestCase):
         self.assertEqual(executor.tmp, self.out / "tmp")
         self.assertEqual(executor.grb, self.out / "grb")
 
+    def test_global_flags_default_to_parsed_environment(self):
+        environment = {
+            "CFLAGS": "-gc '-DNAME=two words'",
+            "CXXFLAGS": "-gx",
+            "CPPFLAGS": "-gp",
+            "LDFLAGS": "-gl",
+            "CTRFLAGS": "-ctr one",
+        }
+        with mock.patch.dict("os.environ", environment, clear=True):
+            context = self.context()
+        self.assertEqual(context.cflags, ["-gc", "-DNAME=two words"])
+        self.assertEqual(context.cxxflags, ["-gx"])
+        self.assertEqual(context.cppflags, ["-gp"])
+        self.assertEqual(context.ldflags, ["-gl", "-ctr", "one"])
+
     def test_rejects_unrooted_graph_paths(self):
         context = self.context()
         with self.assertRaisesRegex(runner.BuildError, r"input path must start with \$\(S\)/"):
@@ -91,6 +106,10 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "build.py").write_text(
             "import build\n"
             "build.includes += ['$(S)/include', '$(B)/generated']\n"
+            "build.cflags += ['-project-c']\n"
+            "build.cxxflags += ['-project-cxx']\n"
+            "build.cppflags += ['-project-cpp']\n"
+            "build.ldflags += ['-project-ld']\n"
             "app = program(srcs=build.glob('$(S)/main.c'))\n"
             "lib = library(srcs=['$(S)/lib.c'])\n",
         )
@@ -98,11 +117,50 @@ class BuildSystemTest(unittest.TestCase):
         context.load(self.root / "build.py")
         context.build_graph()
         self.assertEqual(context.includes, ["$(S)/include", "$(B)/generated"])
+        self.assertEqual(context.cflags[-1], "-project-c")
+        self.assertEqual(context.cxxflags[-1], "-project-cxx")
+        self.assertEqual(context.cppflags[-1], "-project-cpp")
+        self.assertEqual(context.ldflags[-1], "-project-ld")
         for name in ("app", "lib"):
             command = context.target_names[name].nodes[0].commands[0]
             self.assertIn("-I$(S)", command)
             self.assertIn("-I$(S)/include", command)
             self.assertIn("-I$(B)/generated", command)
+
+    def test_target_flags_follow_global_and_dependency_flags(self):
+        (self.root / "main.c").write_text("int c;\n")
+        (self.root / "main.cpp").write_text("int cxx;\n")
+        context = self.context()
+        context.cppflags = ["-global-cpp"]
+        context.cflags = ["-global-c"]
+        context.cxxflags = ["-global-cxx"]
+        context.ldflags = ["-global-ld"]
+        dependency = context.interface(
+            cppflags=["-dep-cpp"], cflags=["-dep-c"], cxxflags=["-dep-cxx"],
+            ldflags=["-dep-ld"],
+        )
+        app = context.program(
+            name="app", srcs=["$(S)/main.c", "$(S)/main.cpp"], deps=[dependency],
+            cppflags=["-local-cpp"], cflags=["-local-c"], cxxflags=["-local-cxx"],
+            ldflags=["-local-ld"],
+        )
+        context.build_graph()
+
+        c_command = app.nodes[0].commands[0]
+        cxx_command = app.nodes[1].commands[0]
+        self.assertEqual(
+            c_command[1:c_command.index("-c")],
+            ["-global-cpp", "-global-c", "-I$(S)", "-dep-cpp", "-dep-c", "-local-cpp", "-local-c"],
+        )
+        self.assertEqual(
+            cxx_command[1:cxx_command.index("-c")],
+            [
+                "-global-cpp", "-global-c", "-global-cxx", "-I$(S)",
+                "-dep-cpp", "-dep-c", "-dep-cxx",
+                "-local-cpp", "-local-c", "-local-cxx",
+            ],
+        )
+        self.assertEqual(app.root.commands[0][-3:], ["-global-ld", "-dep-ld", "-local-ld"])
 
     def test_node_descriptions_and_colors(self):
         (self.root / "thing.cpp").write_text("int thing;\n")
