@@ -63,6 +63,18 @@ class BuildSystemTest(unittest.TestCase):
         with self.assertRaisesRegex(runner.BuildError, r"include path must start with \$\(S\)/"):
             context.load(self.root / "build.py")
 
+    def test_build_glob_returns_sorted_symbolic_paths(self):
+        (self.root / "z.cpp").write_text("\n")
+        (self.root / "a.cpp").write_text("\n")
+        (self.root / "ignored.c").write_text("\n")
+        context = self.context()
+        self.assertEqual(
+            context.glob("$(S)/*.cpp"),
+            ["$(S)/a.cpp", "$(S)/z.cpp"],
+        )
+        with self.assertRaisesRegex(runner.BuildError, r"glob pattern must start with \$\(S\)/"):
+            context.glob("*.cpp")
+
     def test_infers_target_name_from_module_global(self):
         (self.root / "build.py").write_text(
             "thing = library(srcs=['$(S)/thing.c'])\ninstall(thing)\n",
@@ -79,7 +91,7 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "build.py").write_text(
             "import build\n"
             "build.includes += ['$(S)/include', '$(B)/generated']\n"
-            "app = program(srcs=['$(S)/main.c'])\n"
+            "app = program(srcs=build.glob('$(S)/main.c'))\n"
             "lib = library(srcs=['$(S)/lib.c'])\n",
         )
         context = self.context()

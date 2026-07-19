@@ -1,5 +1,4 @@
 import build
-import glob
 import os
 import shlex
 
@@ -116,34 +115,14 @@ for shader in ["cm_convert", "lock_blur"]:
 
 imgui = library(
     name="imgui",
-    srcs=[
-        "$(S)/third_party/imgui/imgui.cpp",
-        "$(S)/third_party/imgui/imgui_draw.cpp",
-        "$(S)/third_party/imgui/imgui_tables.cpp",
-        "$(S)/third_party/imgui/imgui_widgets.cpp",
-        "$(S)/third_party/imgui/imgui_impl_vulkan.cpp",
-        "$(S)/third_party/imgui/imgui_impl_glfw.cpp",
-    ],
+    srcs=build.glob("$(S)/third_party/imgui/*.cpp"),
     cflags=common_cxxflags,
     public_cflags=["-DGLFW_INCLUDE_NONE"],
     deps=[vulkan, glfw],
 )
 
 
-imway_sources = [
-    "$(S)/main.cpp", "$(S)/main_composer.cpp", "$(S)/main_supervisor.cpp", "$(S)/main_screenshot.cpp",
-    "$(S)/composer.cpp", "$(S)/frame_resource.cpp", "$(S)/pooled.cpp", "$(S)/pooled_ev.cpp", "$(S)/pooled_fd.cpp",
-    "$(S)/pooled_vk.cpp", "$(S)/scene.cpp", "$(S)/wayland.cpp", "$(S)/control.cpp", "$(S)/input.cpp",
-    "$(S)/intr_list.cpp", "$(S)/listener.cpp", "$(S)/keyboard.cpp", "$(S)/theme.cpp", "$(S)/dialog.cpp",
-    "$(S)/desktop_chrome.cpp", "$(S)/dock.cpp", "$(S)/lock_screen.cpp", "$(S)/launcher.cpp", "$(S)/calendar.cpp",
-    "$(S)/inspector.cpp", "$(S)/settings.cpp", "$(S)/shadow.cpp", "$(S)/toast.cpp", "$(S)/history.cpp",
-    "$(S)/dbus_conn.cpp", "$(S)/notifications.cpp", "$(S)/notifier.cpp", "$(S)/status_notifier.cpp",
-    "$(S)/mixer.cpp", "$(S)/mixer_sndio.cpp", "$(S)/mixer_pulse.cpp", "$(S)/osd.cpp", "$(S)/wifi.cpp",
-    "$(S)/wifi_iwd.cpp", "$(S)/wifi_nm.cpp", "$(S)/wifi_ui.cpp", "$(S)/icon_store.cpp", "$(S)/icon_pool.cpp",
-    "$(S)/icon.cpp", "$(S)/device_vk.cpp", "$(S)/tex_pool.cpp", "$(S)/input_sink.cpp", "$(S)/xdg_utils.cpp",
-    "$(S)/session.cpp", "$(S)/device.cpp", "$(S)/device_kms.cpp", "$(S)/device_headless.cpp", "$(S)/util.cpp",
-    "$(S)/output.cpp", "$(S)/frame_listener.cpp", "$(S)/renderer.cpp",
-]
+imway_sources = build.glob("$(S)/*.cpp")
 
 imway = program(
     name="imway",
@@ -197,13 +176,13 @@ client_protocols = library(
 
 
 tests = []
-for source in sorted(glob.glob("dev/tests/client_*.c") + glob.glob("dev/tests/client_*.cpp")):
+for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
     flags = common_cxxflags if source.endswith(".cpp") else common_cflags
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",
-        srcs=[f"$(S)/{source}"],
+        srcs=[source],
         cflags=flags,
         ldflags=common_ldflags,
         deps=[client_protocols, wayland_client, drm, dbus],

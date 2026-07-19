@@ -9,6 +9,7 @@ import concurrent.futures
 import dataclasses
 import errno
 import fcntl
+import glob as globlib
 import hashlib
 import importlib.util
 import json
@@ -188,6 +189,23 @@ class BuildContext:
         except (OSError, subprocess.CalledProcessError) as exc:
             raise BuildError(f"pkg-config variable {package}:{variable} failed: {exc}") from exc
 
+    def glob(self, pattern: str) -> list[str]:
+        pattern = str(pattern)
+        if pattern.startswith(S + "/"):
+            relative_pattern = pattern[len(S) + 1:]
+            matches = globlib.glob(str(self.source_root / relative_pattern), recursive=True)
+            result: list[str] = []
+            for match in matches:
+                try:
+                    relative = Path(match).relative_to(self.source_root)
+                except ValueError as exc:
+                    raise BuildError(f"glob escaped $(S): {pattern}") from exc
+                result.append(S + "/" + relative.as_posix())
+            return sorted(result)
+        if os.path.isabs(pattern):
+            return sorted(globlib.glob(pattern, recursive=True))
+        raise BuildError(f"glob pattern must start with $(S)/ or be absolute: {pattern}")
+
     def library(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), ldflags=(), output=None) -> Target:
         return self._compiled_target(
             "library", srcs, name, cflags, public_cflags, deps, ldflags, output, None,
@@ -244,6 +262,7 @@ class BuildContext:
         module = importlib.util.module_from_spec(spec)
         build_module = types.ModuleType("build")
         build_module.includes = []
+        build_module.glob = self.glob
         module.__dict__.update({
             "pkg_config": self.pkg_config,
             "pkg_config_variable": self.pkg_config_variable,
