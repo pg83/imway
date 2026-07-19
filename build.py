@@ -17,10 +17,10 @@ common_cxxflags = [
 common_ldflags = [*words(os.environ.get("LDFLAGS")), *words(os.environ.get("CTRFLAGS"))]
 
 build.includes += [
-    "third_party/imgui",
-    f"{B}/protocols",
-    f"{B}/shaders",
-    f"{B}/tests",
+    "$(S)/third_party/imgui",
+    "$(B)/protocols",
+    "$(B)/shaders",
+    "$(B)/tests",
 ]
 
 
@@ -72,9 +72,9 @@ server_protocol_paths = [
 def protocol_rule(path, kind, out_dir):
     name = path.rsplit("/", 1)[-1]
     xml = f"{protocol_root}/{path}.xml"
-    header = f"{B}/{out_dir}/{name}-{kind}-protocol.h"
+    header = f"$(B)/{out_dir}/{name}-{kind}-protocol.h"
     code_name = f"{name}-protocol.c" if kind == "server" else f"{name}-client-code.c"
-    code = f"{B}/{out_dir}/{code_name}"
+    code = f"$(B)/{out_dir}/{code_name}"
     return command(
         name=f"{kind}_{name}",
         inputs=[xml],
@@ -89,7 +89,7 @@ def protocol_rule(path, kind, out_dir):
 
 server_rules = [protocol_rule(path, "server", "protocols") for path in server_protocol_paths]
 server_sources = [
-    f"{B}/protocols/{path.rsplit('/', 1)[-1]}-protocol.c"
+    f"$(B)/protocols/{path.rsplit('/', 1)[-1]}-protocol.c"
     for path in server_protocol_paths
 ]
 
@@ -105,11 +105,11 @@ shader_rules = []
 for shader in ["cm_convert", "lock_blur"]:
     shader_rules.append(command(
         name=f"shader_{shader}",
-        inputs=[f"{shader}.comp"],
-        outputs=[f"shaders/{shader}.spv.h"],
+        inputs=[f"$(S)/{shader}.comp"],
+        outputs=[f"$(B)/shaders/{shader}.spv.h"],
         cmd=[
-            "glslangValidator", "-V", f"{S}/{shader}.comp",
-            "--variable-name", f"{shader}_spv", "-o", f"{B}/shaders/{shader}.spv.h",
+            "glslangValidator", "-V", f"$(S)/{shader}.comp",
+            "--variable-name", f"{shader}_spv", "-o", f"$(B)/shaders/{shader}.spv.h",
         ],
     ))
 
@@ -117,12 +117,12 @@ for shader in ["cm_convert", "lock_blur"]:
 imgui = library(
     name="imgui",
     srcs=[
-        "third_party/imgui/imgui.cpp",
-        "third_party/imgui/imgui_draw.cpp",
-        "third_party/imgui/imgui_tables.cpp",
-        "third_party/imgui/imgui_widgets.cpp",
-        "third_party/imgui/imgui_impl_vulkan.cpp",
-        "third_party/imgui/imgui_impl_glfw.cpp",
+        "$(S)/third_party/imgui/imgui.cpp",
+        "$(S)/third_party/imgui/imgui_draw.cpp",
+        "$(S)/third_party/imgui/imgui_tables.cpp",
+        "$(S)/third_party/imgui/imgui_widgets.cpp",
+        "$(S)/third_party/imgui/imgui_impl_vulkan.cpp",
+        "$(S)/third_party/imgui/imgui_impl_glfw.cpp",
     ],
     cflags=common_cxxflags,
     public_cflags=["-DGLFW_INCLUDE_NONE"],
@@ -131,18 +131,18 @@ imgui = library(
 
 
 imway_sources = [
-    "main.cpp", "main_composer.cpp", "main_supervisor.cpp", "main_screenshot.cpp",
-    "composer.cpp", "frame_resource.cpp", "pooled.cpp", "pooled_ev.cpp", "pooled_fd.cpp",
-    "pooled_vk.cpp", "scene.cpp", "wayland.cpp", "control.cpp", "input.cpp",
-    "intr_list.cpp", "listener.cpp", "keyboard.cpp", "theme.cpp", "dialog.cpp",
-    "desktop_chrome.cpp", "dock.cpp", "lock_screen.cpp", "launcher.cpp", "calendar.cpp",
-    "inspector.cpp", "settings.cpp", "shadow.cpp", "toast.cpp", "history.cpp",
-    "dbus_conn.cpp", "notifications.cpp", "notifier.cpp", "status_notifier.cpp",
-    "mixer.cpp", "mixer_sndio.cpp", "mixer_pulse.cpp", "osd.cpp", "wifi.cpp",
-    "wifi_iwd.cpp", "wifi_nm.cpp", "wifi_ui.cpp", "icon_store.cpp", "icon_pool.cpp",
-    "icon.cpp", "device_vk.cpp", "tex_pool.cpp", "input_sink.cpp", "xdg_utils.cpp",
-    "session.cpp", "device.cpp", "device_kms.cpp", "device_headless.cpp", "util.cpp",
-    "output.cpp", "frame_listener.cpp", "renderer.cpp",
+    "$(S)/main.cpp", "$(S)/main_composer.cpp", "$(S)/main_supervisor.cpp", "$(S)/main_screenshot.cpp",
+    "$(S)/composer.cpp", "$(S)/frame_resource.cpp", "$(S)/pooled.cpp", "$(S)/pooled_ev.cpp", "$(S)/pooled_fd.cpp",
+    "$(S)/pooled_vk.cpp", "$(S)/scene.cpp", "$(S)/wayland.cpp", "$(S)/control.cpp", "$(S)/input.cpp",
+    "$(S)/intr_list.cpp", "$(S)/listener.cpp", "$(S)/keyboard.cpp", "$(S)/theme.cpp", "$(S)/dialog.cpp",
+    "$(S)/desktop_chrome.cpp", "$(S)/dock.cpp", "$(S)/lock_screen.cpp", "$(S)/launcher.cpp", "$(S)/calendar.cpp",
+    "$(S)/inspector.cpp", "$(S)/settings.cpp", "$(S)/shadow.cpp", "$(S)/toast.cpp", "$(S)/history.cpp",
+    "$(S)/dbus_conn.cpp", "$(S)/notifications.cpp", "$(S)/notifier.cpp", "$(S)/status_notifier.cpp",
+    "$(S)/mixer.cpp", "$(S)/mixer_sndio.cpp", "$(S)/mixer_pulse.cpp", "$(S)/osd.cpp", "$(S)/wifi.cpp",
+    "$(S)/wifi_iwd.cpp", "$(S)/wifi_nm.cpp", "$(S)/wifi_ui.cpp", "$(S)/icon_store.cpp", "$(S)/icon_pool.cpp",
+    "$(S)/icon.cpp", "$(S)/device_vk.cpp", "$(S)/tex_pool.cpp", "$(S)/input_sink.cpp", "$(S)/xdg_utils.cpp",
+    "$(S)/session.cpp", "$(S)/device.cpp", "$(S)/device_kms.cpp", "$(S)/device_headless.cpp", "$(S)/util.cpp",
+    "$(S)/output.cpp", "$(S)/frame_listener.cpp", "$(S)/renderer.cpp",
 ]
 
 imway = program(
@@ -184,7 +184,7 @@ client_protocol_paths = [
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths]
 client_sources = [
-    f"{B}/tests/{path.rsplit('/', 1)[-1]}-client-code.c"
+    f"$(B)/tests/{path.rsplit('/', 1)[-1]}-client-code.c"
     for path in client_protocol_paths
 ]
 
@@ -202,8 +202,8 @@ for source in sorted(glob.glob("dev/tests/client_*.c") + glob.glob("dev/tests/cl
     flags = common_cxxflags if source.endswith(".cpp") else common_cflags
     tests.append(program(
         name=name,
-        output=f"tests/{name}",
-        srcs=[source],
+        output=f"$(B)/tests/{name}",
+        srcs=[f"$(S)/{source}"],
         cflags=flags,
         ldflags=common_ldflags,
         deps=[client_protocols, wayland_client, drm, dbus],

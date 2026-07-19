@@ -44,9 +44,28 @@ class BuildSystemTest(unittest.TestCase):
         self.assertEqual(executor.tmp, self.out / "tmp")
         self.assertEqual(executor.grb, self.out / "grb")
 
+    def test_rejects_unrooted_graph_paths(self):
+        context = self.context()
+        with self.assertRaisesRegex(runner.BuildError, r"input path must start with \$\(S\)/"):
+            context.program(name="app", srcs=["main.c"])
+        with self.assertRaisesRegex(runner.BuildError, r"output path must start with \$\(B\)/"):
+            context.command(name="generated", outputs=["generated.h"], cmd=[["true"]])
+        with self.assertRaisesRegex(runner.BuildError, r"cwd path must start with \$\(S\)/"):
+            context.command(
+                name="generated", outputs=["$(B)/generated.h"], cmd=[["true"]], cwd="tools",
+            )
+
+        (self.root / "build.py").write_text(
+            "import build\n"
+            "build.includes += ['include']\n"
+            "app = program(srcs=['$(S)/main.c'])\n",
+        )
+        with self.assertRaisesRegex(runner.BuildError, r"include path must start with \$\(S\)/"):
+            context.load(self.root / "build.py")
+
     def test_infers_target_name_from_module_global(self):
         (self.root / "build.py").write_text(
-            "thing = library(srcs=['thing.c'])\ninstall(thing)\n",
+            "thing = library(srcs=['$(S)/thing.c'])\ninstall(thing)\n",
         )
         (self.root / "thing.c").write_text("int thing;\n")
         context = self.context()
@@ -59,9 +78,9 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "lib.c").write_text("int value;\n")
         (self.root / "build.py").write_text(
             "import build\n"
-            "build.includes += ['include', '$(B)/generated']\n"
-            "app = program(srcs=['main.c'])\n"
-            "lib = library(srcs=['lib.c'])\n",
+            "build.includes += ['$(S)/include', '$(B)/generated']\n"
+            "app = program(srcs=['$(S)/main.c'])\n"
+            "lib = library(srcs=['$(S)/lib.c'])\n",
         )
         context = self.context()
         context.load(self.root / "build.py")
@@ -76,10 +95,10 @@ class BuildSystemTest(unittest.TestCase):
     def test_node_descriptions_and_colors(self):
         (self.root / "thing.cpp").write_text("int thing;\n")
         context = self.context()
-        library = context.library(name="thing", srcs=["thing.cpp"])
-        program = context.program(name="app", srcs=["thing.cpp"])
+        library = context.library(name="thing", srcs=["$(S)/thing.cpp"])
+        program = context.program(name="app", srcs=["$(S)/thing.cpp"])
         generated = context.command(
-            name="generated", outputs=["generated.h"],
+            name="generated", outputs=["$(B)/generated.h"],
             cmd=[[sys.executable, "-c", "pass"]], descr="PB", color="light-cyan",
         )
         context.build_graph()
@@ -98,10 +117,10 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "inc/api/detail.h").write_text("// detail\n")
 
         context = self.context()
-        context.includes = ["inc", "$(B)/gen"]
-        app = context.program(name="app", srcs=["main.cpp"])
+        context.includes = ["$(S)/inc", "$(B)/gen"]
+        app = context.program(name="app", srcs=["$(S)/main.cpp"])
         generated = context.command(
-            name="generated", outputs=["gen/generated.h"],
+            name="generated", outputs=["$(B)/gen/generated.h"],
             cmd=[[sys.executable, "-c", "pass"]],
         )
         context.build_graph()
@@ -122,7 +141,7 @@ class BuildSystemTest(unittest.TestCase):
         header.write_text("#define V 1\n")
 
         first = self.context()
-        app1 = first.program(name="app", srcs=["main.c"])
+        app1 = first.program(name="app", srcs=["$(S)/main.c"])
         first.install(app1)
         first.build_graph()
         first.calculate_uids([app1.root])
@@ -130,7 +149,7 @@ class BuildSystemTest(unittest.TestCase):
 
         header.write_text("#define V 2\n")
         second = self.context()
-        app2 = second.program(name="app", srcs=["main.c"])
+        app2 = second.program(name="app", srcs=["$(S)/main.c"])
         second.install(app2)
         second.build_graph()
         second.calculate_uids([app2.root])
@@ -141,7 +160,7 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "a.h").write_text('#include "b.h"\n')
         (self.root / "b.h").write_text('#include "a.h"\n')
         context = self.context()
-        app = context.program(name="app", srcs=["main.c"])
+        app = context.program(name="app", srcs=["$(S)/main.c"])
         context.build_graph()
         self.assertEqual(
             app.nodes[0].source_inputs,
@@ -162,7 +181,7 @@ class BuildSystemTest(unittest.TestCase):
         def graph():
             context = self.context()
             target = context.command(
-                name="copy", inputs=["input.txt"], outputs=["result.txt"],
+                name="copy", inputs=["$(S)/input.txt"], outputs=["$(B)/result.txt"],
                 cmd=[[sys.executable, "-c", script, "$(S)/input.txt", "$(B)/result.txt", "$(S)/count.txt"]],
             )
             context.install(target)
@@ -186,7 +205,7 @@ class BuildSystemTest(unittest.TestCase):
     def test_executor_reports_cache_miss_progress(self):
         context = self.context()
         target = context.command(
-            name="write", outputs=["result.txt"], descr="ZZ", color="magenta",
+            name="write", outputs=["$(B)/result.txt"], descr="ZZ", color="magenta",
             cmd=[[
                 sys.executable, "-c",
                 "from pathlib import Path; import sys; sys.stderr.write('warning'); Path(sys.argv[1]).write_text('ok')",
@@ -221,7 +240,7 @@ class BuildSystemTest(unittest.TestCase):
     def test_failed_node_does_not_publish_manifest(self):
         context = self.context()
         target = context.command(
-            name="fail", outputs=["missing"],
+            name="fail", outputs=["$(B)/missing"],
             cmd=[[sys.executable, "-c", "raise SystemExit(7)"]],
         )
         context.build_graph()
@@ -246,7 +265,7 @@ class BuildSystemTest(unittest.TestCase):
         project.mkdir()
         shutil.copy2(ROOT / "build", project / "build")
         (project / "build.py").write_text(
-            "job = command(name='job', outputs=['done'], cmd=[\n"
+            "job = command(name='job', outputs=['$(B)/done'], cmd=[\n"
             "    'python3', '-c',\n"
             "    \"import os, pathlib, sys, time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)\",\n"
             "    '$(S)/worker.pid',\n"

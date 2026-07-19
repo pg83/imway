@@ -67,23 +67,28 @@ def _source_path(path: str) -> str:
     path = str(path)
     if path.startswith((S + "/", B + "/")) or os.path.isabs(path):
         return path
-    return S + "/" + path.lstrip("./")
+    raise BuildError(f"input path must start with $(S)/ or $(B)/: {path}")
 
 
 def _output_path(path: str) -> str:
     path = str(path)
     if path.startswith(B + "/"):
         return path
-    if path.startswith(S + "/") or os.path.isabs(path):
-        raise BuildError(f"output must live under $(B): {path}")
-    return B + "/" + path.lstrip("./")
+    raise BuildError(f"output path must start with $(B)/: {path}")
 
 
 def _include_path(path: str) -> str:
     path = str(path).rstrip("/")
     if path in (S, B) or path.startswith((S + "/", B + "/")) or os.path.isabs(path):
         return path
-    return S + "/" + path.lstrip("./")
+    raise BuildError(f"include path must start with $(S)/ or $(B)/: {path}")
+
+
+def _cwd_path(path: str) -> str:
+    path = str(path).rstrip("/")
+    if path in (S, B) or path.startswith((S + "/", B + "/")) or os.path.isabs(path):
+        return path
+    raise BuildError(f"cwd path must start with $(S)/ or $(B)/: {path}")
 
 
 @dataclasses.dataclass(eq=False)
@@ -212,7 +217,7 @@ class BuildContext:
         target = Target(
             "command", name=name, deps=_items(deps), inputs=[_source_path(x) for x in _items(inputs)],
             outputs=[_output_path(x) for x in _items(outputs)],
-            commands=[[str(x) for x in command] for command in commands], cwd=str(cwd),
+            commands=[[str(x) for x in command] for command in commands], cwd=_cwd_path(cwd),
             env=dict(env or {}), public_cflags=_items(cflags), ldflags=_items(ldflags),
             descr=str(descr), color=str(color),
         )
@@ -247,8 +252,6 @@ class BuildContext:
             "program": self.program,
             "command": self.command,
             "install": self.install,
-            "S": S,
-            "B": B,
         })
         sys.modules[spec.name] = module
         missing = object()
