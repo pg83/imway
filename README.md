@@ -36,14 +36,13 @@ Raw, no frameworks (no wlroots/Smithay):
 ## Development
 
 ```sh
-git submodule update --init   # vendored libstd (third_party/libstd)
-dev/build.sh                  # build-boot/imway + the test clients
-dev/test.py                   # integration tests, a fresh headless compositor per test
+./build                       # build/imway + all test clients
+dev/test.py                   # a fresh headless compositor per test
 ```
 
-`dev/build.sh` assumes every dependency is on the compiler's default paths (no
-cmake, no pkg-config, no detection). `dev/test.py` only runs what `dev/build.sh`
-built: it spreads every scenario across a thread pool, runs each three times
+`build` imports `build.py`, resolves project includes transitively and executes
+the resulting graph through its content-addressed cache. `dev/test.py` only
+runs already built artifacts: it spreads every scenario across a thread pool, runs each three times
 with the schedule shuffled, and reports OK / FAIL / FLAKY (`--jobs`, `--runs`,
 `--filter`, `--keep`, `--allow-flaky`; `IMWAY=path` points at another binary).
 Tests are

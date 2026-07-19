@@ -372,9 +372,8 @@ Roadmap status: M1–M4 done (clipboard/DnD included; see the production batch
 at the end of §14.3). Firefox-esr works (rendering, clicks, menus). Next: M5 —
 the stal/ix port.
 The code was moved onto the [pg83/std](https://github.com/pg83/std) library (namespace
-`stl`), vendored as the `third_party/libstd` submodule and built as part of the
-build by default (`-DIMWAY_USE_VENDORED_STD=OFF` links a system `-lstd` instead —
-the stal/ix path): zero dependencies on the C++ STL, ownership via `ObjPool` (creation in a pool,
+`stl`), with its source vendored as the `third_party/libstd` submodule while the
+stal/ix build links the packaged `-lstd`: zero dependencies on the C++ STL, ownership via `ObjPool` (creation in a pool,
 LIFO death), interfaces in headers / implementations entirely in .cpp, builds only with
 clang++ (the library uses clang builtins). Rings 0 and 3 (§12) were never
 needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and KMS).
@@ -382,9 +381,9 @@ needed: the whole cycle was rings 1–2 (QEMU aarch64 + lavapipe, headless and K
 ### 14.1 Layers and files
 
 Project layout (2026-07-17): sources live at the repository root — flat, no
-`src/` — one pair of files per subsystem. Everything that is not the compositor
-itself lives under `dev/`: `dev/build.sh` (the single build entry point, also
-builds the test clients), `dev/test.py` (runs the integration suite in
+`src/` — one pair of files per subsystem. `build` and `build.py` are the build
+runner and graph description and also build the test clients. Everything else
+that is not the compositor itself lives under `dev/`: `dev/test.py` (runs the integration suite in
 parallel, a fresh headless compositor per run, three shuffled runs per test),
 `dev/tests/` (the scenarios and their clients),
 `dev/docs/` (this document). Vendored code stays in `third_party/`.

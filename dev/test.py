@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Integration test runner. Builds nothing — dev/build.sh builds the compositor
+# Integration test runner. Builds nothing — ./build produces the compositor
 # and the test clients.
 #
 # Each test run gets a fresh headless compositor in its own scratch dir
@@ -354,10 +354,10 @@ def last_line(s: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="imway integration test runner")
-    ap.add_argument("--imway", default=os.environ.get("IMWAY", "build-boot/imway"),
-                    help="compositor binary (default build-boot/imway)")
-    ap.add_argument("--bindir", default=os.environ.get("B", "build-boot"),
-                    help="build dir holding tests/ (default build-boot)")
+    ap.add_argument("--imway", default=os.environ.get("IMWAY", "build/imway"),
+                    help="compositor binary (default build/imway)")
+    ap.add_argument("--bindir", default=os.environ.get("B", "build"),
+                    help="build dir holding tests/ (default build)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=60.0)
@@ -371,7 +371,7 @@ def main() -> int:
     imway = args.imway if os.path.isabs(args.imway) else os.path.join(ROOT, args.imway)
     bindir = args.bindir if os.path.isabs(args.bindir) else os.path.join(ROOT, args.bindir)
     if not (os.path.isfile(imway) and os.access(imway, os.X_OK)):
-        print(f"no {imway} — run dev/build.sh first", file=sys.stderr)
+        print(f"no {imway} — run ./build first", file=sys.stderr)
         return 2
 
     tests, unbuilt = discover(os.path.join(ROOT, "dev", "tests"), bindir, args.filter)
@@ -380,7 +380,7 @@ def main() -> int:
               file=sys.stderr)
         for name in unbuilt:
             print(f"  {name}", file=sys.stderr)
-        print("run dev/build.sh first", file=sys.stderr)
+        print("run ./build first", file=sys.stderr)
         return 2
     if not tests:
         print("no tests matched", file=sys.stderr)

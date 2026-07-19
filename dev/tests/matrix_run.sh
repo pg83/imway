@@ -14,7 +14,7 @@ set -euo pipefail
 
 # every combo shares one client binary, so the runner's name-derived
 # IMWAY_CLIENT is empty here — resolve it against the build dir ourselves
-IMWAY_CLIENT="$(dirname "$0")/../../${B:-build-boot}/tests/client_feat_render_matrix"
+IMWAY_CLIENT="$(dirname "$0")/../../${B:-build}/tests/client_feat_render_matrix"
 [[ -x "$IMWAY_CLIENT" ]] || { echo "client_feat_render_matrix is not built"; exit 1; }
 
 s=$1 t=$2 vp=$3 dm=$4

@@ -1,10 +1,8 @@
 # dev VM state: disk images, ssh keys, pid/logs (2.5G+)
 dev/vm/.state/
 build/
-build-boot/
-build-asan/
-build-sanitize/
 build-*/
+out/
 __pycache__/
 .claude/settings.local.json
 .#*
