@@ -4,5 +4,7 @@ build/
 build-boot/
 build-asan/
 build-sanitize/
+build-*/
+__pycache__/
 .claude/settings.local.json
 .#*
