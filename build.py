@@ -71,6 +71,7 @@ def protocol_rule(path, kind, out_dir):
         name=f"{kind}_{name}",
         inputs=[xml],
         outputs=[header, code],
+        descr='WL',
         cmd=[
             ["wayland-scanner", f"{kind}-header", xml, header],
             ["wayland-scanner", "private-code", xml, code],

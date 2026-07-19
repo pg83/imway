@@ -126,7 +126,7 @@ class Target:
     outputs: list[str] = dataclasses.field(default_factory=list)
     cwd: str = B
     env: dict[str, str] = dataclasses.field(default_factory=dict)
-    descr: str = "GEN"
+    descr: str = "GN"
     color: str = "yellow"
     linker: str | None = None
     enabled: bool = True
