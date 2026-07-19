@@ -31,7 +31,7 @@
 #include "output.h"
 #include "intr_list.h"
 #include "scene.h"
-#include "shadow.h"
+#include "window_shadow.h"
 #include "toast.h"
 #include "util.h"
 
@@ -260,7 +260,7 @@ namespace {
         Settings settings;
         DialogState* settingsState = nullptr;
         bool settingsToggle = false;
-        ShadowSprite shadow;       // window drop shadows, see shadow.h
+        ShadowSprite shadow;       // window drop shadows, see window_shadow.h
 
         // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
         // once per ~2s, the clock timer keeps frames coming

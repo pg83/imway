@@ -95,6 +95,7 @@ for shader in ["cm_convert", "lock_blur"]:
         name=f"shader_{shader}",
         inputs=[f"$(S)/{shader}.comp"],
         outputs=[f"$(B)/shaders/{shader}.spv.h"],
+        descr='SH',
         cmd=[
             "glslangValidator", "-V", f"$(S)/{shader}.comp",
             "--variable-name", f"{shader}_spv", "-o", f"$(B)/shaders/{shader}.spv.h",

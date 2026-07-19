@@ -1,4 +1,4 @@
-#include "shadow.h"
+#include "window_shadow.h"
 
 #include <math.h>
 
