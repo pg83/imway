@@ -354,10 +354,10 @@ def last_line(s: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="imway integration test runner")
-    ap.add_argument("--imway", default=os.environ.get("IMWAY", "build/imway"),
-                    help="compositor binary (default build/imway)")
-    ap.add_argument("--bindir", default=os.environ.get("B", "build"),
-                    help="build dir holding tests/ (default build)")
+    ap.add_argument("--imway", default=os.environ.get("IMWAY", ".build/imway"),
+                    help="compositor binary (default .build/imway)")
+    ap.add_argument("--bindir", default=os.environ.get("B", ".build"),
+                    help="build dir holding tests/ (default .build)")
     ap.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--timeout", type=float, default=60.0)

@@ -622,11 +622,10 @@ class Executor:
         self.jobs = max(1, jobs)
         self.verbose = verbose
         self.keep_going = keep_going
-        self.meta = context.build_root / ".build"
-        self.cas = self.meta / "cas"
-        self.uids = self.meta / "uid"
-        self.tmp = self.meta / "tmp"
-        self.grb = self.meta / "grb"
+        self.cas = context.build_root / "cas"
+        self.uids = context.build_root / "uid"
+        self.tmp = context.build_root / "tmp"
+        self.grb = context.build_root / "grb"
         self.print_lock = threading.Lock()
 
     def run(self, roots: list[Node]) -> None:
@@ -902,7 +901,7 @@ class Executor:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="build")
     parser.add_argument("targets", nargs="*")
-    parser.add_argument("-B", "--build-dir", default=os.environ.get("B", "build"))
+    parser.add_argument("-B", "--build-dir", default=os.environ.get("B", ".build"))
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-k", "--keep-going", action="store_true")
@@ -936,7 +935,8 @@ def main(argv: list[str] | None = None) -> int:
         roots = _uniq(target.root for target in selected if target.root is not None)
         context.calculate_uids(roots)
         if args.clear:
-            shutil.rmtree(context.build_root / ".build", ignore_errors=True)
+            for directory in ("cas", "uid", "tmp", "grb"):
+                shutil.rmtree(context.build_root / directory, ignore_errors=True)
         context.build_root.mkdir(parents=True, exist_ok=True)
         Executor(context, args.jobs, args.verbose, args.keep_going).run(roots)
         return 0

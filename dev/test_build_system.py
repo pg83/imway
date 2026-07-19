@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +34,15 @@ class BuildSystemTest(unittest.TestCase):
 
     def context(self):
         return runner.BuildContext(self.root, self.out)
+
+    def test_default_build_root_and_executor_layout(self):
+        with mock.patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(runner.parse_args([]).build_dir, ".build")
+        executor = runner.Executor(self.context(), 1, False, False)
+        self.assertEqual(executor.cas, self.out / "cas")
+        self.assertEqual(executor.uids, self.out / "uid")
+        self.assertEqual(executor.tmp, self.out / "tmp")
+        self.assertEqual(executor.grb, self.out / "grb")
 
     def test_infers_target_name_from_module_global(self):
         (self.root / "build.py").write_text(

@@ -36,7 +36,7 @@ Raw, no frameworks (no wlroots/Smithay):
 ## Development
 
 ```sh
-./build                       # build/imway + all test clients
+./build                       # .build/imway + all test clients
 dev/test.py                   # a fresh headless compositor per test
 ```
 
