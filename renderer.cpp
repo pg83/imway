@@ -35,6 +35,7 @@
 #include "toast.h"
 #include "util.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <stdlib.h>
@@ -4306,35 +4307,64 @@ void RendererImpl::captureScreenshot() {
         u32 h;
     } hdr = {0x31574d49u, (u32)width, (u32)height};
 
-    (void)!write(mfd, &hdr, sizeof(hdr));
+    // Mapped Vulkan readback memory is often uncached or write-combined. A
+    // scalar byte-wise swizzle over it is catastrophically slow at 4K. Pull
+    // it into ordinary cached RAM with one optimized bulk copy, then convert
+    // whole pixels in place.
+    Vector<u32> pixels;
+    size_t pixelCount = (size_t)width * height;
 
-    auto* px = (const unsigned char*)readbackMap;
-    Vector<u8> row;
+    pixels.zero(pixelCount);
+    memcpy(pixels.mutData(), readbackMap, pixelCount * sizeof(u32));
 
-    row.zero((size_t)width * 4);
+    if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        u32* out = pixels.mutData();
 
-    for (int y = 0; y < height; y++) {
-        const unsigned char* src = px + (size_t)y * width * 4;
+        for (size_t i = 0; i < pixelCount; i++) {
+            u32 src = out[i];
 
-        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
-            const u32* p = (const u32*)src;
+            out[i] = ((src >> 22) & 0xff) |
+                     (((src >> 12) & 0xff) << 8) |
+                     (((src >> 2) & 0xff) << 16) |
+                     0xff000000u;
+        }
+    } else {
+        u32* out = pixels.mutData();
 
-            for (int x = 0; x < width; x++) {
-                row.mut(x * 4 + 0) = (u8)((p[x] >> 22) & 0xff);
-                row.mut(x * 4 + 1) = (u8)((p[x] >> 12) & 0xff);
-                row.mut(x * 4 + 2) = (u8)((p[x] >> 2) & 0xff);
-                row.mut(x * 4 + 3) = 0xff;
+        for (size_t i = 0; i < pixelCount; i++) {
+            u32 src = out[i];
+
+            out[i] = ((src >> 16) & 0xff) |
+                     (src & 0x0000ff00u) |
+                     ((src & 0xff) << 16) |
+                     0xff000000u;
+        }
+    }
+
+    auto writeAll = [mfd](const void* data, size_t size) {
+        auto* p = (const u8*)data;
+
+        while (size) {
+            ssize_t n = write(mfd, p, size);
+
+            if (n < 0 && errno == EINTR) {
+                continue;
             }
-        } else {
-            for (int x = 0; x < width; x++) {
-                row.mut(x * 4 + 0) = src[x * 4 + 2];
-                row.mut(x * 4 + 1) = src[x * 4 + 1];
-                row.mut(x * 4 + 2) = src[x * 4 + 0];
-                row.mut(x * 4 + 3) = 0xff;
+            if (n <= 0) {
+                return false;
             }
+            p += n;
+            size -= (size_t)n;
         }
 
-        (void)!write(mfd, row.data(), row.length());
+        return true;
+    };
+
+    if (!writeAll(&hdr, sizeof(hdr)) ||
+        !writeAll(pixels.data(), pixels.length() * sizeof(u32))) {
+        close(mfd);
+
+        return;
     }
 
     StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, "/proc/self/fd/3"_sv};
