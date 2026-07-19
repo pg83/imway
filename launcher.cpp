@@ -30,6 +30,7 @@ namespace {
     // Dialog and all of its member storage are retired by one arena teardown.
     struct Dialog {
         ObjPool* pool = nullptr;
+        bool fresh = true;
         bool focusField = true;
         // raw buffer by imgui InputText contract
         char query[256] = "";
@@ -263,6 +264,13 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
     ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH / 2.f));
 
     if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
+        if (fresh) {
+            ImGui::SetWindowFocus();
+            fresh = false;
+        } else if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+            open = false;
+        }
+
         if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel < n) {
             sel++;
         }

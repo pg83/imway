@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launcher: Super+F2 opens the launcher overlay; Escape closes it.
+# Launcher: Super+F2 opens it; a click outside dismisses it.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -23,8 +23,7 @@ for _ in $(seq 1 20); do
 done
 [[ "$opened" -gt 2000 ]] || { echo "launcher did not open ($opened)"; exit 1; }
 
-ctl "key 1 press"    # Escape
-ctl "key 1 release"
+click_at 1000 650
 
 closed=99999
 for _ in $(seq 1 20); do
