@@ -29,7 +29,6 @@ namespace {
 
     // Dialog and all of its member storage are retired by one arena teardown.
     struct Dialog {
-        ObjPool* pool = nullptr;
         bool fresh = true;
         bool focusField = true;
         // raw buffer by imgui InputText contract
@@ -45,7 +44,7 @@ namespace {
         Buffer queryLower;
         Buffer nameLower;
 
-        Dialog(ObjPool* p);
+        Dialog();
 
         StringView view(u32 off, u32 len) const;
 
@@ -78,9 +77,7 @@ static void appendExec(StringBuilder& out, StringView val) {
     out << StringView(seg, b);
 }
 
-Dialog::Dialog(ObjPool* p)
-    : pool(p)
-{
+Dialog::Dialog() {
     rescan();
 }
 
@@ -348,12 +345,12 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
     return picked;
 }
 
-bool drawLauncher(Composer& c, bool toggle, void** state, Buffer& run,
+bool drawLauncher(Composer& c, bool toggle, DialogState** state, Buffer& run,
                   LauncherAction& action, float anchorX, float anchorY) {
     action = LauncherAction::none;
     bool picked = false;
 
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         picked = d.draw(c, open, run, action, anchorX, anchorY);
     });
 

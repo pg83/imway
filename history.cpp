@@ -14,13 +14,7 @@ using namespace stl;
 namespace {
     // the panel has no state of its own; its existence is the whole state
     struct Dialog {
-        ObjPool* pool = nullptr;
         bool fresh = true;
-
-        Dialog(ObjPool* p)
-            : pool(p)
-        {
-        }
 
         void draw(Composer& c, bool& open);
     };
@@ -104,8 +98,8 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::End();
 }
 
-void drawHistory(Composer& c, bool toggle, void** state) {
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+void drawHistory(Composer& c, bool toggle, DialogState** state) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
 }

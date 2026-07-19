@@ -1,52 +1,52 @@
 #pragma once
 
-#include "pooled.h"
-
 #include <std/mem/obj_pool.h>
-#include <std/ptr/refcount.h>
 
-template <typename T>
-void dialog(T*& d) noexcept {
-    if (!d) {
+// The public handle owns one self-contained arena.  `opaque` is the widget's
+// private state; users may destroy the entire dialog at any point without
+// knowing its concrete type by calling dialog(state).
+struct DialogState {
+    stl::ObjPool* pool = nullptr;
+    void* opaque = nullptr;
+};
+
+inline void dialog(DialogState*& state) noexcept {
+    if (!state) {
         return;
     }
 
-    stl::ObjPool* pool = d->pool;
+    stl::ObjPool* pool = state->pool;
 
-    d = nullptr;
-    stl::RefCountOps<stl::ObjPool>::unref(pool);
+    state = nullptr;
+    delete pool;
 }
 
 template <typename T, typename F>
-void dialog(stl::ObjPool& owner, bool toggle, void** state, F&& draw) {
-    T*& d = *(T**)state;
+void dialog(bool toggle, DialogState** slot, F&& draw) {
+    DialogState*& state = *slot;
 
     if (toggle) {
-        if (d) {
-            dialog(d);
+        if (state) {
+            dialog(state);
         } else {
-            auto pool = stl::ObjPool::fromMemory();
-            stl::ObjPool* p = pool.mutPtr();
+            stl::ObjPool* pool = stl::ObjPool::fromMemoryRaw();
+            DialogState* created = pool->make<DialogState>();
 
-            d = p->make<T>(p);
-            p->ref();
-            pooledGuard(owner, [state] {
-                T*& d = *(T**)state;
-
-                dialog(d);
-            });
+            created->pool = pool;
+            created->opaque = pool->make<T>();
+            state = created;
         }
     }
 
-    if (!d) {
+    if (!state) {
         return;
     }
 
     bool open = true;
 
-    draw(*d, open);
+    draw(*(T*)state->opaque, open);
 
     if (!open) {
-        dialog(d);
+        dialog(state);
     }
 }

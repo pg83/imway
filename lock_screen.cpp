@@ -4,7 +4,6 @@
 #include "device_vk.h"
 #include "dialog.h"
 #include "input_sink.h"
-#include "pooled.h"
 #include "render_filter.h"
 #include "scene.h"
 #include "tex_pool.h"
@@ -222,7 +221,6 @@ namespace {
     };
 
     struct Dialog {
-        ObjPool* pool = nullptr;
         InputSink** inputRoute = nullptr;
         InputSink* previousInput = nullptr;
         LockFilter filter;
@@ -231,9 +229,8 @@ namespace {
         bool failed = false;
         bool closeRequested = false;
 
-        Dialog(ObjPool* p, InputSink** route)
-            : pool(p)
-            , inputRoute(route)
+        Dialog(InputSink** route)
+            : inputRoute(route)
             , previousInput(*route)
         {
             lockSink.drain = previousInput;
@@ -689,32 +686,31 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::End();
 }
 
-void openLockOverlay(Composer& c, void** state, InputSink** inputRoute) {
-    if (*(Dialog**)state) {
+void openLockOverlay(Composer& c, DialogState** state, InputSink** inputRoute) {
+    if (*state) {
         return;
     }
 
-    auto arena = ObjPool::fromMemory();
-    ObjPool* pool = arena.mutPtr();
-    Dialog* dialogState = pool->make<Dialog>(pool, inputRoute);
+    ObjPool* pool = ObjPool::fromMemoryRaw();
+    DialogState* created = pool->make<DialogState>();
 
-    *state = dialogState;
-    pool->ref();
-    c.filters.pushBack(&dialogState->filter);
-    pooledGuard(*c.pool, [state] {
-        closeLockOverlay(state);
-    });
+    created->pool = pool;
+    created->opaque = pool->make<Dialog>(inputRoute);
+    *state = created;
+    c.filters.pushBack(&((Dialog*)created->opaque)->filter);
+
     c.scene->needsFrame = true;
 }
 
-void drawLockOverlay(Composer& c, void** state) {
-    Dialog*& current = *(Dialog**)state;
+void drawLockOverlay(Composer& c, DialogState** state) {
+    DialogState*& handle = *state;
+    Dialog* current = handle ? (Dialog*)handle->opaque : nullptr;
 
     // Authentication closed the previous rendered frame. Its GPU submission
     // has retired before the renderer starts another, so the arena and filter
     // resources are safe to release now.
     if (current && current->closeRequested) {
-        dialog(current);
+        dialog(handle);
 
         return;
     }
@@ -726,6 +722,6 @@ void drawLockOverlay(Composer& c, void** state) {
     }
 }
 
-void closeLockOverlay(void** state) noexcept {
-    dialog(*(Dialog**)state);
+void closeLockOverlay(DialogState** state) noexcept {
+    dialog(*state);
 }

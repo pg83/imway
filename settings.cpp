@@ -8,13 +8,6 @@ using namespace stl;
 
 namespace {
     struct Dialog {
-        ObjPool* pool = nullptr;
-
-        Dialog(ObjPool* p)
-            : pool(p)
-        {
-        }
-
         void draw(Settings& s, bool& open);
     };
 }
@@ -97,7 +90,7 @@ void Dialog::draw(Settings& s, bool& open) {
     ImGui::End();
 }
 
-void drawSettings(Composer& c, Settings& s, bool toggle, void** state) {
+void drawSettings(Composer& c, Settings& s, bool toggle, DialogState** state) {
     s.volumeChanged = false;
     s.muteChanged = false;
     s.brightnessChanged = false;
@@ -107,7 +100,7 @@ void drawSettings(Composer& c, Settings& s, bool toggle, void** state) {
     s.dndChanged = false;
     s.themeChanged = false;
 
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(s, open);
     });
 }

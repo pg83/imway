@@ -10,16 +10,8 @@
 using namespace stl;
 
 namespace {
-    // dialog-scoped state: the dialog's existence is the whole state — the
-    // opaque handle behind the caller's void* slot
+    // dialog-scoped private state behind DialogState::opaque
     struct Dialog {
-        ObjPool* pool = nullptr;
-
-        Dialog(ObjPool* p)
-            : pool(p)
-        {
-        }
-
         // pure drawing: state transitions stay in drawInspector, the only
         // outward sign is the open flag dropping
         void draw(Composer& c, const InspectorInfo& info, bool& open);
@@ -85,8 +77,8 @@ void Dialog::draw(Composer& c, const InspectorInfo& info, bool& open) {
     ImGui::End();
 }
 
-void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, void** state) {
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+void drawInspector(Composer& c, const InspectorInfo& info, bool toggle, DialogState** state) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, info, open);
     });
 }

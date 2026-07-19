@@ -14,15 +14,12 @@ namespace {
     constexpr const char* kMonths[12] = {"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"};
     constexpr int kDays[12] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
 
-    // Root of a per-dialog arena.  The opaque caller slot carries this
-    // Dialog*, while pool owns it and every allocation made for the dialog.
     struct Dialog {
-        ObjPool* pool = nullptr;
         bool fresh = true;
         int year = 0;
         int mon = 0;
 
-        Dialog(ObjPool* p);
+        Dialog();
 
         // pure drawing: state transitions stay in drawCalendar, the only
         // outward sign is the open flag dropping
@@ -30,9 +27,7 @@ namespace {
     };
 }
 
-Dialog::Dialog(ObjPool* p)
-    : pool(p)
-{
+Dialog::Dialog() {
     time_t nowT = time(nullptr);
     tm lt{};
 
@@ -146,8 +141,8 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::End();
 }
 
-void drawCalendar(Composer& c, bool toggle, void** state) {
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+void drawCalendar(Composer& c, bool toggle, DialogState** state) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
 }

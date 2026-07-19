@@ -39,6 +39,7 @@ struct Settings {
 };
 
 struct Composer;
+struct DialogState;
 
 // Plain pool-owned ImGui dialog. nullptr state means closed; toggle flips it.
-void drawSettings(Composer& c, Settings& s, bool toggle, void** state);
+void drawSettings(Composer& c, Settings& s, bool toggle, DialogState** state);

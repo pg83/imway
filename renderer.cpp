@@ -5,6 +5,7 @@
 #include "calendar.h"
 #include "desktop_chrome.h"
 #include "device_vk.h"
+#include "dialog.h"
 #include "tex_pool.h"
 #include "frame_listener.h"
 #include "input_sink.h"
@@ -255,9 +256,9 @@ namespace {
         u64 themeRevision = 0;
         ThemeColor desktopColor;
         float nextUiScale = 1.f;   // written by the ui, applied at frame start
-        // settings: renderer-owned values plus a pool-owned dialog handle
+        // settings: renderer-owned values plus a self-owned dialog handle
         Settings settings;
-        void* settingsState = nullptr;
+        DialogState* settingsState = nullptr;
         bool settingsToggle = false;
         ShadowSprite shadow;       // window drop shadows, see shadow.h
 
@@ -271,9 +272,8 @@ namespace {
         bool batCharging = false;
         StringBuilder batPath;
 
-        // calendar: opaque dialog handle owned here, state lives in the
-        // widget; non-null = open
-        void* calendarState = nullptr;
+        // calendar: self-owned opaque handle; non-null = open
+        DialogState* calendarState = nullptr;
         bool calendarToggle = false;
 
         Notifier* notifier = nullptr;
@@ -283,15 +283,14 @@ namespace {
         u64 osdMs = 0;
         int osdKind = 0; // 1 volume, 2 brightness
 
-        // wifi picker: opaque dialog handle owned here
-        void* wifiState = nullptr;
+        // wifi picker: self-owned opaque handle
+        DialogState* wifiState = nullptr;
         bool wifiToggle = false;
 
-        // inspector (Super+F12): opaque dialog handle owned here, state
-        // lives in the widget; non-null = open
-        void* inspectorState = nullptr;
+        // inspector (Super+F12): self-owned opaque handle; non-null = open
+        DialogState* inspectorState = nullptr;
         bool inspectorToggle = false;
-        void* historyState = nullptr;
+        DialogState* historyState = nullptr;
         bool historyToggle = false;
 
         // color picker (eyedropper): armed from the launcher, the next
@@ -321,13 +320,12 @@ namespace {
         bool altTabActive = false;
         Toplevel* altTabSel = nullptr;
 
-        // lockscreen is an ordinary pool-owned dialog; its arena swaps
+        // lockscreen's self-owned arena swaps
         // currentInput for the program-wide swallowing sink.
-        void* lockState = nullptr;
+        DialogState* lockState = nullptr;
 
-        // launcher: opaque dialog handle owned here, state lives in the
-        // widget; non-null = open
-        void* launcherState = nullptr;
+        // launcher: self-owned opaque handle; non-null = open
+        DialogState* launcherState = nullptr;
         bool launcherToggle = false;
         float launcherX = -1.f, launcherY = -1.f;
         IconStore* icons = nullptr;
@@ -608,6 +606,12 @@ RendererImpl::~RendererImpl() noexcept {
         destroyTexture((SurfaceTexture*)textures.mutBack());
     }
 
+    dialog(settingsState);
+    dialog(calendarState);
+    dialog(wifiState);
+    dialog(inspectorState);
+    dialog(historyState);
+    dialog(launcherState);
     closeLockOverlay(&lockState);
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();

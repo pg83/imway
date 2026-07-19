@@ -10,20 +10,14 @@
 using namespace stl;
 
 namespace {
-    // dialog-scoped state behind the caller's void* slot
+    // dialog-scoped private state behind DialogState::opaque
     struct Dialog {
-        ObjPool* pool = nullptr;
         bool fresh = true;
         // raw buffer by imgui InputText contract
         char pass[128] = "";
         // path of the network the passphrase is being typed for; a new
         // request for a different network clears the field
         StringBuilder passPath;
-
-        Dialog(ObjPool* p)
-            : pool(p)
-        {
-        }
 
         void draw(Composer& c, bool& open);
     };
@@ -160,8 +154,8 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::End();
 }
 
-void drawWifi(Composer& c, bool toggle, void** state) {
-    dialog<Dialog>(*c.pool, toggle, state, [&](Dialog& d, bool& open) {
+void drawWifi(Composer& c, bool toggle, DialogState** state) {
+    dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(c, open);
     });
 }
