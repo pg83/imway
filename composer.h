@@ -6,6 +6,7 @@
 
 namespace stl {
     class ObjPool;
+    struct ThreadPool;
 }
 
 struct ev_loop;
@@ -38,6 +39,7 @@ struct Composer {
     Theme theme;
     stl::ObjPool* pool = nullptr;
     struct ev_loop* loop = nullptr;
+    stl::ThreadPool* offload = nullptr;
     Scene* scene = nullptr;
 
     Session* session = nullptr;

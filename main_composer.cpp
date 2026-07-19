@@ -34,6 +34,7 @@
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
 #include <std/sys/throw.h>
+#include <std/thr/pool.h>
 
 using namespace stl;
 
@@ -149,6 +150,7 @@ int mainComposer(int argc, char** argv) {
 
     c.pool = pool.mutPtr();
     c.loop = loop;
+    c.offload = ThreadPool::simple(c.pool, 1);
     c.supervisor = Supervisor::create(c);
 
     try {
