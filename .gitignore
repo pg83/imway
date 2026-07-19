@@ -1,6 +1,7 @@
 # dev VM state: disk images, ssh keys, pid/logs (2.5G+)
 dev/vm/.state/
 .build/
+/imway
 build-*/
 out/
 __pycache__/

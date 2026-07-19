@@ -320,6 +320,49 @@ class BuildSystemTest(unittest.TestCase):
                 runner.Executor(context, 1, False, False).run([target.root])
         self.assertFalse(runner.Executor(context, 1, False, False)._manifest_path(target.root.uid).exists())
 
+    def test_cli_target_is_published_in_source_root(self):
+        project = self.root / "project"
+        project.mkdir()
+        shutil.copy2(ROOT / "build", project / "build")
+        (project / "build.py").write_text(
+            "app = command(name='app', outputs=['$(B)/bin/app'], cmd=[\n"
+            "    'python3', '-c',\n"
+            "    \"from pathlib import Path; import sys; Path(sys.argv[1]).write_text('ok')\",\n"
+            "    '$(B)/bin/app',\n"
+            "])\n"
+            "install(app)\n",
+        )
+
+        subprocess.run(
+            [str(project / "build"), "app"], cwd=project,
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        published = project / "app"
+        self.assertTrue(published.is_symlink())
+        self.assertEqual(published.readlink(), Path(".build/bin/app"))
+        self.assertEqual(published.read_text(), "ok")
+
+        published.unlink()
+        subprocess.run(
+            [str(project / "build")], cwd=project,
+            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        self.assertFalse(published.exists())
+
+    def test_publish_refuses_to_replace_source_file(self):
+        context = self.context()
+        target = context.command(
+            name="app", outputs=["$(B)/app"],
+            cmd=[[sys.executable, "-c", "pass"]],
+        )
+        context.build_graph()
+        source = self.root / "app"
+        source.write_text("keep")
+
+        with self.assertRaisesRegex(runner.BuildError, "refusing to replace non-symlink"):
+            context.publish([target])
+        self.assertEqual(source.read_text(), "keep")
+
     def test_parser_ignores_commented_directives(self):
         source = self.root / "source.c"
         source.write_text(

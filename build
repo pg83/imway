@@ -540,6 +540,31 @@ class BuildContext:
             return root / path[len(B) + 1:]
         return Path(path)
 
+    def publish(self, targets: Iterable[Target]) -> None:
+        publications: list[tuple[Path, str]] = []
+        for target in _uniq(targets):
+            if not target.name or Path(target.name).name != target.name:
+                raise BuildError(f"target name cannot be published in source root: {target.name!r}")
+            if target.root is None or not target.root.outputs:
+                raise BuildError(f"target has no output to publish: {target.name}")
+            link = self.source_root / target.name
+            try:
+                info = link.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if not stat.S_ISLNK(info.st_mode):
+                    raise BuildError(f"refusing to replace non-symlink: {link}")
+            output = self.physical(target.root.outputs[0])
+            publications.append((link, os.path.relpath(output, self.source_root)))
+        for link, relative in publications:
+            temporary = link.with_name("." + link.name + "." + uuid.uuid4().hex)
+            try:
+                os.symlink(relative, temporary)
+                os.replace(temporary, link)
+            finally:
+                temporary.unlink(missing_ok=True)
+
     def source_hash(self, path: str) -> str:
         cached = self.file_hashes.get(path)
         if cached is not None:
@@ -1091,6 +1116,8 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.rmtree(context.build_root / directory, ignore_errors=True)
         context.build_root.mkdir(parents=True, exist_ok=True)
         Executor(context, args.jobs, args.verbose, args.keep_going).run(roots)
+        if args.targets:
+            context.publish(selected)
         return 0
     except BuildError as exc:
         print(f"build: {exc}", file=sys.stderr)
