@@ -72,7 +72,10 @@
 #include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
+#include <std/sys/atomic.h>
+#include <std/sys/event_fd.h>
 #include <std/sys/fd.h>
+#include <std/thr/pool.h>
 
 using namespace stl;
 
@@ -138,6 +141,7 @@ namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
+    void screenshotDoneCb(struct ev_loop*, ev_io* w, int);
 
     struct RendererImpl;
 
@@ -208,6 +212,21 @@ namespace {
         VkBuffer readback = VK_NULL_HANDLE;
         VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
         void* readbackMap = nullptr;
+
+        // Interactive screenshots use their own readback submission so the
+        // compositor's frame command buffer and fence remain independent of
+        // the background CPU conversion.
+        VkBuffer shotReadback = VK_NULL_HANDLE;
+        VkDeviceMemory shotReadbackMemory = VK_NULL_HANDLE;
+        void* shotReadbackMap = nullptr;
+        VkCommandBuffer shotCmd = VK_NULL_HANDLE;
+        VkFence shotFence = VK_NULL_HANDLE;
+        ThreadPool* shotPool = nullptr;
+        EventFD shotDone;
+        ev_io* shotDoneIo = nullptr;
+        bool shotRequested = false;
+        bool shotBusy = false;
+        int shotResultFd = -1; // worker publishes with release, event loop consumes with acquire
 
         VkCommandPool cmdPool = VK_NULL_HANDLE;
         VkCommandBuffer cmd = VK_NULL_HANDLE;
@@ -448,6 +467,10 @@ namespace {
         bool screenshot(StringView path) override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
+        bool submitScreenshot();
+        int buildScreenshot();
+        void screenshotReady();
+        void spawnScreenshot(int mfd);
     };
 
     CallVolumeChanged::CallVolumeChanged(RendererImpl* p)
@@ -483,6 +506,10 @@ namespace {
     // the desktop renders on demand, wake it up so the clock stays fresh
     void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
+    }
+
+    void screenshotDoneCb(struct ev_loop*, ev_io* w, int) {
+        ((RendererImpl*)w->data)->screenshotReady();
     }
 }
 
@@ -564,6 +591,12 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
     setup(scene->outW, scene->outH);
 
+    shotPool = ThreadPool::simple(pool, 1);
+    shotDoneIo = createEvIo(*pool, loop);
+    ev_io_init(shotDoneIo, screenshotDoneCb, shotDone.fd(), EV_READ);
+    shotDoneIo->data = this;
+    ev_io_start(loop, shotDoneIo);
+
     // before any input arrives the cursor sits at the screen center
     posX = scene->outW / 2.0;
     posY = scene->outH / 2.0;
@@ -591,6 +624,20 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 }
 
 RendererImpl::~RendererImpl() noexcept {
+    // A screenshot task owns shotReadbackMap until it signals shotDone. Join
+    // before waiting/destroying Vulkan objects or tearing down the event fd.
+    shotPool->join();
+
+    if (ev_is_active(shotDoneIo)) {
+        ev_io_stop(loop, shotDoneIo);
+    }
+
+    int resultFd = stdAtomicFetch(&shotResultFd, MemoryOrder::Acquire);
+
+    if (resultFd >= 0) {
+        close(resultFd);
+    }
+
     // the device must be idle before the pooled handles unwind (they die
     // right after this destructor); imgui and the churn-class resources
     // (textures, the recreatable syncOut, the present fence) are tied to
@@ -1346,6 +1393,7 @@ void RendererImpl::setup(int w, int h) {
     }
 
     createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
+    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, shotReadback, shotReadbackMemory, &shotReadbackMap);
 
     VkAttachmentDescription att{};
 
@@ -1425,10 +1473,12 @@ void RendererImpl::setup(int w, int h) {
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
     VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &cmd));
+    VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &shotCmd));
 
     VkFenceCreateInfo fenci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
     VK_CHECK(vkCreateFence(device, &fenci, nullptr, &fence));
+    VK_CHECK(vkCreateFence(device, &fenci, nullptr, &shotFence));
 
     if (hasSyncFd) {
         importSemFd = (PFN_vkImportSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
@@ -1596,8 +1646,11 @@ void RendererImpl::setup(int w, int h) {
 
     pooledVk(*pool, device, readbackMemory);
     pooledVk(*pool, device, readback);
+    pooledVk(*pool, device, shotReadbackMemory);
+    pooledVk(*pool, device, shotReadback);
     pooledVk(*pool, device, cmdPool);
     pooledVk(*pool, device, fence);
+    pooledVk(*pool, device, shotFence);
     pooledVk(*pool, device, sampler);
 
     for (VkSemaphore sem : syncWaitPool) {
@@ -4064,6 +4117,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
     frameInFlight = true;
     haveFrame = true;
 
+    if (shotRequested) {
+        submitScreenshot();
+    }
+
     for (Surface* s : explicitSurfaces) {
         s->syncAcquireWait = false;
     }
@@ -4273,73 +4330,96 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
     return true;
 }
 
-// grab the composed frame into an anonymous memfd (RGBA8, self-describing
-// header) and hand it to the crop tool via /proc/self/fd — no temp file,
-// the buffer lives in ram and the kernel reclaims it when the tool exits
 void RendererImpl::captureScreenshot() {
-    if (lastFrameDirect) {
-        forceComposition = true;
-        scene->needsFrame = true;
-        frameNow();
-        forceComposition = false;
-    }
-
-    if (!haveFrame) {
+    if (shotRequested || shotBusy) {
         return;
     }
 
-    finishGpuFrame(true);
+    // Render one composed frame even when the desktop currently uses direct
+    // scanout. renderFrame queues a separate readback submission after it;
+    // neither the key callback nor the compositor event loop waits for it.
+    shotRequested = true;
+    forceComposition = true;
+    scene->needsFrame = true;
+}
 
-    if (!readbackLastFrame()) {
-        return;
+bool RendererImpl::submitScreenshot() {
+    vkResetCommandBuffer(shotCmd, 0);
+    vkResetFences(device, 1, &shotFence);
+
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(shotCmd, &bi);
+
+    // This submission follows the frame submission on the same queue. The
+    // barrier makes its color writes visible to the transfer without changing
+    // the image layout used by presentation.
+    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+    bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    bar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bar.oldLayout = lastLayout;
+    bar.newLayout = lastLayout;
+    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.image = lastImage;
+    bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(shotCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+
+    VkBufferImageCopy region{};
+
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {(u32)width, (u32)height, 1};
+    vkCmdCopyImageToBuffer(shotCmd, lastImage, lastLayout, shotReadback, 1, &region);
+    vkEndCommandBuffer(shotCmd);
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &shotCmd;
+
+    VkResult result = vkQueueSubmit(queue, 1, &si, shotFence);
+
+    shotRequested = false;
+    forceComposition = false;
+
+    if (result != VK_SUCCESS) {
+        sysE << "imway: screenshot submit failed ("_sv << (long)result << ")"_sv << endL;
+
+        return false;
+    }
+
+    shotBusy = true;
+    shotPool->submit([this] {
+        int fd = buildScreenshot();
+
+        stdAtomicStore(&shotResultFd, fd, MemoryOrder::Release);
+        shotDone.signal();
+    });
+
+    return true;
+}
+
+// Wait for the private screenshot fence off the event loop, then stream the
+// mapped Vulkan buffer through a small cached chunk into the memfd. The whole
+// 4K image is never duplicated in normal heap memory.
+int RendererImpl::buildScreenshot() {
+    if (vkWaitForFences(device, 1, &shotFence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+        return -1;
     }
 
     int mfd = memfd_create("imway-shot", MFD_CLOEXEC);
 
     if (mfd < 0) {
-        return;
+        return -1;
     }
 
-    // self-describing header: 'IMW1' magic + width + height, then RGBA8 rows
     struct {
         u32 magic;
         u32 w;
         u32 h;
     } hdr = {0x31574d49u, (u32)width, (u32)height};
-
-    // Mapped Vulkan readback memory is often uncached or write-combined. A
-    // scalar byte-wise swizzle over it is catastrophically slow at 4K. Pull
-    // it into ordinary cached RAM with one optimized bulk copy, then convert
-    // whole pixels in place.
-    Vector<u32> pixels;
-    size_t pixelCount = (size_t)width * height;
-
-    pixels.zero(pixelCount);
-    memcpy(pixels.mutData(), readbackMap, pixelCount * sizeof(u32));
-
-    if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
-        u32* out = pixels.mutData();
-
-        for (size_t i = 0; i < pixelCount; i++) {
-            u32 src = out[i];
-
-            out[i] = ((src >> 22) & 0xff) |
-                     (((src >> 12) & 0xff) << 8) |
-                     (((src >> 2) & 0xff) << 16) |
-                     0xff000000u;
-        }
-    } else {
-        u32* out = pixels.mutData();
-
-        for (size_t i = 0; i < pixelCount; i++) {
-            u32 src = out[i];
-
-            out[i] = ((src >> 16) & 0xff) |
-                     (src & 0x0000ff00u) |
-                     ((src & 0xff) << 16) |
-                     0xff000000u;
-        }
-    }
 
     auto writeAll = [mfd](const void* data, size_t size) {
         auto* p = (const u8*)data;
@@ -4360,12 +4440,88 @@ void RendererImpl::captureScreenshot() {
         return true;
     };
 
-    if (!writeAll(&hdr, sizeof(hdr)) ||
-        !writeAll(pixels.data(), pixels.length() * sizeof(u32))) {
+    constexpr size_t chunkCapacity = 1024 * 1024;
+    auto* chunk = (u32*)malloc(chunkCapacity);
+
+    if (!chunk || !writeAll(&hdr, sizeof(hdr))) {
+        free(chunk);
         close(mfd);
+
+        return -1;
+    }
+
+    const u8* input = (const u8*)shotReadbackMap;
+    size_t bytes = (size_t)width * height * sizeof(u32);
+
+    for (size_t offset = 0; offset < bytes;) {
+        size_t chunkBytes = bytes - offset;
+
+        if (chunkBytes > chunkCapacity) {
+            chunkBytes = chunkCapacity;
+        }
+
+        // WC/uncached Vulkan memory is efficient when consumed by optimized
+        // bulk memcpy. All scalar conversion then happens in normal cache.
+        memcpy(chunk, input + offset, chunkBytes);
+
+        size_t count = chunkBytes / sizeof(u32);
+
+        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            for (size_t i = 0; i < count; i++) {
+                u32 src = chunk[i];
+
+                chunk[i] = ((src >> 22) & 0xff) |
+                           (((src >> 12) & 0xff) << 8) |
+                           (((src >> 2) & 0xff) << 16) |
+                           0xff000000u;
+            }
+        } else {
+            for (size_t i = 0; i < count; i++) {
+                u32 src = chunk[i];
+
+                chunk[i] = ((src >> 16) & 0xff) |
+                           (src & 0x0000ff00u) |
+                           ((src & 0xff) << 16) |
+                           0xff000000u;
+            }
+        }
+
+        if (!writeAll(chunk, chunkBytes)) {
+            free(chunk);
+            close(mfd);
+
+            return -1;
+        }
+
+        offset += chunkBytes;
+    }
+
+    free(chunk);
+
+    return mfd;
+}
+
+void RendererImpl::screenshotReady() {
+    shotDone.drain();
+
+    int mfd = stdAtomicFetch(&shotResultFd, MemoryOrder::Acquire);
+
+    stdAtomicStore(&shotResultFd, -1, MemoryOrder::Relaxed);
+    shotBusy = false;
+
+    if (mfd < 0) {
+        sysE << "imway: screenshot readback failed"_sv << endL;
 
         return;
     }
+
+    spawnScreenshot(mfd);
+}
+
+// Hand the completed anonymous file to the crop tool. This tiny supervisor
+// round trip remains on the event loop; all GPU waiting and bulk CPU work are
+// already finished.
+void RendererImpl::spawnScreenshot(int mfd) {
 
     StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, "/proc/self/fd/3"_sv};
     StringBuilder display;

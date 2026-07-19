@@ -8,6 +8,15 @@ set -euo pipefail
 ctl "key 99 press"
 ctl "key 99 release"
 
+# The 4K readback/conversion runs outside the compositor event loop. A control
+# request queued immediately after PrintScreen must not wait for the cropper.
+responsive="$XDG_RUNTIME_DIR/responsive.dump"
+ctl "dump $responsive"
+await 10 test -e "$responsive" || {
+    echo "compositor event loop blocked during 4K screenshot"
+    exit 1
+}
+
 await 100 in_log "toplevel imway screenshot () mapped"
 
 w=$(dump_field "title=imway screenshot" client_w)
