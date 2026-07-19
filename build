@@ -22,6 +22,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import types
 import uuid
 from collections import defaultdict, deque
 from pathlib import Path
@@ -119,7 +120,6 @@ class Target:
     cflags: list[str] = dataclasses.field(default_factory=list)
     public_cflags: list[str] = dataclasses.field(default_factory=list)
     ldflags: list[str] = dataclasses.field(default_factory=list)
-    includes: list[str] = dataclasses.field(default_factory=list)
     output: str | None = None
     commands: list[list[str]] = dataclasses.field(default_factory=list)
     inputs: list[str] = dataclasses.field(default_factory=list)
@@ -148,14 +148,15 @@ class BuildContext:
         self.output_nodes: dict[str, Node] = {}
         self.target_names: dict[str, Target] = {}
         self.file_hashes: dict[str, str] = {}
+        self.includes: list[str] = []
         self.cc = os.environ.get("CC", "cc")
         self.cxx = os.environ.get("CXX", "c++")
         self.ar = os.environ.get("AR") or shutil.which("ar") or shutil.which("llvm-ar") or "ar"
 
-    def interface(self, *, cflags=(), ldflags=(), includes=(), enabled=True, name=None) -> Target:
+    def interface(self, *, cflags=(), ldflags=(), enabled=True, name=None) -> Target:
         target = Target(
             "interface", name=name, public_cflags=_items(cflags), ldflags=_items(ldflags),
-            includes=[_include_path(x) for x in _items(includes)], enabled=enabled,
+            enabled=enabled,
         )
         self.targets.append(target)
         return target
@@ -182,29 +183,29 @@ class BuildContext:
         except (OSError, subprocess.CalledProcessError) as exc:
             raise BuildError(f"pkg-config variable {package}:{variable} failed: {exc}") from exc
 
-    def library(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), includes=(), ldflags=(), output=None) -> Target:
+    def library(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), ldflags=(), output=None) -> Target:
         return self._compiled_target(
-            "library", srcs, name, cflags, public_cflags, deps, includes, ldflags, output, None,
+            "library", srcs, name, cflags, public_cflags, deps, ldflags, output, None,
         )
 
-    def program(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), includes=(), ldflags=(), output=None, linker=None) -> Target:
+    def program(self, *, srcs, name=None, cflags=(), public_cflags=(), deps=(), ldflags=(), output=None, linker=None) -> Target:
         return self._compiled_target(
-            "program", srcs, name, cflags, public_cflags, deps, includes, ldflags, output, linker,
+            "program", srcs, name, cflags, public_cflags, deps, ldflags, output, linker,
         )
 
-    def _compiled_target(self, kind, srcs, name, cflags, public_cflags, deps, includes, ldflags, output, linker) -> Target:
+    def _compiled_target(self, kind, srcs, name, cflags, public_cflags, deps, ldflags, output, linker) -> Target:
         target = Target(
             kind, name=name, srcs=[_source_path(x) for x in _items(srcs)],
             deps=_items(deps), cflags=_items(cflags), public_cflags=_items(public_cflags),
-            includes=[_include_path(x) for x in _items(includes)], ldflags=_items(ldflags),
-            output=_output_path(output) if output else None, linker=linker,
+            ldflags=_items(ldflags), output=_output_path(output) if output else None,
+            linker=linker,
         )
         self._validate_deps(target)
         self.targets.append(target)
         return target
 
     def command(self, *, inputs=(), outputs, cmd, deps=(), name=None, cwd=B, env=None,
-                cflags=(), ldflags=(), includes=(), descr="GEN", color="yellow") -> Target:
+                cflags=(), ldflags=(), descr="GEN", color="yellow") -> Target:
         commands = cmd
         if not commands or isinstance(commands[0], (str, bytes)):
             commands = [commands]
@@ -213,7 +214,6 @@ class BuildContext:
             outputs=[_output_path(x) for x in _items(outputs)],
             commands=[[str(x) for x in command] for command in commands], cwd=str(cwd),
             env=dict(env or {}), public_cflags=_items(cflags), ldflags=_items(ldflags),
-            includes=[_include_path(x) for x in _items(includes)],
             descr=str(descr), color=str(color),
         )
         self._validate_deps(target)
@@ -237,6 +237,8 @@ class BuildContext:
         if spec is None or spec.loader is None:
             raise BuildError(f"cannot load {path}")
         module = importlib.util.module_from_spec(spec)
+        build_module = types.ModuleType("build")
+        build_module.includes = []
         module.__dict__.update({
             "pkg_config": self.pkg_config,
             "pkg_config_variable": self.pkg_config_variable,
@@ -249,7 +251,17 @@ class BuildContext:
             "B": B,
         })
         sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
+        missing = object()
+        previous_build = sys.modules.get("build", missing)
+        sys.modules["build"] = build_module
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            if previous_build is missing:
+                del sys.modules["build"]
+            else:
+                sys.modules["build"] = previous_build
+        self.includes = [_include_path(path) for path in _items(build_module.includes)]
         self._infer_names(module)
         return module
 
@@ -275,7 +287,10 @@ class BuildContext:
 
     def build_graph(self) -> None:
         for target in self.targets:
-            if target.kind != "interface":
+            if target.kind == "command":
+                self._emit_target(target, set())
+        for target in self.targets:
+            if target.kind not in ("interface", "command"):
                 self._emit_target(target, set())
         scanner = IncludeScanner(self)
         for node in self.nodes:
@@ -313,9 +328,9 @@ class BuildContext:
     def _emit_compiled(self, target: Target) -> None:
         assert target.name is not None
         dep_cflags = self._usage_cflags(target.deps)
-        own_includes = ["-I" + path for path in target.includes]
-        common = dep_cflags + own_includes + target.cflags
-        include_roots = _uniq([S, *target.includes, *self._include_roots_from_flags(common)])
+        global_includes = _uniq([S, *[_include_path(path) for path in self.includes]])
+        common = dep_cflags + ["-I" + path for path in global_includes] + target.cflags
+        include_roots = _uniq([*global_includes, *self._include_roots_from_flags(common)])
         objects: list[Node] = []
         uses_cxx = False
         for src in target.srcs:
@@ -373,7 +388,6 @@ class BuildContext:
             seen.add(target)
             for dep in target.deps:
                 walk(dep)
-            out.extend("-I" + path for path in target.includes)
             out.extend(target.public_cflags)
         for target in targets:
             walk(target)

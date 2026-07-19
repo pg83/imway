@@ -54,6 +54,25 @@ class BuildSystemTest(unittest.TestCase):
         context.build_graph()
         self.assertEqual(context.target_names["thing"].root.outputs, ["$(B)/libthing.a"])
 
+    def test_build_module_defines_global_includes(self):
+        (self.root / "main.c").write_text("int main(void) { return 0; }\n")
+        (self.root / "lib.c").write_text("int value;\n")
+        (self.root / "build.py").write_text(
+            "import build\n"
+            "build.includes += ['include', '$(B)/generated']\n"
+            "app = program(srcs=['main.c'])\n"
+            "lib = library(srcs=['lib.c'])\n",
+        )
+        context = self.context()
+        context.load(self.root / "build.py")
+        context.build_graph()
+        self.assertEqual(context.includes, ["$(S)/include", "$(B)/generated"])
+        for name in ("app", "lib"):
+            command = context.target_names[name].nodes[0].commands[0]
+            self.assertIn("-I$(S)", command)
+            self.assertIn("-I$(S)/include", command)
+            self.assertIn("-I$(B)/generated", command)
+
     def test_node_descriptions_and_colors(self):
         (self.root / "thing.cpp").write_text("int thing;\n")
         context = self.context()
@@ -79,12 +98,11 @@ class BuildSystemTest(unittest.TestCase):
         (self.root / "inc/api/detail.h").write_text("// detail\n")
 
         context = self.context()
+        context.includes = ["inc", "$(B)/gen"]
+        app = context.program(name="app", srcs=["main.cpp"])
         generated = context.command(
             name="generated", outputs=["gen/generated.h"],
-            cmd=[[sys.executable, "-c", "pass"]], includes=["$(B)/gen"],
-        )
-        app = context.program(
-            name="app", srcs=["main.cpp"], deps=[generated], includes=["inc"],
+            cmd=[[sys.executable, "-c", "pass"]],
         )
         context.build_graph()
         compile_node = app.nodes[0]

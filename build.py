@@ -1,3 +1,4 @@
+import build
 import glob
 import os
 import shlex
@@ -14,6 +15,13 @@ common_cxxflags = [
     *words(os.environ.get("CPPFLAGS")),
 ]
 common_ldflags = [*words(os.environ.get("LDFLAGS")), *words(os.environ.get("CTRFLAGS"))]
+
+build.includes += [
+    "third_party/imgui",
+    f"{B}/protocols",
+    f"{B}/shaders",
+    f"{B}/tests",
+]
 
 
 wayland_server = pkg_config("wayland-server")
@@ -76,7 +84,6 @@ def protocol_rule(path, kind, out_dir):
             ["wayland-scanner", f"{kind}-header", xml, header],
             ["wayland-scanner", "private-code", xml, code],
         ],
-        includes=[f"{B}/{out_dir}"],
     )
 
 
@@ -89,8 +96,7 @@ server_sources = [
 protocols = library(
     name="protocols",
     srcs=server_sources,
-    deps=[wayland_server, *server_rules],
-    includes=[f"{B}/protocols"],
+    deps=[wayland_server],
     cflags=common_cflags,
 )
 
@@ -105,7 +111,6 @@ for shader in ["cm_convert", "lock_blur"]:
             "glslangValidator", "-V", f"{S}/{shader}.comp",
             "--variable-name", f"{shader}_spv", "-o", f"{B}/shaders/{shader}.spv.h",
         ],
-        includes=[f"{B}/shaders"],
     ))
 
 
@@ -119,7 +124,6 @@ imgui = library(
         "third_party/imgui/imgui_impl_vulkan.cpp",
         "third_party/imgui/imgui_impl_glfw.cpp",
     ],
-    includes=["third_party/imgui"],
     cflags=common_cxxflags,
     public_cflags=["-DGLFW_INCLUDE_NONE"],
     deps=[vulkan, glfw],
@@ -147,7 +151,7 @@ imway = program(
     cflags=common_cxxflags,
     ldflags=common_ldflags,
     deps=[
-        imgui, protocols, *shader_rules,
+        imgui, protocols,
         wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
         png, vulkan, lunasvg, system, sndio, pulse,
     ],
@@ -187,8 +191,7 @@ client_sources = [
 client_protocols = library(
     name="client_protocols",
     srcs=client_sources,
-    deps=[wayland_client, *client_rules],
-    includes=[f"{B}/tests"],
+    deps=[wayland_client],
     cflags=common_cflags,
 )
 
