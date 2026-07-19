@@ -37,7 +37,11 @@ class BuildSystemTest(unittest.TestCase):
 
     def test_default_build_root_and_executor_layout(self):
         with mock.patch.dict("os.environ", {}, clear=True):
-            self.assertEqual(runner.parse_args([]).build_dir, ".build")
+            args = runner.parse_args([])
+            self.assertEqual(args.build_dir, ".build")
+            self.assertFalse(args.ninja)
+        self.assertTrue(runner.parse_args(["--ninja"]).ninja)
+        self.assertTrue(runner.parse_args(["-T"]).ninja)
         executor = runner.Executor(self.context(), 1, False, False)
         self.assertEqual(executor.cas, self.out / "cas")
         self.assertEqual(executor.uids, self.out / "uid")
@@ -291,7 +295,7 @@ class BuildSystemTest(unittest.TestCase):
             runner.Executor(context, 1, False, False).run([target.root])
         self.assertEqual(stderr.getvalue(), "warning\n[ZZ] {1/1} $(B)/result.txt\n")
 
-    def test_executor_repaints_colored_progress_on_a_tty(self):
+    def test_executor_prints_make_style_progress_by_default(self):
         class TtyBuffer(io.StringIO):
             def isatty(self):
                 return True
@@ -299,6 +303,24 @@ class BuildSystemTest(unittest.TestCase):
         stderr = TtyBuffer()
         with contextlib.redirect_stderr(stderr):
             executor = runner.Executor(self.context(), 1, False, False)
+            executor.progress_total = 2
+            executor._progress(runner.Node([], ["$(B)/thing.o"], [], descr="CC", color="green"))
+            executor._progress(runner.Node([], ["$(B)/app"], [], descr="LD", color="light-blue"))
+            executor._finish_progress()
+        self.assertEqual(
+            stderr.getvalue(),
+            "[\x1b[32mCC\x1b[0m] {1/2} $(B)/thing.o\n"
+            "[\x1b[94mLD\x1b[0m] {2/2} $(B)/app\n",
+        )
+
+    def test_executor_repaints_progress_in_ninja_mode(self):
+        class TtyBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        stderr = TtyBuffer()
+        with contextlib.redirect_stderr(stderr):
+            executor = runner.Executor(self.context(), 1, False, False, ninja=True)
             executor.progress_total = 1
             executor._progress(runner.Node([], ["$(B)/thing.o"], [], descr="CC", color="green"))
             executor._finish_progress()

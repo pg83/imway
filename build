@@ -739,11 +739,13 @@ class IncludeScanner:
 
 
 class Executor:
-    def __init__(self, context: BuildContext, jobs: int, verbose: bool, keep_going: bool):
+    def __init__(self, context: BuildContext, jobs: int, verbose: bool, keep_going: bool,
+                 ninja: bool = False):
         self.context = context
         self.jobs = max(1, jobs)
         self.verbose = verbose
         self.keep_going = keep_going
+        self.ninja = ninja
         self.cas = context.build_root / "cas"
         self.uids = context.build_root / "uid"
         self.tmp = context.build_root / "tmp"
@@ -1045,7 +1047,7 @@ class Executor:
                 f"[{descr}] {{{self.progress_done}/{self.progress_total}}} "
                 f"{self._node_name(node)}"
             )
-            if self.interactive:
+            if self.ninja and self.interactive:
                 sys.stderr.write("\x1b[2K\r" + record + "\r")
                 sys.stderr.flush()
                 self.progress_active = True
@@ -1082,6 +1084,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-k", "--keep-going", action="store_true")
+    parser.add_argument(
+        "-T", "--ninja", action="store_true",
+        help="repaint progress in place instead of keeping one line per node",
+    )
     parser.add_argument("--clear", action="store_true")
     parser.add_argument("--list", action="store_true")
     return parser.parse_args(argv)
@@ -1115,7 +1121,7 @@ def main(argv: list[str] | None = None) -> int:
             for directory in ("cas", "uid", "tmp", "grb"):
                 shutil.rmtree(context.build_root / directory, ignore_errors=True)
         context.build_root.mkdir(parents=True, exist_ok=True)
-        Executor(context, args.jobs, args.verbose, args.keep_going).run(roots)
+        Executor(context, args.jobs, args.verbose, args.keep_going, args.ninja).run(roots)
         if args.targets:
             context.publish(selected)
         return 0
