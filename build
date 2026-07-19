@@ -16,6 +16,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -944,5 +945,54 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
 
+def supervised_main(argv: list[str] | None = None) -> int:
+    """Keep signal handling outside the process group that does the work."""
+    watched = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)
+    old_mask = signal.pthread_sigmask(signal.SIG_BLOCK, watched)
+    pid = os.fork()
+
+    if pid == 0:
+        os.setpgid(0, 0)
+        signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+        return main(argv)
+
+    try:
+        os.setpgid(pid, pid)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    interrupted = [0]
+
+    def terminate(signum, _frame):
+        interrupted[0] = interrupted[0] or signum
+
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    old_handlers = {signum: signal.signal(signum, terminate) for signum in watched}
+    signal.pthread_sigmask(signal.SIG_SETMASK, old_mask)
+
+    try:
+        while True:
+            try:
+                _, status = os.waitpid(pid, 0)
+                break
+            except InterruptedError:
+                continue
+    finally:
+        for signum, handler in old_handlers.items():
+            signal.signal(signum, handler)
+
+    if interrupted[0]:
+        return 128 + interrupted[0]
+    if os.WIFEXITED(status):
+        return os.WEXITSTATUS(status)
+    if os.WIFSIGNALED(status):
+        return 128 + os.WTERMSIG(status)
+    return 1
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(supervised_main())

@@ -4,8 +4,12 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import io
+import shutil
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -153,6 +157,47 @@ class BuildSystemTest(unittest.TestCase):
         context = self.context()
         scanner = runner.IncludeScanner(context)
         self.assertEqual(scanner._parse("$(S)/source.c"), [(True, "seen.h")])
+
+    def test_sigint_kills_worker_process_group_without_traceback(self):
+        project = self.root / "project"
+        project.mkdir()
+        shutil.copy2(ROOT / "build", project / "build")
+        (project / "build.py").write_text(
+            "job = command(name='job', outputs=['done'], cmd=[\n"
+            "    'python3', '-c',\n"
+            "    \"import os, pathlib, sys, time; pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); time.sleep(60)\",\n"
+            "    '$(S)/worker.pid',\n"
+            "])\ninstall(job)\n",
+        )
+        process = subprocess.Popen(
+            [str(project / "build"), "-B", "out"], cwd=project,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        pid_file = project / "worker.pid"
+
+        try:
+            deadline = time.monotonic() + 5
+            while not pid_file.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            if not pid_file.exists():
+                if process.poll() is None:
+                    process.terminate()
+                _stdout, stderr = process.communicate(timeout=5)
+                self.fail(f"worker command did not start (rc={process.returncode}): {stderr}")
+            worker_pid = int(pid_file.read_text())
+            process.send_signal(signal.SIGINT)
+            _stdout, stderr = process.communicate(timeout=5)
+            self.assertEqual(process.returncode, 128 + signal.SIGINT)
+            self.assertNotIn("Traceback", stderr)
+
+            deadline = time.monotonic() + 2
+            while Path(f"/proc/{worker_pid}").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(Path(f"/proc/{worker_pid}").exists(), "worker survived SIGINT")
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait()
 
 
 if __name__ == "__main__":
