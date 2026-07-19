@@ -54,6 +54,22 @@ class BuildSystemTest(unittest.TestCase):
         context.build_graph()
         self.assertEqual(context.target_names["thing"].root.outputs, ["$(B)/libthing.a"])
 
+    def test_node_descriptions_and_colors(self):
+        (self.root / "thing.cpp").write_text("int thing;\n")
+        context = self.context()
+        library = context.library(name="thing", srcs=["thing.cpp"])
+        program = context.program(name="app", srcs=["thing.cpp"])
+        generated = context.command(
+            name="generated", outputs=["generated.h"],
+            cmd=[[sys.executable, "-c", "pass"]], descr="PB", color="light-cyan",
+        )
+        context.build_graph()
+
+        self.assertEqual((library.nodes[0].descr, library.nodes[0].color), ("CC", "green"))
+        self.assertEqual((library.root.descr, library.root.color), ("AR", "light-red"))
+        self.assertEqual((program.root.descr, program.root.color), ("LD", "light-blue"))
+        self.assertEqual((generated.root.descr, generated.root.color), ("PB", "light-cyan"))
+
     def test_scans_transitive_project_and_generated_includes(self):
         (self.root / "main.cpp").write_text(
             '#include <api/public.h>\n#include <generated.h>\nint main() {}\n',
@@ -137,13 +153,52 @@ class BuildSystemTest(unittest.TestCase):
             return context, target
 
         first, target1 = graph()
-        runner.Executor(first, 2, False, False).run([target1.root])
+        with contextlib.redirect_stderr(io.StringIO()):
+            runner.Executor(first, 2, False, False).run([target1.root])
         self.assertEqual((self.out / "result.txt").read_text(), "payload\n")
         self.assertEqual(count.read_text(), "1")
 
         second, target2 = graph()
-        runner.Executor(second, 2, False, False).run([target2.root])
+        cached_stderr = io.StringIO()
+        with contextlib.redirect_stderr(cached_stderr):
+            runner.Executor(second, 2, False, False).run([target2.root])
         self.assertEqual(count.read_text(), "1")
+        self.assertEqual(cached_stderr.getvalue(), "")
+
+    def test_executor_reports_cache_miss_progress(self):
+        context = self.context()
+        target = context.command(
+            name="write", outputs=["result.txt"], descr="ZZ", color="magenta",
+            cmd=[[
+                sys.executable, "-c",
+                "from pathlib import Path; import sys; sys.stderr.write('warning'); Path(sys.argv[1]).write_text('ok')",
+                "$(B)/result.txt",
+            ]],
+        )
+        context.install(target)
+        context.build_graph()
+        context.calculate_uids([target.root])
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            runner.Executor(context, 1, False, False).run([target.root])
+        self.assertEqual(stderr.getvalue(), "warning\n[ZZ] {1/1} $(B)/result.txt\n")
+
+    def test_executor_repaints_colored_progress_on_a_tty(self):
+        class TtyBuffer(io.StringIO):
+            def isatty(self):
+                return True
+
+        stderr = TtyBuffer()
+        with contextlib.redirect_stderr(stderr):
+            executor = runner.Executor(self.context(), 1, False, False)
+            executor.progress_total = 1
+            executor._progress(runner.Node([], ["$(B)/thing.o"], [], descr="CC", color="green"))
+            executor._finish_progress()
+        self.assertEqual(
+            stderr.getvalue(),
+            "\x1b[2K\r[\x1b[32mCC\x1b[0m] {1/1} $(B)/thing.o\r\n",
+        )
 
     def test_failed_node_does_not_publish_manifest(self):
         context = self.context()

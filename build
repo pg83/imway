@@ -31,6 +31,14 @@ from typing import Any, Iterable
 S = "$(S)"
 B = "$(B)"
 
+ANSI_COLORS = {
+    "red": "31", "green": "32", "yellow": "33", "blue": "34",
+    "magenta": "35", "cyan": "36", "white": "37",
+    "light-red": "91", "light-green": "92", "light-yellow": "93",
+    "light-blue": "94", "light-magenta": "95", "light-cyan": "96",
+    "light-white": "97",
+}
+
 
 class BuildError(RuntimeError):
     pass
@@ -85,7 +93,8 @@ class Node:
     deps: list["Node"] = dataclasses.field(default_factory=list)
     cwd: str = B
     env: dict[str, str] = dataclasses.field(default_factory=dict)
-    label: str = "CMD"
+    descr: str = "CMD"
+    color: str = ""
     include_roots: list[str] = dataclasses.field(default_factory=list)
     scan_sources: bool = False
     source_inputs: set[str] = dataclasses.field(default_factory=set)
@@ -117,6 +126,8 @@ class Target:
     outputs: list[str] = dataclasses.field(default_factory=list)
     cwd: str = B
     env: dict[str, str] = dataclasses.field(default_factory=dict)
+    descr: str = "GEN"
+    color: str = "yellow"
     linker: str | None = None
     enabled: bool = True
     root: Node | None = None
@@ -193,7 +204,7 @@ class BuildContext:
         return target
 
     def command(self, *, inputs=(), outputs, cmd, deps=(), name=None, cwd=B, env=None,
-                cflags=(), ldflags=(), includes=()) -> Target:
+                cflags=(), ldflags=(), includes=(), descr="GEN", color="yellow") -> Target:
         commands = cmd
         if not commands or isinstance(commands[0], (str, bytes)):
             commands = [commands]
@@ -203,6 +214,7 @@ class BuildContext:
             commands=[[str(x) for x in command] for command in commands], cwd=str(cwd),
             env=dict(env or {}), public_cflags=_items(cflags), ldflags=_items(ldflags),
             includes=[_include_path(x) for x in _items(includes)],
+            descr=str(descr), color=str(color),
         )
         self._validate_deps(target)
         self.targets.append(target)
@@ -284,7 +296,8 @@ class BuildContext:
             node = Node(
                 inputs=target.inputs.copy(), outputs=target.outputs.copy(),
                 commands=[x.copy() for x in target.commands], deps=dep_nodes,
-                cwd=target.cwd, env=target.env.copy(), label="GEN",
+                cwd=target.cwd, env=target.env.copy(),
+                descr=target.descr, color=target.color,
             )
             for inp in node.inputs:
                 if inp.startswith(S + "/") or os.path.isabs(inp):
@@ -322,7 +335,7 @@ class BuildContext:
             node = Node(
                 inputs=[src], outputs=[obj],
                 commands=[[compiler, *common, "-c", src, "-o", obj]], deps=deps,
-                label="CXX" if cxx else "CC", include_roots=include_roots,
+                descr="CC", color="green", include_roots=include_roots,
                 scan_sources=src.startswith(S + "/"),
             )
             if src.startswith(S + "/") or os.path.isabs(src):
@@ -333,7 +346,7 @@ class BuildContext:
         if target.kind == "library":
             output = target.output or f"{B}/lib{target.name}.a"
             command = [self.ar, "rcs", output, *[node.outputs[0] for node in objects]]
-            root = Node([], [output], [command], deps=objects, label="AR")
+            root = Node([], [output], [command], deps=objects, descr="AR", color="light-red")
         else:
             output = target.output or f"{B}/{target.name}"
             libraries = self._link_libraries(target.deps)
@@ -343,7 +356,10 @@ class BuildContext:
             ldflags = self._link_flags(target.deps) + target.ldflags
             linker = target.linker or (self.cxx if target.uses_cxx else self.cc)
             command = [linker, "-o", output, *[node.outputs[0] for node in objects], *archives, *ldflags]
-            root = Node([], [output], [command], deps=_uniq([*objects, *lib_nodes, *other_nodes]), label="LD")
+            root = Node(
+                [], [output], [command], deps=_uniq([*objects, *lib_nodes, *other_nodes]),
+                descr="LD", color="light-blue",
+            )
         self._add_node(root)
         target.root = root
         target.nodes = [*objects, root]
@@ -627,8 +643,19 @@ class Executor:
         self.tmp = context.build_root / "tmp"
         self.grb = context.build_root / "grb"
         self.print_lock = threading.Lock()
+        self.progress_done = 0
+        self.progress_total = 0
+        self.progress_active = False
+        self.interactive = sys.stderr.isatty()
 
     def run(self, roots: list[Node]) -> None:
+        try:
+            self._run(roots)
+        finally:
+            self._finish_progress()
+
+    def _run(self, roots: list[Node]) -> None:
+        self.progress_done = 0
         needed = self._closure(roots)
         consumers: dict[Node, list[Node]] = defaultdict(list)
         remaining: dict[Node, int] = {}
@@ -638,6 +665,8 @@ class Executor:
             for dep in deps:
                 consumers[dep].append(node)
         ready = deque(node for node in needed if remaining[node] == 0)
+        cache_misses = {node for node in needed if not self._cached(node.uid)}
+        self.progress_total = len(cache_misses)
         errors: dict[Node, BaseException] = {}
         blocked: set[Node] = set()
         running: dict[concurrent.futures.Future[None], Node] = {}
@@ -646,7 +675,7 @@ class Executor:
             while ready or running:
                 while ready and len(running) < self.jobs:
                     node = ready.popleft()
-                    future = pool.submit(self._execute, node)
+                    future = pool.submit(self._execute, node, node in cache_misses)
                     running[future] = node
                 if not running:
                     break
@@ -695,12 +724,15 @@ class Executor:
             stack.extend(node.deps)
         return out
 
-    def _execute(self, node: Node) -> None:
+    def _execute(self, node: Node, expected_miss: bool = True) -> None:
         assert node.uid is not None
         if self._cached(node.uid):
             if self.verbose:
-                self._report(f"HIT  {node.label:3} {self._node_name(node)}")
+                self._report(f"HIT  {node.descr:3} {self._node_name(node)}")
             return
+        if not expected_miss:
+            with self.print_lock:
+                self.progress_total += 1
         work = self.tmp / node.uid
         work.mkdir(parents=True, exist_ok=True)
         fd = os.open(work, os.O_RDONLY)
@@ -715,10 +747,11 @@ class Executor:
             for output in node.outputs:
                 self.context.physical(output, work).parent.mkdir(parents=True, exist_ok=True)
             if self.verbose:
-                self._report(f"RUN  {node.label:3} {self._node_name(node)}")
+                self._report(f"RUN  {node.descr:3} {self._node_name(node)}")
             for command in node.commands:
                 self._run_command(node, command, work)
             self._store(node, work)
+            self._progress(node)
         finally:
             os.close(fd)
             self._discard_contents(work)
@@ -739,7 +772,11 @@ class Executor:
             raise BuildError(message)
         if result.stderr:
             with self.print_lock:
+                self._clear_progress()
                 sys.stderr.write(result.stderr)
+                if not result.stderr.endswith("\n"):
+                    sys.stderr.write("\n")
+                sys.stderr.flush()
 
     def _mount(self, value: str, work: Path) -> str:
         return str(value).replace(S, str(self.context.source_root)).replace(B, str(work))
@@ -891,7 +928,41 @@ class Executor:
 
     def _report(self, message: str) -> None:
         with self.print_lock:
+            self._clear_progress()
             print(message, file=sys.stderr)
+
+    def _progress(self, node: Node) -> None:
+        with self.print_lock:
+            self.progress_done += 1
+            descr = self._color(node.color, node.descr)
+            record = (
+                f"[{descr}] {{{self.progress_done}/{self.progress_total}}} "
+                f"{self._node_name(node)}"
+            )
+            if self.interactive:
+                sys.stderr.write("\x1b[2K\r" + record + "\r")
+                sys.stderr.flush()
+                self.progress_active = True
+            else:
+                print(record, file=sys.stderr)
+
+    def _finish_progress(self) -> None:
+        with self.print_lock:
+            if self.progress_active:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
+                self.progress_active = False
+
+    def _clear_progress(self) -> None:
+        if self.progress_active:
+            sys.stderr.write("\x1b[2K\r")
+            self.progress_active = False
+
+    def _color(self, name: str, value: str) -> str:
+        code = ANSI_COLORS.get(name)
+        if not self.interactive or code is None:
+            return value
+        return f"\x1b[{code}m{value}\x1b[0m"
 
     @staticmethod
     def _node_name(node: Node) -> str:
