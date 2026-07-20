@@ -25,7 +25,9 @@ enum class LauncherAction {
 // field, then the compositor actions and xdg desktop entries; up/down +
 // enter or a mouse click. imgui calls inside, so this runs between NewFrame
 // and Render. returns true when the user picked something: either `action`
-// is set to a compositor action, or the command line is appended to run
-// (caller memory, precisely because the dialog dies with the pick)
+// is set to a compositor action, or the command line is appended to run and
+// `terminal` reflects its Desktop Entry Terminal key (caller memory, precisely
+// because the dialog dies with the pick)
 bool drawLauncher(Composer& c, bool toggle, DialogState** state, stl::Buffer& run,
-                  LauncherAction& action, float anchorX = -1.f, float anchorY = -1.f);
+                  LauncherAction& action, bool& terminal, float anchorX = -1.f,
+                  float anchorY = -1.f);

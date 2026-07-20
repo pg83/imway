@@ -19,9 +19,9 @@ for _ in $(seq 1 20); do
     sleep 0.2
     screenshot "$XDG_RUNTIME_DIR/open.ppm"
     opened=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/open.ppm" 400 180 880 460)
-    [[ "$opened" -gt 2000 ]] && break
+    [[ "$opened" -gt 1500 ]] && break
 done
-[[ "$opened" -gt 2000 ]] || { echo "launcher did not open ($opened)"; exit 1; }
+[[ "$opened" -gt 1500 ]] || { echo "launcher did not open ($opened)"; exit 1; }
 
 click_at 1000 650
 

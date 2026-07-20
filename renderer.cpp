@@ -2926,12 +2926,23 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     }
 }
 
-static void spawnClient(Composer& comp, StringView cmd, StringView sock) {
+static StringView terminalProgram() {
+    const char* value = getenv("IMWAY_TERMINAL");
+
+    if (!value || !*value) {
+        value = getenv("TERMINAL");
+    }
+
+    return value && *value ? StringView(value) : "zutty"_sv;
+}
+
+static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool terminal) {
     if (cmd.empty() || sock.empty()) {
         return;
     }
 
-    StringView args[] = {"sh"_sv, "-c"_sv, cmd};
+    StringView shellArgs[] = {"sh"_sv, "-c"_sv, cmd};
+    StringView terminalArgs[] = {terminalProgram(), "-e"_sv, "sh"_sv, "-c"_sv, cmd};
     StringBuilder display;
 
     display << "WAYLAND_DISPLAY="_sv << sock;
@@ -2939,8 +2950,8 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock) {
     StringView env[] = {sv(display)};
     SupervisorSpawn spawn;
 
-    spawn.args = args;
-    spawn.argCount = 3;
+    spawn.args = terminal ? terminalArgs : shellArgs;
+    spawn.argCount = terminal ? 5 : 3;
     spawn.env = env;
     spawn.envCount = 1;
 
@@ -3505,8 +3516,10 @@ void RendererImpl::buildUi(Scene& scene) {
     {
         Buffer cmd;
         LauncherAction act = LauncherAction::none;
+        bool terminal = false;
 
-        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, launcherX, launcherY)) {
+        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, terminal,
+                         launcherX, launcherY)) {
             switch (act) {
                 case LauncherAction::lockScreen:
                     openLockOverlay(*comp, &lockState, &currentInput);
@@ -3524,7 +3537,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     pickArmed = true;
                     break;
                 case LauncherAction::none:
-                    spawnClient(*comp, sv(cmd), scene.socketName);
+                    spawnClient(*comp, sv(cmd), scene.socketName, terminal);
                     break;
             }
         }

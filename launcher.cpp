@@ -25,6 +25,7 @@ namespace {
         u32 exec = 0, execLen = 0;
         u32 icon = 0, iconLen = 0;
         LauncherAction action = LauncherAction::none;
+        bool terminal = false;
     };
 
     // Dialog and all of its member storage are retired by one arena teardown.
@@ -55,7 +56,8 @@ namespace {
 
         // pure drawing: state transitions stay in drawLauncher, the only
         // outward signs are run/action/picked and the open flag dropping
-        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, float anchorX, float anchorY);
+        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
+                  bool& terminal, float anchorX, float anchorY);
     };
 }
 
@@ -147,6 +149,7 @@ void Dialog::parseDesktop(StringBuilder& file) {
     bool inSection = false;
     bool display = true;
     bool isApp = false;
+    bool terminal = false;
     StringView rest = sv(data);
 
     while (!rest.empty()) {
@@ -184,6 +187,8 @@ void Dialog::parseDesktop(StringBuilder& file) {
             icon << val;
         } else if (key == "Type"_sv) {
             isApp = val == "Application"_sv;
+        } else if (key == "Terminal"_sv) {
+            terminal = val == "true"_sv;
         } else if ((key == "NoDisplay"_sv || key == "Hidden"_sv) && val == "true"_sv) {
             display = false;
         }
@@ -204,6 +209,7 @@ void Dialog::parseDesktop(StringBuilder& file) {
     r.icon = (u32)blob.used();
     r.iconLen = (u32)icon.used();
     blob << sv(icon);
+    r.terminal = terminal;
     rows.pushBack(r);
 }
 
@@ -221,7 +227,8 @@ void Dialog::refilter() {
     }
 }
 
-bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, float anchorX, float anchorY) {
+bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
+                  bool& terminal, float anchorX, float anchorY) {
     IconStore& icons = *c.icons;
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
@@ -241,6 +248,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
             StringView ex = view(r.exec, r.execLen);
 
             run.append(ex.begin(), ex.length());
+            terminal = r.terminal;
         }
 
         picked = true;
@@ -346,12 +354,13 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
 }
 
 bool drawLauncher(Composer& c, bool toggle, DialogState** state, Buffer& run,
-                  LauncherAction& action, float anchorX, float anchorY) {
+                  LauncherAction& action, bool& terminal, float anchorX, float anchorY) {
     action = LauncherAction::none;
+    terminal = false;
     bool picked = false;
 
     dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
-        picked = d.draw(c, open, run, action, anchorX, anchorY);
+        picked = d.draw(c, open, run, action, terminal, anchorX, anchorY);
     });
 
     return picked;

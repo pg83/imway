@@ -279,6 +279,30 @@ namespace {
         closeSpan(cursor, UINT_MAX);
     }
 
+    int redirectStdioToNull() {
+        int fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+
+        if (fd < 0) {
+            return errno;
+        }
+
+        for (int target = STDIN_FILENO; target <= STDERR_FILENO; target++) {
+            if (dup2(fd, target) < 0) {
+                int error = errno;
+
+                close(fd);
+
+                return error;
+            }
+        }
+
+        if (fd > STDERR_FILENO) {
+            close(fd);
+        }
+
+        return 0;
+    }
+
     int launch(char** args, char** env, size_t envCount, int passFd, int targetFd, int controlFd, pid_t& pid) {
         int statusPipe[2];
 
@@ -301,15 +325,6 @@ namespace {
             resetChildSignals();
             close(statusPipe[0]);
 
-            if (controlFd >= 0) {
-                if (dup2(controlFd, STDIN_FILENO) < 0 || dup2(controlFd, STDOUT_FILENO) < 0) {
-                    int error = errno;
-
-                    (void)!write(statusPipe[1], &error, sizeof(error));
-                    _exit(126);
-                }
-            }
-
             int errorFd = targetFd == 3 ? 4 : 3;
 
             if (passFd >= 0) {
@@ -325,6 +340,18 @@ namespace {
                 int error = errno;
 
                 (void)!write(statusPipe[1], &error, sizeof(error));
+                _exit(126);
+            }
+
+            if (controlFd >= 0) {
+                if (dup2(controlFd, STDIN_FILENO) < 0 || dup2(controlFd, STDOUT_FILENO) < 0) {
+                    int error = errno;
+
+                    (void)!write(errorFd, &error, sizeof(error));
+                    _exit(126);
+                }
+            } else if (int error = redirectStdioToNull()) {
+                (void)!write(errorFd, &error, sizeof(error));
                 _exit(126);
             }
 

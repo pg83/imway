@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 static int killed_fd = -1;
@@ -35,6 +36,21 @@ int main(void) {
 
     if (!runtime || !display || strcmp(display, "imway-test") != 0) {
         return write_result(runtime ? runtime : "/tmp", "bad environment\n");
+    }
+
+    struct stat null_stat;
+
+    if (stat("/dev/null", &null_stat) != 0) {
+        return write_result(runtime, "cannot stat /dev/null\n");
+    }
+
+    for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; fd++) {
+        struct stat fd_stat;
+
+        if (fstat(fd, &fd_stat) != 0 || !S_ISCHR(fd_stat.st_mode) ||
+            fd_stat.st_rdev != null_stat.st_rdev) {
+            return write_result(runtime, "stdio is not /dev/null\n");
+        }
     }
 
     for (int fd = 3; fd < 256; fd++) {
