@@ -144,11 +144,10 @@ int mainComposer(int argc, char** argv) {
         return 1;
     }
 
-    Composer c;
     ObjPool::Ref pool = ObjPool::fromMemory();
+    Composer c(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
-    c.pool = pool.mutPtr();
     c.loop = loop;
     c.offload = ThreadPool::simple(c.pool, 1);
     c.supervisor = Supervisor::create(c);

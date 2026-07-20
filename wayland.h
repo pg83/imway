@@ -13,7 +13,6 @@ struct ev_loop;
 struct Scene;
 struct Output;
 struct Keyboard;
-struct InputSink;
 struct DmabufFormat;
 struct IconPool;
 struct IconStore;
@@ -34,6 +33,5 @@ struct WaylandConfig {
 
 struct Wayland {
     virtual void run() = 0;
-    virtual InputSink* sink() = 0;
     static Wayland* create(Composer& c, const WaylandConfig&);
 };

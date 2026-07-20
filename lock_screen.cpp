@@ -3,7 +3,6 @@
 #include "composer.h"
 #include "device_vk.h"
 #include "dialog.h"
-#include "input_sink.h"
 #include "render_filter.h"
 #include "scene.h"
 #include "tex_pool.h"
@@ -30,56 +29,6 @@
 using namespace stl;
 
 namespace {
-    struct LockSink: InputSink {
-        InputSink* drain = nullptr;
-
-        void motion(double, double) override {}
-        void relMotion(double, double, double, double) override {}
-        void absMotion(double, double) override {}
-        void scroll(const ScrollEvent&) override {}
-        void swipeBegin(u32) override {}
-        void swipeUpdate(double, double) override {}
-        void pinchBegin(u32) override {}
-        void pinchUpdate(double, double, double, double) override {}
-        void holdBegin(u32) override {}
-
-        void button(u32 button, bool pressed) override {
-            if (!pressed && drain) {
-                drain->button(button, false);
-            }
-        }
-
-        void key(u32 code, bool pressed) override {
-            if (!pressed && drain) {
-                drain->key(code, false);
-            }
-        }
-
-        void modsChanged() override {
-            if (drain) {
-                drain->modsChanged();
-            }
-        }
-
-        void swipeEnd(bool) override {
-            if (drain) {
-                drain->swipeEnd(true);
-            }
-        }
-
-        void pinchEnd(bool) override {
-            if (drain) {
-                drain->pinchEnd(true);
-            }
-        }
-
-        void holdEnd(bool) override {
-            if (drain) {
-                drain->holdEnd(true);
-            }
-        }
-    } lockSink;
-
     void wipe(char* data, size_t size) noexcept {
         volatile char* p = data;
 
@@ -221,28 +170,13 @@ namespace {
     };
 
     struct Dialog {
-        InputSink** inputRoute = nullptr;
-        InputSink* previousInput = nullptr;
         LockFilter filter;
         char password[256] = "";
         bool focusField = true;
         bool failed = false;
         bool closeRequested = false;
 
-        Dialog(InputSink** route)
-            : inputRoute(route)
-            , previousInput(*route)
-        {
-            lockSink.drain = previousInput;
-            *inputRoute = &lockSink;
-        }
-
         ~Dialog() noexcept {
-            if (inputRoute && *inputRoute == &lockSink) {
-                *inputRoute = previousInput;
-            }
-
-            lockSink.drain = nullptr;
             filter.unlink();
             wipe(password, sizeof(password));
             wipeImGuiPasswordState();
@@ -686,7 +620,7 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::End();
 }
 
-void openLockOverlay(Composer& c, DialogState** state, InputSink** inputRoute) {
+void openLockOverlay(Composer& c, DialogState** state) {
     if (*state) {
         return;
     }
@@ -695,7 +629,7 @@ void openLockOverlay(Composer& c, DialogState** state, InputSink** inputRoute) {
     DialogState* created = pool->make<DialogState>();
 
     created->pool = pool;
-    created->opaque = pool->make<Dialog>(inputRoute);
+    created->opaque = pool->make<Dialog>();
     *state = created;
     c.filters.pushBack(&((Dialog*)created->opaque)->filter);
 

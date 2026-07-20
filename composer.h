@@ -28,6 +28,7 @@ struct Session;
 struct StatusNotifier;
 struct Supervisor;
 struct Wayland;
+struct InputSink;
 
 // the wiring board: main owns one, fills the fields as the entities come
 // up, everyone else stores the reference. rules: a constructor may keep the
@@ -36,6 +37,8 @@ struct Wayland;
 // (bus, notes, session, mixer) stay nullable forever — a missing subsystem
 // is a normal mode, check on every use
 struct Composer {
+    Composer(stl::ObjPool* pool);
+
     Theme theme;
     stl::ObjPool* pool = nullptr;
     struct ev_loop* loop = nullptr;
@@ -58,6 +61,7 @@ struct Composer {
     Mixer* mixer = nullptr;
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;
+    InputSink* entry = nullptr;
 
     // listener slots solve the creation order: subscribers link themselves
     // whenever they come up, producers walk the intrusive lists at event time
@@ -68,6 +72,8 @@ struct Composer {
     stl::IntrusiveList sessionEnabledListeners;
     stl::IntrusiveList sessionDisabledListeners;
     stl::IntrusiveList frameListeners;
+    // input producers call entry; it walks this list in order and stops at
+    // the first sink which returns true
     stl::IntrusiveList inputSinks;
     stl::IntrusiveList filters;
 };

@@ -684,24 +684,21 @@ namespace {
         void run() override;
 
         void iconsReloaded();
-        InputSink* sink() override;
+        void syncKeyboardCapture();
         void sessionEnabled();
         void sessionDisabled();
-        void motion(double x, double y) override;
-        void button(u32 btn, bool pressed) override;
-        void key(u32 code, bool pressed) override;
-        void scroll(const ScrollEvent& ev) override;
-        void modsChanged() override;
-        void absMotion(double, double) override;
-        void relMotion(double dx, double dy, double dxRaw, double dyRaw) override;
-        void swipeBegin(u32 fingers) override;
-        void swipeUpdate(double dx, double dy) override;
-        void swipeEnd(bool cancelled) override;
-        void pinchBegin(u32 fingers) override;
-        void pinchUpdate(double dx, double dy, double scale, double rotation) override;
-        void pinchEnd(bool cancelled) override;
-        void holdBegin(u32 fingers) override;
-        void holdEnd(bool cancelled) override;
+        bool pointerMotion(PointerMotionEvent& ev) override;
+        bool button(u32 btn, bool pressed) override;
+        bool key(u32 code, bool pressed) override;
+        bool scroll(const ScrollEvent& ev) override;
+        bool swipeBegin(u32 fingers) override;
+        bool swipeUpdate(double dx, double dy) override;
+        bool swipeEnd(bool cancelled) override;
+        bool pinchBegin(u32 fingers) override;
+        bool pinchUpdate(double dx, double dy, double scale, double rotation) override;
+        bool pinchEnd(bool cancelled) override;
+        bool holdBegin(u32 fingers) override;
+        bool holdEnd(bool cancelled) override;
 
         void onListen(void* arg) override;
 
@@ -7361,6 +7358,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
     comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
     comp.frameListeners.pushBack((Listener*)this);
+    comp.inputSinks.pushBack((InputSink*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;
 
@@ -7950,6 +7948,8 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 void WaylandImpl::onListen(void* arg) {
     u32 msec = ((FrameEvent*)arg)->msec;
 
+    syncKeyboardCapture();
+
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
         seat.focusToplevel(nullptr);
     } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized &&
@@ -8057,10 +8057,6 @@ void WaylandImpl::iconsReloaded() {
     scene->needsFrame = true;
 }
 
-InputSink* WaylandImpl::sink() {
-    return this;
-}
-
 void WaylandImpl::sessionEnabled() {
 }
 
@@ -8068,30 +8064,7 @@ void WaylandImpl::sessionDisabled() {
     seat.releaseAllKeys();
 }
 
-void WaylandImpl::motion(double x, double y) {
-    activity();
-    seat.handleMotion(x, y);
-}
-
-void WaylandImpl::button(u32 btn, bool pressed) {
-    activity();
-    seat.handleButton(btn, pressed);
-}
-
-void WaylandImpl::key(u32 code, bool pressed) {
-    activity();
-    seat.handleKey(code, pressed);
-}
-
-void WaylandImpl::scroll(const ScrollEvent& ev) {
-    activity();
-    seat.handleScroll(ev);
-}
-
-// called by the renderer after every key event: keeps client-visible
-// modifiers fresh and applies the kwin-style release-all on the
-// rising edge of ui keyboard capture
-void WaylandImpl::modsChanged() {
+void WaylandImpl::syncKeyboardCapture() {
     bool cap = scene->kbCaptured;
 
     if (cap && !seat.uiCaptured) {
@@ -8102,48 +8075,91 @@ void WaylandImpl::modsChanged() {
     seat.updateModifiers();
 }
 
-void WaylandImpl::absMotion(double, double) {
-    // the master maps absolute positions into motion()
-}
-
-void WaylandImpl::relMotion(double dx, double dy, double dxRaw, double dyRaw) {
+bool WaylandImpl::pointerMotion(PointerMotionEvent& ev) {
     activity();
-    seat.handleRelMotion(dx, dy, dxRaw, dyRaw);
+
+    if (ev.kind == PointerMotionKind::relative) {
+        seat.handleRelMotion(ev.dx, ev.dy, ev.dxRaw, ev.dyRaw);
+    }
+
+    if (ev.moved) {
+        seat.handleMotion(ev.x, ev.y);
+    }
+
+    return true;
 }
 
-void WaylandImpl::swipeBegin(u32 fingers) {
+bool WaylandImpl::button(u32 btn, bool pressed) {
+    activity();
+    seat.handleButton(btn, pressed);
+
+    return true;
+}
+
+bool WaylandImpl::key(u32 code, bool pressed) {
+    activity();
+    seat.handleKey(code, pressed);
+    syncKeyboardCapture();
+
+    return true;
+}
+
+bool WaylandImpl::scroll(const ScrollEvent& ev) {
+    activity();
+    seat.handleScroll(ev);
+
+    return true;
+}
+
+bool WaylandImpl::swipeBegin(u32 fingers) {
     activity();
     seat.handleSwipeBegin(fingers);
+
+    return true;
 }
 
-void WaylandImpl::swipeUpdate(double dx, double dy) {
+bool WaylandImpl::swipeUpdate(double dx, double dy) {
     seat.handleSwipeUpdate(dx, dy);
+
+    return true;
 }
 
-void WaylandImpl::swipeEnd(bool cancelled) {
+bool WaylandImpl::swipeEnd(bool cancelled) {
     seat.handleSwipeEnd(cancelled);
+
+    return true;
 }
 
-void WaylandImpl::pinchBegin(u32 fingers) {
+bool WaylandImpl::pinchBegin(u32 fingers) {
     activity();
     seat.handlePinchBegin(fingers);
+
+    return true;
 }
 
-void WaylandImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
+bool WaylandImpl::pinchUpdate(double dx, double dy, double scale, double rotation) {
     seat.handlePinchUpdate(dx, dy, scale, rotation);
+
+    return true;
 }
 
-void WaylandImpl::pinchEnd(bool cancelled) {
+bool WaylandImpl::pinchEnd(bool cancelled) {
     seat.handlePinchEnd(cancelled);
+
+    return true;
 }
 
-void WaylandImpl::holdBegin(u32 fingers) {
+bool WaylandImpl::holdBegin(u32 fingers) {
     activity();
     seat.handleHoldBegin(fingers);
+
+    return true;
 }
 
-void WaylandImpl::holdEnd(bool cancelled) {
+bool WaylandImpl::holdEnd(bool cancelled) {
     seat.handleHoldEnd(cancelled);
+
+    return true;
 }
 
 Wayland* Wayland::create(Composer& c, const WaylandConfig& cfg) {

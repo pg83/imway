@@ -430,12 +430,11 @@ standalone.
     put into K_OFF/KD_GRAPHICS), HeadlessOutput = WxH@hz from the config. Selection: connector by
     name ("HDMI-A-1", nullptr = the first connected one), the mode by "WxH@Hz"
     (nullptr = preferred from the EDID).
-  - `input.h` — `InputSink`: `motion` (absolute output coordinates), `button/key`
-    (raw evdev codes), `scroll` (wheel detents). `InputSource::createLibinput`
-    (libinput/udev; outW/outH — the bounds for the relative cursor and the scale of the
-    absolute one). Input sources walk `Composer::inputSinks`; sinks register as
-    intrusive nodes, so sources don't know who consumes. Input devices are an axis
-    separate from Device: the udev seat enumerates them, libinput has its own hotplug.
+  - `input_sink.h` — `InputSink`: pointer motion, raw evdev button/key events,
+    wheel detents and gestures. Producers send through `Composer::entry`; it walks
+    `Composer::inputSinks` in order and stops at the first sink which consumes the
+    event. Renderer owns compositor UI policy, Wayland is the final fallback sink.
+    `InputSource::createLibinput` provides libinput/path hotplug independently of Device.
 - **Layer 1 — `scene.h`: pure data, not a single wayland/vulkan type in the API.**
   Surface trees (`Surface` + the roles `Subsurface`/`Toplevel`/`Popup`),
   content (BGRA pixels or a `DmabufBuffer`), the applied viewport, the input region,

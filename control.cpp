@@ -140,9 +140,11 @@ void ControlImpl::handleLine(StringView cmd) {
         StringView xs, ys;
 
         if (args.split(' ', xs, ys)) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.motion(parseFloat(xs), parseFloat(ys));
-            });
+            PointerMotionEvent ev;
+
+            ev.x = parseFloat(xs);
+            ev.y = parseFloat(ys);
+            comp->entry->pointerMotion(ev);
         }
     } else if (verb == "button"_sv) {
         StringView which, state;
@@ -150,27 +152,24 @@ void ControlImpl::handleLine(StringView cmd) {
         if (args.split(' ', which, state)) {
             u32 btn = which == "left"_sv ? BTN_LEFT : which == "right"_sv ? BTN_RIGHT : BTN_MIDDLE;
 
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.button(btn, state == "press"_sv);
-            });
+            comp->entry->button(btn, state == "press"_sv);
         }
     } else if (verb == "key"_sv) {
         StringView code, state;
 
         if (args.split(' ', code, state)) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.key((u32)code.stou(), state == "press"_sv);
-            });
+            comp->entry->key((u32)code.stou(), state == "press"_sv);
         }
     } else if (verb == "relmotion"_sv) {
         StringView dxs, dys;
 
         if (args.split(' ', dxs, dys)) {
-            double dx = parseFloat(dxs), dy = parseFloat(dys);
+            PointerMotionEvent ev;
 
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.relMotion(dx, dy, dx, dy);
-            });
+            ev.kind = PointerMotionKind::relative;
+            ev.dx = ev.dxRaw = parseFloat(dxs);
+            ev.dy = ev.dyRaw = parseFloat(dys);
+            comp->entry->pointerMotion(ev);
         }
     } else if (verb == "swipe"_sv) {
         // swipe <begin N | update dx dy | end>
@@ -181,21 +180,15 @@ void ControlImpl::handleLine(StringView cmd) {
         }
 
         if (phase == "begin"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.swipeBegin((u32)rest.stou());
-            });
+            comp->entry->swipeBegin((u32)rest.stou());
         } else if (phase == "update"_sv) {
             StringView dxs, dys;
 
             if (rest.split(' ', dxs, dys)) {
-                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                    sink.swipeUpdate(parseFloat(dxs), parseFloat(dys));
-                });
+                comp->entry->swipeUpdate(parseFloat(dxs), parseFloat(dys));
             }
         } else if (phase == "end"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.swipeEnd(rest == "cancel"_sv);
-            });
+            comp->entry->swipeEnd(rest == "cancel"_sv);
         }
     } else if (verb == "pinch"_sv) {
         // pinch <begin N | update dx dy scale rot | end>
@@ -206,22 +199,16 @@ void ControlImpl::handleLine(StringView cmd) {
         }
 
         if (phase == "begin"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.pinchBegin((u32)rest.stou());
-            });
+            comp->entry->pinchBegin((u32)rest.stou());
         } else if (phase == "update"_sv) {
             StringView a, b, c, d, tmp;
 
             rest.split(' ', a, tmp);
             tmp.split(' ', b, tmp);
             tmp.split(' ', c, d);
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.pinchUpdate(parseFloat(a), parseFloat(b), parseFloat(c), parseFloat(d));
-            });
+            comp->entry->pinchUpdate(parseFloat(a), parseFloat(b), parseFloat(c), parseFloat(d));
         } else if (phase == "end"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.pinchEnd(rest == "cancel"_sv);
-            });
+            comp->entry->pinchEnd(rest == "cancel"_sv);
         }
     } else if (verb == "hold"_sv) {
         // hold <begin N | end>
@@ -232,13 +219,9 @@ void ControlImpl::handleLine(StringView cmd) {
         }
 
         if (phase == "begin"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.holdBegin((u32)rest.stou());
-            });
+            comp->entry->holdBegin((u32)rest.stou());
         } else if (phase == "end"_sv) {
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.holdEnd(rest == "cancel"_sv);
-            });
+            comp->entry->holdEnd(rest == "cancel"_sv);
         }
     } else if (verb == "type"_sv) {
         for (u8 c : args) {
@@ -250,20 +233,14 @@ void ControlImpl::handleLine(StringView cmd) {
             }
 
             if (shift) {
-                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                    sink.key(KEY_LEFTSHIFT, true);
-                });
+                comp->entry->key(KEY_LEFTSHIFT, true);
             }
 
-            forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                sink.key(kc, true);
-                sink.key(kc, false);
-            });
+            comp->entry->key(kc, true);
+            comp->entry->key(kc, false);
 
             if (shift) {
-                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-                    sink.key(KEY_LEFTSHIFT, false);
-                });
+                comp->entry->key(KEY_LEFTSHIFT, false);
             }
         }
     } else if (verb == "hscroll"_sv) {
@@ -272,18 +249,14 @@ void ControlImpl::handleLine(StringView cmd) {
         ev.dx = parseFloat(args);
         ev.discreteX = (i32)ev.dx;
         ev.source = ScrollSource::wheel;
-        forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-            sink.scroll(ev);
-        });
+        comp->entry->scroll(ev);
     } else if (verb == "scroll"_sv) {
         ScrollEvent ev;
 
         ev.dy = parseFloat(args);
         ev.discreteY = (i32)ev.dy;
         ev.source = ScrollSource::wheel;
-        forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
-            sink.scroll(ev);
-        });
+        comp->entry->scroll(ev);
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;
