@@ -111,13 +111,5 @@ int main(void) {
         return 1;
     }
 
-    char release[512];
-
-    snprintf(release, sizeof(release), "%s/supervisor-release", runtime);
-
-    while (access(release, F_OK) != 0) {
-        usleep(10000);
-    }
-
     return 0;
 }

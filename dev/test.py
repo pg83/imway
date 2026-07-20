@@ -280,10 +280,9 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
             finally:
                 os.close(fd)
 
-    # teardown: clean shutdown is part of every test. SIGTERM (the compositor
-    # breaks its event loop on it) rather than a FIFO "quit" — writing to the
-    # control FIFO races the compositor's reopen cycle and can be silently
-    # dropped, leaving the compositor running.
+    # Teardown goes through the supervisor: SIGTERM is broadcast to its whole
+    # process group. A FIFO "quit" can race the compositor's reopen cycle and
+    # be silently dropped, leaving the compositor running.
     died = proc.poll() is not None
     expected_exit_missing = False
 
@@ -294,7 +293,8 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
         died = proc.poll() is not None
         expected_exit_missing = not died
 
-    if not died:
+    terminated_by_runner = not died
+    if terminated_by_runner:
         proc.terminate()
     hung = False
 
@@ -337,12 +337,13 @@ def run_once(imway: str, t: Test, timeout: float, keep: bool) -> RunResult:
             detail += f" [client: {milestone}]"
         return finish(FAIL, detail)
     if expected_exit_missing:
-        return finish(FAIL, "compositor did not exit with its watched child")
+        return finish(FAIL, "compositor did not exit when expected")
     if died and not t.expect_exit:
         return finish(FAIL, "compositor died mid-test")
     if hung:
         return finish(FAIL, "compositor hung after quit")
-    if comp_rc not in (0, None):
+    allowed_rc = (0, None, 143) if terminated_by_runner or t.expect_exit else (0, None)
+    if comp_rc not in allowed_rc:
         return finish(FAIL, f"compositor exit rc={comp_rc}")
     return finish(PASS)
 

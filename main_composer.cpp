@@ -273,13 +273,8 @@ int mainComposer(int argc, char** argv) {
             spawn.argCount = args.length();
             spawn.env = env;
             spawn.envCount = 1;
-            spawn.exitWithChild = true;
 
-            i32 pid = c.supervisor->spawn(spawn);
-
-            if (pid < 0) {
-                Errno(-pid).raise(StringBuilder() << "imway: exec "_sv << args[0]);
-            }
+            c.supervisor->spawn(spawn);
         }
 
         wayland->run();

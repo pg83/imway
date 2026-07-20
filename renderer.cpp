@@ -2955,11 +2955,7 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     spawn.env = env;
     spawn.envCount = 1;
 
-    i32 pid = comp.supervisor->spawn(spawn);
-
-    if (pid < 0) {
-        sysE << "imway: launcher spawn failed: "_sv << (const char*)strerror(-pid) << endL;
-    }
+    comp.supervisor->spawn(spawn);
 }
 
 static StringView wifiGlyph(WifiState s) {

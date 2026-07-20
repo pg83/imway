@@ -466,12 +466,14 @@ standalone.
   `main_supervisor.{h,cpp}`, `imway composer` enters `main_composer`, and
   `imway screenshot` is the crop tool. The supervisor is the only code that
   forks or execs. It starts the composer as the first external program, then
-  serves a private `SOCK_SEQPACKET` socket duplicated onto its stdin/stdout;
-  spawn requests carry packed argv/environment and optionally one fd via
-  `SCM_RIGHTS`. Every child closes all unlisted descriptors with `close_range`,
-  and the supervisor reaps and tracks it. Supervisor, composer and children
-  share the supervisor's process group; composer exit terminates that group
-  and ends the supervisor. `main_composer.cpp` assembles the graph into one
+  blocks on a private one-way pipe; the composer writes packed argv/environment
+  spawn requests to fd 3 and never waits for a reply. Children are auto-reaped
+  through the supervisor's `SIGCHLD` disposition and are otherwise forgotten.
+  Supervisor, composer and children share the supervisor's process group;
+  composer exit terminates that group and ends the supervisor. Screenshot
+  memfds are addressed as `/proc/<composer-pid>/fd/<fd>` and retained by the
+  composer for ten seconds, so spawning needs no fd-passing protocol.
+  `main_composer.cpp` assembles the graph into one
   `ObjPool`: creation order = reverse death order, the scene dies last. Clients
   die first (in the epilogue of `run()`); subsystems die with the pool.
   Escaping per-frame resources use the ref-counted arenas from
