@@ -1,5 +1,6 @@
 #pragma once
 
+#include <std/lib/node.h>
 #include <std/sys/types.h>
 
 enum class ScrollSource : u8 {
@@ -18,7 +19,7 @@ struct ScrollEvent {
     bool stopY = false;
 };
 
-struct InputSink {
+struct InputSink: stl::IntrusiveNode {
     virtual void motion(double x, double y) = 0;
     virtual void relMotion(double dx, double dy, double dxRaw, double dyRaw) = 0;
 
@@ -38,4 +39,6 @@ struct InputSink {
     virtual void pinchEnd(bool cancelled) = 0;
     virtual void holdBegin(u32 fingers) = 0;
     virtual void holdEnd(bool cancelled) = 0;
+
+    virtual ~InputSink() noexcept;
 };

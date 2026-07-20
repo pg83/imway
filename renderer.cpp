@@ -180,8 +180,6 @@ namespace {
             void holdEnd(bool cancelled) override;
         };
 
-        InputSink* sink() override;
-
         void modsChanged() override;
 
         struct ev_loop* loop = nullptr;
@@ -525,10 +523,6 @@ void RenderContext::finish() {
     handled = true;
 }
 
-InputSink* RendererImpl::sink() {
-    return this;
-}
-
 void RendererImpl::modsChanged() {
     if (currentInput) {
         currentInput->modsChanged();
@@ -564,6 +558,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     drmFd = vk.drmFd;
     comp.iconResolver = this;
     comp.frameListeners.pushFront((Listener*)this);
+    comp.inputSinks.pushBack((InputSink*)this);
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
     setup(scene->outW, scene->outH);

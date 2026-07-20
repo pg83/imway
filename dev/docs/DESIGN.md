@@ -433,9 +433,9 @@ standalone.
   - `input.h` — `InputSink`: `motion` (absolute output coordinates), `button/key`
     (raw evdev codes), `scroll` (wheel detents). `InputSource::createLibinput`
     (libinput/udev; outW/outH — the bounds for the relative cursor and the scale of the
-    absolute one). `InputSink::tee` fans the stream out to two sinks. Sources don't
-    know who consumes. Input devices are an axis separate from Device: the udev seat
-    enumerates them, libinput has its own hotplug.
+    absolute one). Input sources walk `Composer::inputSinks`; sinks register as
+    intrusive nodes, so sources don't know who consumes. Input devices are an axis
+    separate from Device: the udev seat enumerates them, libinput has its own hotplug.
 - **Layer 1 — `scene.h`: pure data, not a single wayland/vulkan type in the API.**
   Surface trees (`Surface` + the roles `Subsurface`/`Toplevel`/`Popup`),
   content (BGRA pixels or a `DmabufBuffer`), the applied viewport, the input region,

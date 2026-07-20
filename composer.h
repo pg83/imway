@@ -68,5 +68,6 @@ struct Composer {
     stl::IntrusiveList sessionEnabledListeners;
     stl::IntrusiveList sessionDisabledListeners;
     stl::IntrusiveList frameListeners;
+    stl::IntrusiveList inputSinks;
     stl::IntrusiveList filters;
 };

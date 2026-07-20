@@ -1,8 +1,8 @@
 #include "composer.h"
 #include "input.h"
+#include "intr_list.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
-#include "renderer.h"
 #include "input_sink.h"
 #include "listener.h"
 #include "session.h"
@@ -50,9 +50,9 @@ namespace {
     };
 
     struct LibinputSource: public InputSource {
+        Composer* comp = nullptr;
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
-        InputSink* sink = nullptr;
         libinput* li = nullptr;
 
         // hotplug: inotify on /dev/input, one bit + device slot per eventN
@@ -125,9 +125,9 @@ namespace {
 // path backend only: the udev one needs a running udevd for enumeration AND
 // hotplug; a direct /dev/input scan plus inotify behaves the same either way
 LibinputSource::LibinputSource(Composer& c)
-    : loop(c.loop)
+    : comp(&c)
+    , loop(c.loop)
     , session(c.session)
-    , sink(c.renderer->sink())
 {
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
@@ -278,7 +278,9 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_MOTION: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                sink->relMotion(libinput_event_pointer_get_dx(p), libinput_event_pointer_get_dy(p), libinput_event_pointer_get_dx_unaccelerated(p), libinput_event_pointer_get_dy_unaccelerated(p));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.relMotion(libinput_event_pointer_get_dx(p), libinput_event_pointer_get_dy(p), libinput_event_pointer_get_dx_unaccelerated(p), libinput_event_pointer_get_dy_unaccelerated(p));
+                });
 
                 break;
             }
@@ -286,41 +288,59 @@ void LibinputSource::dispatch() {
                 auto* p = libinput_event_get_pointer_event(ev);
 
                 // normalized: the cursor owner maps this to the screen
-                sink->absMotion(libinput_event_pointer_get_absolute_x_transformed(p, 1), libinput_event_pointer_get_absolute_y_transformed(p, 1));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.absMotion(libinput_event_pointer_get_absolute_x_transformed(p, 1), libinput_event_pointer_get_absolute_y_transformed(p, 1));
+                });
 
                 break;
             }
             case LIBINPUT_EVENT_GESTURE_SWIPE_BEGIN:
-                sink->swipeBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.swipeBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                });
                 break;
             case LIBINPUT_EVENT_GESTURE_SWIPE_UPDATE: {
                 auto* g = libinput_event_get_gesture_event(ev);
 
-                sink->swipeUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.swipeUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g));
+                });
 
                 break;
             }
             case LIBINPUT_EVENT_GESTURE_SWIPE_END:
-                sink->swipeEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.swipeEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                });
                 break;
             case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:
-                sink->pinchBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.pinchBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                });
                 break;
             case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE: {
                 auto* g = libinput_event_get_gesture_event(ev);
 
-                sink->pinchUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g), libinput_event_gesture_get_scale(g), libinput_event_gesture_get_angle_delta(g));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.pinchUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g), libinput_event_gesture_get_scale(g), libinput_event_gesture_get_angle_delta(g));
+                });
 
                 break;
             }
             case LIBINPUT_EVENT_GESTURE_PINCH_END:
-                sink->pinchEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.pinchEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                });
                 break;
             case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
-                sink->holdBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.holdBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
+                });
                 break;
             case LIBINPUT_EVENT_GESTURE_HOLD_END:
-                sink->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
+                });
                 break;
             case LIBINPUT_EVENT_DEVICE_ADDED: {
                 libinput_device* dev = libinput_event_get_device(ev);
@@ -353,7 +373,9 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_POINTER_BUTTON: {
                 auto* p = libinput_event_get_pointer_event(ev);
 
-                sink->button(libinput_event_pointer_get_button(p), libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED);
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.button(libinput_event_pointer_get_button(p), libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED);
+                });
 
                 break;
             }
@@ -389,7 +411,9 @@ void LibinputSource::dispatch() {
                 }
 
                 if (scroll.dx != 0 || scroll.dy != 0 || scroll.stopX || scroll.stopY) {
-                    sink->scroll(scroll);
+                    forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                        sink.scroll(scroll);
+                    });
                 }
 
                 break;
@@ -397,7 +421,9 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_KEYBOARD_KEY: {
                 auto* k = libinput_event_get_keyboard_event(ev);
 
-                sink->key(libinput_event_keyboard_get_key(k), libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED);
+                forEach<InputSink>(comp->inputSinks, [&](InputSink& sink) {
+                    sink.key(libinput_event_keyboard_get_key(k), libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED);
+                });
 
                 break;
             }
