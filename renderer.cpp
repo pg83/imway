@@ -131,7 +131,7 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr, 0);
 
             return;
         }
@@ -167,7 +167,7 @@ namespace {
         ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
                                          (float)surface->color.minNits,
                                          (float)surface->color.maxNits, matrix,
-                                         gamma);
+                                         gamma, (int)surface->representation.alphaMode);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
@@ -1767,7 +1767,9 @@ Surface* RendererImpl::scanoutCandidate() {
     Surface* s = fs->surface;
 
     if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 ||
-        s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst) {
+        s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst ||
+        s->representation.alphaMode != 0 || s->representation.coefficients ||
+        s->representation.chromaLocation) {
         return nullptr;
     }
 

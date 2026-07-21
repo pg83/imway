@@ -66,10 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-Нет:
-
-- `color-representation-v1`;
-
 Отдельный большой пробел — YUV. Нет NV12/P010, matrix coefficients, chroma siting, full/limited range. HDR video вынужден заранее конвертироваться в RGB, теряя zero-copy и потенциально качество. Разделение ответственности между color-management и color-representation описано в [Wayland color management model](https://wayland.freedesktop.org/docs/book/Color.html).
 
 ## ImGui и UI

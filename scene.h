@@ -47,6 +47,15 @@ struct DmabufBuffer {
     ~DmabufBuffer() noexcept;
 };
 
+struct ColorRepresentation {
+    // color-representation-v1 wire values; zero coefficients/chroma means
+    // that the client left the corresponding metadata unset.
+    u32 alphaMode = 0;
+    u32 coefficients = 0;
+    u32 range = 0;
+    u32 chromaLocation = 0;
+};
+
 inline void dmabufRef(DmabufBuffer* b) noexcept {
     if (b) {
         frameRef(b->lifetime);
@@ -119,6 +128,7 @@ struct Surface: SceneNode, GrabNode {
 
     // Immutable color description committed with the current surface state.
     ColorDescription color;
+    ColorRepresentation representation;
 
     Subsurface* sub = nullptr;
 

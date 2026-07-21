@@ -17,6 +17,7 @@ layout(push_constant) uniform PushConstant {
     float p10; float p11; float p12;
     float p20; float p21; float p22;
     float gammaR; float gammaG; float gammaB;
+    int alphaMode;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -81,7 +82,12 @@ void main() {
         // Wayland RGB is premultiplied after transfer encoding. Decode the
         // straight electrical value inline; fixed-function SRC_ALPHA performs
         // the only premultiplication, directly into the FP16 scene.
-        vec3 straight = sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0);
+        vec3 straight = pc.alphaMode == 2 ? sampled.rgb :
+            sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0);
+
+        if (pc.alphaMode == 1) {
+            straight = sampled.rgb;
+        }
 
         if (pc.textureSource != 6) {
             straight = clamp(straight, 0.0, 1.0);
@@ -96,6 +102,10 @@ void main() {
                 srgbToLinear(straight);
 
         color = textureToBt2020(color);
+
+        if (pc.alphaMode == 1 && sampled.a > 0.0) {
+            color /= sampled.a;
+        }
 
         if (pc.textureSource == 5) {
             float y = max(dot(color, vec3(0.2627, 0.6780, 0.0593)), 0.0);

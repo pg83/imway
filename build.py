@@ -42,6 +42,7 @@ server_protocol_paths = [
     "stable/linux-dmabuf/linux-dmabuf-v1",
     "stable/presentation-time/presentation-time",
     "staging/color-management/color-management-v1",
+    "staging/color-representation/color-representation-v1",
     "unstable/xdg-decoration/xdg-decoration-unstable-v1",
     "unstable/primary-selection/primary-selection-unstable-v1",
     "unstable/tablet/tablet-unstable-v2",
@@ -149,6 +150,7 @@ client_protocol_paths = [
     "staging/linux-drm-syncobj/linux-drm-syncobj-v1",
     "staging/xdg-toplevel-icon/xdg-toplevel-icon-v1",
     "staging/color-management/color-management-v1",
+    "staging/color-representation/color-representation-v1",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths]

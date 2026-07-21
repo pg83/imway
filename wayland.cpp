@@ -49,6 +49,7 @@
 #include <xdg-decoration-unstable-v1-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
 #include <color-management-v1-server-protocol.h>
+#include <color-representation-v1-server-protocol.h>
 #include <xf86drm.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -241,11 +242,14 @@ namespace {
 
         wl_resource* syncRes = nullptr;
         wl_resource* colorRes = nullptr;
+        wl_resource* representationRes = nullptr;
         TimelineBox* pendAcqTl = nullptr;
         TimelineBox* pendRelTl = nullptr;
         u64 pendAcqPt = 0, pendRelPt = 0;
         bool pendColorChanged = false;
         ColorDescription pendColor;
+        ColorRepresentation pendRepresentation;
+        bool pendRepresentationChanged = false;
 
         XdgSurface* xdg = nullptr;
     };
@@ -282,6 +286,8 @@ namespace {
             Vector<RectI> inputRegion;
             bool colorChanged = false;
             ColorDescription color;
+            bool representationChanged = false;
+            ColorRepresentation representation;
         } cache;
 
         bool effectiveSync() const;
@@ -1214,6 +1220,11 @@ namespace {
             sub.cache.colorChanged = false;
         }
 
+        if (sub.cache.representationChanged) {
+            s.representation = sub.cache.representation;
+            sub.cache.representationChanged = false;
+        }
+
         s.bufferOffsetX = satAddI32(s.bufferOffsetX, sub.cache.offsetX);
         s.bufferOffsetY = satAddI32(s.bufferOffsetY, sub.cache.offsetY);
         sub.cache.offsetX = sub.cache.offsetY = 0;
@@ -1598,6 +1609,22 @@ namespace {
         bool targetHasDst = toCache && sub->cache.vpDstSet ? sub->cache.vpHasDst : s.vp.hasDst;
         bool targetHasContent = toCache && sub->cache.valid ? sub->cache.hasContent : s.hasContent;
 
+        ColorRepresentation targetRepresentation =
+            toCache && sub->cache.representationChanged ?
+            sub->cache.representation : s.representation;
+        if (s.pendRepresentationChanged) {
+            targetRepresentation = s.pendRepresentation;
+        }
+
+        if (targetHasContent && targetRepresentation.chromaLocation) {
+            wl_resource_post_error(
+                s.representationRes,
+                WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT,
+                "chroma location is incompatible with an RGB buffer");
+
+            return;
+        }
+
         if (targetHasSrc && targetHasContent) {
             int targetTransform = toCache && sub->cache.transformSet ? sub->cache.transform : s.bufferTransform;
             int targetScale = toCache && sub->cache.scaleSet ? sub->cache.scale : s.bufferScale;
@@ -1638,6 +1665,16 @@ namespace {
             }
 
             s.pendColorChanged = false;
+        }
+
+        if (s.pendRepresentationChanged) {
+            if (toCache) {
+                sub->cache.representationChanged = true;
+                sub->cache.representation = s.pendRepresentation;
+            } else {
+                s.representation = s.pendRepresentation;
+            }
+            s.pendRepresentationChanged = false;
         }
 
         if (s.pending.inputRegionChanged) {
@@ -1835,6 +1872,12 @@ namespace {
         if (s->colorRes) {
             wl_resource_set_user_data(s->colorRes, nullptr);
             s->colorRes = nullptr;
+        }
+
+
+        if (s->representationRes) {
+            wl_resource_set_user_data(s->representationRes, nullptr);
+            s->representationRes = nullptr;
         }
 
         if (s->frame) {
@@ -8276,6 +8319,138 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_done(res);
     }
 
+    // ---- color-representation-v1 ----
+
+    void representationDestroy(wl_client*, wl_resource* res) {
+        if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+            surface->pendRepresentation = {};
+            surface->pendRepresentationChanged = true;
+        }
+        wl_resource_destroy(res);
+    }
+
+    void representationSetAlpha(wl_client*, wl_resource* res, u32 mode) {
+        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+        if (!surface) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+            return;
+        }
+        if (mode > WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_ALPHA_MODE,
+                                   "unsupported alpha mode");
+            return;
+        }
+        if (!surface->pendRepresentationChanged) {
+            surface->pendRepresentation = surface->representation;
+        }
+        surface->pendRepresentation.alphaMode = mode;
+        surface->pendRepresentationChanged = true;
+    }
+
+    void representationSetCoefficients(wl_client*, wl_resource* res, u32 coefficients,
+                                       u32 range) {
+        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+        if (!surface) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+            return;
+        }
+        if (coefficients != WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY ||
+            range != WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS,
+                                   "unsupported coefficients and range combination");
+            return;
+        }
+        if (!surface->pendRepresentationChanged) {
+            surface->pendRepresentation = surface->representation;
+        }
+        surface->pendRepresentation.coefficients = coefficients;
+        surface->pendRepresentation.range = range;
+        surface->pendRepresentationChanged = true;
+    }
+
+    void representationSetChroma(wl_client*, wl_resource* res, u32 location) {
+        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+        if (!surface) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+            return;
+        }
+        if (location < WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0 ||
+            location > WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_5) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_CHROMA_LOCATION,
+                                   "invalid chroma location");
+            return;
+        }
+        if (!surface->pendRepresentationChanged) {
+            surface->pendRepresentation = surface->representation;
+        }
+        surface->pendRepresentation.chromaLocation = location;
+        surface->pendRepresentationChanged = true;
+    }
+
+    const struct wp_color_representation_surface_v1_interface representationImpl = {
+        .destroy = representationDestroy,
+        .set_alpha_mode = representationSetAlpha,
+        .set_coefficients_and_range = representationSetCoefficients,
+        .set_chroma_location = representationSetChroma,
+    };
+
+    void representationResourceDestroyed(wl_resource* res) {
+        if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+            surface->representationRes = nullptr;
+        }
+    }
+
+    void representationManagerDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void representationManagerGetSurface(wl_client* client, wl_resource* res,
+                                         u32 id, wl_resource* surfaceRes) {
+        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
+        if (surface->representationRes) {
+            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_MANAGER_V1_ERROR_SURFACE_EXISTS,
+                                   "surface already has a color representation object");
+            return;
+        }
+        wl_resource* object = wl_resource_create(
+            client, &wp_color_representation_surface_v1_interface, 1, id);
+        if (!object) {
+            wl_client_post_no_memory(client);
+            return;
+        }
+        surface->representationRes = object;
+        wl_resource_set_implementation(object, &representationImpl, surface,
+                                       representationResourceDestroyed);
+    }
+
+    const struct wp_color_representation_manager_v1_interface representationManagerImpl = {
+        .destroy = representationManagerDestroy,
+        .get_surface = representationManagerGetSurface,
+    };
+
+    void representationManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(
+            client, &wp_color_representation_manager_v1_interface, version, id);
+        if (!res) {
+            wl_client_post_no_memory(client);
+            return;
+        }
+        wl_resource_set_implementation(res, &representationManagerImpl, data, nullptr);
+        wp_color_representation_manager_v1_send_supported_alpha_mode(
+            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_ELECTRICAL);
+        wp_color_representation_manager_v1_send_supported_alpha_mode(
+            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_OPTICAL);
+        wp_color_representation_manager_v1_send_supported_alpha_mode(
+            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT);
+        wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
+            res, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+        wp_color_representation_manager_v1_send_done(res);
+    }
+
 
 void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
@@ -8304,6 +8479,8 @@ void WaylandImpl::createGlobals() {
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.
     wl_global_create(display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
+    wl_global_create(display, &wp_color_representation_manager_v1_interface, 1, this,
+                     representationManagerBind);
 
     u64 syncCap = 0;
 

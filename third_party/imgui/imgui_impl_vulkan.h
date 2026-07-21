@@ -136,7 +136,7 @@ IMGUI_IMPL_API void             ImGui_ImplVulkan_NewFrame();
 IMGUI_IMPL_API void             ImGui_ImplVulkan_RenderDrawData(ImDrawData* draw_data, VkCommandBuffer command_buffer, VkPipeline pipeline = VK_NULL_HANDLE);
 IMGUI_IMPL_API void             ImGui_ImplVulkan_SetMinImageCount(uint32_t min_image_count); // To override MinImageCount after initialization (e.g. if swap chain is recreated)
 IMGUI_IMPL_API void             ImGui_ImplVulkan_SetSdrWhite(float nits);
-IMGUI_IMPL_API void             ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020, const float* gamma);
+IMGUI_IMPL_API void             ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020, const float* gamma, int alpha_mode);
 IMGUI_IMPL_API void             ImGui_ImplVulkan_TextureEncodingCallback(const ImDrawList*, const ImDrawCmd* cmd);
 
 // (Advanced) Use e.g. if you need to recreate pipeline without reinitializing the backend (see #8110, #8111)
