@@ -53,6 +53,7 @@ struct ColorDescription {
 
     static ColorDescription sRgb();
     static ColorDescription bt2100Pq();
+    static ColorDescription bt2100Hlg();
     bool managed() const;
     bool hdr() const;
     bool operator==(const ColorDescription& other) const;

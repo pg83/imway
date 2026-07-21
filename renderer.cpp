@@ -136,7 +136,8 @@ namespace {
             return;
         }
 
-        int source = surface->color.transfer == ColorTransfer::pq ? 4 : 1;
+        int source = surface->color.transfer == ColorTransfer::pq ? 4 :
+                     surface->color.transfer == ColorTransfer::hlg ? 5 : 1;
         int primaries = surface->color.primaries == ColorPrimaries::bt2020 ? 1 : 0;
 
         ImGui_ImplVulkan_SetTextureColor(source, primaries, 0);

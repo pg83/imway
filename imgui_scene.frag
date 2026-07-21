@@ -35,6 +35,19 @@ vec3 pqEotf(vec3 e) {
     return pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1)) * 10000.0;
 }
 
+vec3 hlgEotf(vec3 e, int primaries) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    bvec3 low = lessThanEqual(e, vec3(0.5));
+    vec3 scene = mix((exp((e - c) / a) + b) / 12.0, e * e / 3.0, low);
+    vec3 luma = primaries == 1
+        ? vec3(0.2627, 0.6780, 0.0593)
+        : vec3(0.2126, 0.7152, 0.0722);
+    float y = max(dot(scene, luma), 0.0);
+    return scene * (1000.0 * pow(y, 0.2));
+}
+
 void main() {
     vec4 sampled = texture(sTexture, In.UV.st);
     vec3 tint709 = srgbToLinear(In.Color.rgb);
@@ -54,7 +67,9 @@ void main() {
         vec3 straight = sampled.a > 0.0
             ? clamp(sampled.rgb / sampled.a, 0.0, 1.0)
             : vec3(0.0);
-        color = pc.textureSource == 4 ? pqEotf(straight) : srgbToLinear(straight);
+        color = pc.textureSource == 4 ? pqEotf(straight) :
+                pc.textureSource == 5 ? hlgEotf(straight, pc.texturePrimaries) :
+                srgbToLinear(straight);
 
         if (pc.texturePrimaries == 0) {
             color = bt709ToBt2020(color);

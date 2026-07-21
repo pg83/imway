@@ -120,6 +120,22 @@ ColorDescription ColorDescription::bt2100Pq() {
     return d;
 }
 
+ColorDescription ColorDescription::bt2100Hlg() {
+    ColorDescription d;
+
+    d.transfer = ColorTransfer::hlg;
+    d.primaries = ColorPrimaries::bt2020;
+    d.primary = Chromaticities::bt2020();
+    d.minNits = .005;
+    d.maxNits = 1000.0;
+    d.referenceNits = 203.0;
+    d.target = d.primary;
+    d.targetMinNits = d.minNits;
+    d.targetMaxNits = d.maxNits;
+
+    return d;
+}
+
 bool ColorDescription::managed() const {
     return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb;
 }

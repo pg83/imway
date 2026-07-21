@@ -5,6 +5,7 @@
 int main() {
     ColorDescription sdr = ColorDescription::sRgb();
     ColorDescription pq = ColorDescription::bt2100Pq();
+    ColorDescription hlg = ColorDescription::bt2100Hlg();
     OutputColorState sdrOutput = OutputColorState::sdr();
     OutputColorState hdrOutput = OutputColorState::hdr10(203.0);
 
@@ -13,7 +14,10 @@ int main() {
         sdr.maxNits != 80.0 || sdr.referenceNits != 80.0 ||
         !pq.managed() || !pq.hdr() || pq.transfer != ColorTransfer::pq ||
         pq.primaries != ColorPrimaries::bt2020 || pq.minNits != .005 ||
-        pq.maxNits != 10000.0 || pq.referenceNits != 203.0) {
+        pq.maxNits != 10000.0 || pq.referenceNits != 203.0 ||
+        !hlg.managed() || !hlg.hdr() || hlg.transfer != ColorTransfer::hlg ||
+        hlg.primaries != ColorPrimaries::bt2020 || hlg.minNits != .005 ||
+        hlg.maxNits != 1000.0 || hlg.referenceNits != 203.0) {
         fputs("bad standard color description\n", stderr);
 
         return 1;

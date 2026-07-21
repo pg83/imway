@@ -1,0 +1,3 @@
+#define COLOR_PIXEL 0xFFBFBFBF
+#define COLOR_TRANSFER WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG
+#include "client_feat_color_mgmt.c"

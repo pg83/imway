@@ -7419,6 +7419,10 @@ WaylandImpl::~WaylandImpl() noexcept {
             return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
         }
 
+        if (d.transfer == ColorTransfer::hlg) {
+            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
+        }
+
         return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
                               WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
     }
@@ -7576,25 +7580,29 @@ WaylandImpl::~WaylandImpl() noexcept {
             tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
             tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
 
-        if (!sRgb && tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
+        bool pq = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+        bool hlg = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
+
+        if (!sRgb && !pq && !hlg) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
                                    "transfer function was not advertised");
 
             return;
         }
 
-        p->d.color.transfer = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ ?
-            ColorTransfer::pq : ColorTransfer::sRgb;
+        p->d.color.transfer = pq ? ColorTransfer::pq :
+                              hlg ? ColorTransfer::hlg : ColorTransfer::sRgb;
 
-        if (p->d.color.hdr() && !p->lumSet) {
-            ColorDescription pq = ColorDescription::bt2100Pq();
+        if ((pq || hlg) && !p->lumSet) {
+            ColorDescription defaults = pq ? ColorDescription::bt2100Pq() :
+                                                ColorDescription::bt2100Hlg();
 
-            p->d.color.minNits = pq.minNits;
-            p->d.color.maxNits = pq.maxNits;
-            p->d.color.referenceNits = pq.referenceNits;
-            p->d.color.targetMinNits = pq.targetMinNits;
-            p->d.color.targetMaxNits = pq.targetMaxNits;
-        } else if (p->d.color.hdr()) {
+            p->d.color.minNits = defaults.minNits;
+            p->d.color.maxNits = defaults.maxNits;
+            p->d.color.referenceNits = defaults.referenceNits;
+            p->d.color.targetMinNits = defaults.targetMinNits;
+            p->d.color.targetMaxNits = defaults.targetMaxNits;
+        } else if (pq) {
             p->d.color.maxNits = 10000.0 + p->d.color.minNits;
             p->d.color.targetMaxNits = p->d.color.maxNits;
         }
@@ -7662,7 +7670,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         p->lumSet = true;
         p->d.color.minNits = (double)minLum / 10000.0;
-        p->d.color.maxNits = p->d.color.hdr() ?
+        p->d.color.maxNits = p->d.color.transfer == ColorTransfer::pq ?
             10000.0 + p->d.color.minNits : (double)maxLum;
         p->d.color.referenceNits = (double)refLum;
         p->d.color.targetMinNits = p->d.color.minNits;
@@ -7707,7 +7715,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         u32 minLum = cmMinLuminance(p->d.color.minNits);
         u32 maxLum = cmLuminance(p->d.color.maxNits);
 
-        if (!p->d.color.hdr() && cmInvalidLumRange(minLum, maxLum)) {
+        if (p->d.color.transfer != ColorTransfer::pq && cmInvalidLumRange(minLum, maxLum)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "primary max luminance must exceed min luminance");
 
@@ -8051,6 +8059,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
         wp_color_manager_v1_send_done(res);

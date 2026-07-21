@@ -66,7 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 Нет:
 
-- HLG;
 - extended linear/scRGB;
 - BT.1886/gamma 2.2;
 - Display P3;
@@ -135,7 +134,7 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+1. Добавить `color-representation-v1`, P010/NV12 и scRGB.
 2. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
 3. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 

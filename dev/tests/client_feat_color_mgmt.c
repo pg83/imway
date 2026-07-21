@@ -10,6 +10,10 @@
 #define COLOR_PIXEL 0xFFB4783C
 #endif
 
+#ifndef COLOR_TRANSFER
+#define COLOR_TRANSFER WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ
+#endif
+
 static struct wp_color_manager_v1* cm;
 static struct wl_toplevel_ctx top;
 static int got_intent, got_feature, cm_done;
@@ -69,7 +73,7 @@ int main(void) {
 
     // build a PQ + BT.2020 image description and attach it to the surface
     struct wp_image_description_creator_params_v1* params = wp_color_manager_v1_create_parametric_creator(cm);
-    wp_image_description_creator_params_v1_set_tf_named(params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+    wp_image_description_creator_params_v1_set_tf_named(params, COLOR_TRANSFER);
     wp_image_description_creator_params_v1_set_primaries_named(params, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
 #ifdef COLOR_MAX_CLL
     wp_image_description_creator_params_v1_set_max_cll(params, COLOR_MAX_CLL);
