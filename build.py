@@ -165,15 +165,19 @@ client_protocols = library(
 tests = []
 for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
+    test_sources = [source]
     test_deps = [client_protocols, wayland_client, drm, dbus]
 
     if name == "client_reg_screenshot_copy":
         test_deps.append(jxl)
 
+    if name == "client_reg_direct_scanout_color":
+        test_sources.append("$(S)/color.cpp")
+
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",
-        srcs=[source],
+        srcs=test_sources,
         deps=test_deps,
     ))
 

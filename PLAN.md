@@ -52,16 +52,6 @@ HDR scanout использует XR30, `BT2020_RGB` и `HDR_OUTPUT_METADATA`; ha
 
 Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для Wayland WSI Vulkan сам управляет `wp_color_management_surface_v1`, поэтому отдельная ручная реализация протокола viewer’ом не нужна: [Vulkan WSI specification](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html).
 
-## Критические ошибки
-
-### PQ surface может ошибочно попасть в SDR direct scanout
-
-В HDR direct scanout сейчас отключён — разумно. Но SDR direct scanout не проверяет, что color description поверхности совпадает с output encoding: [renderer.cpp](/home/pg/monorepo/imway/renderer.cpp:1956).
-
-Полноэкранный PQ/BT.2020 buffer способен обойти conversion и уйти на SDR output как сырые значения.
-
-До появления строгой модели совместимости direct scanout следует разрешать только legacy SDR surface → SDR output.
-
 ## Главный отсутствующий блок: display mapping
 
 Сейчас HDR-сцена просто PQ-кодируется вплоть до 10 000 nit. Реальная способность дисплея не учитывается.
@@ -234,14 +224,13 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Запретить несовместимый direct scanout.
-2. Ввести `ColorDescription` и `OutputColorState` как единые модели для renderer, Wayland feedback, KMS metadata и screenshots.
-3. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
-4. Реализовать tone mapping и gamut mapping.
-5. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
-6. Убрать постоянные полноэкранные RGBA16F surface conversions.
-7. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
-8. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-9. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Ввести `ColorDescription` и `OutputColorState` как единые модели для renderer, Wayland feedback, KMS metadata и screenshots.
+2. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
+3. Реализовать tone mapping и gamut mapping.
+4. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
+5. Убрать постоянные полноэкранные RGBA16F surface conversions.
+6. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+7. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+8. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не покрывают tone/gamut mapping, output metadata, link depth и реальную фотометрическую корректность.

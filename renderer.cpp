@@ -2,6 +2,7 @@
 #include "renderer.h"
 
 #include "calendar.h"
+#include "color.h"
 #include "desktop_chrome.h"
 #include "device_vk.h"
 #include "dialog.h"
@@ -1966,6 +1967,10 @@ Surface* RendererImpl::scanoutCandidate() {
     }
 
     if (s->geomW() != scene->outW || s->geomH() != scene->outH) {
+        return nullptr;
+    }
+
+    if (!directScanoutColorCompatible(output->isHdr(), s->colorManaged)) {
         return nullptr;
     }
 
