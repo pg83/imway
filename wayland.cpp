@@ -3847,6 +3847,9 @@ namespace {
     const struct wl_data_device_manager_interface dataManagerImpl = {
         .create_data_source = managerCreateDataSource,
         .get_data_device = managerGetDataDevice,
+        // v4: destroying the manager leaves already-created data devices and
+        // sources intact
+        .release = resDestroy,
     };
 
     void dataManagerBind(wl_client* client, void* data, u32 version, u32 id) {
@@ -8682,7 +8685,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
-    wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);
+    wl_global_create(display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
     wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 1, this, cursorShapeManagerBind);
     wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);

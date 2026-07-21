@@ -10,8 +10,8 @@
 - [x] ~~wl_seat 5 → 11 (axis_value120, axis_relative_direction; warp deferred to pointer-warp)~~ done
 - [x] ~~wl_compositor/wl_surface 4 → 6 (preferred_buffer_scale/transform, offset fix)~~ done
 - [ ] wl_surface v7 get_release (per-commit buffer release callback)
-- [ ] wl_shm 1 → 3
-- [ ] wl_data_device_manager 3 → 4
+- [~] wl_shm — capped at v1 by wl_display_init_shm (libwayland-gated, not imway source)
+- [x] ~~wl_data_device_manager 3 → 4 (release)~~ done
 - [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done
 - [ ] zwp_linux_dmabuf_v1 → 6 (set_sampling_device, feedback v6)
 - [ ] wp_presentation 1 → 2 (+ снять ложный VSYNC на софтверном таймстампе)
