@@ -78,6 +78,11 @@ namespace {
         ObjList<Known> knownAlloc;
         Vector<Known*> known;           // committed
 
+        // per-refresh transients: member free lists, so every refresh reuses
+        // the chunks instead of abandoning them in the composer pool
+        ObjList<StringBuilder> pathAlloc;
+        ObjList<Ctx> ctxAlloc;
+
         bool wantPass = false;
         StringBuilder passAp;
         StringBuilder passSsid;
@@ -226,6 +231,8 @@ NmWifi::NmWifi(Composer& comp, DBusConnection* c)
     , conn(c)
     , netAlloc(comp.pool)
     , knownAlloc(comp.pool)
+    , pathAlloc(comp.pool)
+    , ctxAlloc(comp.pool)
 {
     // fire-and-forget match registration (NULL error = no blocking round trip)
     dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
@@ -364,8 +371,7 @@ void NmWifi::refresh() {
 }
 
 void NmWifi::devicesReply(DBusMessage* reply) {
-    Vector<StringBuilder*> paths; // transient; freed below
-    ObjList<StringBuilder> hold(c->pool);
+    Vector<StringBuilder*> paths; // transient; released below
 
     DBusMessageIter it, var, arr;
 
@@ -376,9 +382,8 @@ void NmWifi::devicesReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = hold.make();
+                StringBuilder* p = pathAlloc.make();
 
-                p->reset();
                 *p << iterStr(&arr);
                 paths.pushBack(p);
                 dbus_message_iter_next(&arr);
@@ -395,19 +400,19 @@ void NmWifi::devicesReply(DBusMessage* reply) {
     devPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = new Ctx();
+        Ctx* cx = ctxAlloc.make();
 
         cx->w = this;
         cx->path << sv(*p);
 
         if (!getAll(sv(*p), kDev, deviceCb, cx)) {
-            delete cx;
+            ctxAlloc.release(cx);
             deviceItemDone();
         }
     }
 
     for (StringBuilder* p : paths) {
-        hold.release(p);
+        pathAlloc.release(p);
     }
 }
 
@@ -468,8 +473,7 @@ void NmWifi::onDevicesDone() {
 }
 
 void NmWifi::connectionsReply(DBusMessage* reply) {
-    ObjList<StringBuilder> hold(c->pool);
-    Vector<StringBuilder*> paths;
+    Vector<StringBuilder*> paths; // transient; released below
 
     DBusMessageIter it, var, arr;
 
@@ -480,9 +484,8 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = hold.make();
+                StringBuilder* p = pathAlloc.make();
 
-                p->reset();
                 *p << iterStr(&arr);
                 paths.pushBack(p);
                 dbus_message_iter_next(&arr);
@@ -499,7 +502,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
     knownPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = new Ctx();
+        Ctx* cx = ctxAlloc.make();
 
         cx->w = this;
         cx->path << sv(*p);
@@ -508,13 +511,13 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
         DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
 
         if (!call(msg, connectionCb, cx)) {
-            delete cx;
+            ctxAlloc.release(cx);
             knownItemDone();
         }
     }
 
     for (StringBuilder* p : paths) {
-        hold.release(p);
+        pathAlloc.release(p);
     }
 }
 
@@ -593,8 +596,7 @@ void NmWifi::onKnownDone() {
 }
 
 void NmWifi::wirelessReply(DBusMessage* reply) {
-    ObjList<StringBuilder> hold(c->pool);
-    Vector<StringBuilder*> aps;
+    Vector<StringBuilder*> aps; // transient; released below
 
     eachProp(reply, [&](StringView key, DBusMessageIter* var) {
         if (key == "ActiveAccessPoint"_sv) {
@@ -606,9 +608,8 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
             dbus_message_iter_recurse(var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = hold.make();
+                StringBuilder* p = pathAlloc.make();
 
-                p->reset();
                 *p << iterStr(&arr);
                 aps.pushBack(p);
                 dbus_message_iter_next(&arr);
@@ -625,19 +626,19 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
     apPending = (int)aps.length();
 
     for (StringBuilder* p : aps) {
-        Ctx* cx = new Ctx();
+        Ctx* cx = ctxAlloc.make();
 
         cx->w = this;
         cx->path << sv(*p);
 
         if (!getAll(sv(*p), kAp, apCb, cx)) {
-            delete cx;
+            ctxAlloc.release(cx);
             apItemDone();
         }
     }
 
     for (StringBuilder* p : aps) {
-        hold.release(p);
+        pathAlloc.release(p);
     }
 }
 
@@ -930,15 +931,16 @@ namespace {
 
     void deviceCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
+        NmWifi* w = cx->w;
         DBusMessage* reply = steal(pc);
 
-        cx->w->deviceReply(cx, reply);
+        w->deviceReply(cx, reply);
 
         if (reply) {
             dbus_message_unref(reply);
         }
 
-        delete cx;
+        w->ctxAlloc.release(cx);
     }
 
     void connectionsCb(DBusPendingCall* pc, void* data) {
@@ -954,15 +956,16 @@ namespace {
 
     void connectionCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
+        NmWifi* w = cx->w;
         DBusMessage* reply = steal(pc);
 
-        cx->w->connectionReply(cx, reply);
+        w->connectionReply(cx, reply);
 
         if (reply) {
             dbus_message_unref(reply);
         }
 
-        delete cx;
+        w->ctxAlloc.release(cx);
     }
 
     void wirelessCb(DBusPendingCall* pc, void* data) {
@@ -978,15 +981,16 @@ namespace {
 
     void apCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
+        NmWifi* w = cx->w;
         DBusMessage* reply = steal(pc);
 
-        cx->w->apReply(cx, reply);
+        w->apReply(cx, reply);
 
         if (reply) {
             dbus_message_unref(reply);
         }
 
-        delete cx;
+        w->ctxAlloc.release(cx);
     }
 
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data) {

@@ -17,6 +17,7 @@
 #include <pulse/pulseaudio.h>
 
 #include <std/ios/sys.h>
+#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -55,8 +56,24 @@ struct pa_defer_event {
 };
 
 namespace {
-    struct ev_loop* apiLoop(pa_mainloop_api* a) {
-        return (struct ev_loop*)a->userdata;
+    // the allocator context behind pa_mainloop_api::userdata: event objects
+    // come from composer-pool free lists (dbus_conn.cpp's WatchBox pattern),
+    // not the raw heap. Kept trivially destructible: the pool preserves the
+    // storage until its own death, so PulseMixer's pooledGuard teardown —
+    // which runs after the impl dies and frees the surviving events through
+    // io_free/time_free/defer_free — still releases into live lists
+    struct PulseApi {
+        pa_mainloop_api api{};
+        struct ev_loop* loop = nullptr;
+        ObjList<pa_io_event> ioAlloc;
+        ObjList<pa_time_event> timeAlloc;
+        ObjList<pa_defer_event> deferAlloc;
+
+        PulseApi(ObjPool* pool, struct ev_loop* l);
+    };
+
+    PulseApi* apiCtx(pa_mainloop_api* a) {
+        return (PulseApi*)a->userdata;
     }
 
     int toEv(pa_io_event_flags_t f) {
@@ -89,9 +106,9 @@ namespace {
     }
 
     pa_io_event* ioNew(pa_mainloop_api* a, int fd, pa_io_event_flags_t f, pa_io_event_cb_t cb, void* userdata) {
-        auto* e = new pa_io_event();
+        pa_io_event* e = apiCtx(a)->ioAlloc.make();
 
-        e->loop = apiLoop(a);
+        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
@@ -115,7 +132,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        delete e;
+        apiCtx(e->api)->ioAlloc.release(e);
     }
 
     void ioSetDestroy(pa_io_event* e, pa_io_event_destroy_cb_t cb) {
@@ -146,9 +163,9 @@ namespace {
     }
 
     pa_time_event* timeNew(pa_mainloop_api* a, const struct timeval* tv, pa_time_event_cb_t cb, void* userdata) {
-        auto* e = new pa_time_event();
+        pa_time_event* e = apiCtx(a)->timeAlloc.make();
 
-        e->loop = apiLoop(a);
+        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
@@ -172,7 +189,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        delete e;
+        apiCtx(e->api)->timeAlloc.release(e);
     }
 
     void timeSetDestroy(pa_time_event* e, pa_time_event_destroy_cb_t cb) {
@@ -186,9 +203,9 @@ namespace {
     }
 
     pa_defer_event* deferNew(pa_mainloop_api* a, pa_defer_event_cb_t cb, void* userdata) {
-        auto* e = new pa_defer_event();
+        pa_defer_event* e = apiCtx(a)->deferAlloc.make();
 
-        e->loop = apiLoop(a);
+        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
@@ -219,7 +236,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        delete e;
+        apiCtx(e->api)->deferAlloc.release(e);
     }
 
     void deferSetDestroy(pa_defer_event* e, pa_defer_event_destroy_cb_t cb) {
@@ -229,8 +246,10 @@ namespace {
     void apiQuit(pa_mainloop_api*, int) {
     }
 
-    void fillApi(pa_mainloop_api& api, struct ev_loop* loop) {
-        api.userdata = loop;
+    void fillApi(PulseApi& ctx) {
+        pa_mainloop_api& api = ctx.api;
+
+        api.userdata = &ctx;
         api.io_new = ioNew;
         api.io_enable = ioEnable;
         api.io_free = ioFree;
@@ -247,6 +266,14 @@ namespace {
     }
 }
 
+PulseApi::PulseApi(ObjPool* pool, struct ev_loop* l)
+    : loop(l)
+    , ioAlloc(pool)
+    , timeAlloc(pool)
+    , deferAlloc(pool)
+{
+}
+
 // --- the mixer ------------------------------------------------------------
 
 namespace {
@@ -259,7 +286,7 @@ namespace {
 
     struct PulseMixer: public Mixer {
         Composer* c = nullptr;
-        pa_mainloop_api api{};
+        PulseApi* papi = nullptr;
         pa_context* ctx = nullptr;
 
         bool ready = false;
@@ -284,8 +311,9 @@ namespace {
 PulseMixer::PulseMixer(Composer& comp)
     : c(&comp)
 {
-    fillApi(api, comp.loop);
-    ctx = pa_context_new(&api, "imway");
+    papi = comp.pool->make<PulseApi>(comp.pool, comp.loop);
+    fillApi(*papi);
+    ctx = pa_context_new(&papi->api, "imway");
 
     pa_context* held = ctx;
 
