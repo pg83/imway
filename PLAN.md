@@ -9,7 +9,7 @@
 ### Этап A — версии реализованного
 - [x] ~~wl_seat 5 → 11 (axis_value120, axis_relative_direction; warp deferred to pointer-warp)~~ done
 - [x] ~~wl_compositor/wl_surface 4 → 6 (preferred_buffer_scale/transform, offset fix)~~ done
-- [ ] wl_surface v7 get_release (per-commit buffer release callback)
+- [x] ~~wl_surface v7 get_release (per-commit buffer release callback)~~ done
 - [~] wl_shm — capped at v1 by wl_display_init_shm (libwayland-gated, not imway source)
 - [x] ~~wl_data_device_manager 3 → 4 (release)~~ done
 - [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done

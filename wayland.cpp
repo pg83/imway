@@ -145,6 +145,9 @@ namespace {
         WaylandImpl* srv = nullptr;
         DmabufBuffer* buffer = nullptr;
         wl_resource* res = nullptr;
+        // wl_surface.get_release callback (v7), fired together with the
+        // wl_buffer.release of this buffer
+        wl_resource* releaseCb = nullptr;
         DmabufUseDestroyListener destroy;
         TimelineBox* acq = nullptr;
         TimelineBox* rel = nullptr;
@@ -215,6 +218,9 @@ namespace {
             SurfaceDestroyListener bufferDestroy;
             bool bufferDestroyArmed = false;
             Vector<wl_resource*> frames;
+            // wl_surface.get_release (v7): a callback fired when the buffer
+            // committed with this pending state is released
+            wl_resource* releaseCb = nullptr;
             bool inputRegionSet = false;
             bool inputRegionChanged = false;
             Vector<RectI> inputRegion;
@@ -294,6 +300,8 @@ namespace {
             ColorDescription color;
             bool representationChanged = false;
             ColorRepresentation representation;
+            // release callback for a synced-subsurface cached buffer (v7)
+            wl_resource* releaseCb = nullptr;
         } cache;
 
         bool effectiveSync() const;
@@ -927,6 +935,24 @@ namespace {
         return (SurfaceImpl*)wl_resource_get_user_data(res);
     }
 
+    // fire and consume a get_release callback (v7): the buffer it was
+    // associated with has been released
+    static void fireReleaseCb(wl_resource*& cb) {
+        if (cb) {
+            wl_callback_send_done(cb, 0);
+            wl_resource_destroy(cb);
+            cb = nullptr;
+        }
+    }
+
+    // drop a release callback that never reached a committed buffer
+    static void dropReleaseCb(wl_resource*& cb) {
+        if (cb) {
+            wl_resource_destroy(cb);
+            cb = nullptr;
+        }
+    }
+
     void detachPendingBuffer(SurfaceImpl& s) {
         if (s.pending.bufferDestroyArmed) {
             wl_list_remove(&s.pending.bufferDestroy.listener.link);
@@ -979,6 +1005,10 @@ namespace {
         if (sub.cache.dmabufRes) {
             wl_buffer_send_release(sub.cache.dmabufRes);
         }
+
+        // the cached buffer is dropped before being applied: its release
+        // callback fires now
+        fireReleaseCb(sub.cache.releaseCb);
 
         if (sub.cache.dmabufDestroyArmed) {
             wl_list_remove(&sub.cache.dmabufDestroy.listener.link);
@@ -1313,6 +1343,10 @@ namespace {
 
                 DmabufUse* use = holdDmabuf(s, sub.cache.dmabufRes, sub.cache.dmabuf, false);
 
+                // the cached release callback follows the buffer into the
+                // applied use
+                use->releaseCb = sub.cache.releaseCb;
+                sub.cache.releaseCb = nullptr;
                 use->acq = sub.cache.acq;
                 use->rel = sub.cache.rel;
                 use->relPoint = sub.cache.releasePoint;
@@ -1519,6 +1553,10 @@ namespace {
             }
 
             if (!s.pending.buffer) {
+                // no buffer to release: a get_release for this commit has
+                // nothing to wait on
+                fireReleaseCb(s.pending.releaseCb);
+
                 if (toCache) {
                     sub->cache.valid = true;
                     sub->cache.hasContent = false;
@@ -1549,6 +1587,8 @@ namespace {
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
+                // shm is copied out at commit, so its release is immediate
+                fireReleaseCb(s.pending.releaseCb);
 
                 if (!toCache) {
                     releaseHeldDmabuf(s);
@@ -1570,12 +1610,18 @@ namespace {
                 }
 
                 wl_buffer_send_release(s.pending.buffer);
+                fireReleaseCb(s.pending.releaseCb);
 
                 if (!toCache) {
                     releaseHeldDmabuf(s);
                 }
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
                 if (toCache) {
+                    // the cached buffer is released later; the release
+                    // callback rides with it
+                    dropReleaseCb(sub->cache.releaseCb);
+                    sub->cache.releaseCb = s.pending.releaseCb;
+                    s.pending.releaseCb = nullptr;
                     dmabufRef(db);
                     sub->cache.dmabuf = db;
                     sub->cache.dmabufRes = s.pending.buffer;
@@ -1597,7 +1643,15 @@ namespace {
                         s.pendAcqTl = s.pendRelTl = nullptr;
                     }
                 } else {
-                    holdDmabuf(s, s.pending.buffer, db);
+                    DmabufUse* use = holdDmabuf(s, s.pending.buffer, db);
+
+                    // the dmabuf releases when the frame that samples it
+                    // retires; the release callback fires with it
+                    if (use) {
+                        use->releaseCb = s.pending.releaseCb;
+                        s.pending.releaseCb = nullptr;
+                    }
+
                     syncApplyPoints(s);
                     s.width = db->width;
                     s.height = db->height;
@@ -1609,6 +1663,8 @@ namespace {
                 sysE << "imway: unknown buffer type"_sv << endL;
             }
 
+            // any get_release that survived (unknown buffer) is dropped
+            dropReleaseCb(s.pending.releaseCb);
             detachPendingBuffer(s);
             s.pending.newlyAttached = false;
             s.pending.attachX = s.pending.attachY = 0;
@@ -1851,6 +1907,19 @@ namespace {
         s.pending.attachY = y;
     }
 
+    void surfaceGetRelease(wl_client* client, wl_resource* res, u32 id) {
+        SurfaceImpl& s = *surfaceFrom(res);
+
+        // double-buffered, one per commit: a second get_release before commit
+        // replaces the first (its buffer is the same pending buffer)
+        dropReleaseCb(s.pending.releaseCb);
+        s.pending.releaseCb = wl_resource_create(client, &wl_callback_interface, 1, id);
+
+        if (!s.pending.releaseCb) {
+            wl_client_post_no_memory(client);
+        }
+    }
+
     const struct wl_surface_interface surfaceImpl = {
         .destroy = surfaceDestroy,
         .attach = surfaceAttach,
@@ -1863,6 +1932,7 @@ namespace {
         .set_buffer_scale = surfaceSetBufferScale,
         .damage_buffer = surfaceDamageBuffer,
         .offset = surfaceOffset,
+        .get_release = surfaceGetRelease,
     };
 
     void surfaceResourceDestroyed(wl_resource* res) {
@@ -1883,6 +1953,8 @@ namespace {
         }
 
         detachPendingBuffer(*s);
+        // an uncommitted get_release callback never gets a buffer
+        dropReleaseCb(s->pending.releaseCb);
 
         for (wl_resource* cb : s->pending.frames) {
             wl_resource_set_user_data(cb, nullptr);
@@ -6627,6 +6699,13 @@ DmabufUse::~DmabufUse() noexcept {
         wl_list_remove(&destroy.listener.link);
     }
 
+    // v7 get_release fires with the buffer's release
+    if (releaseCb) {
+        wl_callback_send_done(releaseCb, 0);
+        wl_resource_destroy(releaseCb);
+        releaseCb = nullptr;
+    }
+
     dmabufUnref(buffer);
 }
 
@@ -8698,7 +8777,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
 
 void WaylandImpl::createGlobals() {
-    wl_global_create(display, &wl_compositor_interface, 6, this, compositorBind);
+    wl_global_create(display, &wl_compositor_interface, 7, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
     wl_global_create(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
