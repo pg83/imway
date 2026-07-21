@@ -3580,6 +3580,13 @@ void RendererImpl::buildUi(Scene& scene) {
 
     cursorUi(scene, overClient);
     ImGui::Render();
+
+    // ImGui deliberately trickles press/release and text events across frames.
+    // Keep the on-demand renderer running until that queue is empty; otherwise
+    // an input burst can strand half of a password until some later event.
+    if (GImGui->InputEventsQueue.Size) {
+        scene.needsFrame = true;
+    }
 }
 
 void RendererImpl::cursorUi(Scene& scene, bool overClient) {
