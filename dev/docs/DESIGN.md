@@ -109,17 +109,18 @@ for a compositor. Every project we studied agrees.
   + `VkImportMemoryFdInfoKHR` → `VkImageView`. Cache the VkImage per `wl_buffer`
   (clients cycle through 2–4 buffers). Release a dmabuf buffer only once the timeline
   point of the last frame that sampled it has passed.
-- **ImGui**: `ImGui_ImplVulkan_AddTexture(view, layout)` → `VkDescriptorSet` =
-  `ImTextureID`. Pool with `FREE_DESCRIPTOR_SET_BIT`, sized generously (~4096) — pool
-  exhaustion fails non-deterministically across drivers. `RemoveTexture`/destroy view —
+- **ImGui**: the texture descriptor has main/Y and UV combined-image-sampler bindings;
+  RGB textures bind their sole view to both. `VkDescriptorSet` = `ImTextureID`. A
+  growable pool chain uses `FREE_DESCRIPTOR_SET_BIT`, so hostile surface counts cannot
+  exhaust a fixed pool. Free the set and destroy views
   only after the frame retires (timeline point). Backend redesign of 2026-04: separate
   SAMPLED_IMAGE + SAMPLER descriptors, `AddTexture` without a sampler parameter —
   pin the ImGui version and read the changelog on upgrades.
-- **YUV (NV12 from video players)**: `VkSamplerYcbcrConversion` requires an immutable
-  sampler in the layout — stock imgui_impl_vulkan can't do this (and with separate
-  descriptors it fundamentally can't). Solution: our own small blit pass
-  YUV→RGBA (immutable-ycbcr-sampler pipeline) before ImGui; ImGui sees plain RGBA.
-  Everyone does it this way. RGB dmabufs (the overwhelming majority) work directly.
+- **YUV**: NV12/P010 stay in their imported multi-planar dma-buf. Plane views expose
+  Y and interleaved UV to the scene shader, which reconstructs electrical RGB using
+  `color-representation-v1` matrix, full/limited range and H.273 chroma location.
+  This is zero-copy and shares the ordinary ImGui pipeline; no intermediate RGBA
+  image or immutable `VkSamplerYcbcrConversion` layout is needed.
 - Layout transitions of imported images are on us, including manual
   `VK_QUEUE_FAMILY_FOREIGN_EXT` barriers (requires `VK_EXT_queue_family_foreign`).
 
@@ -281,7 +282,7 @@ The render-pass code targets "VkImageView + extent", not "a swapchain".
    Criterion: mpv, GTK4/Qt6 with GPU rendering.
 5. **M4 — popups/grabs, clipboard/DnD, presentation-time, fractional-scale.**
    Criterion: menus/comboboxes everywhere, copy-paste between clients.
-6. **M5 — housekeeping**: syncobj (NVIDIA), the YUV blit pass, cursor plane, hotplug,
+6. **M5 — housekeeping**: syncobj (NVIDIA), cursor plane, hotplug,
    multi-monitor, xwayland-satellite, render-on-demand savings.
 
 ## 11. Top risks

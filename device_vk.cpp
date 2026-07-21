@@ -259,7 +259,46 @@ DeviceVk::~DeviceVk() noexcept {
 void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
     int n = 0;
 
-    auto addFormat = [&](VkFormat vkFormat, u32 alphaFourcc, u32 opaqueFourcc) {
+    auto modifierImportable = [&](VkFormat format,
+                                  const VkDrmFormatModifierPropertiesEXT& modifier,
+                                  bool mutablePlanes) {
+        VkPhysicalDeviceExternalImageFormatInfo external{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO};
+
+        external.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
+        VkPhysicalDeviceImageDrmFormatModifierInfoEXT drm{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT};
+
+        drm.pNext = &external;
+        drm.drmFormatModifier = modifier.drmFormatModifier;
+        drm.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        VkPhysicalDeviceImageFormatInfo2 info{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_FORMAT_INFO_2};
+
+        info.pNext = &drm;
+        info.format = format;
+        info.type = VK_IMAGE_TYPE_2D;
+        info.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+        info.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
+        info.flags = mutablePlanes ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0;
+
+        VkExternalImageFormatProperties externalProps{
+            VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
+        VkImageFormatProperties2 props{
+            VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
+
+        props.pNext = &externalProps;
+
+        return vkGetPhysicalDeviceImageFormatProperties2(this->phys, &info,
+                                                          &props) == VK_SUCCESS &&
+            (externalProps.externalMemoryProperties.externalMemoryFeatures &
+             VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT);
+    };
+
+    auto addFormat = [&](VkFormat vkFormat, u32 alphaFourcc,
+                         u32 opaqueFourcc, bool mutablePlanes) {
         VkDrmFormatModifierPropertiesListEXT modList{
             VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
         VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
@@ -276,7 +315,8 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
         for (const auto& m : mods) {
             if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes ||
                 !(m.drmFormatModifierTilingFeatures &
-                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) ||
+                !modifierImportable(vkFormat, m, mutablePlanes)) {
                 continue;
             }
 
@@ -294,16 +334,17 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
         }
     };
 
-    addFormat(kVkFormat, kFourccArgb, kFourccXrgb);
+    addFormat(kVkFormat, kFourccArgb, kFourccXrgb, false);
     addFormat(VK_FORMAT_A2R10G10B10_UNORM_PACK32,
-              kFourccAr30, kFourccXr30);
+              kFourccAr30, kFourccXr30, false);
     addFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32,
-              kFourccAb30, kFourccXb30);
+              kFourccAb30, kFourccXb30, false);
     addFormat(VK_FORMAT_R16G16B16A16_SFLOAT,
-              kFourccAb4h, kFourccXb4h);
-    addFormat(VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, kFourccNv12, 0);
+              kFourccAb4h, kFourccXb4h, false);
+    addFormat(VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+              kFourccNv12, 0, true);
     addFormat(VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
-              kFourccP010, 0);
+              kFourccP010, 0, true);
 
     sysO << "imway: dmabuf formats: "_sv << n << endL;
 }

@@ -25,7 +25,13 @@ static struct xdg_wm_base* wm_base;
 static struct zwp_linux_dmabuf_v1* dmabuf;
 static struct wp_color_representation_manager_v1* representation_manager;
 static struct wl_surface* surface;
-static int nv12_linear;
+static uint32_t pixel_format = DRM_FORMAT_NV12;
+static uint32_t coefficients = WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709;
+static uint32_t color_range = WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED;
+static uint32_t chroma_location = WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0;
+static int y_code = 63, cb_code = 102, cr_code = 240;
+static int pattern;
+static int nv12_linear, p010_linear;
 static int drawn;
 
 static void dmabuf_format(void* data, struct zwp_linux_dmabuf_v1* object, uint32_t format) {
@@ -40,6 +46,7 @@ static void dmabuf_modifier(void* data, struct zwp_linux_dmabuf_v1* object,
     (void)data;
     (void)object;
     if (format == DRM_FORMAT_NV12 && !modifier_hi && !modifier_lo) nv12_linear = 1;
+    if (format == DRM_FORMAT_P010 && !modifier_hi && !modifier_lo) p010_linear = 1;
 }
 
 static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
@@ -80,7 +87,7 @@ static void wm_base_ping(void* data, struct xdg_wm_base* object, uint32_t serial
 
 static const struct xdg_wm_base_listener wm_base_listener = {.ping = wm_base_ping};
 
-static int make_nv12(void) {
+static int make_yuv(void) {
     int drm_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
     if (drm_fd < 0) return -1;
 
@@ -91,8 +98,9 @@ static int make_nv12(void) {
         return -1;
     }
 
+    int bytes = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
     struct amdgpu_bo_alloc_request request = {
-        .alloc_size = W * H * 3 / 2,
+        .alloc_size = W * H * 3 * bytes / 2,
         .phys_alignment = 4096,
         .preferred_heap = AMDGPU_GEM_DOMAIN_VRAM,
         .flags = AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED,
@@ -108,12 +116,31 @@ static int make_nv12(void) {
         return -1;
     }
 
-    // BT.709 limited-range red: Y=63, Cb=102, Cr=240.
-    memset(map, 63, W * H);
-    uint8_t* uv = (uint8_t*)map + W * H;
-    for (int i = 0; i < W * H / 4; i++) {
-        uv[i * 2] = 102;
-        uv[i * 2 + 1] = 240;
+    if (pixel_format == DRM_FORMAT_P010) {
+        uint16_t* y = map;
+        uint16_t* uv = y + W * H;
+
+        for (int i = 0; i < W * H; i++) y[i] = (uint16_t)(y_code << 6);
+        for (int row = 0; row < H / 2; row++) {
+            for (int col = 0; col < W / 2; col++) {
+                int i = (row * (W / 2) + col) * 2;
+
+                uv[i] = (uint16_t)((pattern ? (col < W / 4 ? 64 : 960) : cb_code) << 6);
+                uv[i + 1] = (uint16_t)((pattern ? (row < H / 4 ? 64 : 960) : cr_code) << 6);
+            }
+        }
+    } else {
+        memset(map, y_code, W * H);
+        uint8_t* uv = (uint8_t*)map + W * H;
+
+        for (int row = 0; row < H / 2; row++) {
+            for (int col = 0; col < W / 2; col++) {
+                int i = (row * (W / 2) + col) * 2;
+
+                uv[i] = (uint8_t)(pattern ? (col < W / 4 ? 16 : 240) : cb_code);
+                uv[i + 1] = (uint8_t)(pattern ? (row < H / 4 ? 16 : 240) : cr_code);
+            }
+        }
     }
 
     amdgpu_bo_cpu_unmap(bo);
@@ -125,32 +152,37 @@ static int make_nv12(void) {
 }
 
 static void draw(void) {
-    int fd = make_nv12();
+    int fd = make_yuv();
     if (fd < 0) exit(77);
+
+    int bytes = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
+    uint32_t stride = W * bytes;
+    uint32_t uv_offset = W * H * bytes;
 
     struct zwp_linux_buffer_params_v1* params =
         zwp_linux_dmabuf_v1_create_params(dmabuf);
-    zwp_linux_buffer_params_v1_add(params, fd, 0, 0, W, 0, 0);
-    zwp_linux_buffer_params_v1_add(params, fd, 1, W * H, W, 0, 0);
+    zwp_linux_buffer_params_v1_add(params, fd, 0, 0, stride, 0, 0);
+    zwp_linux_buffer_params_v1_add(params, fd, 1, uv_offset, stride, 0, 0);
     struct wl_buffer* buffer = zwp_linux_buffer_params_v1_create_immed(
-        params, W, H, DRM_FORMAT_NV12, 0);
+        params, W, H, pixel_format, 0);
     zwp_linux_buffer_params_v1_destroy(params);
     close(fd);
 
-    struct wp_color_representation_surface_v1* representation =
-        wp_color_representation_manager_v1_get_surface(representation_manager, surface);
-    wp_color_representation_surface_v1_set_coefficients_and_range(
-        representation, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
-        WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
-    wp_color_representation_surface_v1_set_chroma_location(
-        representation, WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0);
+    if (coefficients) {
+        struct wp_color_representation_surface_v1* representation =
+            wp_color_representation_manager_v1_get_surface(representation_manager, surface);
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            representation, coefficients, color_range);
+        wp_color_representation_surface_v1_set_chroma_location(
+            representation, chroma_location);
+    }
 
     wl_surface_attach(surface, buffer, 0, 0);
     wl_surface_damage(surface, 0, 0, W, H);
     wl_surface_commit(surface);
     wl_buffer_destroy(buffer);
     drawn = 1;
-    puts("client_reg_yuv_dmabuf: mapped NV12");
+    puts("client_reg_yuv_dmabuf: mapped YUV");
 }
 
 static void xdg_surface_configure(void* data, struct xdg_surface* object,
@@ -185,9 +217,21 @@ static const struct xdg_toplevel_listener toplevel_listener = {
     .close = toplevel_close,
 };
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(10);
+
+    if (argc != 1 && argc != 8) return 2;
+    if (argc == 8) {
+        pixel_format = !strcmp(argv[1], "p010") ? DRM_FORMAT_P010 : DRM_FORMAT_NV12;
+        coefficients = (uint32_t)strtoul(argv[2], NULL, 0);
+        color_range = (uint32_t)strtoul(argv[3], NULL, 0);
+        chroma_location = (uint32_t)strtoul(argv[4], NULL, 0);
+        pattern = !strcmp(argv[5], "pattern");
+        y_code = pattern ? (pixel_format == DRM_FORMAT_P010 ? 512 : 128) : atoi(argv[5]);
+        cb_code = atoi(argv[6]);
+        cr_code = atoi(argv[7]);
+    }
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) return 1;
 
@@ -199,8 +243,10 @@ int main(void) {
     zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
     wl_display_roundtrip(display);
-    if (!nv12_linear) {
-        fputs("client_reg_yuv_dmabuf: NV12+LINEAR not advertised\n", stderr);
+    if ((pixel_format == DRM_FORMAT_NV12 && !nv12_linear) ||
+        (pixel_format == DRM_FORMAT_P010 && !p010_linear)) {
+        fprintf(stderr, "client_reg_yuv_dmabuf: %s+LINEAR not advertised\n",
+                pixel_format == DRM_FORMAT_P010 ? "P010" : "NV12");
         return 1;
     }
 
@@ -213,5 +259,5 @@ int main(void) {
     wl_surface_commit(surface);
 
     while (wl_display_dispatch(display) != -1) {}
-    return 0;
+    return wl_display_get_error(display) ? 3 : 0;
 }

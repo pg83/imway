@@ -66,8 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-Отдельный большой пробел — YUV. Нет NV12/P010, matrix coefficients, chroma siting, full/limited range. HDR video вынужден заранее конвертироваться в RGB, теряя zero-copy и потенциально качество. Разделение ответственности между color-management и color-representation описано в [Wayland color management model](https://wayland.freedesktop.org/docs/book/Color.html).
-
 ## ImGui и UI
 
 Linear-light blend внутренней сцены физически корректен. Это хорошая политика, хотя KWin сознательно использует nonlinear blend для более привычного вида desktop UI.
@@ -126,8 +124,7 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Добавить `color-representation-v1` и P010/NV12.
-2. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-3. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+2. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не могут проверить реальный KMS link и фотометрическую корректность физического дисплея.
