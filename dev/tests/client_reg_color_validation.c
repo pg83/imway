@@ -115,29 +115,29 @@ int main(int argc, char** argv) {
     }
 
     if (!strcmp(argv[1], "invalid-luminances")) {
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
         wp_image_description_creator_params_v1_set_luminances(params, 10000, 1, 80);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
     }
 
-    if (!strcmp(argv[1], "duplicate-mastering-primaries")) {
-        wp_image_description_creator_params_v1_set_mastering_display_primaries(
-            params, 640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000);
+    if (!strcmp(argv[1], "unsupported-mastering-primaries")) {
         wp_image_description_creator_params_v1_set_mastering_display_primaries(
             params, 640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET);
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
     }
 
-    if (!strcmp(argv[1], "invalid-mastering-luminance")) {
+    if (!strcmp(argv[1], "unsupported-mastering-luminance")) {
         wp_image_description_creator_params_v1_set_mastering_luminance(params, 10000, 1);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
     }
 
     if (!strcmp(argv[1], "invalid-max-cll") || !strcmp(argv[1], "invalid-max-fall")) {
         set_required(params);
-        wp_image_description_creator_params_v1_set_mastering_luminance(params, 0, 100);
+        wp_image_description_creator_params_v1_set_luminances(params, 0, 100, 80);
         if (!strcmp(argv[1], "invalid-max-cll")) {
             wp_image_description_creator_params_v1_set_max_cll(params, 101);
         } else {

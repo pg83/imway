@@ -70,14 +70,28 @@ namespace {
         SurfaceImpl* surface = nullptr;
     };
 
-    // color-management-v1: a client image description reduced to what we act
-    // on — the parametric hdr case (st2084 PQ + BT.2020) with its luminances
+    // Parametric color-management image description.  The renderer currently
+    // consumes the compact hdr/wide/maxCll/refLum projection; the rest is kept
+    // here so protocol descriptions remain lossless and introspectable.
     struct CImgDesc {
         WaylandImpl* srv = nullptr;
+        u64 identity = 0;
         bool hdr = false;   // st2084_pq transfer
         bool wide = false;  // bt2020 primaries
         bool allowInfo = false;
-        u32 maxCll = 0, refLum = 0;
+        u32 tf = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
+        u32 primaries = WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+        u32 minLum = 2000;
+        u32 maxLum = 80;
+        u32 refLum = 80;
+        i32 targetPrimaries[8] = {};
+        u32 targetMinLum = 2000;
+        u32 targetMaxLum = 80;
+        u32 maxCll = 0;
+        u32 maxFall = 0;
+        bool maxCllSet = false;
+        bool maxFallSet = false;
+        bool ready = true;
     };
 
     struct CParams {
@@ -86,20 +100,25 @@ namespace {
         bool tfSet = false;
         bool primSet = false;
         bool lumSet = false;
-        bool masteringPrimSet = false;
-        bool masteringLumSet = false;
         bool maxCllSet = false;
         bool maxFallSet = false;
-        u32 minLum = 2000;
-        u32 maxLum = 80;
-        u32 masteringMinLum = 0;
-        u32 masteringMaxLum = 0;
-        u32 maxFall = 0;
     };
     struct ToplevelImpl;
     struct WaylandImpl;
     struct ConstraintBox;
     struct IdleInhibitor;
+
+    struct CmOutput {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+    };
+
+    struct CmFeedback {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        SurfaceImpl* surface = nullptr;
+        wl_listener surfaceDestroy{};
+    };
 
     // refcounted drm syncobj: the resource holds one ref, every commit
     // holding an acquire/release point holds another; the destructor drops
@@ -654,7 +673,14 @@ namespace {
         // color-management-v1 objects
         ObjList<CImgDesc> cimgAlloc;
         ObjList<CParams> cparAlloc;
-        u32 cimgIdentity = 0;
+        ObjList<CmOutput> cmOutputAlloc;
+        ObjList<CmFeedback> cmFeedbackAlloc;
+        Vector<CmOutput*> cmOutputResources;
+        Vector<CmFeedback*> cmFeedbackResources;
+        u64 cimgIdentity = 0;
+        u64 cmDisplayIdentity = 0;
+        bool cmDisplayHdr = false;
+        u32 cmDisplayRefLum = 80;
 
         int drmFd = -1;
         bool explicitSyncSupported = false;
@@ -701,6 +727,7 @@ namespace {
         bool holdEnd(bool cancelled) override;
 
         void onListen(void* arg) override;
+        void syncColorState();
 
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
@@ -7340,6 +7367,8 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , activationTokenAlloc(comp.pool)
     , cimgAlloc(comp.pool)
     , cparAlloc(comp.pool)
+    , cmOutputAlloc(comp.pool)
+    , cmFeedbackAlloc(comp.pool)
     , idleAlloc(comp.pool)
     , idleInhibitorAlloc(comp.pool)
 {
@@ -7351,6 +7380,9 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     wlLoop = wl_display_get_event_loop(display);
 
     output = cfg.output;
+    cmDisplayHdr = output && output->isHdr();
+    cmDisplayRefLum = cmDisplayHdr ? (u32)(output->sdrWhiteNits() + .5) : 80;
+    cmDisplayIdentity = ++cimgIdentity;
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
     icons = comp.icons;
@@ -7421,20 +7453,55 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
         auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
-        if (!d || !d->allowInfo) {
+        if (!d || !d->ready) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NOT_READY,
+                                   "this image description is not ready");
+
+            return;
+        }
+
+        if (!d->allowInfo) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION,
                                    "this image description cannot be introspected");
 
             return;
         }
 
-        // minimal: the info object with just a done — clients that set
-        // descriptions rarely introspect the details
-        wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface, 1, id);
+        wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface,
+                                               wl_resource_get_version(res), id);
 
-        if (info) {
-            wp_image_description_info_v1_send_done(info);
+        if (!info) {
+            wl_client_post_no_memory(client);
+
+            return;
         }
+
+        wp_image_description_info_v1_send_primaries_named(info, d->primaries);
+        wp_image_description_info_v1_send_primaries(
+            info, d->targetPrimaries[0], d->targetPrimaries[1],
+            d->targetPrimaries[2], d->targetPrimaries[3],
+            d->targetPrimaries[4], d->targetPrimaries[5],
+            d->targetPrimaries[6], d->targetPrimaries[7]);
+        wp_image_description_info_v1_send_tf_named(info, d->tf);
+        wp_image_description_info_v1_send_luminances(info, d->minLum, d->maxLum, d->refLum);
+        wp_image_description_info_v1_send_target_primaries(
+            info, d->targetPrimaries[0], d->targetPrimaries[1],
+            d->targetPrimaries[2], d->targetPrimaries[3],
+            d->targetPrimaries[4], d->targetPrimaries[5],
+            d->targetPrimaries[6], d->targetPrimaries[7]);
+        wp_image_description_info_v1_send_target_luminance(
+            info, d->targetMinLum, d->targetMaxLum);
+
+        if (d->maxCllSet) {
+            wp_image_description_info_v1_send_target_max_cll(info, d->maxCll);
+        }
+
+        if (d->maxFallSet) {
+            wp_image_description_info_v1_send_target_max_fall(info, d->maxFall);
+        }
+
+        wp_image_description_info_v1_send_done(info);
+        wl_resource_destroy(info);
     }
 
     const struct wp_image_description_v1_interface cmImageDescImpl = {
@@ -7464,8 +7531,42 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         *obj = d;
         obj->srv = srv;
+
+        if (!obj->identity) {
+            obj->identity = ++srv->cimgIdentity;
+        }
+
         wl_resource_set_implementation(res, &cmImageDescImpl, obj, cmImageDescResourceDestroyed);
-        wp_image_description_v1_send_ready(res, ++srv->cimgIdentity);
+
+        if (version >= 2) {
+            wp_image_description_v1_send_ready2(res, (u32)(obj->identity >> 32), (u32)obj->identity);
+        } else {
+            wp_image_description_v1_send_ready(res, (u32)obj->identity);
+        }
+
+        return res;
+    }
+
+    wl_resource* cmMakeFailedImageDesc(WaylandImpl* srv, wl_client* client,
+                                        u32 version, u32 id, u32 cause,
+                                        const char* message) {
+        wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface,
+                                              version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return nullptr;
+        }
+
+        CImgDesc* obj = srv->cimgAlloc.make();
+
+        *obj = {};
+        obj->srv = srv;
+        obj->ready = false;
+        wl_resource_set_implementation(res, &cmImageDescImpl, obj,
+                                       cmImageDescResourceDestroyed);
+        wp_image_description_v1_send_failed(res, cause, message);
 
         return res;
     }
@@ -7481,15 +7582,29 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        if (tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB &&
-            tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
+        u32 version = wl_resource_get_version(res);
+        bool sRgb = version >= 2 ?
+            tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
+            tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
+
+        if (!sRgb && tf != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
                                    "transfer function was not advertised");
 
             return;
         }
 
+        p->d.tf = tf;
         p->d.hdr = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+
+        if (p->d.hdr && !p->lumSet) {
+            p->d.minLum = 50;
+            p->d.maxLum = 10000;
+            p->d.refLum = 203;
+        } else if (p->d.hdr) {
+            p->d.maxLum = 10000 + p->d.minLum / 10000;
+        }
+
         p->tfSet = true;
     }
 
@@ -7516,6 +7631,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
+        p->d.primaries = prim;
         p->d.wide = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
         p->primSet = true;
     }
@@ -7539,7 +7655,8 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        if (cmInvalidLumRange(minLum, maxLum) || cmInvalidLumRange(minLum, refLum)) {
+        if (cmInvalidLumRange(minLum, refLum) ||
+            (p->tfSet && !p->d.hdr && cmInvalidLumRange(minLum, maxLum))) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "primary max and reference luminance must exceed min luminance");
 
@@ -7547,50 +7664,34 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         p->lumSet = true;
-        p->minLum = minLum;
-        p->maxLum = maxLum;
+        p->d.minLum = minLum;
+        p->d.maxLum = p->d.hdr ? 10000 + minLum / 10000 : maxLum;
         p->d.refLum = refLum;
     }
 
     void cmParamsSetMasteringPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
-
-        if (p->masteringPrimSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "mastering display primaries are already set");
-
-            return;
-        }
-
-        p->masteringPrimSet = true;
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "mastering display primaries were not advertised");
     }
 
-    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
-
-        if (cmInvalidLumRange(minLum, maxLum)) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
-                                   "mastering max luminance must exceed min luminance");
-
-            return;
-        }
-
-        p->masteringLumSet = true;
-        p->masteringMinLum = minLum;
-        p->masteringMaxLum = maxLum;
+    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32, u32) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "mastering luminance was not advertised");
     }
 
     void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
         p->d.maxCll = v;
+        p->d.maxCllSet = true;
         p->maxCllSet = true;
     }
 
     void cmParamsSetMaxFall(wl_client*, wl_resource* res, u32 v) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
-        p->maxFall = v;
+        p->d.maxFall = v;
+        p->d.maxFallSet = true;
         p->maxFallSet = true;
     }
 
@@ -7603,21 +7704,41 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        u32 minLum = p->masteringLumSet ? p->masteringMinLum : p->minLum;
-        u32 maxLum = p->masteringLumSet ? p->masteringMaxLum : p->maxLum;
+        if (!p->d.hdr && cmInvalidLumRange(p->d.minLum, p->d.maxLum)) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
+                                   "primary max luminance must exceed min luminance");
+
+            return;
+        }
+
+        u32 minLum = p->d.minLum;
+        u32 maxLum = p->d.maxLum;
         auto levelInMasteringRange = [minLum, maxLum](u32 level) {
             return (u64)level * 10000 > minLum && level <= maxLum;
         };
 
-        if ((p->maxCllSet && !levelInMasteringRange(p->d.maxCll)) ||
-            (p->maxFallSet && !levelInMasteringRange(p->maxFall)) ||
-            (p->maxCllSet && p->maxFallSet && p->maxFall > p->d.maxCll)) {
+        bool version1RangeError = wl_resource_get_version(res) < 2 &&
+            ((p->maxCllSet && !levelInMasteringRange(p->d.maxCll)) ||
+             (p->maxFallSet && !levelInMasteringRange(p->d.maxFall)));
+
+        if (version1RangeError ||
+            (p->maxCllSet && p->maxFallSet && p->d.maxFall > p->d.maxCll)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "content light levels are outside the mastering luminance range");
 
             return;
         }
 
+        static constexpr i32 srgb[8] = {
+            640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000,
+        };
+        static constexpr i32 bt2020[8] = {
+            708000, 292000, 170000, 797000, 131000, 46000, 312700, 329000,
+        };
+
+        memcpy(p->d.targetPrimaries, p->d.wide ? bt2020 : srgb, sizeof(p->d.targetPrimaries));
+        p->d.targetMinLum = p->d.minLum;
+        p->d.targetMaxLum = p->d.maxLum;
         cmMakeImageDesc(p->srv, client, wl_resource_get_version(res), id, p->d);
         wl_resource_destroy(res); // create consumes the creator
     }
@@ -7668,7 +7789,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        if (!d) {
+        if (!d || !d->ready) {
             wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION,
                                    "image description is not ready");
 
@@ -7720,13 +7841,32 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
     }
 
-    // output / feedback: hand back a description of the display
-    CImgDesc cmDisplayDesc(WaylandImpl* srv) {
+    // Output and preferred descriptions refer to the same immutable record and
+    // therefore carry the same identity until the output color state changes.
+    CImgDesc cmDisplayDesc(WaylandImpl* srv, u32 version) {
+        static constexpr i32 srgb[8] = {
+            640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000,
+        };
+        static constexpr i32 bt2020[8] = {
+            708000, 292000, 170000, 797000, 131000, 46000, 312700, 329000,
+        };
         CImgDesc d;
 
-        d.hdr = srv->output && srv->output->isHdr();
+        d.identity = srv->cmDisplayIdentity;
+        d.hdr = srv->cmDisplayHdr;
         d.wide = d.hdr;
         d.allowInfo = true;
+        d.tf = d.hdr ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ :
+            (version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
+                            WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        d.primaries = d.hdr ? WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 :
+                              WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+        d.minLum = d.hdr ? 50 : 2000;
+        d.maxLum = d.hdr ? 10000 : 80;
+        d.refLum = d.hdr ? srv->cmDisplayRefLum : 80;
+        d.targetMinLum = d.minLum;
+        d.targetMaxLum = d.maxLum;
+        memcpy(d.targetPrimaries, d.hdr ? bt2020 : srgb, sizeof(d.targetPrimaries));
 
         return d;
     }
@@ -7736,9 +7876,18 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 
     void cmOutputGetImageDesc(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        auto* obj = (CmOutput*)wl_resource_get_user_data(res);
 
-        cmMakeImageDesc(srv, client, wl_resource_get_version(res), id, cmDisplayDesc(srv));
+        if (!obj->srv->output) {
+            cmMakeFailedImageDesc(obj->srv, client, wl_resource_get_version(res), id,
+                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_NO_OUTPUT,
+                                  "the wl_output is gone");
+
+            return;
+        }
+
+        cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id,
+                        cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
     }
 
     const struct wp_color_management_output_v1_interface cmOutputImpl = {
@@ -7746,14 +7895,31 @@ WaylandImpl::~WaylandImpl() noexcept {
         .get_image_description = cmOutputGetImageDesc,
     };
 
+    void cmOutputResourceDestroyed(wl_resource* res) {
+        auto* obj = (CmOutput*)wl_resource_get_user_data(res);
+
+        if (obj) {
+            removeOne(obj->srv->cmOutputResources, obj);
+            obj->srv->cmOutputAlloc.release(obj);
+        }
+    }
+
     void cmFeedbackDestroy(wl_client*, wl_resource* res) {
         wl_resource_destroy(res);
     }
 
     void cmFeedbackGetPreferred(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
 
-        cmMakeImageDesc(srv, client, wl_resource_get_version(res), id, cmDisplayDesc(srv));
+        if (!obj->surface) {
+            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1_ERROR_INERT,
+                                   "the wl_surface is gone");
+
+            return;
+        }
+
+        cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id,
+                        cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
     }
 
     const struct wp_color_management_surface_feedback_v1_interface cmFeedbackImpl = {
@@ -7761,6 +7927,26 @@ WaylandImpl::~WaylandImpl() noexcept {
         .get_preferred = cmFeedbackGetPreferred,
         .get_preferred_parametric = cmFeedbackGetPreferred,
     };
+
+    void cmFeedbackSurfaceDestroyed(wl_listener* listener, void*) {
+        auto* obj = (CmFeedback*)((char*)listener - offsetof(CmFeedback, surfaceDestroy));
+
+        obj->surface = nullptr;
+        wl_list_remove(&listener->link);
+    }
+
+    void cmFeedbackResourceDestroyed(wl_resource* res) {
+        auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
+
+        if (obj) {
+            if (obj->surface) {
+                wl_list_remove(&obj->surfaceDestroy.link);
+            }
+
+            removeOne(obj->srv->cmFeedbackResources, obj);
+            obj->srv->cmFeedbackAlloc.release(obj);
+        }
+    }
 
     // manager
     void cmManagerDestroy(wl_client*, wl_resource* res) {
@@ -7776,7 +7962,14 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        wl_resource_set_implementation(out, &cmOutputImpl, wl_resource_get_user_data(res), nullptr);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        CmOutput* obj = srv->cmOutputAlloc.make();
+
+        *obj = {};
+        obj->srv = srv;
+        obj->res = out;
+        wl_resource_set_implementation(out, &cmOutputImpl, obj, cmOutputResourceDestroyed);
+        srv->cmOutputResources.pushBack(obj);
     }
 
     void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
@@ -7801,7 +7994,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         wl_resource_set_implementation(cs, &cmSurfaceImpl, surface, cmSurfaceResourceDestroyed);
     }
 
-    void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+    void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
 
         if (!fb) {
@@ -7810,7 +8003,17 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        wl_resource_set_implementation(fb, &cmFeedbackImpl, wl_resource_get_user_data(res), nullptr);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        CmFeedback* obj = srv->cmFeedbackAlloc.make();
+
+        *obj = {};
+        obj->srv = srv;
+        obj->res = fb;
+        obj->surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
+        obj->surfaceDestroy.notify = cmFeedbackSurfaceDestroyed;
+        wl_resource_add_destroy_listener(surfaceRes, &obj->surfaceDestroy);
+        wl_resource_set_implementation(fb, &cmFeedbackImpl, obj, cmFeedbackResourceDestroyed);
+        srv->cmFeedbackResources.pushBack(obj);
     }
 
     void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
@@ -7840,6 +8043,19 @@ WaylandImpl::~WaylandImpl() noexcept {
                                "Windows-scRGB was not advertised");
     }
 
+    void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource* reference) {
+        (void)reference;
+        cmMakeFailedImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
+                              wl_resource_get_version(res), id,
+                              WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
+                              "foreign image description references are unsupported");
+    }
+
+    void cmManagerCreateWindowsBt2100(wl_client*, wl_resource* res, u32) {
+        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
+                               "Windows-BT.2100 was not advertised");
+    }
+
     const struct wp_color_manager_v1_interface cmManagerImpl = {
         .destroy = cmManagerDestroy,
         .get_output = cmManagerGetOutput,
@@ -7848,6 +8064,8 @@ WaylandImpl::~WaylandImpl() noexcept {
         .create_icc_creator = cmManagerCreateIccCreator,
         .create_parametric_creator = cmManagerCreateParamsCreator,
         .create_windows_scrgb = cmManagerCreateWindowsScrgb,
+        .get_image_description = cmManagerGetImageDesc,
+        .create_windows_bt2100 = cmManagerCreateWindowsBt2100,
     };
 
     void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
@@ -7863,8 +8081,13 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        if (version >= 2) {
+            wp_color_manager_v1_send_supported_tf_named(
+                res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4);
+        } else {
+            wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        }
+
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
@@ -7895,11 +8118,10 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
     wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
-    // Color-management: the renderer converts each color-managed surface (PQ
-    // and/or BT.2020) into the sRGB composition space via a compute pass
-    // (renderer.cpp, cm_convert.comp), so a client's declared image
-    // description is honored rather than composited raw.
-    wl_global_create(display, &wp_color_manager_v1_interface, 1, this, colorManagerBind);
+    // Color-management: client electrical values are decoded into the linear
+    // BT.2020 scene before composition and the output transform encodes that
+    // scene for the active output description.
+    wl_global_create(display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
 
     u64 syncCap = 0;
 
@@ -7945,9 +8167,50 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
     return false;
 }
 
+void WaylandImpl::syncColorState() {
+    bool hdr = output && output->isHdr();
+    u32 refLum = hdr ? (u32)(output->sdrWhiteNits() + .5) : 80;
+
+    if (hdr == cmDisplayHdr && refLum == cmDisplayRefLum) {
+        return;
+    }
+
+    cmDisplayHdr = hdr;
+    cmDisplayRefLum = refLum;
+    cmDisplayIdentity = ++cimgIdentity;
+
+    for (CmOutput* obj : cmOutputResources) {
+        if (output) {
+            wp_color_management_output_v1_send_image_description_changed(obj->res);
+        }
+    }
+
+    for (CmFeedback* obj : cmFeedbackResources) {
+        if (!obj->surface) {
+            continue;
+        }
+
+        if (wl_resource_get_version(obj->res) >= 2) {
+            wp_color_management_surface_feedback_v1_send_preferred_changed2(
+                obj->res, (u32)(cmDisplayIdentity >> 32), (u32)cmDisplayIdentity);
+        } else {
+            wp_color_management_surface_feedback_v1_send_preferred_changed(
+                obj->res, (u32)cmDisplayIdentity);
+        }
+    }
+
+    // color-management-output.changed is grouped with the core output batch.
+    for (wl_resource* res : outputResources) {
+        if (wl_resource_get_version(res) >= WL_OUTPUT_DONE_SINCE_VERSION) {
+            wl_output_send_done(res);
+        }
+    }
+}
+
 void WaylandImpl::onListen(void* arg) {
     u32 msec = ((FrameEvent*)arg)->msec;
 
+    syncColorState();
     syncKeyboardCapture();
 
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {

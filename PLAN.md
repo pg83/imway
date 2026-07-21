@@ -20,7 +20,7 @@ client image
 |---|---:|
 | Основная HDR-математика для opaque RGB | 8/10 |
 | Внутреннее пространство композиции | 9/10 |
-| Wayland color-management | 3/10 |
+| Wayland color-management | 6/10 |
 | Tone/gamut mapping | 2/10 |
 | KMS metadata и физический сигнал | 4/10 |
 | HDR screenshot/JXL | 8/10 |
@@ -54,29 +54,7 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 ## Критические ошибки
 
-### 1. `get_information()` нарушает протокол
-
-Сейчас `cmImageDescGetInfo()` посылает только `done`: [wayland.cpp](/home/pg/monorepo/imway/wayland.cpp:7421).
-
-Для parametric image description протокол требует сообщить transfer function, primaries, luminances, target primaries/luminance и только затем `done`: [color-management-v1](https://wayland.app/protocols/color-management-v1).
-
-Клиенты, которые действительно спрашивают описание output/preferred image, будут получать пустое описание.
-
-### 2. Заявляется неподдержанная mastering metadata
-
-Compositor рекламирует `SET_MASTERING_DISPLAY_PRIMARIES`, но координаты primaries фактически выбрасываются. MaxFALL также теряется; MaxCLL сохраняется, но не участвует в rendering decision.
-
-Render intent `perceptual` принимается, хотя perceptual gamut/tone mapping отсутствует.
-
-Это надо либо реализовать, либо перестать рекламировать. Сейчас capability negotiation врёт клиентам.
-
-### 3. Неверные default luminances для PQ
-
-Параметры начинают жизнь с SDR defaults примерно `0.2–80 nit`, даже если затем выбрана PQ. Поэтому валидное PQ-описание с MaxCLL 1000, но без явно заданного luminance range, может быть отвергнуто как превышающее 80 nit.
-
-Defaults должны определяться выбранной transfer function. Для PQ — абсолютный диапазон PQ и reference white, определённые протоколом.
-
-### 4. PQ surface может ошибочно попасть в SDR direct scanout
+### PQ surface может ошибочно попасть в SDR direct scanout
 
 В HDR direct scanout сейчас отключён — разумно. Но SDR direct scanout не проверяет, что color description поверхности совпадает с output encoding: [renderer.cpp](/home/pg/monorepo/imway/renderer.cpp:1956).
 
@@ -158,17 +136,16 @@ Framebuffer XR30 гарантирует только формат буфера. 
 
 Нужно делать atomic test modeset с требуемыми 10/12 bpc и проверять фактический результат. В свежем DRM сейчас как раз развивается `link bpc` feedback, потому что одного `max bpc` недостаточно.
 
-## Wayland-протокол сильно уже современного baseline
+## Wayland-протокол всё ещё ограничен
 
-Локальная версия фактически соответствует v1. А актуальный протокол уже имеет v2 и 64-битные identities, image-description references, `absolute_no_adaptation`, исправленное определение sRGB TF и Windows BT.2100 descriptions.
-
-Сейчас поддерживаются только:
+Сейчас поддерживаются:
 
 - sRGB;
 - PQ;
 - BT.709/sRGB primaries;
 - BT.2020 primaries;
 - parametric descriptions;
+- полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
 Нет:
@@ -181,7 +158,6 @@ Framebuffer XR30 гарантирует только формат буфера. 
 - ICC profiles;
 - Windows scRGB/BT.2100;
 - `color-representation-v1`;
-- корректных output/preferred change events.
 
 Отдельный большой пробел — YUV. Нет NV12/P010, matrix coefficients, chroma siting, full/limited range. HDR video вынужден заранее конвертироваться в RGB, теряя zero-copy и потенциально качество. Разделение ответственности между color-management и color-representation описано в [Wayland color management model](https://wayland.freedesktop.org/docs/book/Color.html).
 
@@ -258,15 +234,14 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Сделать color-management честным: актуальный протокол, полноценный image description, правильные defaults и events.
-2. Запретить несовместимый direct scanout.
-3. Ввести `ColorDescription` и `OutputColorState` как единые модели для renderer, Wayland feedback, KMS metadata и screenshots.
-4. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
-5. Реализовать tone mapping и gamut mapping.
-6. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
-7. Убрать постоянные полноэкранные RGBA16F surface conversions.
-8. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
-9. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-10. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Запретить несовместимый direct scanout.
+2. Ввести `ColorDescription` и `OutputColorState` как единые модели для renderer, Wayland feedback, KMS metadata и screenshots.
+3. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
+4. Реализовать tone mapping и gamut mapping.
+5. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
+6. Убрать постоянные полноэкранные RGBA16F surface conversions.
+7. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+8. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+9. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не покрывают tone/gamut mapping, output metadata, link depth и реальную фотометрическую корректность.
