@@ -5768,7 +5768,10 @@ namespace {
                 return CursorKind::grab;
             case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE:
             case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL:
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE:
                 return CursorKind::move;
+            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK:
+                return CursorKind::hand;
             case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE:
             case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE:
             case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE:
@@ -8700,7 +8703,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
     wl_global_create(display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
-    wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 1, this, cursorShapeManagerBind);
+    wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
     wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
     wl_global_create(display, &wp_presentation_interface, 1, this, presentationBind);
     wl_global_create(display, &xdg_activation_v1_interface, 1, this, activationBind);
