@@ -61,7 +61,8 @@ static const struct wl_registry_listener extra_listener = {extra_global, extra_r
 
 static int got_intent;
 static int got_parametric, got_luminances, got_mastering, got_windows_scrgb, got_other_feature;
-static int got_srgb_tf, got_compound_tf, got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf;
+static int got_srgb_tf, got_compound_tf, got_bt1886_tf, got_gamma22_tf;
+static int got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf;
 static int got_srgb_prim, got_bt2020_prim, got_other_prim;
 static int manager_done;
 
@@ -81,6 +82,8 @@ static void manager_tf(void* d, struct wp_color_manager_v1* m, uint32_t value) {
     (void)d; (void)m;
     if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB) got_srgb_tf++;
     else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4) got_compound_tf++;
+    else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886) got_bt1886_tf++;
+    else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22) got_gamma22_tf++;
     else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR) got_linear_tf++;
     else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) got_pq_tf++;
     else if (value == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG) got_hlg_tf++;
@@ -279,13 +282,16 @@ static int check_manager(void) {
     if (color_version != 3 || !manager_done || got_intent != 1 ||
         got_parametric != 1 || got_luminances != 1 || got_mastering ||
         got_windows_scrgb != 1 || got_other_feature ||
-        got_srgb_tf || got_compound_tf != 1 || got_linear_tf != 1 || got_pq_tf != 1 || got_hlg_tf != 1 || got_other_tf ||
+        got_srgb_tf || got_compound_tf != 1 || got_bt1886_tf != 1 ||
+        got_gamma22_tf != 1 || got_linear_tf != 1 || got_pq_tf != 1 ||
+        got_hlg_tf != 1 || got_other_tf ||
         got_srgb_prim != 1 || got_bt2020_prim != 1 || got_other_prim) {
         fprintf(stderr, "bad manager: v=%u done=%d intent=%d features=%d/%d/%d/%d/%d "
-                "tf=%d/%d/%d/%d/%d/%d prim=%d/%d/%d\n", color_version, manager_done,
+                "tf=%d/%d/%d/%d/%d/%d/%d/%d prim=%d/%d/%d\n", color_version, manager_done,
                 got_intent, got_parametric, got_luminances, got_mastering,
                 got_windows_scrgb, got_other_feature,
-                got_srgb_tf, got_compound_tf, got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf,
+                got_srgb_tf, got_compound_tf, got_bt1886_tf, got_gamma22_tf,
+                got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf,
                 got_srgb_prim, got_bt2020_prim, got_other_prim);
         return 1;
     }

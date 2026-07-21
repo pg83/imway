@@ -11,6 +11,8 @@ layout(push_constant) uniform PushConstant {
     float sdrWhiteNits;
     int texturePrimaries;
     float textureReferenceNits;
+    float textureMinNits;
+    float textureMaxNits;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -48,6 +50,13 @@ vec3 hlgEotf(vec3 e, int primaries) {
     return scene * (1000.0 * pow(y, 0.2));
 }
 
+vec3 bt1886Eotf(vec3 e) {
+    const float gamma = 2.4;
+    vec3 black = vec3(pow(max(pc.textureMinNits, 0.0), 1.0 / gamma));
+    vec3 white = vec3(pow(max(pc.textureMaxNits, pc.textureMinNits), 1.0 / gamma));
+    return pow(max(e * (white - black) + black, 0.0), vec3(gamma));
+}
+
 void main() {
     vec4 sampled = texture(sTexture, In.UV.st);
     vec3 tint709 = srgbToLinear(In.Color.rgb);
@@ -73,6 +82,8 @@ void main() {
         color = pc.textureSource == 4 ? pqEotf(straight) :
                 pc.textureSource == 5 ? hlgEotf(straight, pc.texturePrimaries) :
                 pc.textureSource == 6 ? straight :
+                pc.textureSource == 7 ? bt1886Eotf(straight) :
+                pc.textureSource == 8 ? pow(max(straight, 0.0), vec3(2.2)) :
                 srgbToLinear(straight);
 
         if (pc.texturePrimaries == 0) {
@@ -82,7 +93,7 @@ void main() {
         vec3 tint2020 = bt709ToBt2020(tint709);
         float scale = pc.textureSource == 6
             ? pc.textureReferenceNits
-            : pc.textureSource == 1
+            : pc.textureSource == 1 || pc.textureSource == 8
             ? (pc.textureReferenceNits > 0.0 ? pc.textureReferenceNits : pc.sdrWhiteNits)
             : 1.0;
         color *= tint2020 * scale;

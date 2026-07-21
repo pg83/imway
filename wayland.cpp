@@ -7427,6 +7427,14 @@ WaylandImpl::~WaylandImpl() noexcept {
             return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
         }
 
+        if (d.transfer == ColorTransfer::bt1886) {
+            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
+        }
+
+        if (d.transfer == ColorTransfer::gamma22) {
+            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
+        }
+
         return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
                               WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
     }
@@ -7587,8 +7595,10 @@ WaylandImpl::~WaylandImpl() noexcept {
         bool pq = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
         bool hlg = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
         bool linear = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
+        bool bt1886 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
+        bool gamma22 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
 
-        if (!sRgb && !pq && !hlg && !linear) {
+        if (!sRgb && !pq && !hlg && !linear && !bt1886 && !gamma22) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
                                    "transfer function was not advertised");
 
@@ -7597,10 +7607,22 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         p->d.color.transfer = pq ? ColorTransfer::pq :
                               hlg ? ColorTransfer::hlg :
-                              linear ? ColorTransfer::extendedLinear : ColorTransfer::sRgb;
+                              linear ? ColorTransfer::extendedLinear :
+                              bt1886 ? ColorTransfer::bt1886 :
+                              gamma22 ? ColorTransfer::gamma22 : ColorTransfer::sRgb;
 
         if (linear) {
             p->d.color.linearOneNits = p->d.color.referenceNits;
+        }
+
+        if (bt1886 && !p->lumSet) {
+            ColorDescription defaults = ColorDescription::bt1886();
+
+            p->d.color.minNits = defaults.minNits;
+            p->d.color.maxNits = defaults.maxNits;
+            p->d.color.referenceNits = defaults.referenceNits;
+            p->d.color.targetMinNits = defaults.targetMinNits;
+            p->d.color.targetMaxNits = defaults.targetMaxNits;
         }
 
         if ((pq || hlg) && !p->lumSet) {
@@ -8084,6 +8106,8 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
         wp_color_manager_v1_send_done(res);

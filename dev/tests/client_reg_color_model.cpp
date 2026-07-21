@@ -7,6 +7,8 @@ int main() {
     ColorDescription pq = ColorDescription::bt2100Pq();
     ColorDescription hlg = ColorDescription::bt2100Hlg();
     ColorDescription linear = ColorDescription::extendedLinear();
+    ColorDescription bt1886 = ColorDescription::bt1886();
+    ColorDescription gamma22 = ColorDescription::gamma22();
     OutputColorState sdrOutput = OutputColorState::sdr();
     OutputColorState hdrOutput = OutputColorState::hdr10(203.0);
 
@@ -23,7 +25,12 @@ int main() {
         linear.transfer != ColorTransfer::extendedLinear ||
         linear.primaries != ColorPrimaries::sRgb || linear.minNits != .2 ||
         linear.maxNits != 80.0 || linear.referenceNits != 80.0 ||
-        linear.linearOneNits != 80.0) {
+        linear.linearOneNits != 80.0 || !bt1886.managed() || bt1886.hdr() ||
+        bt1886.transfer != ColorTransfer::bt1886 || bt1886.minNits != .01 ||
+        bt1886.maxNits != 100.0 || bt1886.referenceNits != 100.0 ||
+        !gamma22.managed() || gamma22.hdr() ||
+        gamma22.transfer != ColorTransfer::gamma22 || gamma22.minNits != .2 ||
+        gamma22.maxNits != 80.0 || gamma22.referenceNits != 80.0) {
         fputs("bad standard color description\n", stderr);
 
         return 1;

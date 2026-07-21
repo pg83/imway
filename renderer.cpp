@@ -131,18 +131,23 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0);
 
             return;
         }
 
         int source = surface->color.transfer == ColorTransfer::pq ? 4 :
                      surface->color.transfer == ColorTransfer::hlg ? 5 :
-                     surface->color.transfer == ColorTransfer::extendedLinear ? 6 : 1;
+                     surface->color.transfer == ColorTransfer::extendedLinear ? 6 :
+                     surface->color.transfer == ColorTransfer::bt1886 ? 7 :
+                     surface->color.transfer == ColorTransfer::gamma22 ? 8 : 1;
         int primaries = surface->color.primaries == ColorPrimaries::bt2020 ? 1 : 0;
-        float reference = source == 6 ? (float)surface->color.linearOneNits : 0;
+        float reference = source == 6 ? (float)surface->color.linearOneNits :
+                          source == 8 ? (float)surface->color.referenceNits : 0;
 
-        ImGui_ImplVulkan_SetTextureColor(source, primaries, reference);
+        ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
+                                         (float)surface->color.minNits,
+                                         (float)surface->color.maxNits);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);

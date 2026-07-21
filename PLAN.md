@@ -68,7 +68,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 Нет:
 
-- BT.1886/gamma 2.2;
 - Display P3;
 - custom primaries;
 - ICC profiles;

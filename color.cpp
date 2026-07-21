@@ -144,6 +144,27 @@ ColorDescription ColorDescription::extendedLinear() {
     return d;
 }
 
+ColorDescription ColorDescription::bt1886() {
+    ColorDescription d;
+
+    d.transfer = ColorTransfer::bt1886;
+    d.minNits = .01;
+    d.maxNits = 100.0;
+    d.referenceNits = 100.0;
+    d.targetMinNits = d.minNits;
+    d.targetMaxNits = d.maxNits;
+
+    return d;
+}
+
+ColorDescription ColorDescription::gamma22() {
+    ColorDescription d;
+
+    d.transfer = ColorTransfer::gamma22;
+
+    return d;
+}
+
 bool ColorDescription::managed() const {
     return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb;
 }
