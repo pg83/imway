@@ -30,7 +30,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include <screenshot_pq.spv.h>
+#include <output_transform_vert.spv.h>
+#include <screenshot_output.spv.h>
+#include <screenshot_scene.spv.h>
 
 #include <png.h>
 #include <jxl/color_encoding.h>
@@ -40,9 +42,10 @@ using namespace stl;
 
 // imway screenshot <path>: a standalone GLFW+Vulkan imgui client. On KMS the
 // path names an owned scanout DMA-BUF and metadata comes through the
-// environment; headless uses a self-describing IMW1 memfd.  The viewer samples
-// the shared image directly and reads back only the selected region on
-// Save/Copy. GLFW owns window/input and imgui drives the Vulkan UI.
+// environment; headless uses a self-describing IMW1 memfd. The HDR viewer
+// decodes the shared PQ image into an FP16 linear-BT.2020/nits target, blends
+// ImGui there, then encodes the result to its PQ swapchain. Save/Copy still
+// reads only the selected source region. GLFW owns window/input.
 
 namespace {
     // a screenshot-specific exception carrying a human message; raised by fail()
@@ -583,6 +586,17 @@ namespace {
     ImGui_ImplVulkanH_Window gWin;
     u32 gMinImageCount = 2;
     bool gRebuild = false;
+    bool gLinearHdr = false;
+    VkRenderPass gScenePass = VK_NULL_HANDLE;
+    VkImage gSceneImage = VK_NULL_HANDLE;
+    VkDeviceMemory gSceneMemory = VK_NULL_HANDLE;
+    VkImageView gSceneView = VK_NULL_HANDLE;
+    VkFramebuffer gSceneFramebuffer = VK_NULL_HANDLE;
+    VkSampler gSceneSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout gOutputSetLayout = VK_NULL_HANDLE;
+    VkDescriptorSet gOutputSet = VK_NULL_HANDLE;
+    VkPipelineLayout gOutputPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline gOutputPipeline = VK_NULL_HANDLE;
 
     // ui scale handed down from the compositor via IMGUI_SCALE (its clients
     // otherwise render at scale 1, so the panel/text would be tiny on hidpi)
@@ -781,6 +795,242 @@ namespace {
         }
 
         return 0;
+    }
+
+    VkShaderModule shaderModule(const u32* code, size_t bytes) {
+        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+
+        ci.codeSize = bytes;
+        ci.pCode = code;
+
+        VkShaderModule module = VK_NULL_HANDLE;
+
+        vkc(vkCreateShaderModule(gDevice, &ci, gAlloc, &module));
+
+        return module;
+    }
+
+    void destroySceneTarget() {
+        if (gOutputSet) {
+            vkFreeDescriptorSets(gDevice, gDescPool, 1, &gOutputSet);
+            gOutputSet = VK_NULL_HANDLE;
+        }
+        if (gSceneFramebuffer) vkDestroyFramebuffer(gDevice, gSceneFramebuffer, gAlloc);
+        if (gSceneView) vkDestroyImageView(gDevice, gSceneView, gAlloc);
+        if (gSceneImage) vkDestroyImage(gDevice, gSceneImage, gAlloc);
+        if (gSceneMemory) vkFreeMemory(gDevice, gSceneMemory, gAlloc);
+        gSceneFramebuffer = VK_NULL_HANDLE;
+        gSceneView = VK_NULL_HANDLE;
+        gSceneImage = VK_NULL_HANDLE;
+        gSceneMemory = VK_NULL_HANDLE;
+    }
+
+    void createSceneTarget(u32 width, u32 height) {
+        destroySceneTarget();
+
+        VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ici.extent = {width, height, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        vkc(vkCreateImage(gDevice, &ici, gAlloc, &gSceneImage));
+
+        VkMemoryRequirements req{};
+
+        vkGetImageMemoryRequirements(gDevice, gSceneImage, &req);
+
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits,
+                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        vkc(vkAllocateMemory(gDevice, &mai, gAlloc, &gSceneMemory));
+        vkc(vkBindImageMemory(gDevice, gSceneImage, gSceneMemory, 0));
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+        vci.image = gSceneImage;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkc(vkCreateImageView(gDevice, &vci, gAlloc, &gSceneView));
+
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+        fci.renderPass = gScenePass;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &gSceneView;
+        fci.width = width;
+        fci.height = height;
+        fci.layers = 1;
+        vkc(vkCreateFramebuffer(gDevice, &fci, gAlloc, &gSceneFramebuffer));
+
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+
+        ai.descriptorPool = gDescPool;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &gOutputSetLayout;
+        vkc(vkAllocateDescriptorSets(gDevice, &ai, &gOutputSet));
+
+        VkDescriptorImageInfo image{gSceneSampler, gSceneView,
+                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+
+        write.dstSet = gOutputSet;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &image;
+        vkUpdateDescriptorSets(gDevice, 1, &write, 0, nullptr);
+    }
+
+    void setupLinearHdr(u32 width, u32 height) {
+        VkAttachmentDescription attachment{};
+
+        attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        attachment.samples = VK_SAMPLE_COUNT_1_BIT;
+        attachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+        attachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        attachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkAttachmentReference color{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+        VkSubpassDescription subpass{};
+
+        subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+        subpass.colorAttachmentCount = 1;
+        subpass.pColorAttachments = &color;
+
+        VkSubpassDependency dependencies[2]{};
+
+        dependencies[0].srcSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[0].dstSubpass = 0;
+        dependencies[0].srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[0].dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].srcSubpass = 0;
+        dependencies[1].dstSubpass = VK_SUBPASS_EXTERNAL;
+        dependencies[1].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+        dependencies[1].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+        dependencies[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        dependencies[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+        VkRenderPassCreateInfo rpci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+
+        rpci.attachmentCount = 1;
+        rpci.pAttachments = &attachment;
+        rpci.subpassCount = 1;
+        rpci.pSubpasses = &subpass;
+        rpci.dependencyCount = 2;
+        rpci.pDependencies = dependencies;
+        vkc(vkCreateRenderPass(gDevice, &rpci, gAlloc, &gScenePass));
+
+        VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+
+        sci.magFilter = VK_FILTER_NEAREST;
+        sci.minFilter = VK_FILTER_NEAREST;
+        sci.addressModeU = sci.addressModeV = sci.addressModeW =
+            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        vkc(vkCreateSampler(gDevice, &sci, gAlloc, &gSceneSampler));
+
+        VkDescriptorSetLayoutBinding binding{};
+
+        binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        binding.descriptorCount = 1;
+        binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+        VkDescriptorSetLayoutCreateInfo dlci{
+            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+
+        dlci.bindingCount = 1;
+        dlci.pBindings = &binding;
+        vkc(vkCreateDescriptorSetLayout(gDevice, &dlci, gAlloc,
+                                        &gOutputSetLayout));
+
+        VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+        plci.setLayoutCount = 1;
+        plci.pSetLayouts = &gOutputSetLayout;
+        vkc(vkCreatePipelineLayout(gDevice, &plci, gAlloc,
+                                   &gOutputPipelineLayout));
+
+        VkShaderModule vert = shaderModule(output_transform_vert_spv,
+                                           sizeof(output_transform_vert_spv));
+        VkShaderModule frag = shaderModule(screenshot_output_spv,
+                                           sizeof(screenshot_output_spv));
+        VkPipelineShaderStageCreateInfo stages[2] = {
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+             VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
+             VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
+        };
+        VkPipelineVertexInputStateCreateInfo vertex{
+            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo assembly{
+            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        VkPipelineViewportStateCreateInfo viewport{
+            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        VkPipelineRasterizationStateCreateInfo raster{
+            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        VkPipelineMultisampleStateCreateInfo multisample{
+            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        VkPipelineColorBlendAttachmentState blendAttachment{};
+        VkPipelineColorBlendStateCreateInfo blend{
+            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                          VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{
+            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+
+        assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+        viewport.viewportCount = viewport.scissorCount = 1;
+        raster.polygonMode = VK_POLYGON_MODE_FILL;
+        raster.cullMode = VK_CULL_MODE_NONE;
+        raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        raster.lineWidth = 1.f;
+        multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+        blend.attachmentCount = 1;
+        blend.pAttachments = &blendAttachment;
+        dynamic.dynamicStateCount = 2;
+        dynamic.pDynamicStates = dynamicStates;
+
+        VkGraphicsPipelineCreateInfo gpci{
+            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+
+        gpci.stageCount = 2;
+        gpci.pStages = stages;
+        gpci.pVertexInputState = &vertex;
+        gpci.pInputAssemblyState = &assembly;
+        gpci.pViewportState = &viewport;
+        gpci.pRasterizationState = &raster;
+        gpci.pMultisampleState = &multisample;
+        gpci.pColorBlendState = &blend;
+        gpci.pDynamicState = &dynamic;
+        gpci.layout = gOutputPipelineLayout;
+        gpci.renderPass = gWin.RenderPass;
+        vkc(vkCreateGraphicsPipelines(gDevice, VK_NULL_HANDLE, 1, &gpci,
+                                      gAlloc, &gOutputPipeline));
+        vkDestroyShaderModule(gDevice, frag, gAlloc);
+        vkDestroyShaderModule(gDevice, vert, gAlloc);
+
+        createSceneTarget(width, height);
+        gLinearHdr = true;
+    }
+
+    void destroyLinearHdr() {
+        destroySceneTarget();
+        if (gOutputPipeline) vkDestroyPipeline(gDevice, gOutputPipeline, gAlloc);
+        if (gOutputPipelineLayout) vkDestroyPipelineLayout(gDevice, gOutputPipelineLayout, gAlloc);
+        if (gOutputSetLayout) vkDestroyDescriptorSetLayout(gDevice, gOutputSetLayout, gAlloc);
+        if (gSceneSampler) vkDestroySampler(gDevice, gSceneSampler, gAlloc);
+        if (gScenePass) vkDestroyRenderPass(gDevice, gScenePass, gAlloc);
     }
 
     struct Texture {
@@ -1237,17 +1487,44 @@ namespace {
         VkRenderPassBeginInfo rp = {};
 
         rp.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
-        rp.renderPass = wd->RenderPass;
-        rp.framebuffer = fd->Framebuffer;
         rp.renderArea.extent.width = wd->Width;
         rp.renderArea.extent.height = wd->Height;
         rp.clearValueCount = 1;
         rp.pClearValues = &wd->ClearValue;
-        vkCmdBeginRenderPass(fd->CommandBuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
 
-        ImGui_ImplVulkan_RenderDrawData(draw, fd->CommandBuffer);
+        if (gLinearHdr) {
+            VkClearValue sceneClear{};
 
-        vkCmdEndRenderPass(fd->CommandBuffer);
+            rp.renderPass = gScenePass;
+            rp.framebuffer = gSceneFramebuffer;
+            rp.pClearValues = &sceneClear;
+            vkCmdBeginRenderPass(fd->CommandBuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            ImGui_ImplVulkan_RenderDrawData(draw, fd->CommandBuffer);
+            vkCmdEndRenderPass(fd->CommandBuffer);
+
+            rp.renderPass = wd->RenderPass;
+            rp.framebuffer = fd->Framebuffer;
+            rp.pClearValues = &wd->ClearValue;
+            vkCmdBeginRenderPass(fd->CommandBuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              gOutputPipeline);
+            vkCmdBindDescriptorSets(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    gOutputPipelineLayout, 0, 1, &gOutputSet,
+                                    0, nullptr);
+            VkViewport viewport{0, 0, (float)wd->Width, (float)wd->Height, 0, 1};
+            VkRect2D scissor{{0, 0}, {(u32)wd->Width, (u32)wd->Height}};
+
+            vkCmdSetViewport(fd->CommandBuffer, 0, 1, &viewport);
+            vkCmdSetScissor(fd->CommandBuffer, 0, 1, &scissor);
+            vkCmdDraw(fd->CommandBuffer, 3, 1, 0, 0);
+            vkCmdEndRenderPass(fd->CommandBuffer);
+        } else {
+            rp.renderPass = wd->RenderPass;
+            rp.framebuffer = fd->Framebuffer;
+            vkCmdBeginRenderPass(fd->CommandBuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
+            ImGui_ImplVulkan_RenderDrawData(draw, fd->CommandBuffer);
+            vkCmdEndRenderPass(fd->CommandBuffer);
+        }
 
         VkPipelineStageFlags wait = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
         VkSubmitInfo si = {};
@@ -1635,8 +1912,14 @@ namespace {
             glfwGetFramebufferSize(window, &nw, &nh);
 
             if (nw > 0 && nh > 0 && (gRebuild || gWin.Width != nw || gWin.Height != nh)) {
+                if (gLinearHdr) {
+                    vkDeviceWaitIdle(gDevice);
+                }
                 ImGui_ImplVulkan_SetMinImageCount(gMinImageCount);
                 ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, &gWin, gQueueFamily, gAlloc, nw, nh, gMinImageCount, 0);
+                if (gLinearHdr) {
+                    createSceneTarget((u32)nw, (u32)nh);
+                }
                 gWin.FrameIndex = 0;
                 gRebuild = false;
             }
@@ -1775,6 +2058,10 @@ int mainScreenshot(StringView path) {
         glfwGetFramebufferSize(window, &fbw, &fbh);
         setupVulkanWindow(surface, fbw, fbh, loaded && img.color.hdr());
 
+        if (loaded && img.color.hdr()) {
+            setupLinearHdr((u32)fbw, (u32)fbh);
+        }
+
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
         ImGui::GetIO().IniFilename = nullptr;
@@ -1792,15 +2079,15 @@ int mainScreenshot(StringView path) {
         ii.DescriptorPool = gDescPool;
         ii.MinImageCount = gMinImageCount;
         ii.ImageCount = gWin.ImageCount;
-        ii.PipelineInfoMain.RenderPass = gWin.RenderPass;
+        ii.PipelineInfoMain.RenderPass = gLinearHdr ? gScenePass : gWin.RenderPass;
         ii.PipelineInfoMain.Subpass = 0;
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
         if (loaded && img.color.hdr()) {
             ii.CustomShaderFragCreateInfo.sType =
                 VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            ii.CustomShaderFragCreateInfo.codeSize = sizeof(screenshot_pq_spv);
-            ii.CustomShaderFragCreateInfo.pCode = screenshot_pq_spv;
+            ii.CustomShaderFragCreateInfo.codeSize = sizeof(screenshot_scene_spv);
+            ii.CustomShaderFragCreateInfo.pCode = screenshot_scene_spv;
         }
 
         ImGui_ImplVulkan_Init(&ii);
@@ -1876,6 +2163,10 @@ int mainScreenshot(StringView path) {
             vkFreeMemory(gDevice, tex.memory, gAlloc);
         }
         ImGui_ImplVulkan_Shutdown();
+        if (gLinearHdr) {
+            destroyLinearHdr();
+            gLinearHdr = false;
+        }
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
         ImGui_ImplVulkanH_DestroyWindow(gInstance, gDevice, &gWin, gAlloc);

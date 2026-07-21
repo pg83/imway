@@ -66,21 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-## ImGui и UI
-
-Linear-light blend внутренней сцены физически корректен. Это хорошая политика, хотя KWin сознательно использует nonlinear blend для более привычного вида desktop UI.
-
-Но screenshot viewer сейчас рисует ImGui непосредственно поверх PQ-encoded swapchain. Fixed-function blending происходит над PQ code values, а не linear light. Crop overlays и прозрачный UI там имеют неправильную яркость.
-
-Viewer тоже должен иметь небольшой FP16 linear/nits intermediate:
-
-```text
-HDR image + SDR UI
-→ linear blend
-→ PQ encode
-→ swapchain
-```
-
 ## Screenshots
 
 JXL-путь хороший, но стоит дополнить:

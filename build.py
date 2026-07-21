@@ -94,8 +94,8 @@ protocols = library(
 
 
 shader_rules = []
-for shader in ["lock_blur", "imgui_scene", "output_transform", "output_transform_vert", "screenshot_pq"]:
-    stage = "vert" if shader == "output_transform_vert" else "frag" if shader in ["imgui_scene", "output_transform", "screenshot_pq"] else "comp"
+for shader in ["lock_blur", "imgui_scene", "output_transform", "output_transform_vert", "screenshot_scene", "screenshot_output"]:
+    stage = "vert" if shader == "output_transform_vert" else "frag" if shader in ["imgui_scene", "output_transform", "screenshot_scene", "screenshot_output"] else "comp"
     shader_rules.append(command(
         name=f"shader_{shader}",
         inputs=[f"$(S)/{shader}.{stage}"],

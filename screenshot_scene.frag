@@ -26,31 +26,26 @@ vec3 bt709ToBt2020(vec3 c) {
     ) * c;
 }
 
-vec3 pqEncode(vec3 nits) {
+vec3 pqDecode(vec3 e) {
     const float m1 = 2610.0 / 16384.0;
     const float m2 = 2523.0 / 32.0;
     const float c1 = 3424.0 / 4096.0;
     const float c2 = 2413.0 / 128.0;
     const float c3 = 2392.0 / 128.0;
-    vec3 p = pow(clamp(nits / 10000.0, 0.0, 1.0), vec3(m1));
-    return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2));
+    vec3 p = pow(max(e, 0.0), vec3(1.0 / m2));
+    return pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1)) * 10000.0;
 }
 
 void main() {
     vec4 sampled = texture(sTexture, In.UV.st);
 
     if (pc.textureEncoding == 2) {
-        // The scanout screenshot is already BT.2020/PQ. Preserve its code
-        // values exactly; only opacity is relevant for this opaque image.
-        fColor = vec4(sampled.rgb, sampled.a * In.Color.a);
+        fColor = vec4(pqDecode(sampled.rgb), sampled.a * In.Color.a);
         return;
     }
 
-    // ImGui colors and its font atlas are SDR/sRGB. Since color management is
-    // attached to the whole wl_surface, encode the UI into that surface's PQ
-    // signal while keeping its white at the compositor's SDR white level.
     vec3 tint = srgbToLinear(In.Color.rgb);
     vec3 linear709 = srgbToLinear(sampled.rgb) * tint;
     vec3 nits2020 = bt709ToBt2020(linear709) * pc.sdrWhiteNits;
-    fColor = vec4(pqEncode(nits2020), sampled.a * In.Color.a);
+    fColor = vec4(nits2020, sampled.a * In.Color.a);
 }
