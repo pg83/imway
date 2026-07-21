@@ -2559,11 +2559,20 @@ namespace {
         wl_resource_destroy(res);
     }
 
+    void sendConfigureBounds(ToplevelImpl& t) {
+        // the work area the client should fit into (v4); sent before the
+        // configure so a fresh toplevel can pick its initial size
+        if (wl_resource_get_version(t.res) >= XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION) {
+            xdg_toplevel_send_configure_bounds(t.res, t.srv->scene->workW, t.srv->scene->workH);
+        }
+    }
+
     void sendConfigure(XdgSurface& xs) {
         if (xs.toplevel) {
             wl_array states;
 
             wl_array_init(&states);
+            sendConfigureBounds(*xs.toplevel);
             xdg_toplevel_send_configure(xs.toplevel->res, 0, 0, &states);
             wl_array_release(&states);
         } else if (xs.popup) {
@@ -2611,6 +2620,20 @@ namespace {
 
         srv->scene->toplevels.pushBack(t);
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
+
+        // static window-management capabilities (v5): advertise what the ui
+        // actually offers so clients can hide unavailable menu entries. No
+        // window_menu — we have no client-driven window menu.
+        if (wl_resource_get_version(tres) >= XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION) {
+            wl_array caps;
+
+            wl_array_init(&caps);
+            *(u32*)wl_array_add(&caps, sizeof(u32)) = XDG_TOPLEVEL_WM_CAPABILITIES_MAXIMIZE;
+            *(u32*)wl_array_add(&caps, sizeof(u32)) = XDG_TOPLEVEL_WM_CAPABILITIES_FULLSCREEN;
+            *(u32*)wl_array_add(&caps, sizeof(u32)) = XDG_TOPLEVEL_WM_CAPABILITIES_MINIMIZE;
+            xdg_toplevel_send_wm_capabilities(tres, &caps);
+            wl_array_release(&caps);
+        }
     }
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes);
@@ -3084,6 +3107,13 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_MAXIMIZED;
         }
 
+        // a minimized window is not visible: tell the client (v6) so it can
+        // throttle or stop rendering
+        if (t.minimized &&
+            wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
+            *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_SUSPENDED;
+        }
+
         // csd windows are "tiled": the toolkits (GTK) then drop their drop
         // shadows, invisible resize margins and rounded corners, which we
         // would otherwise have to crop via window geometry; ssd clients must
@@ -3096,6 +3126,7 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_TILED_BOTTOM;
         }
 
+        sendConfigureBounds(t);
         xdg_toplevel_send_configure(t.res, w, h, &states);
         wl_array_release(&states);
 
@@ -8601,7 +8632,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 void WaylandImpl::createGlobals() {
     wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
-    wl_global_create(display, &xdg_wm_base_interface, 3, this, wmBaseBind);
+    wl_global_create(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);
     wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
     wl_global_create(display, &wl_data_device_manager_interface, 3, this, dataManagerBind);

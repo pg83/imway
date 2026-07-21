@@ -11,7 +11,7 @@
 - [ ] wl_compositor/wl_surface 4 → 7 (preferred_buffer_scale/transform, get_release)
 - [ ] wl_shm 1 → 3
 - [ ] wl_data_device_manager 3 → 4
-- [ ] xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)
+- [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done
 - [ ] zwp_linux_dmabuf_v1 → 6 (set_sampling_device, feedback v6)
 - [ ] wp_presentation 1 → 2 (+ снять ложный VSYNC на софтверном таймстампе)
 - [ ] wp_cursor_shape 1 → 2
