@@ -7,7 +7,7 @@ layout(push_constant) uniform OutputPush {
     vec4 toTarget[3];
     vec4 fromTarget[3];
     vec4 mapping; // peak nits, SDR scale (0 = PQ, -1 = unit bypass)
-    vec4 color;   // target luminance coefficients in yzw
+    vec4 color;   // tone map enable in x, target luminance coefficients in yzw
 } pc;
 
 vec3 applyRows(vec4 rows[3], vec3 c) {
@@ -45,6 +45,11 @@ vec3 dither(vec3 encoded) {
 
 float toneMap(float value, float peak) {
     value = max(value, 0.0);
+
+    // nothing in the scene exceeds the peak: the roll-off knee would only
+    // dim in-range content (SDR white ends at exactly peak on SDR outputs)
+    if (pc.color.x < 0.5) return min(value, peak);
+
     float knee = peak * 0.9;
     if (value <= knee) return value;
     float headroom = peak - knee;

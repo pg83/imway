@@ -451,6 +451,29 @@ ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color) {
     return mapping.fromTarget.apply(target);
 }
 
+double surfaceMaxNits(const ColorDescription& color, double sdrWhiteNits) {
+    switch (color.transfer) {
+        case ColorTransfer::pq:
+            return color.maxNits;
+        case ColorTransfer::hlg:
+            // the fixed 1000-nit OOTF in the scene shader
+            return 1000.0;
+        case ColorTransfer::extendedLinear:
+            // scRGB is the one transfer the scene shader does not clamp
+            return 1e9;
+        case ColorTransfer::bt1886:
+            return color.maxNits;
+        case ColorTransfer::gamma22:
+        case ColorTransfer::iccGamma:
+            return color.referenceNits > 0 ? color.referenceNits : sdrWhiteNits;
+        case ColorTransfer::sRgb:
+            break;
+    }
+
+    // sRGB electrical values are clamped to [0,1] and scaled by SDR white
+    return sdrWhiteNits;
+}
+
 void HdrContentMetadata::add(const ColorDescription& color, double sdrWhiteNits) {
     if (!color.hdr()) {
         maxCllNits = fmax(maxCllNits, sdrWhiteNits);

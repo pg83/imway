@@ -349,6 +349,9 @@ namespace {
         bool pickShow = false;
         bool forceComposition = false;
         bool lastFrameDirect = false;
+        // brightest possible scene value this frame (from visible surface
+        // descriptions); the display tone map engages only above output peak
+        double sceneMaxNits = 0;
         u8 pickR = 0, pickG = 0, pickB = 0;
         float frameMs[kFrameHistory] = {};
         int frameMsIdx = 0;
@@ -2057,6 +2060,9 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     push.row[6][1] = unitSdr ? -1.f : mapping.hdr ? 0.f : 203.f;
     push.row[6][2] = unitSdr ? 0.f :
         fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 1023.f : 255.f;
+    // the roll-off knee reshapes in-range content, so it only runs when
+    // something visible can actually exceed the output peak
+    push.row[7][0] = !unitSdr && sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
     push.row[7][1] = (float)mapping.targetLuma.r;
     push.row[7][2] = (float)mapping.targetLuma.g;
     push.row[7][3] = (float)mapping.targetLuma.b;
@@ -4456,9 +4462,17 @@ void RendererImpl::frameNow() {
     // visible. Client metadata is advisory, but it lets the output describe
     // the result of the same display mapping that the pixels pass through.
     contentMetadata.add(ColorDescription::sRgb(), outputColor.sdrWhiteNits);
+
+    double white = outputColor.hdr() ? outputColor.sdrWhiteNits : 203.0;
+
+    sceneMaxNits = white;
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
         if (s.hasContent && surfaceVisible(&s)) {
             contentMetadata.add(s.color, outputColor.sdrWhiteNits);
+
+            double nits = surfaceMaxNits(s.color, white);
+
+            sceneMaxNits = nits > sceneMaxNits ? nits : sceneMaxNits;
         }
     });
     output->setHdrMetadata(hdrOutputMetadata(outputColor, contentMetadata));

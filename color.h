@@ -158,6 +158,12 @@ OutputColorState outputColorState(const OutputConfiguration& config,
 OutputMapping outputMapping(const OutputColorState& output,
                             double colorTemperature = 0);
 ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
+
+// The brightest scene value a surface with this description can produce,
+// mirroring the renderer's per-transfer scale. Bounds the display tone map:
+// when nothing on screen can exceed the output peak, the roll-off knee must
+// not touch in-range content.
+double surfaceMaxNits(const ColorDescription& color, double sdrWhiteNits);
 HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
                                     const HdrContentMetadata& content);
 
