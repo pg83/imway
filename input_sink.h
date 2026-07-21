@@ -31,6 +31,10 @@ struct ScrollEvent {
     double dy = 0;
     i32 discreteX = 0;
     i32 discreteY = 0;
+    // high-resolution wheel steps (multiples of 120, one notch = 120), wheel
+    // source only; zero means "derive from discrete"
+    i32 value120X = 0;
+    i32 value120Y = 0;
     ScrollSource source = ScrollSource::continuous;
     bool stopX = false;
     bool stopY = false;

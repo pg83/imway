@@ -9,19 +9,26 @@ set -euo pipefail
 start_client
 wait_client "dither-temporal ready"
 sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/one.ppm"
-# force a fresh frame between the captures: screenshots read back the last
-# rendered frame, and an idle scene renders nothing new
-ctl "relmotion 1 0"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/two.ppm"
 
 x=$(dump_field 'app_id=dither-temporal' imgx)
 y=$(dump_field 'app_id=dither-temporal' imgy)
 w=$(dump_field 'app_id=dither-temporal' client_w)
 h=$(dump_field 'app_id=dither-temporal' client_h)
 
-python3 - "$XDG_RUNTIME_DIR/one.ppm" "$XDG_RUNTIME_DIR/two.ppm" "$x" "$y" "$w" "$h" <<'PY'
+# screenshots read back the last rendered frame; an idle scene renders
+# nothing new, so nudge the pointer to force a fresh frame between captures.
+# The frame counter (mod 64) drives the noise, so two genuinely distinct
+# frames must differ — retry until we catch two different frames.
+differ=0
+for attempt in $(seq 1 8); do
+    ctl "relmotion 1 0"
+    sleep 0.2
+    screenshot "$XDG_RUNTIME_DIR/one.ppm"
+    ctl "relmotion 1 0"
+    sleep 0.2
+    screenshot "$XDG_RUNTIME_DIR/two.ppm"
+
+    differ=$(python3 - "$XDG_RUNTIME_DIR/one.ppm" "$XDG_RUNTIME_DIR/two.ppm" "$x" "$y" "$w" "$h" <<'PY'
 import sys
 a, b = sys.argv[1], sys.argv[2]
 x, y, w, h = map(int, sys.argv[3:])
@@ -37,8 +44,12 @@ for yy in range(y + inset, y + h - inset):
         i = (yy * W + xx) * 3
         total += 1
         differ += da[i:i + 3] != db[i:i + 3]
-print(f"differ={differ} of {total}")
-assert differ > total // 20, "dither pattern is identical between frames (static noise)"
+print(differ if differ > total // 20 else 0)
 PY
+)
+    [[ "$differ" -gt 0 ]] && break
+done
 
-echo "OK: dither noise varies between frames"
+[[ "$differ" -gt 0 ]] || { echo "dither pattern identical across frames (static noise)"; exit 1; }
+
+echo "OK: dither noise varies between frames ($differ px)"

@@ -7,7 +7,7 @@
 Вычёркивается по мере готовности; транскрипт-первоисточник — ниже.
 
 ### Этап A — версии реализованного
-- [ ] wl_seat 5 → 11 (axis_value120, axis_relative_direction, warp)
+- [x] ~~wl_seat 5 → 11 (axis_value120, axis_relative_direction; warp deferred to pointer-warp)~~ done
 - [ ] wl_compositor/wl_surface 4 → 7 (preferred_buffer_scale/transform, get_release)
 - [ ] wl_shm 1 → 3
 - [ ] wl_data_device_manager 3 → 4

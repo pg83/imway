@@ -312,7 +312,20 @@ static void wl_tl_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t 
     (void)d; (void)t; (void)w; (void)h; (void)s;
 }
 static void wl_tl_close(void* d, struct xdg_toplevel* t) { (void)d; (void)t; exit(0); }
-static const struct xdg_toplevel_listener wl_tl_listener = {wl_tl_configure, wl_tl_close};
+// v4 configure_bounds / v5 wm_capabilities: no-ops so a shared-listener client
+// bound at xdg-shell >= 4 does not abort on an unhandled opcode
+static void wl_tl_configure_bounds(void* d, struct xdg_toplevel* t, int32_t w, int32_t h) {
+    (void)d; (void)t; (void)w; (void)h;
+}
+static void wl_tl_wm_capabilities(void* d, struct xdg_toplevel* t, struct wl_array* c) {
+    (void)d; (void)t; (void)c;
+}
+static const struct xdg_toplevel_listener wl_tl_listener = {
+    .configure = wl_tl_configure,
+    .close = wl_tl_close,
+    .configure_bounds = wl_tl_configure_bounds,
+    .wm_capabilities = wl_tl_wm_capabilities,
+};
 
 static void wl_make_toplevel(struct wl_toplevel_ctx* c, const char* title, int w, int h,
                              uint32_t color) {

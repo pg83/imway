@@ -256,6 +256,7 @@ void ControlImpl::handleLine(StringView cmd) {
 
         ev.dy = parseFloat(args);
         ev.discreteY = (i32)ev.dy;
+        ev.value120Y = (i32)ev.dy * 120;
         ev.source = ScrollSource::wheel;
         comp->entry->scroll(ev);
     } else if (verb == "screenshot"_sv) {

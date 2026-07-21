@@ -385,6 +385,7 @@ void LibinputSource::dispatch() {
 
                     scroll.dy = raw / (wheel ? 120.0 : 15.0);
                     scroll.discreteY = wheel ? (i32)(raw / 120.0) : 0;
+                    scroll.value120Y = wheel ? (i32)raw : 0;
                     scroll.stopY = !wheel && raw == 0;
                 }
 
@@ -394,6 +395,7 @@ void LibinputSource::dispatch() {
 
                     scroll.dx = raw / (wheel ? 120.0 : 15.0);
                     scroll.discreteX = wheel ? (i32)(raw / 120.0) : 0;
+                    scroll.value120X = wheel ? (i32)raw : 0;
                     scroll.stopX = !wheel && raw == 0;
                 }
 

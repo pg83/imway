@@ -5837,7 +5837,7 @@ namespace {
         wl_resource_set_implementation(res, &cursorShapeManagerImpl, data, nullptr);
     }
 
-    constexpr u32 kSeatVersion = 5;
+    constexpr u32 kSeatVersion = 11;
 
     SeatState* seatOf(wl_resource* res) {
         return (SeatState*)wl_resource_get_user_data(res);
@@ -6778,8 +6778,13 @@ void SeatState::handleScroll(const ScrollEvent& ev) {
             continue;
         }
 
-        bool discrete = wl_resource_get_version(p) >= WL_POINTER_AXIS_DISCRETE_SINCE_VERSION;
-        bool source = wl_resource_get_version(p) >= WL_POINTER_AXIS_SOURCE_SINCE_VERSION;
+        u32 pv = wl_resource_get_version(p);
+        // v8 replaces axis_discrete with the high-resolution axis_value120;
+        // send one or the other, never both
+        bool value120 = pv >= WL_POINTER_AXIS_VALUE120_SINCE_VERSION;
+        bool discrete = !value120 && pv >= WL_POINTER_AXIS_DISCRETE_SINCE_VERSION;
+        bool source = pv >= WL_POINTER_AXIS_SOURCE_SINCE_VERSION;
+        bool relDir = pv >= WL_POINTER_AXIS_RELATIVE_DIRECTION_SINCE_VERSION;
 
         if (source) {
             u32 wlSource = ev.source == ScrollSource::wheel ? WL_POINTER_AXIS_SOURCE_WHEEL
@@ -6789,23 +6794,43 @@ void SeatState::handleScroll(const ScrollEvent& ev) {
             wl_pointer_send_axis_source(p, wlSource);
         }
 
+        // we never invert the sign relative to the physical motion; libinput's
+        // natural-scroll config is already folded into the value
+        auto sendRelDir = [&](u32 axis) {
+            if (relDir) {
+                wl_pointer_send_axis_relative_direction(p, axis, WL_POINTER_AXIS_RELATIVE_DIRECTION_IDENTICAL);
+            }
+        };
+
         if (ev.dy != 0) {
-            if (discrete && ev.source == ScrollSource::wheel && ev.discreteY != 0) {
-                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_VERTICAL_SCROLL, ev.discreteY);
+            sendRelDir(WL_POINTER_AXIS_VERTICAL_SCROLL);
+
+            if (ev.source == ScrollSource::wheel) {
+                if (value120 && ev.value120Y != 0) {
+                    wl_pointer_send_axis_value120(p, WL_POINTER_AXIS_VERTICAL_SCROLL, ev.value120Y);
+                } else if (discrete && ev.discreteY != 0) {
+                    wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_VERTICAL_SCROLL, ev.discreteY);
+                }
             }
 
             wl_pointer_send_axis(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(ev.dy * 15.0));
-        } else if (ev.stopY && wl_resource_get_version(p) >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
+        } else if (ev.stopY && pv >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
             wl_pointer_send_axis_stop(p, t, WL_POINTER_AXIS_VERTICAL_SCROLL);
         }
 
         if (ev.dx != 0) {
-            if (discrete && ev.source == ScrollSource::wheel && ev.discreteX != 0) {
-                wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, ev.discreteX);
+            sendRelDir(WL_POINTER_AXIS_HORIZONTAL_SCROLL);
+
+            if (ev.source == ScrollSource::wheel) {
+                if (value120 && ev.value120X != 0) {
+                    wl_pointer_send_axis_value120(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, ev.value120X);
+                } else if (discrete && ev.discreteX != 0) {
+                    wl_pointer_send_axis_discrete(p, WL_POINTER_AXIS_HORIZONTAL_SCROLL, ev.discreteX);
+                }
             }
 
             wl_pointer_send_axis(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL, wl_fixed_from_double(ev.dx * 15.0));
-        } else if (ev.stopX && wl_resource_get_version(p) >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
+        } else if (ev.stopX && pv >= WL_POINTER_AXIS_STOP_SINCE_VERSION) {
             wl_pointer_send_axis_stop(p, t, WL_POINTER_AXIS_HORIZONTAL_SCROLL);
         }
 
