@@ -12,6 +12,10 @@
 inline constexpr VkFormat kVkFormat = VK_FORMAT_B8G8R8A8_UNORM;
 inline constexpr u32 kFourccArgb = 0x34325241;
 inline constexpr u32 kFourccXrgb = 0x34325258;
+inline constexpr u32 kFourccAr30 = 0x30335241;
+inline constexpr u32 kFourccXr30 = 0x30335258;
+inline constexpr u32 kFourccAb30 = 0x30334241;
+inline constexpr u32 kFourccXb30 = 0x30334258;
 
 struct DmabufFormat;
 

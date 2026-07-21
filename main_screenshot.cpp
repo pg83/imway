@@ -29,7 +29,11 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
+#include <screenshot_pq.spv.h>
+
 #include <png.h>
+#include <jxl/color_encoding.h>
+#include <jxl/encode.h>
 
 using namespace stl;
 
@@ -79,9 +83,16 @@ namespace {
         u64 allocationSize = 0;
         u64 renderDevice = 0;
         bool dmabuf = false;
+        bool hdr = false;
+        double sdrWhiteNits = 0;
+        Buffer rgb16;
 
         bool shared() const;
     };
+
+    struct Texture;
+    void readTexture(const Image& img, const Texture& tex, int x0, int y0,
+                     int x1, int y1, Image& out);
 
     constexpr u32 kMagic = 0x31574d49u; // 'IMW1' little-endian
 
@@ -133,6 +144,15 @@ namespace {
     void loadImage(StringView path, Image& img) {
         Buffer p(path);
 
+        if (const char* color = getenv("IMWAY_SHOT_COLOR")) {
+            StringView value(color), hs, ns;
+
+            if (value.split(':', hs, ns)) {
+                img.hdr = hs == "1"_sv;
+                img.sdrWhiteNits = parseFloat(ns);
+            }
+        }
+
         if (const char* spec = getenv("IMWAY_SHOT_DMABUF")) {
             if (!parseShared(StringView(spec), img)) {
                 fail("bad shared screenshot metadata"_sv);
@@ -171,7 +191,7 @@ namespace {
         img.px = (const u8*)img.file.data() + 12;
     }
 
-    // ---- png output ----
+    // ---- encoded output ----
     // mkdir -p: create each '/'-separated prefix of the path in turn
     void mkdirs(StringView path) {
         Buffer b(path);
@@ -221,7 +241,7 @@ namespace {
     }
 
     // stream the encoded png to a file; throws on open/write failure
-    void savePng(const Buffer& png, StringView file) {
+    void saveFile(const Buffer& data, StringView file) {
         ScopedFD fd(open(Buffer(file).cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
         if (fd.get() < 0) {
@@ -230,11 +250,106 @@ namespace {
 
         FDRegular out(fd);
 
-        out.write(png.data(), png.length());
+        out.write(data.data(), data.length());
         out.flush();
     }
 
-    // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.png (fallback ~/Pictures)
+    void encodeJxlPixels(const Image& img, const u16* pixels, u32 w, u32 h,
+                         Buffer& out) {
+        JxlEncoder* enc = JxlEncoderCreate(nullptr);
+
+        if (!enc) {
+            fail("jxl encoder allocation failed"_sv);
+        }
+
+        JxlBasicInfo info;
+
+        JxlEncoderInitBasicInfo(&info);
+        info.xsize = w;
+        info.ysize = h;
+        info.bits_per_sample = 16;
+        info.num_color_channels = 3;
+        info.uses_original_profile = JXL_TRUE;
+
+        JxlColorEncoding color{};
+
+        if (img.hdr) {
+            color.color_space = JXL_COLOR_SPACE_RGB;
+            color.white_point = JXL_WHITE_POINT_D65;
+            color.primaries = JXL_PRIMARIES_2100;
+            color.transfer_function = JXL_TRANSFER_FUNCTION_PQ;
+            color.rendering_intent = JXL_RENDERING_INTENT_RELATIVE;
+        } else {
+            JxlColorEncodingSetToSRGB(&color, JXL_FALSE);
+        }
+
+        JxlEncoderFrameSettings* frame = JxlEncoderFrameSettingsCreate(enc, nullptr);
+        JxlPixelFormat format{3, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
+        size_t bytes = (size_t)w * h * 3 * sizeof(u16);
+        bool ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS &&
+                  JxlEncoderSetColorEncoding(enc, &color) == JXL_ENC_SUCCESS &&
+                  frame && JxlEncoderSetFrameLossless(frame, JXL_TRUE) == JXL_ENC_SUCCESS &&
+                  JxlEncoderAddImageFrame(frame, &format, pixels, bytes) == JXL_ENC_SUCCESS;
+
+        if (!ok) {
+            JxlEncoderDestroy(enc);
+            fail("jxl encode setup failed"_sv);
+        }
+
+        JxlEncoderCloseInput(enc);
+        out.reset();
+
+        for (;;) {
+            unsigned char chunk[64 * 1024];
+            unsigned char* next = chunk;
+            size_t available = sizeof(chunk);
+            JxlEncoderStatus status = JxlEncoderProcessOutput(enc, &next, &available);
+
+            out.append(chunk, sizeof(chunk) - available);
+
+            if (status == JXL_ENC_SUCCESS) {
+                break;
+            }
+            if (status != JXL_ENC_NEED_MORE_OUTPUT) {
+                JxlEncoderDestroy(enc);
+                fail("jxl encode failed"_sv);
+            }
+        }
+
+        JxlEncoderDestroy(enc);
+    }
+
+    void encodeJxlSelection(const Image& img, const Texture& tex, int x0,
+                            int y0, int x1, int y1, Buffer& out) {
+        Image selected;
+
+        if (img.shared()) {
+            readTexture(img, tex, x0, y0, x1, y1, selected);
+        } else {
+            selected.w = (u32)(x1 - x0);
+            selected.h = (u32)(y1 - y0);
+            selected.rgb16.zero((size_t)selected.w * selected.h * 3 * sizeof(u16));
+            u16* dst = (u16*)selected.rgb16.mutData();
+
+            for (int y = y0; y < y1; y++) {
+                for (int x = x0; x < x1; x++) {
+                    const u8* src = img.px + ((size_t)y * img.w + x) * 4;
+                    size_t at = ((size_t)(y - y0) * selected.w + (x - x0)) * 3;
+
+                    dst[at + 0] = (u16)(src[0] * 257);
+                    dst[at + 1] = (u16)(src[1] * 257);
+                    dst[at + 2] = (u16)(src[2] * 257);
+                }
+            }
+        }
+
+        selected.hdr = img.hdr;
+        selected.sdrWhiteNits = img.sdrWhiteNits;
+        encodeJxlPixels(selected, (const u16*)selected.rgb16.data(),
+                        selected.w, selected.h, out);
+    }
+
+    // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.jxl (fallback ~/Pictures)
     Buffer destPath() {
         StringBuilder dir;
         const char* base = getenv("XDG_PICTURES_DIR");
@@ -259,15 +374,14 @@ namespace {
 
         strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
 
-        return Buffer(sv(StringBuilder() << sv(dir) << "/imway-"_sv << StringView(stamp) << ".png"_sv));
+        return Buffer(sv(StringBuilder() << sv(dir) << "/imway-"_sv << StringView(stamp) << ".jxl"_sv));
     }
 
     // ---- wayland clipboard ----
-    // glfw only speaks the text clipboard, so image/png goes on the wayland
-    // selection directly: bind wl_seat + wl_data_device_manager off glfw's own
-    // wl_display, offer a data source, and hold it alive to serve paste
-    // requests until the selection is taken over — the same "linger until
-    // overwritten" contract wl-copy honors.
+    // glfw only speaks the text clipboard, so image/jxl and the compatibility
+    // image/png go on the Wayland selection directly. Bind wl_seat and
+    // wl_data_device_manager off GLFW's display, then keep the source alive
+    // until the selection is taken over — the same contract wl-copy honors.
     struct Clip {
         wl_seat* seat = nullptr;
         wl_pointer* pointer = nullptr;
@@ -276,6 +390,7 @@ namespace {
         wl_data_device* device = nullptr;
         wl_data_source* source = nullptr;
         Buffer png;         // must outlive the source: send() can fire anytime
+        Buffer jxl;
         u32 serial = 0;
         bool cancelled = false;
     } gClip;
@@ -382,13 +497,15 @@ namespace {
 
     const wl_registry_listener clipRegListener = {clipReg, [](void*, wl_registry*, u32) {}};
 
-    void clipSend(void*, wl_data_source*, const char*, int32_t fd) {
+    void clipSend(void*, wl_data_source*, const char* mime, int32_t fd) {
         ScopedFD sfd(fd);
 
         try {
             FDPipe out(sfd);
 
-            out.write(gClip.png.data(), gClip.png.length());
+            const Buffer& data = StringView(mime) == "image/jxl"_sv ? gClip.jxl : gClip.png;
+
+            out.write(data.data(), data.length());
         } catch (...) {
             // the paste target may close its end early (EPIPE) — nothing to do
         }
@@ -425,10 +542,8 @@ namespace {
         }
     }
 
-    // put the encoded png (already in gClip.png) on the clipboard and block
-    // servicing wayland events until the selection is lost. the window is
-    // hidden by now, so we only hold the selection. throws if the compositor
-    // exposes no data-device machinery.
+    // Put the encoded JXL and PNG fallback on the clipboard and service
+    // Wayland events until ownership is lost. The window is hidden by now.
     void copyToClipboard(GLFWwindow* window) {
         wl_display* dpy = glfwGetWaylandDisplay();
 
@@ -438,6 +553,7 @@ namespace {
 
         gClip.source = wl_data_device_manager_create_data_source(gClip.ddm);
         wl_data_source_add_listener(gClip.source, &clipSourceListener, nullptr);
+        wl_data_source_offer(gClip.source, "image/jxl");
         wl_data_source_offer(gClip.source, "image/png");
         gClip.cancelled = false;
         wl_data_device_set_selection(gClip.device, gClip.source, gClip.serial);
@@ -503,12 +619,22 @@ namespace {
         app.pApplicationName = "imway screenshot";
         app.apiVersion = VK_API_VERSION_1_2;
 
+        Vector<const char*> instanceExts;
+
+        for (u32 i = 0; i < nexts; i++) {
+            instanceExts.pushBack(exts[i]);
+        }
+
+        if (img.hdr) {
+            instanceExts.pushBack(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
+        }
+
         VkInstanceCreateInfo ci = {};
 
         ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
         ci.pApplicationInfo = &app;
-        ci.enabledExtensionCount = nexts;
-        ci.ppEnabledExtensionNames = exts;
+        ci.enabledExtensionCount = (u32)instanceExts.length();
+        ci.ppEnabledExtensionNames = instanceExts.data();
         vkc(vkCreateInstance(&ci, gAlloc, &gInstance));
 
         if (img.shared()) {
@@ -599,7 +725,7 @@ namespace {
         vkc(vkCreateDescriptorPool(gDevice, &pi, gAlloc, &gDescPool));
     }
 
-    void setupVulkanWindow(VkSurfaceKHR surface, int w, int h) {
+    void setupVulkanWindow(VkSurfaceKHR surface, int w, int h, bool hdr) {
         ImGui_ImplVulkanH_Window* wd = &gWin;
 
         wd->Surface = surface;
@@ -612,9 +738,29 @@ namespace {
             fail("no vulkan WSI support"_sv);
         }
 
-        const VkFormat fmts[] = {VK_FORMAT_B8G8R8A8_UNORM, VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8_UNORM, VK_FORMAT_R8G8B8_UNORM};
+        const VkFormat hdrFmts[] = {
+            VK_FORMAT_A2R10G10B10_UNORM_PACK32,
+            VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VK_FORMAT_R8G8B8A8_UNORM,
+        };
+        const VkFormat sdrFmts[] = {
+            VK_FORMAT_B8G8R8A8_UNORM,
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_B8G8R8_UNORM,
+            VK_FORMAT_R8G8B8_UNORM,
+        };
+        const VkFormat* fmts = hdr ? hdrFmts : sdrFmts;
 
-        wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(gPhys, surface, fmts, 4, VK_COLORSPACE_SRGB_NONLINEAR_KHR);
+        VkColorSpaceKHR colorSpace = hdr ? VK_COLOR_SPACE_HDR10_ST2084_EXT :
+                                          VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+
+        wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
+            gPhys, surface, fmts, 4, colorSpace);
+
+        if (hdr && wd->SurfaceFormat.colorSpace != colorSpace) {
+            fail("vulkan WSI has no BT.2020/PQ surface"_sv);
+        }
 
         VkPresentModeKHR modes[] = {VK_PRESENT_MODE_FIFO_KHR};
 
@@ -1009,22 +1155,34 @@ namespace {
 
         vkc(vkMapMemory(gDevice, memory, 0, bytes, 0, &map));
         out.file.zero((size_t)bytes);
+        out.rgb16.zero((size_t)out.w * out.h * 3 * sizeof(u16));
 
         const u32* source = (const u32*)map;
         u32* dest = (u32*)out.file.mutData();
+        u16* rgb16 = (u16*)out.rgb16.mutData();
 
         for (size_t i = 0; i < (size_t)out.w * out.h; i++) {
             u32 pixel = source[i];
 
             if ((VkFormat)img.format ==
                 VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
-                dest[i] = ((pixel >> 22) & 0xff) |
-                          (((pixel >> 12) & 0xff) << 8) |
-                          (((pixel >> 2) & 0xff) << 16) | 0xff000000u;
+                u32 r = (pixel >> 20) & 1023;
+                u32 g = (pixel >> 10) & 1023;
+                u32 b = pixel & 1023;
+
+                dest[i] = (r >> 2) | ((g >> 2) << 8) | ((b >> 2) << 16) | 0xff000000u;
+                rgb16[i * 3 + 0] = (u16)((r * 65535 + 511) / 1023);
+                rgb16[i * 3 + 1] = (u16)((g * 65535 + 511) / 1023);
+                rgb16[i * 3 + 2] = (u16)((b * 65535 + 511) / 1023);
             } else {
-                dest[i] = ((pixel >> 16) & 0xff) |
-                          (pixel & 0x0000ff00u) |
-                          ((pixel & 0xff) << 16) | 0xff000000u;
+                u32 r = (pixel >> 16) & 0xff;
+                u32 g = (pixel >> 8) & 0xff;
+                u32 b = pixel & 0xff;
+
+                dest[i] = r | (g << 8) | (b << 16) | 0xff000000u;
+                rgb16[i * 3 + 0] = (u16)(r * 257);
+                rgb16[i * 3 + 1] = (u16)(g * 257);
+                rgb16[i * 3 + 2] = (u16)(b * 257);
             }
         }
 
@@ -1292,7 +1450,17 @@ namespace {
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        dl->AddImage((ImTextureID)tex.ds, origin, ImVec2(origin.x + content.x, origin.y + content.y));
+        if (img.hdr) {
+            dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback,
+                            (void*)(intptr_t)2);
+        }
+
+        dl->AddImage((ImTextureID)tex.ds, origin,
+                     ImVec2(origin.x + content.x, origin.y + content.y));
+
+        if (img.hdr) {
+            dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
+        }
 
         ImVec2 mouse = ImGui::GetIO().MousePos;
         auto toScreen = [&](float px, float py) {
@@ -1604,7 +1772,7 @@ int mainScreenshot(StringView path) {
         int fbw, fbh;
 
         glfwGetFramebufferSize(window, &fbw, &fbh);
-        setupVulkanWindow(surface, fbw, fbh);
+        setupVulkanWindow(surface, fbw, fbh, loaded && img.hdr);
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1626,7 +1794,17 @@ int mainScreenshot(StringView path) {
         ii.PipelineInfoMain.RenderPass = gWin.RenderPass;
         ii.PipelineInfoMain.Subpass = 0;
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+
+        if (loaded && img.hdr) {
+            ii.CustomShaderFragCreateInfo.sType =
+                VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            ii.CustomShaderFragCreateInfo.codeSize = sizeof(screenshot_pq_spv);
+            ii.CustomShaderFragCreateInfo.pCode = screenshot_pq_spv;
+        }
+
         ImGui_ImplVulkan_Init(&ii);
+        ImGui_ImplVulkan_SetSdrWhite(
+            img.sdrWhiteNits > 0 ? (float)img.sdrWhiteNits : 203.f);
         initClipboard();
 
         Texture tex;
@@ -1654,15 +1832,16 @@ int mainScreenshot(StringView path) {
                 cropRegion(img, view.crop, x0, y0, x1, y1);
 
                 if (action == 1) {
-                    Buffer png;
+                    Buffer jxl;
 
-                    encodeSelection(img, tex, x0, y0, x1, y1, png);
+                    encodeJxlSelection(img, tex, x0, y0, x1, y1, jxl);
 
                     Buffer dest = destPath();
 
-                    savePng(png, sv(dest));
+                    saveFile(jxl, sv(dest));
                     sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
                 } else {
+                    encodeJxlSelection(img, tex, x0, y0, x1, y1, gClip.jxl);
                     encodeSelection(img, tex, x0, y0, x1, y1, gClip.png);
                     // nothing left to show; hold the selection with no window
                     copyToClipboard(window);

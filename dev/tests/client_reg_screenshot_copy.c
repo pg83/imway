@@ -1,17 +1,22 @@
 // End-to-end receiver for the screenshot cropper's Copy action. It validates
-// the image/png payload, then replaces the selection so the hidden cropper is
-// cancelled and can exit.
+// both image/jxl and the compatibility image/png payload, then replaces the
+// selection so the hidden cropper is cancelled and can exit.
 
 #include "wl_util.h"
+
+#include <jxl/color_encoding.h>
+#include <jxl/decode.h>
 
 static struct wl_toplevel_ctx top;
 static struct wl_data_device* device;
 static struct wl_data_offer* selection;
 static int image_png;
+static int image_jxl;
 
 static void offer_mime(void* data, struct wl_data_offer* offer, const char* mime) {
     (void)data; (void)offer;
     if (!strcmp(mime, "image/png")) image_png = 1;
+    if (!strcmp(mime, "image/jxl")) image_jxl = 1;
 }
 
 static void offer_source_actions(void* data, struct wl_data_offer* offer, uint32_t actions) {
@@ -91,6 +96,132 @@ static const struct wl_data_source_listener source_listener = {
     source_action,
 };
 
+static size_t receive_prefix(const char* mime, unsigned char* data, size_t len) {
+    int fds[2];
+
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 0;
+    }
+
+    wl_data_offer_receive(selection, mime, fds[1]);
+    close(fds[1]);
+    wl_display_flush(wl_dpy);
+
+    size_t used = 0;
+
+    while (used < len) {
+        wl_display_roundtrip(wl_dpy);
+        ssize_t n = read(fds[0], data + used, len - used);
+
+        if (n <= 0) break;
+        used += (size_t)n;
+    }
+
+    close(fds[0]);
+    return used;
+}
+
+static size_t receive_all(const char* mime, unsigned char** result) {
+    int fds[2];
+
+    if (pipe(fds) < 0) {
+        perror("pipe");
+        return 0;
+    }
+
+    wl_data_offer_receive(selection, mime, fds[1]);
+    close(fds[1]);
+    wl_display_flush(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+
+    size_t used = 0;
+    size_t size = 64 * 1024;
+    unsigned char* data = (unsigned char*)malloc(size);
+
+    if (!data) {
+        close(fds[0]);
+        return 0;
+    }
+
+    for (;;) {
+        if (used == size) {
+            size_t next_size = size * 2;
+            unsigned char* next = (unsigned char*)realloc(data, next_size);
+
+            if (!next) {
+                free(data);
+                close(fds[0]);
+                return 0;
+            }
+
+            data = next;
+            size = next_size;
+        }
+
+        ssize_t n = read(fds[0], data + used, size - used);
+
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        used += (size_t)n;
+    }
+
+    close(fds[0]);
+    *result = data;
+    return used;
+}
+
+static int validate_hdr_jxl(const unsigned char* data, size_t size) {
+    JxlDecoder* dec = JxlDecoderCreate(NULL);
+
+    if (!dec) return 0;
+
+    int basic_ok = 0;
+    int color_ok = 0;
+
+    if (JxlDecoderSubscribeEvents(
+            dec, JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING) !=
+            JXL_DEC_SUCCESS ||
+        JxlDecoderSetInput(dec, data, size) != JXL_DEC_SUCCESS) {
+        JxlDecoderDestroy(dec);
+        return 0;
+    }
+
+    JxlDecoderCloseInput(dec);
+
+    for (;;) {
+        JxlDecoderStatus status = JxlDecoderProcessInput(dec);
+
+        if (status == JXL_DEC_BASIC_INFO) {
+            JxlBasicInfo info;
+
+            if (JxlDecoderGetBasicInfo(dec, &info) == JXL_DEC_SUCCESS) {
+                basic_ok = info.bits_per_sample == 16;
+            }
+        } else if (status == JXL_DEC_COLOR_ENCODING) {
+            JxlColorEncoding color;
+
+            if (JxlDecoderGetColorAsEncodedProfile(
+                    dec, JXL_COLOR_PROFILE_TARGET_ORIGINAL, &color) ==
+                JXL_DEC_SUCCESS) {
+                color_ok = color.color_space == JXL_COLOR_SPACE_RGB &&
+                           color.white_point == JXL_WHITE_POINT_D65 &&
+                           color.primaries == JXL_PRIMARIES_2100 &&
+                           color.transfer_function == JXL_TRANSFER_FUNCTION_PQ;
+            }
+        } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER ||
+                   status == JXL_DEC_SUCCESS) {
+            break;
+        } else if (status == JXL_DEC_ERROR ||
+                   status == JXL_DEC_NEED_MORE_INPUT) {
+            break;
+        }
+    }
+
+    JxlDecoderDestroy(dec);
+    return basic_ok && color_ok;
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(40);
@@ -106,37 +237,18 @@ int main(void) {
     wl_data_device_add_listener(device, &device_listener, NULL);
     printf("copy receiver ready\n");
 
-    for (int i = 0; i < 1000 && (!selection || !image_png); i++) {
+    for (int i = 0; i < 1000 && (!selection || !image_png || !image_jxl); i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(10000);
     }
 
-    if (!selection || !image_png) {
-        fprintf(stderr, "no image/png screenshot selection\n");
+    if (!selection || !image_png || !image_jxl) {
+        fprintf(stderr, "screenshot selection lacks image/jxl or image/png\n");
         return 1;
     }
-
-    int fds[2];
-    if (pipe(fds) < 0) {
-        perror("pipe");
-        return 1;
-    }
-
-    wl_data_offer_receive(selection, "image/png", fds[1]);
-    close(fds[1]);
-    wl_display_flush(wl_dpy);
 
     unsigned char signature[8] = {};
-    size_t used = 0;
-
-    while (used < sizeof(signature)) {
-        wl_display_roundtrip(wl_dpy);
-        ssize_t n = read(fds[0], signature + used, sizeof(signature) - used);
-        if (n <= 0) break;
-        used += (size_t)n;
-    }
-
-    close(fds[0]);
+    size_t used = receive_prefix("image/png", signature, sizeof(signature));
 
     static const unsigned char png_signature[8] = {
         0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n',
@@ -146,6 +258,33 @@ int main(void) {
         fprintf(stderr, "screenshot clipboard payload is not PNG\n");
         return 1;
     }
+
+    memset(signature, 0, sizeof(signature));
+    used = receive_prefix("image/jxl", signature, sizeof(signature));
+
+    static const unsigned char jxl_container_signature[8] = {
+        0x00, 0x00, 0x00, 0x0c, 'J', 'X', 'L', ' ',
+    };
+    int jxl_codestream = used >= 2 && signature[0] == 0xff && signature[1] == 0x0a;
+    int jxl_container = used == sizeof(signature) &&
+                        !memcmp(signature, jxl_container_signature,
+                                sizeof(signature));
+
+    if (!jxl_codestream && !jxl_container) {
+        fprintf(stderr, "screenshot clipboard payload is not JPEG XL\n");
+        return 1;
+    }
+
+    unsigned char* jxl = NULL;
+    size_t jxl_size = receive_all("image/jxl", &jxl);
+
+    if (!jxl_size || !validate_hdr_jxl(jxl, jxl_size)) {
+        fprintf(stderr, "JPEG XL screenshot lacks 16-bit BT.2020/PQ metadata\n");
+        free(jxl);
+        return 1;
+    }
+
+    free(jxl);
 
     for (int i = 0; i < 300 && wlk_focus != top.surface; i++) {
         wl_display_roundtrip(wl_dpy);
@@ -164,6 +303,6 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     wl_display_roundtrip(wl_dpy);
 
-    printf("screenshot png ok\n");
+    printf("screenshot jxl and png ok\n");
     return 0;
 }

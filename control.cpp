@@ -6,6 +6,7 @@
 #include "pooled_fd.h"
 #include "renderer.h"
 #include "intr_list.h"
+#include "output.h"
 #include "scene.h"
 #include "util.h"
 
@@ -260,6 +261,8 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;
+    } else if (verb == "sdr-white"_sv) {
+        comp->output->setSdrWhite(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
     } else if (verb == "quit"_sv) {

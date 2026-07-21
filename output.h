@@ -19,6 +19,8 @@ struct SharedScanout {
     u64 modifier = 0;
     u64 allocationSize = 0;
     u64 renderDevice = 0;
+    bool hdr = false;
+    double sdrWhiteNits = 0;
 };
 
 struct Output {
@@ -49,15 +51,14 @@ struct Output {
     virtual void setBrightness(float v) = 0;
 
     // macOS-style "sdr white": brightness of SDR 1.0 on the HDR pipeline in
-    // nits, 0 means the hdr path is off; setting takes effect on the next
-    // frame commit via a GAMMA_LUT rebuild
+    // nits, 0 means the hdr path is off; HDR client luminance stays absolute
     virtual bool isHdr() const = 0;
     virtual double sdrWhiteNits() const = 0;
     virtual void setSdrWhite(double nits) = 0;
 
-    // night light: color temperature in kelvin, <= 0 or >= 6500 is neutral;
-    // rides the GAMMA_LUT like the sdr white knob, works without hdr too
+    // night light: color temperature in kelvin, <= 0 or >= 6500 is neutral
     virtual void setColorTemp(double kelvin) = 0;
+    virtual double colorTemp() const = 0;
 
     // timestamp (CLOCK_MONOTONIC ns) and vblank sequence of the last
     // completed pageflip; false when the backend has no real flips

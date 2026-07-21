@@ -1,7 +1,7 @@
 #version 450
 layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D src;
-layout(binding = 1, rgba8) writeonly uniform image2D dst;
+layout(binding = 1, rgba16f) writeonly uniform image2D dst;
 layout(push_constant) uniform PC {
     int pq;
     int wide;
@@ -15,7 +15,12 @@ vec3 pq_eotf(vec3 e) {
     return pow(max(ep - c1, 0.0) / (c2 - c3 * ep), vec3(1.0 / m1)); // 1.0 == 10000 nits
 }
 float s2l(float c) { return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4); }
-float l2s(float c) { return c <= 0.0031308 ? c * 12.92 : 1.055 * pow(c, 1.0 / 2.4) - 0.055; }
+
+vec3 bt709_to_bt2020(vec3 c) {
+    return mat3(0.627404, 0.069097, 0.016391,
+                0.329283, 0.919540, 0.088013,
+                0.043313, 0.011362, 0.895595) * c;
+}
 
 void main() {
     ivec2 p = ivec2(gl_GlobalInvocationID.xy);
@@ -24,16 +29,12 @@ void main() {
     vec4 s = texture(src, (vec2(p) + 0.5) / vec2(sz));
     vec3 c = s.rgb;
     if (pc.pq != 0) {
-        c = pq_eotf(c) * (10000.0 / max(pc.refWhite, 1.0)); // reference white -> 1.0
+        c = pq_eotf(c) * 10000.0; // absolute nits
     } else {
         c = vec3(s2l(c.r), s2l(c.g), s2l(c.b));
     }
-    if (pc.wide != 0) { // BT.2020 -> BT.709 (column-major)
-        mat3 m = mat3( 1.660491, -0.124550, -0.018151,
-                      -0.587641,  1.132900, -0.100579,
-                      -0.072850, -0.008349,  1.118730);
-        c = m * c;
+    if (pc.wide == 0) {
+        c = bt709_to_bt2020(c);
     }
-    c = clamp(c, 0.0, 1.0);
-    imageStore(dst, p, vec4(l2s(c.r), l2s(c.g), l2s(c.b), s.a));
+    imageStore(dst, p, vec4(c, s.a));
 }

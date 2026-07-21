@@ -513,6 +513,13 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     scale << "IMGUI_SCALE="_sv << (long double)uiScale;
 
     StringBuilder metadata;
+    StringBuilder color;
+    bool hdr = image ? image->hdr : output->isHdr();
+    double sdrWhite = image ? image->sdrWhiteNits :
+                              (hdr ? output->sdrWhiteNits() : 0);
+
+    color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv
+          << (long double)sdrWhite;
 
     if (image) {
         metadata << "IMWAY_SHOT_DMABUF="_sv
@@ -526,13 +533,13 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
                  << (unsigned long long)image->renderDevice;
     }
 
-    StringView env[] = {sv(display), sv(scale), sv(metadata)};
+    StringView env[] = {sv(display), sv(scale), sv(color), sv(metadata)};
     SupervisorSpawn spec;
 
     spec.args = args;
     spec.argCount = 3;
     spec.env = env;
-    spec.envCount = image ? 3 : 2;
+    spec.envCount = image ? 4 : 3;
 
     comp->supervisor->spawn(spec);
     retain(fd);

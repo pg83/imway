@@ -257,36 +257,43 @@ DeviceVk::~DeviceVk() noexcept {
 }
 
 void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
-    VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
-    VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
-
-    props.pNext = &modList;
-    vkGetPhysicalDeviceFormatProperties2(this->phys, kVkFormat, &props);
-
-    Vector<VkDrmFormatModifierPropertiesEXT> mods;
-
-    mods.zero(modList.drmFormatModifierCount);
-    modList.pDrmFormatModifierProperties = mods.mutData();
-    vkGetPhysicalDeviceFormatProperties2(this->phys, kVkFormat, &props);
-
     int n = 0;
 
-    for (const auto& m : mods) {
-        if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes) {
-            continue;
+    auto addFormat = [&](VkFormat vkFormat, u32 alphaFourcc, u32 opaqueFourcc) {
+        VkDrmFormatModifierPropertiesListEXT modList{
+            VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
+        VkFormatProperties2 props{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+
+        props.pNext = &modList;
+        vkGetPhysicalDeviceFormatProperties2(this->phys, vkFormat, &props);
+
+        Vector<VkDrmFormatModifierPropertiesEXT> mods;
+
+        mods.zero(modList.drmFormatModifierCount);
+        modList.pDrmFormatModifierProperties = mods.mutData();
+        vkGetPhysicalDeviceFormatProperties2(this->phys, vkFormat, &props);
+
+        for (const auto& m : mods) {
+            if (m.drmFormatModifierPlaneCount > (u32)kDmabufMaxPlanes ||
+                !(m.drmFormatModifierTilingFeatures &
+                  VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+                continue;
+            }
+
+            DmabufFormat alpha{alphaFourcc, m.drmFormatModifier};
+            DmabufFormat opaque{opaqueFourcc, m.drmFormatModifier};
+
+            vis.visit(&alpha);
+            vis.visit(&opaque);
+            n += 2;
         }
+    };
 
-        if (!(m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
-            continue;
-        }
+    addFormat(kVkFormat, kFourccArgb, kFourccXrgb);
+    addFormat(VK_FORMAT_A2R10G10B10_UNORM_PACK32,
+              kFourccAr30, kFourccXr30);
+    addFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+              kFourccAb30, kFourccXb30);
 
-        DmabufFormat argb{kFourccArgb, m.drmFormatModifier};
-        DmabufFormat xrgb{kFourccXrgb, m.drmFormatModifier};
-
-        vis.visit(&argb);
-        vis.visit(&xrgb);
-        n += 2;
-    }
-
-    sysO << "imway: dmabuf formats: "_sv << n << " (modifiers per fourcc: "_sv << n / 2 << ")"_sv << endL;
+    sysO << "imway: dmabuf formats: "_sv << n << endL;
 }

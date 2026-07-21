@@ -288,12 +288,12 @@ void LockFilter::setup(RenderContext& ctx) {
     VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &baseFramebuffer));
 
     for (int i = 0; i < 2; i++) {
-        createImage(blurW, blurH, VK_FORMAT_R8G8B8A8_UNORM,
+        createImage(blurW, blurH, VK_FORMAT_R16G16B16A16_SFLOAT,
             VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
             blurImages[i], blurMemory[i]);
 
         vci.image = blurImages[i];
-        vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         VK_CHECK(vkCreateImageView(device, &vci, nullptr, &blurViews[i]));
     }
 
@@ -569,7 +569,9 @@ void Dialog::draw(Composer& c, bool& open) {
         ImVec2 max(min.x + w, min.y + h);
 
         if (ImTextureID background = filter.background()) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
             draw->AddImage(background, min, max);
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
         }
 
         draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, 0.42f)));

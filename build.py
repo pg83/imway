@@ -23,6 +23,7 @@ seat = pkg_config("libseat")
 dbus = pkg_config("dbus-1")
 glfw = pkg_config("glfw3")
 png = pkg_config("libpng")
+jxl = pkg_config("libjxl")
 vulkan = pkg_config("vulkan")
 lunasvg = pkg_config("lunasvg")
 sndio = pkg_config("sndio", required=False)
@@ -90,14 +91,15 @@ protocols = library(
 
 
 shader_rules = []
-for shader in ["cm_convert", "lock_blur"]:
+for shader in ["cm_convert", "lock_blur", "imgui_scene", "output_transform", "output_transform_vert", "screenshot_pq"]:
+    stage = "vert" if shader == "output_transform_vert" else "frag" if shader in ["imgui_scene", "output_transform", "screenshot_pq"] else "comp"
     shader_rules.append(command(
         name=f"shader_{shader}",
-        inputs=[f"$(S)/{shader}.comp"],
+        inputs=[f"$(S)/{shader}.{stage}"],
         outputs=[f"$(B)/shaders/{shader}.spv.h"],
         descr='SH',
         cmd=[
-            "glslangValidator", "-V", f"$(S)/{shader}.comp",
+            "glslangValidator", "-V", f"$(S)/{shader}.{stage}",
             "--variable-name", f"{shader}_spv", "-o", f"$(B)/shaders/{shader}.spv.h",
         ],
     ))
@@ -118,7 +120,7 @@ imway = program(
     deps=[
         imgui, protocols,
         wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
-        png, vulkan, lunasvg, system, sndio, pulse,
+        png, jxl, vulkan, lunasvg, system, sndio, pulse,
     ],
 )
 
@@ -163,11 +165,16 @@ client_protocols = library(
 tests = []
 for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
+    test_deps = [client_protocols, wayland_client, drm, dbus]
+
+    if name == "client_reg_screenshot_copy":
+        test_deps.append(jxl)
+
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",
         srcs=[source],
-        deps=[client_protocols, wayland_client, drm, dbus],
+        deps=test_deps,
     ))
 
 

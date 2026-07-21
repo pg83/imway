@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Copy from the screenshot cropper must install an image/png selection and the
-# hidden owner must exit after another focused client replaces it.
+# imway-args: --hdr 203
+# Copy from the screenshot cropper must install image/jxl and the image/png
+# compatibility selection, then exit after another focused client replaces it.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -19,10 +20,10 @@ sleep 0.2
 ctl "key 46 release"
 ctl "key 29 release"
 
-expect_client_ok "screenshot Copy did not publish a PNG"
+expect_client_ok "screenshot Copy did not publish JXL and PNG"
 await 100 in_log "toplevel imway screenshot destroyed" || {
     echo "hidden screenshot owner did not exit after replacement"
     exit 1
 }
 expect_alive "screenshot Copy killed the compositor"
-echo "OK: screenshot Copy published PNG and released ownership cleanly"
+echo "OK: screenshot Copy published JXL and PNG and released ownership cleanly"

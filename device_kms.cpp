@@ -565,9 +565,7 @@ namespace {
         u32 connColorspace = 0, connHdrMeta = 0;
         u64 colorspaceBt2020 = 0, colorspaceDefault = 0;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
-        u32 hdrMetaBlob = 0, degammaBlob = 0, ctmBlob = 0, gammaBlob = 0;
-        u64 gamLutSize = 0;
-        bool gammaDirty = false;
+        u32 hdrMetaBlob = 0;
         double tempK = 0; // night light color temperature, 0 = neutral
 
         // last completed pageflip, for presentation-time feedback
@@ -608,12 +606,12 @@ namespace {
         int physicalHeightMm() const override;
         void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
-        void buildGammaLut();
 
         bool isHdr() const override;
         double sdrWhiteNits() const override;
         void setSdrWhite(double nits) override;
         void setColorTemp(double kelvin) override;
+        double colorTemp() const override;
         bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1);
@@ -978,7 +976,6 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     // light without hdr, and ALL of it is needed for the startup scrub —
     // kms color state survives compositor restarts
     crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
-    gamLutSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT_SIZE", 0);
     crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
     crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
     connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
@@ -1192,12 +1189,8 @@ KmsOutput::~KmsOutput() noexcept {
         drmModeDestroyPropertyBlob(fd, modeBlob);
     }
 
-    u32 colorBlobs[] = {hdrMetaBlob, degammaBlob, ctmBlob, gammaBlob};
-
-    for (u32 blob : colorBlobs) {
-        if (blob) {
-            drmModeDestroyPropertyBlob(fd, blob);
-        }
+    if (hdrMetaBlob) {
+        drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
     }
 }
 
@@ -1374,11 +1367,8 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     STD_VERIFY(planeId);
 }
 
-// SDR desktop on an HDR display: the whole transform runs on the DCN scanout
-// pipeline, the renderer keeps producing plain sRGB. DEGAMMA_LUT decodes sRGB
-// to linear, CTM rotates BT.709 primaries into BT.2020, GAMMA_LUT maps linear
-// [0..1] to PQ with 1.0 pinned at hdrNits — that knob is the macOS-style
-// "sdr white" brightness
+// Vulkan hands KMS an already encoded BT.2020/PQ XR30 image. The connector
+// properties describe that signal; the CRTC color pipeline stays passthrough.
 bool KmsOutput::setupHdr() {
     if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "BT2020_RGB", &connColorspace, &colorspaceBt2020)) {
         sysE << "imway: hdr: connector has no Colorspace/BT2020_RGB"_sv << endL;
@@ -1386,10 +1376,8 @@ bool KmsOutput::setupHdr() {
         return false;
     }
 
-    u64 degSize = getPropValue(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT_SIZE", 0);
-
-    if (!connHdrMeta || !crtcDegammaProp || !crtcCtmProp || !crtcGammaProp || !degSize || !gamLutSize) {
-        sysE << "imway: hdr: missing kms props (meta "_sv << connHdrMeta << ", degamma "_sv << crtcDegammaProp << "/"_sv << degSize << ", ctm "_sv << crtcCtmProp << ", gamma "_sv << crtcGammaProp << "/"_sv << gamLutSize << ")"_sv << endL;
+    if (!connHdrMeta) {
+        sysE << "imway: hdr: connector has no HDR_OUTPUT_METADATA"_sv << endL;
 
         return false;
     }
@@ -1418,96 +1406,7 @@ bool KmsOutput::setupHdr() {
     meta.hdmi_metadata_type1.max_fall = 400;
     drmModeCreatePropertyBlob(fd, &meta, sizeof(meta), &hdrMetaBlob);
 
-    Vector<drm_color_lut> lut;
-
-    lut.zero((size_t)degSize);
-
-    for (u64 i = 0; i < degSize; i++) {
-        double x = (double)i / (double)(degSize - 1);
-        double lin = x <= 0.04045 ? x / 12.92 : pow((x + 0.055) / 1.055, 2.4);
-        u16 v = (u16)(lin * 65535.0 + 0.5);
-
-        lut.mut(i) = {v, v, v, 0};
-    }
-
-    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(degSize * sizeof(drm_color_lut)), &degammaBlob);
-
-    // BT.709 -> BT.2020, S31.32 fixed point (all coefficients positive)
-    static const double m709to2020[9] = {0.627404, 0.329283, 0.043313, 0.069097, 0.919540, 0.011362, 0.016391, 0.088013, 0.895595};
-    drm_color_ctm ctm{};
-
-    for (int i = 0; i < 9; i++) {
-        ctm.matrix[i] = (u64)(m709to2020[i] * 4294967296.0 + 0.5);
-    }
-
-    drmModeCreatePropertyBlob(fd, &ctm, sizeof(ctm), &ctmBlob);
-
-    buildGammaLut();
-
-    return hdrMetaBlob && degammaBlob && ctmBlob && gammaBlob;
-}
-
-// Tanner Helland's fit of the black body curve; only the warm (< 6500K)
-// side matters here, red stays at 1.0
-static void tempToRgb(double k, double& r, double& g, double& b) {
-    double t = k / 100.0;
-
-    r = 1.0;
-    g = (99.4708025861 * log(t) - 161.1195681661) / 255.0;
-    b = t <= 19.0 ? 0.0 : (138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0;
-    g = g < 0 ? 0 : g > 1 ? 1 : g;
-    b = b < 0 ? 0 : b > 1 ? 1 : b;
-}
-
-// the single GAMMA_LUT carries both knobs: linear [0..1] -> PQ with 1.0
-// pinned at hdrNits when the hdr pipeline is up, a plain srgb-encoded ramp
-// otherwise, both tinted by the night light temperature; with everything
-// neutral the blob is dropped (0 = kernel passthrough)
-void KmsOutput::buildGammaLut() {
-    if (!crtcGammaProp || !gamLutSize) {
-        return;
-    }
-
-    if (gammaBlob) {
-        drmModeDestroyPropertyBlob(fd, gammaBlob);
-        gammaBlob = 0;
-    }
-
-    double mr = 1, mg = 1, mb = 1;
-
-    if (tempK > 0) {
-        tempToRgb(tempK, mr, mg, mb);
-    }
-
-    // gate on hdrNits, not hdrActive: this runs from setupHdr before the
-    // caller has flipped hdrActive, and gating on the flag kills hdr setup
-    if (hdrNits <= 0 && tempK <= 0) {
-        return;
-    }
-
-    Vector<drm_color_lut> lut;
-
-    lut.zero((size_t)gamLutSize);
-
-    for (u64 i = 0; i < gamLutSize; i++) {
-        double x = (double)i / (double)(gamLutSize - 1);
-
-        if (hdrNits > 0) {
-            auto pq = [](double y) {
-                double ym = pow(y, 0.1593017578125);
-
-                return pow((0.8359375 + 18.8515625 * ym) / (1.0 + 18.6875 * ym), 78.84375);
-            };
-            double y = x * hdrNits / 10000.0;
-
-            lut.mut(i) = {(u16)(pq(y * mr) * 65535.0 + 0.5), (u16)(pq(y * mg) * 65535.0 + 0.5), (u16)(pq(y * mb) * 65535.0 + 0.5), 0};
-        } else {
-            // redshift-style: scale the encoded ramp, close enough for a tint
-            lut.mut(i) = {(u16)(x * mr * 65535.0 + 0.5), (u16)(x * mg * 65535.0 + 0.5), (u16)(x * mb * 65535.0 + 0.5), 0};
-        }
-    }
-
-    drmModeCreatePropertyBlob(fd, lut.data(), (u32)(gamLutSize * sizeof(drm_color_lut)), &gammaBlob);
+    return hdrMetaBlob != 0;
 }
 
 bool KmsOutput::isHdr() const {
@@ -1524,8 +1423,7 @@ void KmsOutput::setSdrWhite(double nits) {
     }
 
     hdrNits = nits;
-    buildGammaLut();
-    gammaDirty = true;
+    c->scene->needsFrame = true;
 }
 
 void KmsOutput::setColorTemp(double kelvin) {
@@ -1536,8 +1434,11 @@ void KmsOutput::setColorTemp(double kelvin) {
     }
 
     tempK = k;
-    buildGammaLut();
-    gammaDirty = true;
+    c->scene->needsFrame = true;
+}
+
+double KmsOutput::colorTemp() const {
+    return tempK;
 }
 
 bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
@@ -1589,9 +1490,9 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         if (hdrActive) {
             drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
             drmModeAtomicAddProperty(req, connectorId, connHdrMeta, hdrMetaBlob);
-            drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, degammaBlob);
-            drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, ctmBlob);
-            drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
+            if (crtcDegammaProp) drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
+            if (crtcCtmProp) drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
+            if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
         } else {
             // scrub color state left over by a previous session: connector
             // and crtc props are not reset by anyone on restart
@@ -1611,17 +1512,8 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
                 drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
             }
 
-            if (crtcGammaProp) {
-                // 0 unless the night light already built a tint ramp
-                drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
-            }
+            if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
         }
-    }
-
-    // live lut change (sdr white / night light): no modeset needed, a zero
-    // blob resets the crtc to passthrough
-    if (crtcGammaProp && gammaDirty && !doModeset) {
-        drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, gammaBlob);
     }
 
     drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
@@ -1660,10 +1552,6 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
     int ret = drmModeAtomicCommit(fd, req, flags, this);
 
     drmModeAtomicFree(req);
-
-    if (ret == 0) {
-        gammaDirty = false;
-    }
 
     // drmModeAtomicCommit returns -errno itself; reading errno here would
     // report success on libdrm's early exits that never touch errno
@@ -2277,6 +2165,8 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
     image.modifier = sb.modifier;
     image.allocationSize = sb.allocationSize;
     image.renderDevice = vk->renderDev;
+    image.hdr = hdrActive;
+    image.sdrWhiteNits = hdrActive ? hdrNits : 0;
 
     screenshotIndex = i;
     screenshotWasPresented = false;
@@ -2443,7 +2333,7 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 }
 
 bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
-    if (!started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
+    if (hdrActive || !started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
         return false;
     }
 

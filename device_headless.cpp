@@ -51,13 +51,15 @@ namespace {
         Composer* c = nullptr;
         int w = 0, h = 0;
         double hz = 60.0;
+        double hdrNits = 0;
+        double tempK = 0;
 
         // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
         // so headless exercises the renderer's hw-cursor rasterization path
         // (rasterizeShape) that a real headless output otherwise never hits
         int curCap = 0;
 
-        HeadlessOutput(Composer& comp, int width, int height, double refresh);
+        HeadlessOutput(Composer& comp, int width, int height, double refresh, double hdrWhite);
 
         int width() const override;
         int height() const override;
@@ -80,6 +82,7 @@ namespace {
         double sdrWhiteNits() const override;
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
+        double colorTemp() const override;
         bool lastFlip(u64&, u32&) const override;
         bool start() override;
         bool ready() const override;
@@ -116,11 +119,12 @@ namespace {
     };
 }
 
-HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh)
+HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh, double hdrWhite)
     : c(&comp)
     , w(width)
     , h(height)
     , hz(refresh)
+    , hdrNits(hdrWhite)
 {
     if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
         curCap = 64;
@@ -187,17 +191,27 @@ void HeadlessOutput::setPowerSave(bool) {
 }
 
 bool HeadlessOutput::isHdr() const {
-    return false;
+    return hdrNits > 0;
 }
 
 double HeadlessOutput::sdrWhiteNits() const {
-    return 0;
+    return hdrNits;
 }
 
-void HeadlessOutput::setSdrWhite(double) {
+void HeadlessOutput::setSdrWhite(double nits) {
+    if (hdrNits > 0 && nits > 0) {
+        hdrNits = nits;
+        c->scene->needsFrame = true;
+    }
 }
 
-void HeadlessOutput::setColorTemp(double) {
+void HeadlessOutput::setColorTemp(double kelvin) {
+    tempK = kelvin > 0 && kelvin < 6500 ? kelvin : 0;
+    c->scene->needsFrame = true;
+}
+
+double HeadlessOutput::colorTemp() const {
+    return tempK;
 }
 
 bool HeadlessOutput::lastFlip(u64&, u32&) const {
@@ -315,14 +329,14 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     }
 }
 
-::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double) {
+::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double hdrNits) {
     ModeSpec m{1280, 800, 60};
 
     if (!modeStr.empty()) {
         STD_VERIFY(m.parse(modeStr));
     }
 
-    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0);
+    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, hdrNits);
 }
 
 Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {

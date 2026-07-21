@@ -278,6 +278,7 @@ struct ImGui_ImplVulkan_Data
     ImGui_ImplVulkan_InitInfo   VulkanInitInfo;
     VkDeviceSize                BufferMemoryAlignment;
     VkDeviceSize                NonCoherentAtomSize;
+    float                       SdrWhiteNits;
     VkPipelineCreateFlags       PipelineCreateFlags;
     VkDescriptorSetLayout       DescriptorSetLayout;
     VkPipelineLayout            PipelineLayout;
@@ -301,6 +302,7 @@ struct ImGui_ImplVulkan_Data
         memset((void*)this, 0, sizeof(*this));
         BufferMemoryAlignment = 256;
         NonCoherentAtomSize = 64;
+        SdrWhiteNits = 203.0f;
     }
 };
 
@@ -532,7 +534,27 @@ static void ImGui_ImplVulkan_SetupRenderState(ImDrawData* draw_data, VkPipeline 
         translate[1] = -1.0f - draw_data->DisplayPos.y * scale[1];
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, sizeof(float) * 0, sizeof(float) * 2, scale);
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, sizeof(float) * 2, sizeof(float) * 2, translate);
+        int texture_encoding = 0;
+        vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4, sizeof(texture_encoding), &texture_encoding);
+        vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 5, sizeof(bd->SdrWhiteNits), &bd->SdrWhiteNits);
     }
+}
+
+void ImGui_ImplVulkan_SetSdrWhite(float nits)
+{
+    ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
+    if (bd)
+        bd->SdrWhiteNits = nits > 0.0f ? nits : 203.0f;
+}
+
+void ImGui_ImplVulkan_TextureEncodingCallback(const ImDrawList*, const ImDrawCmd* cmd)
+{
+    ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
+    ImGui_ImplVulkan_RenderState* state = (ImGui_ImplVulkan_RenderState*)ImGui::GetPlatformIO().Renderer_RenderState;
+    if (!bd || !state)
+        return;
+    int encoding = (int)(intptr_t)cmd->UserCallbackData;
+    vkCmdPushConstants(state->CommandBuffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4, sizeof(encoding), &encoding);
 }
 
 // Render function
@@ -1122,9 +1144,9 @@ bool ImGui_ImplVulkan_CreateDeviceObjects()
     {
         // Constants: we are using 'vec2 offset' and 'vec2 scale' instead of a full 3d projection matrix
         VkPushConstantRange push_constants[1] = {};
-        push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+        push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push_constants[0].offset = sizeof(float) * 0;
-        push_constants[0].size = sizeof(float) * 4;
+        push_constants[0].size = sizeof(float) * 6;
         VkDescriptorSetLayout set_layout[1] = { bd->DescriptorSetLayout };
         VkPipelineLayoutCreateInfo layout_info = {};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

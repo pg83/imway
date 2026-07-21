@@ -57,6 +57,9 @@
 #include <xdg-shell-server-protocol.h>
 
 #include <cm_convert.spv.h> // generated SPIR-V: cm_convert_spv[]
+#include <imgui_scene.spv.h>
+#include <output_transform.spv.h>
+#include <output_transform_vert.spv.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -109,6 +112,7 @@ struct SurfaceTexture: stl::IntrusiveNode {
     u32 convGen = 0xffffffffu;               // colorGeneration reflected by convImage
     bool converted = false;                  // ds currently points at convView
     bool convFresh = false;                  // convImage layout still UNDEFINED
+    int encoding = 0;                        // 0 sRGB, 1 relative linear, 2 absolute nits
 };
 
 struct TextureLease {
@@ -177,11 +181,24 @@ namespace {
         u32 queueFamily = 0;
         VkQueue queue = VK_NULL_HANDLE;
 
+        // Composition is always linear BT.2020 in absolute nits. target is the
+        // final encoded image used only by non-scanout backends.
+        VkImage sceneTarget = VK_NULL_HANDLE;
+        VkDeviceMemory sceneMemory = VK_NULL_HANDLE;
+        VkImageView sceneView = VK_NULL_HANDLE;
+        VkFramebuffer sceneFramebuffer = VK_NULL_HANDLE;
         VkImage target = VK_NULL_HANDLE;
         VkDeviceMemory targetMemory = VK_NULL_HANDLE;
         VkImageView targetView = VK_NULL_HANDLE;
         VkRenderPass renderPass = VK_NULL_HANDLE;
         VkFramebuffer framebuffer = VK_NULL_HANDLE;
+        VkRenderPass outputPass = VK_NULL_HANDLE;
+        VkDescriptorSetLayout outputSetLayout = VK_NULL_HANDLE;
+        VkPipelineLayout outputPipeLayout = VK_NULL_HANDLE;
+        VkPipeline outputPipeline = VK_NULL_HANDLE;
+        VkDescriptorPool outputDescPool = VK_NULL_HANDLE;
+        VkDescriptorSet outputDesc = VK_NULL_HANDLE;
+        VkDescriptorSet cursorOutputDesc = VK_NULL_HANDLE;
 
         VkBuffer readback = VK_NULL_HANDLE;
         VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
@@ -328,6 +345,10 @@ namespace {
         VkDeviceMemory curImgMem = VK_NULL_HANDLE;
         VkImageView curView = VK_NULL_HANDLE;
         VkFramebuffer curFb = VK_NULL_HANDLE;
+        VkImage curScene = VK_NULL_HANDLE;
+        VkDeviceMemory curSceneMem = VK_NULL_HANDLE;
+        VkImageView curSceneView = VK_NULL_HANDLE;
+        VkFramebuffer curSceneFb = VK_NULL_HANDLE;
         VkBuffer curReadback = VK_NULL_HANDLE;
         VkDeviceMemory curReadbackMem = VK_NULL_HANDLE;
         void* curReadbackMap = nullptr;
@@ -362,6 +383,10 @@ namespace {
         void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
+        void setupOutputTransform();
+        void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer,
+                                   VkDescriptorSet source, int w, int h,
+                                   bool hdr, float sdrWhite, double kelvin);
 
         void setupColorConvert();
         void ensureConversion(SurfaceTexture* tex, Surface& s);
@@ -1182,6 +1207,8 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 }
 
 void RendererImpl::setup(int w, int h) {
+    constexpr VkFormat sceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
     width = w;
     height = h;
     scanout = output->scanoutCount() > 0;
@@ -1190,15 +1217,24 @@ void RendererImpl::setup(int w, int h) {
         fmt = output->scanoutBuffer(0)->format;
     }
 
+    createImage(width, height, sceneFormat,
+                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
+                sceneTarget, sceneMemory);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+    vci.image = sceneTarget;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = sceneFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &sceneView));
+
     if (!scanout) {
         createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
 
-        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-
         vci.image = target;
-        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = fmt;
-        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
     }
 
@@ -1206,14 +1242,14 @@ void RendererImpl::setup(int w, int h) {
 
     VkAttachmentDescription att{};
 
-    att.format = fmt;
+    att.format = sceneFormat;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
     att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     att.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     att.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     att.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    att.finalLayout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    att.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     VkAttachmentReference ref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkSubpassDescription sub{};
@@ -1228,16 +1264,38 @@ void RendererImpl::setup(int w, int h) {
     rpci.pAttachments = &att;
     rpci.subpassCount = 1;
     rpci.pSubpasses = &sub;
+    VkSubpassDependency sceneDone{};
+
+    sceneDone.srcSubpass = 0;
+    sceneDone.dstSubpass = VK_SUBPASS_EXTERNAL;
+    sceneDone.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sceneDone.dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    sceneDone.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    sceneDone.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    rpci.dependencyCount = 1;
+    rpci.pDependencies = &sceneDone;
     VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &renderPass));
+
+    VkFramebufferCreateInfo sceneFci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+    sceneFci.renderPass = renderPass;
+    sceneFci.attachmentCount = 1;
+    sceneFci.pAttachments = &sceneView;
+    sceneFci.width = width;
+    sceneFci.height = height;
+    sceneFci.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(device, &sceneFci, nullptr, &sceneFramebuffer));
+
+    att.format = fmt;
+    att.finalLayout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    rpci.dependencyCount = 0;
+    rpci.pDependencies = nullptr;
+    VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &outputPass));
 
     if (scanout) {
         for (int i = 0; i < output->scanoutCount(); i++) {
-            VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-
             vci.image = output->scanoutBuffer(i)->image;
-            vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
             vci.format = fmt;
-            vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
             VkImageView view = VK_NULL_HANDLE;
 
@@ -1247,7 +1305,7 @@ void RendererImpl::setup(int w, int h) {
 
             VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
-            fci.renderPass = renderPass;
+            fci.renderPass = outputPass;
             fci.attachmentCount = 1;
             fci.pAttachments = &view;
             fci.width = width;
@@ -1262,7 +1320,7 @@ void RendererImpl::setup(int w, int h) {
     } else {
         VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
-        fci.renderPass = renderPass;
+        fci.renderPass = outputPass;
         fci.attachmentCount = 1;
         fci.pAttachments = &targetView;
         fci.width = width;
@@ -1324,6 +1382,8 @@ void RendererImpl::setup(int w, int h) {
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VK_CHECK(vkCreateSampler(device, &sci, nullptr, &sampler));
+
+    setupOutputTransform();
 
     texPool = VkTexturePool::create(*pool, device, sampler);
 
@@ -1391,6 +1451,9 @@ void RendererImpl::setup(int w, int h) {
     ii.CheckVkResultFn = imguiVkCheck;
     ii.PipelineInfoMain.RenderPass = renderPass;
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+    ii.CustomShaderFragCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ii.CustomShaderFragCreateInfo.codeSize = sizeof(imgui_scene_spv);
+    ii.CustomShaderFragCreateInfo.pCode = imgui_scene_spv;
 
     STD_VERIFY(ImGui_ImplVulkan_Init(&ii));
 
@@ -1398,25 +1461,43 @@ void RendererImpl::setup(int w, int h) {
     hwCapH = output->cursorCapH();
 
     if (hwCapW > 0 && hwCapH > 0) {
+        createImage(hwCapW, hwCapH, VK_FORMAT_R16G16B16A16_SFLOAT,
+                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                    curScene, curSceneMem);
         createImage(hwCapW, hwCapH, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
 
         VkImageViewCreateInfo cvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
-        cvi.image = curImg;
+        cvi.image = curScene;
         cvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        cvi.format = fmt;
+        cvi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curSceneView));
+        cvi.image = curImg;
+        cvi.format = fmt;
         VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curView));
 
         VkFramebufferCreateInfo cfi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
         cfi.renderPass = renderPass;
         cfi.attachmentCount = 1;
-        cfi.pAttachments = &curView;
+        cfi.pAttachments = &curSceneView;
         cfi.width = (u32)hwCapW;
         cfi.height = (u32)hwCapH;
         cfi.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &cfi, nullptr, &curSceneFb));
+        cfi.renderPass = outputPass;
+        cfi.pAttachments = &curView;
         VK_CHECK(vkCreateFramebuffer(device, &cfi, nullptr, &curFb));
+
+        VkDescriptorImageInfo imageInfo{sampler, curSceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+
+        write.dstSet = cursorOutputDesc;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imageInfo;
+        vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
         createHostBuffer((VkDeviceSize)hwCapW * hwCapH * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, curReadback, curReadbackMem, &curReadbackMap);
 
@@ -1439,10 +1520,19 @@ void RendererImpl::setup(int w, int h) {
     // unwinds these after ~RendererImpl has waited the device idle and shut
     // imgui down, and before DeviceVk dies. LIFO — dependents last.
     pooledVk(*pool, device, renderPass);
+    pooledVk(*pool, device, sceneMemory);
+    pooledVk(*pool, device, sceneTarget);
+    pooledVk(*pool, device, sceneView);
+    pooledVk(*pool, device, sceneFramebuffer);
     pooledVk(*pool, device, targetMemory);
     pooledVk(*pool, device, target);
     pooledVk(*pool, device, targetView);
     pooledVk(*pool, device, framebuffer);
+    pooledVk(*pool, device, outputPass);
+    pooledVk(*pool, device, outputSetLayout);
+    pooledVk(*pool, device, outputPipeLayout);
+    pooledVk(*pool, device, outputPipeline);
+    pooledVk(*pool, device, outputDescPool);
 
     pooledVk(*pool, device, readbackMemory);
     pooledVk(*pool, device, readback);
@@ -1457,6 +1547,10 @@ void RendererImpl::setup(int w, int h) {
     }
 
     if (curImg) {
+        pooledVk(*pool, device, curSceneMem);
+        pooledVk(*pool, device, curScene);
+        pooledVk(*pool, device, curSceneView);
+        pooledVk(*pool, device, curSceneFb);
         pooledVk(*pool, device, curImgMem);
         pooledVk(*pool, device, curImg);
         pooledVk(*pool, device, curView);
@@ -1472,10 +1566,8 @@ void RendererImpl::setup(int w, int h) {
     pooledVk(*pool, device, cmDescPool);
 }
 
-// A compute pipeline that converts a color-managed surface (PQ and/or BT.2020)
-// into the sRGB composition space. Bindings: 0 = source sampler2D, 1 = dest
-// storage image; push constants carry the transfer/gamut flags + reference
-// white. See cm_convert.comp.
+// Color-managed surfaces enter the linear BT.2020 scene here. PQ becomes
+// absolute nits; SDR stays relative to the compositor's SDR white setting.
 void RendererImpl::setupColorConvert() {
     VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
 
@@ -1551,6 +1643,7 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
             texPool->free(tex->ds, tex->dsPool);
             tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
             tex->converted = false;
+            tex->encoding = 0;
         }
         return;
     }
@@ -1561,14 +1654,14 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
 
     freeConversion(tex);
 
-    createImage(tex->w, tex->h, VK_FORMAT_R8G8B8A8_UNORM,
+    createImage(tex->w, tex->h, VK_FORMAT_R16G16B16A16_SFLOAT,
                 VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, tex->convImage, tex->convMemory);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
     vci.image = tex->convImage;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = VK_FORMAT_R8G8B8A8_UNORM;
+    vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->convView));
 
@@ -1602,6 +1695,7 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
     }
     tex->ds = texPool->alloc(tex->convView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
     tex->converted = true;
+    tex->encoding = s.colorPq ? 2 : 1;
     tex->convGen = s.colorGeneration;
     tex->convFresh = true;
 }
@@ -1936,6 +2030,180 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     }
 }
 
+void RendererImpl::setupOutputTransform() {
+    VkDescriptorSetLayoutBinding binding{};
+
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+
+    dlci.bindingCount = 1;
+    dlci.pBindings = &binding;
+    VK_CHECK(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &outputSetLayout));
+
+    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 5 * sizeof(u32)};
+    VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+
+    plci.setLayoutCount = 1;
+    plci.pSetLayouts = &outputSetLayout;
+    plci.pushConstantRangeCount = 1;
+    plci.pPushConstantRanges = &push;
+    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &outputPipeLayout));
+
+    VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+
+    smci.codeSize = sizeof(output_transform_vert_spv);
+    smci.pCode = output_transform_vert_spv;
+    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &vert));
+    smci.codeSize = sizeof(output_transform_spv);
+    smci.pCode = output_transform_spv;
+    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &frag));
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vert;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = frag;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertex{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo input{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+
+    input.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+
+    viewport.viewportCount = 1;
+    viewport.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+
+    raster.polygonMode = VK_POLYGON_MODE_FILL;
+    raster.cullMode = VK_CULL_MODE_NONE;
+    raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    raster.lineWidth = 1.f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState attachment{};
+
+    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+
+    blend.attachmentCount = 1;
+    blend.pAttachments = &attachment;
+
+    VkDynamicState dynamicStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+
+    dynamic.dynamicStateCount = 2;
+    dynamic.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+
+    gpci.stageCount = 2;
+    gpci.pStages = stages;
+    gpci.pVertexInputState = &vertex;
+    gpci.pInputAssemblyState = &input;
+    gpci.pViewportState = &viewport;
+    gpci.pRasterizationState = &raster;
+    gpci.pMultisampleState = &ms;
+    gpci.pColorBlendState = &blend;
+    gpci.pDynamicState = &dynamic;
+    gpci.layout = outputPipeLayout;
+    gpci.renderPass = outputPass;
+    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &outputPipeline));
+    vkDestroyShaderModule(device, frag, nullptr);
+    vkDestroyShaderModule(device, vert, nullptr);
+
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+
+    dpci.maxSets = 2;
+    dpci.poolSizeCount = 1;
+    dpci.pPoolSizes = &poolSize;
+    VK_CHECK(vkCreateDescriptorPool(device, &dpci, nullptr, &outputDescPool));
+
+    VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+
+    dsai.descriptorPool = outputDescPool;
+    VkDescriptorSet sets[2] = {};
+
+    dsai.descriptorSetCount = 2;
+    dsai.pSetLayouts = &outputSetLayout;
+    VkDescriptorSetLayout layouts[2] = {outputSetLayout, outputSetLayout};
+
+    dsai.pSetLayouts = layouts;
+    VK_CHECK(vkAllocateDescriptorSets(device, &dsai, sets));
+    outputDesc = sets[0];
+    cursorOutputDesc = sets[1];
+
+    VkDescriptorImageInfo imageInfo{sampler, sceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+
+    write.dstSet = outputDesc;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+}
+
+void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
+                                         VkFramebuffer outputFramebuffer,
+                                         VkDescriptorSet source, int w, int h,
+                                         bool hdr, float sdrWhite,
+                                         double kelvin) {
+    VkClearValue clear{};
+    VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+
+    begin.renderPass = outputPass;
+    begin.framebuffer = outputFramebuffer;
+    begin.renderArea = {{0, 0}, {(u32)w, (u32)h}};
+    begin.clearValueCount = 1;
+    begin.pClearValues = &clear;
+    vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, outputPipeline);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, outputPipeLayout,
+                            0, 1, &source, 0, nullptr);
+
+    VkViewport viewport{0.f, 0.f, (float)w, (float)h, 0.f, 1.f};
+    VkRect2D scissor{{0, 0}, {(u32)w, (u32)h}};
+
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    vkCmdSetScissor(commands, 0, 1, &scissor);
+
+    struct {
+        i32 hdr;
+        float sdrWhite;
+        float temperature[3];
+    } push = {hdr ? 1 : 0, sdrWhite, {1.f, 1.f, 1.f}};
+
+    if (kelvin > 0 && kelvin < 6500) {
+        double t = kelvin / 100.0;
+
+        push.temperature[1] = (float)((99.4708025861 * log(t) - 161.1195681661) / 255.0);
+        push.temperature[2] = t <= 19.0 ? 0.f : (float)((138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0);
+        push.temperature[1] = push.temperature[1] < 0 ? 0 : push.temperature[1] > 1 ? 1 : push.temperature[1];
+        push.temperature[2] = push.temperature[2] < 0 ? 0 : push.temperature[2] > 1 ? 1 : push.temperature[2];
+    }
+
+    vkCmdPushConstants(commands, outputPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(commands, 3, 1, 0, 0);
+    vkCmdEndRenderPass(commands);
+}
+
 bool RendererImpl::importDmabuf(Surface& s) {
     DmabufBuffer* b = s.dmabuf;
 
@@ -1960,6 +2228,12 @@ bool RendererImpl::importDmabuf(Surface& s) {
     }
 
     auto* tex = b->lifetime->make<SurfaceTexture>();
+    VkFormat vkFormat = b->format == kFourccAr30 ||
+                        b->format == kFourccXr30 ?
+                        VK_FORMAT_A2R10G10B10_UNORM_PACK32 :
+                        b->format == kFourccAb30 ||
+                        b->format == kFourccXb30 ?
+                        VK_FORMAT_A2B10G10R10_UNORM_PACK32 : kVkFormat;
 
     tex->w = b->width;
     tex->h = b->height;
@@ -1999,7 +2273,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     ici.pNext = &extInfo;
     ici.imageType = VK_IMAGE_TYPE_2D;
-    ici.format = kVkFormat;
+    ici.format = vkFormat;
     ici.extent = {(u32)b->width, (u32)b->height, 1};
     ici.mipLevels = 1;
     ici.arrayLayers = 1;
@@ -2151,10 +2425,11 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = kVkFormat;
+    vci.format = vkFormat;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    if (b->format == kFourccXrgb) {
+    if (b->format == kFourccXrgb || b->format == kFourccXr30 ||
+        b->format == kFourccXb30) {
         vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
     }
 
@@ -2240,14 +2515,25 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 
         surfaceUvs(s, ux0, uy0, ux1, uy1, uv);
 
+        ImDrawList* draw = ImGui::GetWindowDrawList();
+
+        if (s.texture->encoding) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback,
+                              (void*)(intptr_t)s.texture->encoding);
+        }
+
         if (s.bufferTransform == 0) {
             ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2]);
         } else {
             ImGui::PushID(&s);
             ImGui::InvisibleButton("surface", ImVec2(w, h));
-            ImGui::GetWindowDrawList()->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
+            draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
                 ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
             ImGui::PopID();
+        }
+
+        if (s.texture->encoding) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
         }
 
         s.imgX = x - gx;
@@ -2302,8 +2588,17 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         ImVec2 uv[4];
 
         surfaceUvs(s, ux0, uy0, ux1, uy1, uv);
-        ImGui::GetForegroundDrawList()->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
+        ImDrawList* draw = ImGui::GetForegroundDrawList();
+
+        if (s.texture->encoding) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback,
+                              (void*)(intptr_t)s.texture->encoding);
+        }
+        draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
             ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
+        if (s.texture->encoding) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
+        }
         s.imgX = x - gx;
         s.imgY = y - gy;
 
@@ -2473,13 +2768,17 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     VkRenderPassBeginInfo rbi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
     rbi.renderPass = renderPass;
-    rbi.framebuffer = curFb;
+    rbi.framebuffer = curSceneFb;
     rbi.renderArea = {{0, 0}, {(u32)hwCapW, (u32)hwCapH}};
     rbi.clearValueCount = 1;
     rbi.pClearValues = &clear;
     vkCmdBeginRenderPass(curCmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    ImGui_ImplVulkan_SetSdrWhite(1.f);
     ImGui_ImplVulkan_RenderDrawData(&dd, curCmd);
     vkCmdEndRenderPass(curCmd);
+
+    recordOutputTransform(curCmd, curFb, cursorOutputDesc, hwCapW, hwCapH,
+                          false, 1.f, 0);
 
     VkImageLayout layout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -3442,7 +3741,11 @@ void RendererImpl::buildUi(Scene& scene) {
                 ImVec2 tuv0((float)t->surface->geomX() / texW, (float)t->surface->geomY() / texH);
                 ImVec2 tuv1(((float)t->surface->geomX() + sw) / texW, ((float)t->surface->geomY() + sh) / texH);
 
+                int encoding = t->surface->texture->encoding;
+
+                if (encoding) dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)(intptr_t)encoding);
                 dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th), tuv0, tuv1);
+                if (encoding) dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
 
                 if (t == altTabSel) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
@@ -3623,7 +3926,7 @@ void RendererImpl::syncScanoutTargets() {
 
         VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
-        fci.renderPass = renderPass;
+        fci.renderPass = outputPass;
         fci.attachmentCount = 1;
         fci.pAttachments = &scanViews[i];
         fci.width = width;
@@ -3886,20 +4189,30 @@ bool RendererImpl::renderFrame(int scanIdx) {
         }
     });
 
+    ImGui_ImplVulkan_SetSdrWhite(output->isHdr() ? (float)output->sdrWhiteNits() : 203.f);
+
     RenderContext renderCtx;
 
     renderCtx.physicalDevice = phys;
     renderCtx.device = device;
     renderCtx.commands = cmd;
-    renderCtx.format = fmt;
+    renderCtx.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     renderCtx.sampler = sampler;
     renderCtx.outputPass = renderPass;
-    renderCtx.outputFramebuffer = scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer;
+    renderCtx.outputFramebuffer = sceneFramebuffer;
     renderCtx.textures = texPool;
     renderCtx.drawData = ImGui::GetDrawData();
-    renderCtx.clearColor[0] = desktopColor.r;
-    renderCtx.clearColor[1] = desktopColor.g;
-    renderCtx.clearColor[2] = desktopColor.b;
+    auto srgbToLinear = [](float x) {
+        return x <= 0.04045f ? x / 12.92f : powf((x + 0.055f) / 1.055f, 2.4f);
+    };
+    float r = srgbToLinear(desktopColor.r);
+    float g = srgbToLinear(desktopColor.g);
+    float b = srgbToLinear(desktopColor.b);
+    float white = output->isHdr() ? (float)output->sdrWhiteNits() : 203.f;
+
+    renderCtx.clearColor[0] = (0.627404f * r + 0.329283f * g + 0.043313f * b) * white;
+    renderCtx.clearColor[1] = (0.069097f * r + 0.919540f * g + 0.011362f * b) * white;
+    renderCtx.clearColor[2] = (0.016391f * r + 0.088013f * g + 0.895595f * b) * white;
     renderCtx.clearColor[3] = desktopColor.a;
     renderCtx.width = width;
     renderCtx.height = height;
@@ -3909,6 +4222,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
     });
 
     renderCtx.finish();
+
+    recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer,
+                          outputDesc, width, height, output->isHdr(), white,
+                          output->colorTemp());
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;
     lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
