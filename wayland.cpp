@@ -1166,6 +1166,23 @@ namespace {
         }
 
         wl_shm_buffer_end_access(&shm);
+
+        // the renderer samples the fourth byte as alpha; XRGB leaves it
+        // undefined and clients commonly write zero there
+        if (fmt == WL_SHM_FORMAT_XRGB8888) {
+            i32 y0 = incremental ? rect->y : 0;
+            i32 y1 = incremental ? rect->y + rect->h : h;
+            i32 x0 = incremental ? rect->x : 0;
+            i32 x1 = incremental ? rect->x + rect->w : w;
+
+            for (i32 y = y0; y < y1; y++) {
+                u8* row = out.mutData() + ((size_t)y * w + x0) * 4;
+
+                for (i32 x = x0; x < x1; x++, row += 4) {
+                    row[3] = 0xff;
+                }
+            }
+        }
     }
 
     void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm, const RectI* rect) {
@@ -4981,6 +4998,14 @@ namespace {
         }
 
         wl_shm_buffer_end_access(shm);
+
+        // icons render as ARGB; XRGB leaves the alpha byte undefined
+        if (fmt == WL_SHM_FORMAT_XRGB8888) {
+            for (size_t i = 0; i < box->pixels.length(); i++) {
+                box->pixels.mut(i) |= 0xff000000u;
+            }
+        }
+
         box->w = w;
         box->h = h;
         box->effectiveSize = effectiveSize;
