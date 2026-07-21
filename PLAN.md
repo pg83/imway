@@ -58,6 +58,8 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 - sRGB;
 - PQ;
+- HLG;
+- extended linear/scRGB, включая Windows-scRGB;
 - BT.709/sRGB primaries;
 - BT.2020 primaries;
 - parametric descriptions;
@@ -66,12 +68,11 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 Нет:
 
-- extended linear/scRGB;
 - BT.1886/gamma 2.2;
 - Display P3;
 - custom primaries;
 - ICC profiles;
-- Windows scRGB/BT.2100;
+- Windows BT.2100;
 - `color-representation-v1`;
 
 Отдельный большой пробел — YUV. Нет NV12/P010, matrix coefficients, chroma siting, full/limited range. HDR video вынужден заранее конвертироваться в RGB, теряя zero-copy и потенциально качество. Разделение ответственности между color-management и color-representation описано в [Wayland color management model](https://wayland.freedesktop.org/docs/book/Color.html).
@@ -134,7 +135,7 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Добавить `color-representation-v1`, P010/NV12 и scRGB.
+1. Добавить `color-representation-v1` и P010/NV12.
 2. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
 3. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 

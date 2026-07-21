@@ -294,6 +294,8 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
               kFourccAr30, kFourccXr30);
     addFormat(VK_FORMAT_A2B10G10R10_UNORM_PACK32,
               kFourccAb30, kFourccXb30);
+    addFormat(VK_FORMAT_R16G16B16A16_SFLOAT,
+              kFourccAb4h, kFourccXb4h);
 
     sysO << "imway: dmabuf formats: "_sv << n << endL;
 }

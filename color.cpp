@@ -136,6 +136,14 @@ ColorDescription ColorDescription::bt2100Hlg() {
     return d;
 }
 
+ColorDescription ColorDescription::extendedLinear() {
+    ColorDescription d;
+
+    d.transfer = ColorTransfer::extendedLinear;
+
+    return d;
+}
+
 bool ColorDescription::managed() const {
     return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb;
 }
@@ -147,7 +155,8 @@ bool ColorDescription::hdr() const {
 bool ColorDescription::operator==(const ColorDescription& o) const {
     return transfer == o.transfer && primaries == o.primaries && primary == o.primary &&
            minNits == o.minNits && maxNits == o.maxNits &&
-           referenceNits == o.referenceNits && target == o.target &&
+           referenceNits == o.referenceNits && linearOneNits == o.linearOneNits &&
+           target == o.target &&
            targetMinNits == o.targetMinNits && targetMaxNits == o.targetMaxNits &&
            maxCll == o.maxCll && maxFall == o.maxFall &&
            maxCllSet == o.maxCllSet && maxFallSet == o.maxFallSet;

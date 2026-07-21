@@ -7423,6 +7423,10 @@ WaylandImpl::~WaylandImpl() noexcept {
             return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
         }
 
+        if (d.transfer == ColorTransfer::extendedLinear) {
+            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
+        }
+
         return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
                               WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
     }
@@ -7582,8 +7586,9 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         bool pq = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
         bool hlg = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
+        bool linear = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
 
-        if (!sRgb && !pq && !hlg) {
+        if (!sRgb && !pq && !hlg && !linear) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
                                    "transfer function was not advertised");
 
@@ -7591,7 +7596,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         p->d.color.transfer = pq ? ColorTransfer::pq :
-                              hlg ? ColorTransfer::hlg : ColorTransfer::sRgb;
+                              hlg ? ColorTransfer::hlg :
+                              linear ? ColorTransfer::extendedLinear : ColorTransfer::sRgb;
+
+        if (linear) {
+            p->d.color.linearOneNits = p->d.color.referenceNits;
+        }
 
         if ((pq || hlg) && !p->lumSet) {
             ColorDescription defaults = pq ? ColorDescription::bt2100Pq() :
@@ -7673,6 +7683,9 @@ WaylandImpl::~WaylandImpl() noexcept {
         p->d.color.maxNits = p->d.color.transfer == ColorTransfer::pq ?
             10000.0 + p->d.color.minNits : (double)maxLum;
         p->d.color.referenceNits = (double)refLum;
+        if (p->d.color.transfer == ColorTransfer::extendedLinear) {
+            p->d.color.linearOneNits = p->d.color.referenceNits;
+        }
         p->d.color.targetMinNits = p->d.color.minNits;
         p->d.color.targetMaxNits = p->d.color.maxNits;
     }
@@ -8008,9 +8021,18 @@ WaylandImpl::~WaylandImpl() noexcept {
                                "ICC profiles were not advertised");
     }
 
-    void cmManagerCreateWindowsScrgb(wl_client*, wl_resource* res, u32) {
-        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "Windows-scRGB was not advertised");
+    void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
+        CImgDesc d;
+
+        d.color = ColorDescription::extendedLinear();
+        d.color.minNits = 0;
+        d.color.maxNits = 10000.0;
+        d.color.referenceNits = 203.0;
+        d.color.linearOneNits = 80.0;
+        d.color.targetMinNits = 0;
+        d.color.targetMaxNits = 10000.0;
+        cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
+                        wl_resource_get_version(res), id, d);
     }
 
     void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource* reference) {
@@ -8051,6 +8073,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
         if (version >= 2) {
             wp_color_manager_v1_send_supported_tf_named(
                 res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4);
@@ -8060,6 +8083,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
         wp_color_manager_v1_send_done(res);

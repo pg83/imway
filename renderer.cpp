@@ -137,10 +137,12 @@ namespace {
         }
 
         int source = surface->color.transfer == ColorTransfer::pq ? 4 :
-                     surface->color.transfer == ColorTransfer::hlg ? 5 : 1;
+                     surface->color.transfer == ColorTransfer::hlg ? 5 :
+                     surface->color.transfer == ColorTransfer::extendedLinear ? 6 : 1;
         int primaries = surface->color.primaries == ColorPrimaries::bt2020 ? 1 : 0;
+        float reference = source == 6 ? (float)surface->color.linearOneNits : 0;
 
-        ImGui_ImplVulkan_SetTextureColor(source, primaries, 0);
+        ImGui_ImplVulkan_SetTextureColor(source, primaries, reference);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
@@ -2035,7 +2037,10 @@ bool RendererImpl::importDmabuf(Surface& s) {
                         VK_FORMAT_A2R10G10B10_UNORM_PACK32 :
                         b->format == kFourccAb30 ||
                         b->format == kFourccXb30 ?
-                        VK_FORMAT_A2B10G10R10_UNORM_PACK32 : kVkFormat;
+                        VK_FORMAT_A2B10G10R10_UNORM_PACK32 :
+                        b->format == kFourccAb4h ||
+                        b->format == kFourccXb4h ?
+                        VK_FORMAT_R16G16B16A16_SFLOAT : kVkFormat;
 
     tex->w = b->width;
     tex->h = b->height;
@@ -2230,7 +2235,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
     if (b->format == kFourccXrgb || b->format == kFourccXr30 ||
-        b->format == kFourccXb30) {
+        b->format == kFourccXb30 || b->format == kFourccXb4h) {
         vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
     }
 

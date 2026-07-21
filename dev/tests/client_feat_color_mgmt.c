@@ -14,6 +14,10 @@
 #define COLOR_TRANSFER WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ
 #endif
 
+#ifndef COLOR_PRIMARIES
+#define COLOR_PRIMARIES WP_COLOR_MANAGER_V1_PRIMARIES_BT2020
+#endif
+
 static struct wp_color_manager_v1* cm;
 static struct wl_toplevel_ctx top;
 static int got_intent, got_feature, cm_done;
@@ -71,10 +75,10 @@ int main(void) {
     printf("client_feat_color_mgmt: raw\n");
     pump(1000);
 
-    // build a PQ + BT.2020 image description and attach it to the surface
+    // build the requested image description and attach it to the surface
     struct wp_image_description_creator_params_v1* params = wp_color_manager_v1_create_parametric_creator(cm);
     wp_image_description_creator_params_v1_set_tf_named(params, COLOR_TRANSFER);
-    wp_image_description_creator_params_v1_set_primaries_named(params, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+    wp_image_description_creator_params_v1_set_primaries_named(params, COLOR_PRIMARIES);
 #ifdef COLOR_MAX_CLL
     wp_image_description_creator_params_v1_set_max_cll(params, COLOR_MAX_CLL);
 #endif

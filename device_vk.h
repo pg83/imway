@@ -16,6 +16,8 @@ inline constexpr u32 kFourccAr30 = 0x30335241;
 inline constexpr u32 kFourccXr30 = 0x30335258;
 inline constexpr u32 kFourccAb30 = 0x30334241;
 inline constexpr u32 kFourccXb30 = 0x30334258;
+inline constexpr u32 kFourccAb4h = 0x48344241;
+inline constexpr u32 kFourccXb4h = 0x48344258;
 
 struct DmabufFormat;
 

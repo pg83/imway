@@ -43,6 +43,7 @@ struct ColorDescription {
     double minNits = .2;
     double maxNits = 80.0;
     double referenceNits = 80.0;
+    double linearOneNits = 80.0;
     Chromaticities target = Chromaticities::sRgb();
     double targetMinNits = .2;
     double targetMaxNits = 80.0;
@@ -54,6 +55,7 @@ struct ColorDescription {
     static ColorDescription sRgb();
     static ColorDescription bt2100Pq();
     static ColorDescription bt2100Hlg();
+    static ColorDescription extendedLinear();
     bool managed() const;
     bool hdr() const;
     bool operator==(const ColorDescription& other) const;

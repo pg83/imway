@@ -64,11 +64,15 @@ void main() {
         // Wayland RGB is premultiplied after transfer encoding. Decode the
         // straight electrical value inline; fixed-function SRC_ALPHA performs
         // the only premultiplication, directly into the FP16 scene.
-        vec3 straight = sampled.a > 0.0
-            ? clamp(sampled.rgb / sampled.a, 0.0, 1.0)
-            : vec3(0.0);
+        vec3 straight = sampled.a > 0.0 ? sampled.rgb / sampled.a : vec3(0.0);
+
+        if (pc.textureSource != 6) {
+            straight = clamp(straight, 0.0, 1.0);
+        }
+
         color = pc.textureSource == 4 ? pqEotf(straight) :
                 pc.textureSource == 5 ? hlgEotf(straight, pc.texturePrimaries) :
+                pc.textureSource == 6 ? straight :
                 srgbToLinear(straight);
 
         if (pc.texturePrimaries == 0) {
@@ -76,7 +80,9 @@ void main() {
         }
 
         vec3 tint2020 = bt709ToBt2020(tint709);
-        float scale = pc.textureSource == 1
+        float scale = pc.textureSource == 6
+            ? pc.textureReferenceNits
+            : pc.textureSource == 1
             ? (pc.textureReferenceNits > 0.0 ? pc.textureReferenceNits : pc.sdrWhiteNits)
             : 1.0;
         color *= tint2020 * scale;

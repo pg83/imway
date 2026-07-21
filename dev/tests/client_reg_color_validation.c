@@ -86,12 +86,6 @@ int main(int argc, char** argv) {
                             WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE);
     }
 
-    if (!strcmp(argv[1], "unsupported-scrgb")) {
-        wp_color_manager_v1_create_windows_scrgb(color_mgr);
-        return expect_error(wp_color_manager_v1_interface.name,
-                            WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE);
-    }
-
     struct wp_image_description_creator_params_v1* params = make_params();
 
     if (!strcmp(argv[1], "unsupported-tf-power")) {
