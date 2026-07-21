@@ -14,7 +14,7 @@
 - [x] ~~wl_data_device_manager 3 → 4 (release)~~ done
 - [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done
 - [ ] zwp_linux_dmabuf_v1 → 6 (set_sampling_device, feedback v6)
-- [ ] wp_presentation 1 → 2 (+ снять ложный VSYNC на софтверном таймстампе)
+- [x] ~~wp_presentation 1 → 2 (+ dropped false VSYNC on software timestamps)~~ done
 - [x] ~~wp_cursor_shape 1 → 2 (zoom, dnd_ask, all_resize shapes)~~ done
 - [x] ~~ext_idle_notify 1 → 2 (get_input_idle_notification)~~ done
 

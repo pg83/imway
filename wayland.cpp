@@ -871,7 +871,9 @@ namespace {
 
                 clock_gettime(CLOCK_MONOTONIC, &ts);
                 flipNs = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
-                flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC;
+                // a software "now" timestamp is not vblank-locked; the spec
+                // says VSYNC must not be claimed without hardware timing
+                flags = 0;
             }
 
             u64 sec = flipNs / 1000000000ull;
@@ -8705,7 +8707,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
     wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
     wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
-    wl_global_create(display, &wp_presentation_interface, 1, this, presentationBind);
+    wl_global_create(display, &wp_presentation_interface, 2, this, presentationBind);
     wl_global_create(display, &xdg_activation_v1_interface, 1, this, activationBind);
     wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
