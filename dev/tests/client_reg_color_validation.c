@@ -80,12 +80,6 @@ int main(int argc, char** argv) {
     wl_display_roundtrip(wl_dpy);
     if (!color_mgr) return 2;
 
-    if (!strcmp(argv[1], "unsupported-icc")) {
-        wp_color_manager_v1_create_icc_creator(color_mgr);
-        return expect_error(wp_color_manager_v1_interface.name,
-                            WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE);
-    }
-
     struct wp_image_description_creator_params_v1* params = make_params();
 
     if (!strcmp(argv[1], "unsupported-tf-power")) {

@@ -24,6 +24,7 @@ dbus = pkg_config("dbus-1")
 glfw = pkg_config("glfw3")
 png = pkg_config("libpng")
 jxl = pkg_config("libjxl")
+lcms = pkg_config("lcms2")
 display_info = pkg_config("libdisplay-info")
 vulkan = pkg_config("vulkan")
 lunasvg = pkg_config("lunasvg")
@@ -121,7 +122,7 @@ imway = program(
     deps=[
         imgui, protocols,
         wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
-        png, jxl, display_info, vulkan, lunasvg, system, sndio, pulse,
+        png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse,
     ],
 )
 
@@ -171,6 +172,9 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
 
     if name == "client_reg_screenshot_copy":
         test_deps.append(jxl)
+
+    if name in ("client_reg_color_icc", "client_reg_color_icc_validation"):
+        test_deps.append(lcms)
 
     if name in ("client_reg_color_model", "client_reg_direct_scanout_color",
                 "client_reg_display_color", "client_reg_tone_mapping",

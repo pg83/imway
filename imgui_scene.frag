@@ -16,6 +16,7 @@ layout(push_constant) uniform PushConstant {
     float p00; float p01; float p02;
     float p10; float p11; float p12;
     float p20; float p21; float p22;
+    float gammaR; float gammaG; float gammaB;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -91,6 +92,7 @@ void main() {
                 pc.textureSource == 6 ? straight :
                 pc.textureSource == 7 ? bt1886Eotf(straight) :
                 pc.textureSource == 8 ? pow(max(straight, 0.0), vec3(2.2)) :
+                pc.textureSource == 9 ? pow(max(straight, 0.0), vec3(pc.gammaR, pc.gammaG, pc.gammaB)) :
                 srgbToLinear(straight);
 
         color = textureToBt2020(color);
@@ -103,7 +105,7 @@ void main() {
         vec3 tint2020 = bt709ToBt2020(tint709);
         float scale = pc.textureSource == 6
             ? pc.textureReferenceNits
-            : pc.textureSource == 1 || pc.textureSource == 8
+            : pc.textureSource == 1 || pc.textureSource == 8 || pc.textureSource == 9
             ? (pc.textureReferenceNits > 0.0 ? pc.textureReferenceNits : pc.sdrWhiteNits)
             : 1.0;
         color *= tint2020 * scale;

@@ -5,6 +5,7 @@ extern "C" {
 }
 
 #include <math.h>
+#include <string.h>
 
 namespace {
     ColorMatrix multiply(const ColorMatrix& a, const ColorMatrix& b) {
@@ -171,7 +172,8 @@ ColorDescription ColorDescription::gamma22() {
 }
 
 bool ColorDescription::managed() const {
-    return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb;
+    return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb ||
+           directToBt2020;
 }
 
 bool ColorDescription::hdr() const {
@@ -185,7 +187,10 @@ bool ColorDescription::operator==(const ColorDescription& o) const {
            target == o.target &&
            targetMinNits == o.targetMinNits && targetMaxNits == o.targetMaxNits &&
            maxCll == o.maxCll && maxFall == o.maxFall &&
-           maxCllSet == o.maxCllSet && maxFallSet == o.maxFallSet;
+           maxCllSet == o.maxCllSet && maxFallSet == o.maxFallSet &&
+           directToBt2020 == o.directToBt2020 &&
+           !memcmp(toBt2020, o.toBt2020, sizeof(toBt2020)) &&
+           !memcmp(gamma, o.gamma, sizeof(gamma));
 }
 
 bool ColorDescription::operator!=(const ColorDescription& o) const {

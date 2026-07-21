@@ -9,6 +9,7 @@ enum class ColorTransfer {
     extendedLinear,
     bt1886,
     gamma22,
+    iccGamma,
 };
 
 enum class ColorPrimaries {
@@ -51,6 +52,9 @@ struct ColorDescription {
     u32 maxFall = 0;
     bool maxCllSet = false;
     bool maxFallSet = false;
+    bool directToBt2020 = false;
+    double toBt2020[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    double gamma[3] = {1, 1, 1};
 
     static ColorDescription sRgb();
     static ColorDescription bt2100Pq();

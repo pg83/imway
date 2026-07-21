@@ -131,7 +131,7 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr);
 
             return;
         }
@@ -140,22 +140,34 @@ namespace {
                      surface->color.transfer == ColorTransfer::hlg ? 5 :
                      surface->color.transfer == ColorTransfer::extendedLinear ? 6 :
                      surface->color.transfer == ColorTransfer::bt1886 ? 7 :
-                     surface->color.transfer == ColorTransfer::gamma22 ? 8 : 1;
+                     surface->color.transfer == ColorTransfer::gamma22 ? 8 :
+                     surface->color.transfer == ColorTransfer::iccGamma ? 9 : 1;
         int primaries = surface->color.primaries == ColorPrimaries::bt2020 ? 1 : 0;
         float reference = source == 6 ? (float)surface->color.linearOneNits :
-                          source == 8 ? (float)surface->color.referenceNits : 0;
+                          source == 8 || source == 9 ?
+                          (float)surface->color.referenceNits : 0;
 
         ColorMatrix transform = colorPrimariesTransform(surface->color.primary,
                                                         Chromaticities::bt2020());
+        if (surface->color.directToBt2020) {
+            for (int i = 0; i < 9; i++) {
+                transform.v[i] = surface->color.toBt2020[i];
+            }
+        }
         float matrix[9];
+        float gamma[3];
 
         for (int i = 0; i < 9; i++) {
             matrix[i] = (float)transform.v[i];
         }
+        for (int i = 0; i < 3; i++) {
+            gamma[i] = (float)surface->color.gamma[i];
+        }
 
         ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
                                          (float)surface->color.minNits,
-                                         (float)surface->color.maxNits, matrix);
+                                         (float)surface->color.maxNits, matrix,
+                                         gamma);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);

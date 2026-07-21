@@ -4,6 +4,7 @@
 #include "icon.h"
 #include "icon_pool.h"
 #include "icon_store.h"
+#include "icc.h"
 
 #include "input_sink.h"
 #include "frame_listener.h"
@@ -15,10 +16,12 @@
 #include "session.h"
 #include "util.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/random.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <sys/mman.h>
 #include <unistd.h>
@@ -89,6 +92,13 @@ namespace {
         bool lumSet = false;
         bool maxCllSet = false;
         bool maxFallSet = false;
+    };
+
+    struct CIcc {
+        WaylandImpl* srv = nullptr;
+        Vector<u8> data;
+        bool fileSet = false;
+        bool readFailed = false;
     };
     struct ToplevelImpl;
     struct WaylandImpl;
@@ -652,6 +662,7 @@ namespace {
         // color-management-v1 objects
         ObjList<CImgDesc> cimgAlloc;
         ObjList<CParams> cparAlloc;
+        ObjList<CIcc> ciccAlloc;
         ObjList<CmOutput> cmOutputAlloc;
         ObjList<CmFeedback> cmFeedbackAlloc;
         Vector<CmOutput*> cmOutputResources;
@@ -7332,6 +7343,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , activationTokenAlloc(comp.pool)
     , cimgAlloc(comp.pool)
     , cparAlloc(comp.pool)
+    , ciccAlloc(comp.pool)
     , cmOutputAlloc(comp.pool)
     , cmFeedbackAlloc(comp.pool)
     , idleAlloc(comp.pool)
@@ -8061,9 +8073,127 @@ WaylandImpl::~WaylandImpl() noexcept {
         wl_resource_set_implementation(pr, &cmParamsImpl, p, cmParamsResourceDestroyed);
     }
 
-    void cmManagerCreateIccCreator(wl_client*, wl_resource* res, u32) {
-        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "ICC profiles were not advertised");
+    void cmIccCreate(wl_client* client, wl_resource* res, u32 id) {
+        auto* icc = (CIcc*)wl_resource_get_user_data(res);
+
+        if (!icc->fileSet) {
+            wl_resource_post_error(
+                res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_INCOMPLETE_SET,
+                "an ICC profile file is required");
+
+            return;
+        }
+
+        ColorDescription color;
+        if (icc->readFailed) {
+            cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id,
+                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_OPERATING_SYSTEM,
+                                  "the ICC profile could not be read");
+        } else if (!colorDescriptionFromIcc(icc->data.data(), icc->data.length(), color)) {
+            cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id,
+                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
+                                  "the ICC profile is invalid or unsupported");
+        } else {
+            CImgDesc description;
+
+            description.color = color;
+            cmMakeImageDesc(icc->srv, client, wl_resource_get_version(res), id,
+                            description);
+        }
+
+        wl_resource_destroy(res);
+    }
+
+    void cmIccSetFile(wl_client*, wl_resource* res, int fd, u32 offset, u32 length) {
+        auto* icc = (CIcc*)wl_resource_get_user_data(res);
+
+        if (icc->fileSet) {
+            close(fd);
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_ALREADY_SET,
+                                   "the ICC profile file is already set");
+
+            return;
+        }
+
+        if (!length || length > 32 * 1024 * 1024) {
+            close(fd);
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE,
+                                   "the ICC profile size must be between 1 byte and 32 MiB");
+
+            return;
+        }
+
+        int flags = fcntl(fd, F_GETFL);
+        struct stat st;
+        bool readable = flags >= 0 && (flags & O_ACCMODE) != O_WRONLY;
+        bool seekable = lseek(fd, 0, SEEK_CUR) >= 0;
+
+        if (!readable || !seekable || fstat(fd, &st)) {
+            close(fd);
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD,
+                                   "the ICC profile fd must be readable and seekable");
+
+            return;
+        }
+
+        if ((u64)offset + length > (u64)st.st_size) {
+            close(fd);
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_OUT_OF_FILE,
+                                   "the ICC profile range exceeds the file size");
+
+            return;
+        }
+
+        icc->fileSet = true;
+        icc->data.zero(length);
+        size_t done = 0;
+
+        while (done < length) {
+            ssize_t n = pread(fd, icc->data.mutData() + done, length - done,
+                              (off_t)offset + done);
+
+            if (n > 0) {
+                done += (size_t)n;
+            } else if (n < 0 && errno == EINTR) {
+                continue;
+            } else {
+                icc->readFailed = true;
+                break;
+            }
+        }
+        close(fd);
+    }
+
+    const struct wp_image_description_creator_icc_v1_interface cmIccImpl = {
+        .create = cmIccCreate,
+        .set_icc_file = cmIccSetFile,
+    };
+
+    void cmIccResourceDestroyed(wl_resource* res) {
+        auto* icc = (CIcc*)wl_resource_get_user_data(res);
+
+        if (icc && icc->srv) {
+            icc->srv->ciccAlloc.release(icc);
+        }
+    }
+
+    void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
+        wl_resource* creator = wl_resource_create(
+            client, &wp_image_description_creator_icc_v1_interface,
+            wl_resource_get_version(res), id);
+
+        if (!creator) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        CIcc* icc = srv->ciccAlloc.make();
+
+        icc->srv = srv;
+        wl_resource_set_implementation(creator, &cmIccImpl, icc,
+                                       cmIccResourceDestroyed);
     }
 
     void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
@@ -8117,6 +8247,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         wl_resource_set_implementation(res, &cmManagerImpl, data, nullptr);
         wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_ICC_V2_V4);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);

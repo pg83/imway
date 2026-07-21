@@ -9,7 +9,9 @@
 #ifndef WL_UTIL_H
 #define WL_UTIL_H
 
+#ifndef _GNU_SOURCE
 #define _GNU_SOURCE
+#endif
 #include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
@@ -89,7 +91,9 @@ static void wlk_enter(void* d, struct wl_keyboard* k, uint32_t serial, struct wl
     wlk_focus = s;
     wlk_enter_nkeys = 0;
     uint32_t* kc;
-    wl_array_for_each(kc, keys) {
+    for (kc = (uint32_t*)keys->data;
+         (const char*)kc < (const char*)keys->data + keys->size;
+         kc++) {
         if (wlk_enter_nkeys < 8) wlk_enter_keys[wlk_enter_nkeys++] = *kc;
     }
 }
@@ -193,18 +197,18 @@ static void wl_reg_global(void* d, struct wl_registry* r, uint32_t name, const c
                           uint32_t version) {
     (void)d; (void)version;
     if (!strcmp(iface, wl_compositor_interface.name))
-        wl_comp = wl_registry_bind(r, name, &wl_compositor_interface, 4);
+        wl_comp = (struct wl_compositor*)wl_registry_bind(r, name, &wl_compositor_interface, 4);
     else if (!strcmp(iface, wl_subcompositor_interface.name))
-        wl_subcomp = wl_registry_bind(r, name, &wl_subcompositor_interface, 1);
+        wl_subcomp = (struct wl_subcompositor*)wl_registry_bind(r, name, &wl_subcompositor_interface, 1);
     else if (!strcmp(iface, wl_shm_interface.name))
-        wl_shm_g = wl_registry_bind(r, name, &wl_shm_interface, 1);
+        wl_shm_g = (struct wl_shm*)wl_registry_bind(r, name, &wl_shm_interface, 1);
     else if (!strcmp(iface, xdg_wm_base_interface.name))
-        wl_wm = wl_registry_bind(r, name, &xdg_wm_base_interface, REG_XDG_VERSION);
+        wl_wm = (struct xdg_wm_base*)wl_registry_bind(r, name, &xdg_wm_base_interface, REG_XDG_VERSION);
     else if (!strcmp(iface, wl_seat_interface.name)) {
-        wl_seat_g = wl_registry_bind(r, name, &wl_seat_interface, 5);
+        wl_seat_g = (struct wl_seat*)wl_registry_bind(r, name, &wl_seat_interface, 5);
         wl_seat_add_listener(wl_seat_g, &wl_seat_listener, NULL);
     } else if (!strcmp(iface, wl_data_device_manager_interface.name))
-        wl_ddm = wl_registry_bind(r, name, &wl_data_device_manager_interface, REG_DDM_VERSION);
+        wl_ddm = (struct wl_data_device_manager*)wl_registry_bind(r, name, &wl_data_device_manager_interface, REG_DDM_VERSION);
 }
 static void wl_reg_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener wl_reg_listener = {wl_reg_global, wl_reg_remove};
@@ -269,7 +273,7 @@ static struct wl_buffer* wl_solid(int w, int h, uint32_t argb) {
         perror("memfd");
         exit(1);
     }
-    uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    uint32_t* px = (uint32_t*)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     for (int i = 0; i < w * h; i++) px[i] = argb;
     munmap(px, size);
     struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, size);
@@ -292,7 +296,7 @@ struct wl_toplevel_ctx {
 };
 
 static void wl_tl_xdg_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
-    struct wl_toplevel_ctx* c = d;
+    struct wl_toplevel_ctx* c = (struct wl_toplevel_ctx*)d;
     xdg_surface_ack_configure(xs, serial);
     if (!c->committed) {
         wl_surface_attach(c->surface, wl_solid(c->w, c->h, c->color), 0, 0);

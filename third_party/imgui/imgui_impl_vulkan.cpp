@@ -537,8 +537,8 @@ static void ImGui_ImplVulkan_SetupRenderState(ImDrawData* draw_data, VkPipeline 
         int texture_source = 0;
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4, sizeof(texture_source), &texture_source);
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 5, sizeof(bd->SdrWhiteNits), &bd->SdrWhiteNits);
-        struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; } color = {
-            0, 0.0f, 0.0f, 0.0f, {1, 0, 0, 0, 1, 0, 0, 0, 1}};
+        struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; } color = {
+            0, 0.0f, 0.0f, 0.0f, {1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 1, 1}};
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 6, sizeof(color), &color);
     }
 }
@@ -550,23 +550,25 @@ void ImGui_ImplVulkan_SetSdrWhite(float nits)
         bd->SdrWhiteNits = nits > 0.0f ? nits : 203.0f;
 }
 
-void ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020)
+void ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020, const float* gamma)
 {
     ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
     ImGui_ImplVulkan_RenderState* state = (ImGui_ImplVulkan_RenderState*)ImGui::GetPlatformIO().Renderer_RenderState;
     if (!bd || !state)
         return;
-    struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; } color = {
+    struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; } color = {
         primaries, reference_nits, min_nits, max_nits};
     for (int i = 0; i < 9; i++)
         color.matrix[i] = primaries_to_bt2020 ? primaries_to_bt2020[i] : (i % 4 == 0 ? 1.0f : 0.0f);
+    for (int i = 0; i < 3; i++)
+        color.gamma[i] = gamma ? gamma[i] : 1.0f;
     vkCmdPushConstants(state->CommandBuffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4, sizeof(source), &source);
     vkCmdPushConstants(state->CommandBuffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 6, sizeof(color), &color);
 }
 
 void ImGui_ImplVulkan_TextureEncodingCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
-    ImGui_ImplVulkan_SetTextureColor((int)(intptr_t)cmd->UserCallbackData, 0, 0.0f, 0.0f, 0.0f, nullptr);
+    ImGui_ImplVulkan_SetTextureColor((int)(intptr_t)cmd->UserCallbackData, 0, 0.0f, 0.0f, 0.0f, nullptr, nullptr);
 }
 
 // Render function
@@ -1158,7 +1160,7 @@ bool ImGui_ImplVulkan_CreateDeviceObjects()
         VkPushConstantRange push_constants[1] = {};
         push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push_constants[0].offset = sizeof(float) * 0;
-        push_constants[0].size = sizeof(float) * 19;
+        push_constants[0].size = sizeof(float) * 22;
         VkDescriptorSetLayout set_layout[1] = { bd->DescriptorSetLayout };
         VkPipelineLayoutCreateInfo layout_info = {};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;

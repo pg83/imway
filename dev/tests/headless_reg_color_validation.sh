@@ -4,7 +4,7 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-for mode in unsupported-icc unsupported-tf-power \
+for mode in unsupported-tf-power \
             duplicate-luminances invalid-luminances unsupported-mastering-primaries \
             unsupported-mastering-luminance invalid-max-cll invalid-max-fall \
             parametric-information; do
