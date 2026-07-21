@@ -474,7 +474,8 @@ standalone.
   memfds are addressed as `/proc/<composer-pid>/fd/<fd>` and retained by the
   composer for ten seconds, so spawning needs no fd-passing protocol.
   `main_composer.cpp` assembles the graph into one
-  `ObjPool`: creation order = reverse death order, the scene dies last. Clients
+  `ObjPool`: creation order = reverse death order; the Composer wiring board
+  is the pool's first object and dies last, the scene right before it. Clients
   die first (in the epilogue of `run()`); subsystems die with the pool.
   Escaping per-frame resources use the ref-counted arenas from
   `frame_resource.{h,cpp}`. Errors are `stl::Exception` exceptions

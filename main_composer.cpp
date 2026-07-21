@@ -181,7 +181,9 @@ int mainComposer(int argc, char** argv) {
     }
 
     ObjPool::Ref pool = ObjPool::fromMemory();
-    Composer c(pool.mutPtr());
+    // the wiring board is the pool's first object: LIFO death makes it
+    // outlive every subsystem that stores the reference
+    Composer& c = *pool->make<Composer>(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
     c.loop = loop;

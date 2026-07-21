@@ -30,8 +30,9 @@ struct Supervisor;
 struct Wayland;
 struct InputSink;
 
-// the wiring board: main owns one, fills the fields as the entities come
-// up, everyone else stores the reference. rules: a constructor may keep the
+// the wiring board: main creates one as the first object of the root pool
+// (so it dies after every subsystem holding the reference) and fills the
+// fields as the entities come up. rules: a constructor may keep the
 // reference but only read fields created before it; everything else
 // dereferences at use time, when the graph is complete; nullable fields
 // (bus, notes, session, mixer) stay nullable forever — a missing subsystem
