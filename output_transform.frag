@@ -81,14 +81,19 @@ vec3 displayMap(vec3 scene) {
 
 void main() {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(sceneImage, 0));
-    vec3 nits2020 = texture(sceneImage, uv).rgb;
+    vec4 scene = texture(sceneImage, uv);
 
     if (pc.mapping.y < 0.0) {
-        fColor = vec4(clamp(nits2020, 0.0, 1.0), 1.0);
+        // cursor plane: the scene is premultiplied linear BT.2020 in [0,1],
+        // the plane wants premultiplied sRGB-encoded pixels with the alpha
+        // channel intact
+        vec3 straight = scene.a > 0.0 ? scene.rgb / scene.a : vec3(0.0);
+        vec3 target = clamp(applyRows(pc.toTarget, straight), 0.0, 1.0);
+        fColor = vec4(linearToSrgb(target) * scene.a, scene.a);
         return;
     }
 
-    vec3 target = displayMap(nits2020);
+    vec3 target = displayMap(scene.rgb);
 
     if (pc.mapping.y == 0.0) {
         fColor = vec4(dither(pqOetf(applyRows(pc.fromTarget, target))), 1.0);
