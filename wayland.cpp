@@ -31,6 +31,7 @@
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
 #include <content-type-v1-server-protocol.h>
+#include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
@@ -336,6 +337,7 @@ namespace {
         int pendingMaxW = 0, pendingMaxH = 0;
         bool pendingMinSet = false, pendingMaxSet = false;
         wl_resource* decoRes = nullptr;
+        wl_resource* dialogRes = nullptr;
 
         // pool icon built from client pixels (xdg-toplevel-icon); wayland
         // owns it: released on replace and on destroy
@@ -2672,6 +2674,11 @@ namespace {
             t->decoRes = nullptr;
         }
 
+        if (t->dialogRes) {
+            wl_resource_set_user_data(t->dialogRes, nullptr);
+            t->dialogRes = nullptr;
+        }
+
         if (t->ownIcon && srv->iconPool) {
             srv->iconPool->release(t->ownIcon);
             t->ownIcon = nullptr;
@@ -4306,6 +4313,66 @@ namespace {
         if (s.vpRes) {
             wl_resource_set_user_data(s.vpRes, nullptr);
         }
+    }
+
+    // ---- xdg-dialog ----
+    void xdgDialogSetModal(wl_client*, wl_resource* res, bool modal) {
+        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
+            t->modal = modal;
+            t->srv->scene->needsFrame = true;
+        }
+    }
+
+    void xdgDialogSet(wl_client*, wl_resource* res) {
+        xdgDialogSetModal(nullptr, res, true);
+    }
+
+    void xdgDialogUnset(wl_client*, wl_resource* res) {
+        xdgDialogSetModal(nullptr, res, false);
+    }
+
+    void xdgDialogResourceDestroyed(wl_resource* res) {
+        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
+            t->modal = false;
+            t->dialogRes = nullptr;
+        }
+    }
+
+    const struct xdg_dialog_v1_interface xdgDialogImpl = {
+        .destroy = resDestroy,
+        .set_modal = xdgDialogSet,
+        .unset_modal = xdgDialogUnset,
+    };
+
+    void xdgWmDialogGetDialog(wl_client* client, wl_resource* res, u32 id, wl_resource* toplevelRes) {
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
+        wl_resource* d = wl_resource_create(client, &xdg_dialog_v1_interface, wl_resource_get_version(res), id);
+
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        t->dialogRes = d;
+        wl_resource_set_implementation(d, &xdgDialogImpl, t, xdgDialogResourceDestroyed);
+    }
+
+    const struct xdg_wm_dialog_v1_interface xdgWmDialogImpl = {
+        .destroy = resDestroy,
+        .get_xdg_dialog = xdgWmDialogGetDialog,
+    };
+
+    void xdgWmDialogBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_wm_dialog_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &xdgWmDialogImpl, data, nullptr);
     }
 
     // ---- wp-pointer-warp ----
@@ -9057,6 +9124,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
     wl_global_create(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
     wl_global_create(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
+    wl_global_create(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);

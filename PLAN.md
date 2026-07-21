@@ -22,7 +22,7 @@
 - [x] ~~xdg-system-bell v1~~ done
 - [x] ~~wp-alpha-modifier v1~~ done
 - [x] ~~wp-pointer-warp v1~~ done
-- [ ] xdg-wm-dialog v1
+- [x] ~~xdg-wm-dialog v1~~ done
 - [x] ~~wp-content-type v1~~ done
 
 ### Этап C — frame pacing

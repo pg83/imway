@@ -292,6 +292,7 @@ void ControlImpl::dumpState(StringView outPath) {
             << " maximized="_sv << (int)t.maximized
             << " activated="_sv << (int)t.activated
             << " docked="_sv << (int)t.docked
+            << " modal="_sv << (int)t.modal
             << " focused="_sv << (int)(scene->focusedToplevel == &t)
             << " x="_sv << (int)t.curX
             << " y="_sv << (int)t.curY

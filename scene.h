@@ -233,6 +233,9 @@ struct Toplevel: stl::IntrusiveNode {
     // written by the renderer: the window sits in a dock node, so it must
     // fill its size exactly — wayland turns this into TILED states
     bool docked = false;
+
+    // xdg-dialog: the client marked this toplevel as a modal dialog
+    bool modal = false;
 };
 
 // the node links it into Scene::popups (insertion order = z-order)
