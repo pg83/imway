@@ -30,9 +30,9 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include <output_transform_vert.spv.h>
-#include <screenshot_output.spv.h>
-#include <screenshot_scene.spv.h>
+#include <fullscreen.spv.h>
+#include <main_screenshot_output.spv.h>
+#include <main_screenshot_scene.spv.h>
 
 #include <png.h>
 #include <jxl/color_encoding.h>
@@ -1040,10 +1040,10 @@ namespace {
         vkc(vkCreatePipelineLayout(gDevice, &plci, gAlloc,
                                    &gOutputPipelineLayout));
 
-        VkShaderModule vert = shaderModule(output_transform_vert_spv,
-                                           sizeof(output_transform_vert_spv));
-        VkShaderModule frag = shaderModule(screenshot_output_spv,
-                                           sizeof(screenshot_output_spv));
+        VkShaderModule vert = shaderModule(fullscreen_spv,
+                                           sizeof(fullscreen_spv));
+        VkShaderModule frag = shaderModule(main_screenshot_output_spv,
+                                           sizeof(main_screenshot_output_spv));
         VkPipelineShaderStageCreateInfo stages[2] = {
             {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
              VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
@@ -2169,8 +2169,8 @@ int mainScreenshot(StringView path) {
         if (loaded && img.color.hdr()) {
             ii.CustomShaderFragCreateInfo.sType =
                 VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-            ii.CustomShaderFragCreateInfo.codeSize = sizeof(screenshot_scene_spv);
-            ii.CustomShaderFragCreateInfo.pCode = screenshot_scene_spv;
+            ii.CustomShaderFragCreateInfo.codeSize = sizeof(main_screenshot_scene_spv);
+            ii.CustomShaderFragCreateInfo.pCode = main_screenshot_scene_spv;
         }
 
         ImGui_ImplVulkan_Init(&ii);

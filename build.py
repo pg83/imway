@@ -93,9 +93,18 @@ protocols = library(
 )
 
 
+# shaders are named after the .cpp that creates their pipeline;
+# fullscreen.vert is the shared fullscreen-triangle vertex stage
 shader_rules = []
-for shader in ["lock_blur", "imgui_scene", "output_transform", "output_transform_vert", "screenshot_scene", "screenshot_output"]:
-    stage = "vert" if shader == "output_transform_vert" else "frag" if shader in ["imgui_scene", "output_transform", "screenshot_scene", "screenshot_output"] else "comp"
+for shader, stage in [
+    ("fullscreen", "vert"),
+    ("renderer_scene", "frag"),
+    ("renderer_output", "frag"),
+    ("renderer_cursor", "frag"),
+    ("main_screenshot_scene", "frag"),
+    ("main_screenshot_output", "frag"),
+    ("lock_screen_blur", "comp"),
+]:
     shader_rules.append(command(
         name=f"shader_{shader}",
         inputs=[f"$(S)/{shader}.{stage}"],

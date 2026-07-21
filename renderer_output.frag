@@ -6,7 +6,7 @@ layout(set = 0, binding = 0) uniform sampler2D sceneImage;
 layout(push_constant) uniform OutputPush {
     vec4 toTarget[3];
     vec4 fromTarget[3];
-    vec4 mapping; // peak nits, SDR scale (0 = PQ, -1 = unit bypass)
+    vec4 mapping; // peak nits, SDR scale (0 = PQ), dither divisor
     vec4 color;   // tone map enable in x, target luminance coefficients in yzw
 } pc;
 
@@ -81,19 +81,8 @@ vec3 displayMap(vec3 scene) {
 
 void main() {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(sceneImage, 0));
-    vec4 scene = texture(sceneImage, uv);
-
-    if (pc.mapping.y < 0.0) {
-        // cursor plane: the scene is premultiplied linear BT.2020 in [0,1],
-        // the plane wants premultiplied sRGB-encoded pixels with the alpha
-        // channel intact
-        vec3 straight = scene.a > 0.0 ? scene.rgb / scene.a : vec3(0.0);
-        vec3 target = clamp(applyRows(pc.toTarget, straight), 0.0, 1.0);
-        fColor = vec4(linearToSrgb(target) * scene.a, scene.a);
-        return;
-    }
-
-    vec3 target = displayMap(scene.rgb);
+    vec3 nits2020 = texture(sceneImage, uv).rgb;
+    vec3 target = displayMap(nits2020);
 
     if (pc.mapping.y == 0.0) {
         fColor = vec4(dither(pqOetf(applyRows(pc.fromTarget, target))), 1.0);

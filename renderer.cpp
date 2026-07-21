@@ -57,9 +57,10 @@
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xdg-shell-server-protocol.h>
 
-#include <imgui_scene.spv.h>
-#include <output_transform.spv.h>
-#include <output_transform_vert.spv.h>
+#include <fullscreen.spv.h>
+#include <renderer_cursor.spv.h>
+#include <renderer_output.spv.h>
+#include <renderer_scene.spv.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -252,6 +253,10 @@ namespace {
         VkDescriptorPool outputDescPool = VK_NULL_HANDLE;
         VkDescriptorSet outputDesc = VK_NULL_HANDLE;
         VkDescriptorSet cursorOutputDesc = VK_NULL_HANDLE;
+        // cursor-plane encode pass: same fullscreen vertex stage, its own
+        // fragment shader and push range (renderer_cursor.frag)
+        VkPipelineLayout cursorPipeLayout = VK_NULL_HANDLE;
+        VkPipeline cursorPipeline = VK_NULL_HANDLE;
 
         VkBuffer readback = VK_NULL_HANDLE;
         VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
@@ -437,8 +442,9 @@ namespace {
         void setupOutputTransform();
         void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer,
                                    VkDescriptorSet source, int w, int h,
-                                   const OutputColorState& color, bool unitSdr,
-                                   double kelvin);
+                                   const OutputColorState& color, double kelvin);
+        void recordCursorTransform(VkCommandBuffer commands,
+                                   VkFramebuffer outputFramebuffer, int w, int h);
 
         void drawSurfaceTree(Surface& s, float x, float y);
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
@@ -1509,8 +1515,8 @@ void RendererImpl::setup(int w, int h) {
     ii.PipelineInfoMain.RenderPass = renderPass;
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ii.CustomShaderFragCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    ii.CustomShaderFragCreateInfo.codeSize = sizeof(imgui_scene_spv);
-    ii.CustomShaderFragCreateInfo.pCode = imgui_scene_spv;
+    ii.CustomShaderFragCreateInfo.codeSize = sizeof(renderer_scene_spv);
+    ii.CustomShaderFragCreateInfo.pCode = renderer_scene_spv;
 
     STD_VERIFY(ImGui_ImplVulkan_Init(&ii));
 
@@ -1587,6 +1593,8 @@ void RendererImpl::setup(int w, int h) {
     pooledVk(*pool, device, outputSetLayout);
     pooledVk(*pool, device, outputPipeLayout);
     pooledVk(*pool, device, outputPipeline);
+    pooledVk(*pool, device, cursorPipeLayout);
+    pooledVk(*pool, device, cursorPipeline);
     pooledVk(*pool, device, outputDescPool);
 
     pooledVk(*pool, device, readbackMemory);
@@ -1912,15 +1920,23 @@ void RendererImpl::setupOutputTransform() {
     plci.pPushConstantRanges = &push;
     VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &outputPipeLayout));
 
-    VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE;
+    VkPushConstantRange cursorPush{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 12 * sizeof(float)};
 
-    smci.codeSize = sizeof(output_transform_vert_spv);
-    smci.pCode = output_transform_vert_spv;
+    plci.pPushConstantRanges = &cursorPush;
+    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &cursorPipeLayout));
+
+    VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, cursorFrag = VK_NULL_HANDLE;
+
+    smci.codeSize = sizeof(fullscreen_spv);
+    smci.pCode = fullscreen_spv;
     VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &vert));
-    smci.codeSize = sizeof(output_transform_spv);
-    smci.pCode = output_transform_spv;
+    smci.codeSize = sizeof(renderer_output_spv);
+    smci.pCode = renderer_output_spv;
     VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &frag));
+    smci.codeSize = sizeof(renderer_cursor_spv);
+    smci.pCode = renderer_cursor_spv;
+    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &cursorFrag));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
 
@@ -1984,6 +2000,12 @@ void RendererImpl::setupOutputTransform() {
     gpci.layout = outputPipeLayout;
     gpci.renderPass = outputPass;
     VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &outputPipeline));
+
+    stages[1].module = cursorFrag;
+    gpci.layout = cursorPipeLayout;
+    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &cursorPipeline));
+
+    vkDestroyShaderModule(device, cursorFrag, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
     vkDestroyShaderModule(device, vert, nullptr);
 
@@ -2023,7 +2045,6 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
                                          VkFramebuffer outputFramebuffer,
                                          VkDescriptorSet source, int w, int h,
                                          const OutputColorState& outputColor,
-                                         bool unitSdr,
                                          double kelvin) {
     VkClearValue clear{};
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -2056,18 +2077,54 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
         }
     }
 
-    push.row[6][0] = unitSdr ? 1.f : (float)mapping.peakNits;
-    push.row[6][1] = unitSdr ? -1.f : mapping.hdr ? 0.f : 203.f;
-    push.row[6][2] = unitSdr ? 0.f :
-        fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 1023.f : 255.f;
+    push.row[6][0] = (float)mapping.peakNits;
+    push.row[6][1] = mapping.hdr ? 0.f : 203.f;
+    push.row[6][2] = fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 1023.f : 255.f;
     // the roll-off knee reshapes in-range content, so it only runs when
     // something visible can actually exceed the output peak
-    push.row[7][0] = !unitSdr && sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
+    push.row[7][0] = sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
     push.row[7][1] = (float)mapping.targetLuma.r;
     push.row[7][2] = (float)mapping.targetLuma.g;
     push.row[7][3] = (float)mapping.targetLuma.b;
 
     vkCmdPushConstants(commands, outputPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
+    vkCmdDraw(commands, 3, 1, 0, 0);
+    vkCmdEndRenderPass(commands);
+}
+
+void RendererImpl::recordCursorTransform(VkCommandBuffer commands,
+                                         VkFramebuffer outputFramebuffer,
+                                         int w, int h) {
+    VkClearValue clear{};
+    VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+
+    begin.renderPass = outputPass;
+    begin.framebuffer = outputFramebuffer;
+    begin.renderArea = {{0, 0}, {(u32)w, (u32)h}};
+    begin.clearValueCount = 1;
+    begin.pClearValues = &clear;
+    vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, cursorPipeline);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, cursorPipeLayout,
+                            0, 1, &cursorOutputDesc, 0, nullptr);
+
+    VkViewport viewport{0.f, 0.f, (float)w, (float)h, 0.f, 1.f};
+    VkRect2D scissor{{0, 0}, {(u32)w, (u32)h}};
+
+    vkCmdSetViewport(commands, 0, 1, &viewport);
+    vkCmdSetScissor(commands, 0, 1, &scissor);
+
+    // the cursor scene is composed as SDR with unit white
+    OutputMapping mapping = outputMapping(OutputColorState::sdr());
+    float push[12] = {};
+
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            push[row * 4 + col] = (float)mapping.toTarget.v[row * 3 + col];
+        }
+    }
+
+    vkCmdPushConstants(commands, cursorPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(commands, 3, 1, 0, 0);
     vkCmdEndRenderPass(commands);
 }
@@ -2681,8 +2738,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     ImGui_ImplVulkan_RenderDrawData(&dd, curCmd);
     vkCmdEndRenderPass(curCmd);
 
-    recordOutputTransform(curCmd, curFb, cursorOutputDesc, hwCapW, hwCapH,
-                          OutputColorState::sdr(), true, 0);
+    recordCursorTransform(curCmd, curFb, hwCapW, hwCapH);
 
     VkImageLayout layout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -4134,7 +4190,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     renderCtx.finish();
 
     recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer,
-                          outputDesc, width, height, outputColor, false,
+                          outputDesc, width, height, outputColor,
                           output->colorTemp());
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;

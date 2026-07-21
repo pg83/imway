@@ -17,7 +17,7 @@
 #include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
 
-#include <lock_blur.spv.h>
+#include <lock_screen_blur.spv.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
@@ -299,8 +299,8 @@ void LockFilter::setup(RenderContext& ctx) {
 
     VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
 
-    smci.codeSize = sizeof(lock_blur_spv);
-    smci.pCode = lock_blur_spv;
+    smci.codeSize = sizeof(lock_screen_blur_spv);
+    smci.pCode = lock_screen_blur_spv;
     VkShaderModule module = VK_NULL_HANDLE;
     VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &module));
 
