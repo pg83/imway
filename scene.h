@@ -270,6 +270,12 @@ struct Scene {
     bool drawCursor = false;
     bool dockVisible = true;
 
+    // xdg-system-bell: CLOCK_MONOTONIC ms of the last ring; the renderer
+    // flashes the screen briefly while it is recent (0 = never rung).
+    // bellCount is a monotone ring counter surfaced through the state dump.
+    u64 bellMs = 0;
+    u32 bellCount = 0;
+
     // short active-layout name for the menu bar, written by wayland;
     // fixed 2-3 letter code, filled by the keyboard API
     char layout[4] = "";

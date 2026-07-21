@@ -19,7 +19,7 @@
 - [x] ~~ext_idle_notify 1 → 2 (get_input_idle_notification)~~ done
 
 ### Этап B — дешёвая мелочь
-- [ ] xdg-system-bell v1
+- [x] ~~xdg-system-bell v1~~ done
 - [x] ~~wp-alpha-modifier v1~~ done
 - [ ] wp-pointer-warp v1
 - [ ] xdg-wm-dialog v1

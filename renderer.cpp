@@ -3771,6 +3771,23 @@ void RendererImpl::buildUi(Scene& scene) {
         scene.ptrCaptured = true;
     }
 
+    // xdg-system-bell: a brief screen flash on ring, fading over ~150ms
+    if (scene.bellMs) {
+        u64 now = nowMsec();
+        u64 age = now >= scene.bellMs ? now - scene.bellMs : 0;
+
+        if (age < 150) {
+            float a = (1.f - (float)age / 150.f) * 0.35f;
+
+            ImGui::GetForegroundDrawList()->AddRectFilled(
+                ImVec2(0.f, 0.f), ImVec2((float)width, (float)height),
+                IM_COL32(255, 255, 255, (int)(a * 255.f)));
+            scene.needsFrame = true;
+        } else {
+            scene.bellMs = 0;
+        }
+    }
+
     cursorUi(scene, overClient);
     ImGui::Render();
 

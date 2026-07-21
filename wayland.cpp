@@ -30,6 +30,7 @@
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
+#include <xdg-system-bell-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
 #include <fractional-scale-v1-server-protocol.h>
@@ -4289,6 +4290,34 @@ namespace {
         if (s.vpRes) {
             wl_resource_set_user_data(s.vpRes, nullptr);
         }
+    }
+
+    // ---- xdg-system-bell ----
+    void systemBellRing(wl_client*, wl_resource* res, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        // a visible bell: the renderer flashes the screen briefly. The
+        // surface argument only scopes which window rang; we flash globally
+        srv->scene->bellMs = nowMsec();
+        srv->scene->bellCount++;
+        srv->scene->needsFrame = true;
+    }
+
+    const struct xdg_system_bell_v1_interface systemBellImpl = {
+        .destroy = resDestroy,
+        .ring = systemBellRing,
+    };
+
+    void systemBellBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_system_bell_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &systemBellImpl, data, nullptr);
     }
 
     // ---- wp-alpha-modifier ----
@@ -8892,6 +8921,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
     wl_global_create(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
     wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
+    wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);

@@ -332,6 +332,7 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
+    out << "bell count="_sv << scene->bellCount << "\n"_sv;
     out << "cursor shape="_sv << (int)scene->cursorShape
         << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
 
