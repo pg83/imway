@@ -5,23 +5,20 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-dominant_surface_color() {
-    python3 - "$1" <<'PY'
-import collections, sys
+surface_color() {
+    python3 - "$@" <<'PY'
+import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'
 w, h = map(int, f.readline().split())
 assert f.readline().strip() == b'255'
 d = f.read(w*h*3)
-c = collections.Counter(zip(d[::3], d[1::3], d[2::3]))
-# The client owns 60k pixels. Compositor background/title colors are either
-# much larger or much smaller; select the most common color in that band.
-for rgb, n in c.most_common():
-    if 55000 <= n <= 65000:
-        print(*rgb, n)
-        break
-else:
-    print(0, 0, 0, 0)
+x, y, cw, ch = map(int, sys.argv[2:6])
+pixels = [d[(yy*w+xx)*3:(yy*w+xx)*3+3]
+          for yy in range(y+16, y+ch-16)
+          for xx in range(x+16, x+cw-16)]
+print(*(round(sum(p[c] for p in pixels) / len(pixels)) for c in range(3)),
+      len(pixels))
 PY
 }
 
@@ -36,15 +33,19 @@ PY
 start_client
 wait_client "raw"
 sleep 0.3
+x=$(dump_field 'app_id=client_feat_color_mgmt' imgx)
+y=$(dump_field 'app_id=client_feat_color_mgmt' imgy)
+w=$(dump_field 'app_id=client_feat_color_mgmt' client_w)
+h=$(dump_field 'app_id=client_feat_color_mgmt' client_h)
 screenshot "$XDG_RUNTIME_DIR/raw.ppm"
-read -r rr rg rb rn < <(dominant_surface_color "$XDG_RUNTIME_DIR/raw.ppm")
-[[ "$rn" -gt 55000 ]] || { echo "raw surface not found"; exit 1; }
+read -r rr rg rb rn < <(surface_color "$XDG_RUNTIME_DIR/raw.ppm" "$x" "$y" "$w" "$h")
+[[ "$rn" -gt 40000 ]] || { echo "raw surface not found"; exit 1; }
 
 wait_client "managed"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/hdr.ppm"
-read -r hr hg hb hn < <(dominant_surface_color "$XDG_RUNTIME_DIR/hdr.ppm")
-[[ "$hn" -gt 55000 ]] || { echo "HDR surface not found"; exit 1; }
+read -r hr hg hb hn < <(surface_color "$XDG_RUNTIME_DIR/hdr.ppm" "$x" "$y" "$w" "$h")
+[[ "$hn" -gt 40000 ]] || { echo "HDR surface not found"; exit 1; }
 
 echo "legacy SDR in PQ=($rr,$rg,$rb); managed PQ=($hr,$hg,$hb)"
 [[ $((hr - 180)) -ge -3 && $((hr - 180)) -le 3 ]]
@@ -58,7 +59,7 @@ read -r bg1r bg1g bg1b < <(first_pixel "$XDG_RUNTIME_DIR/hdr.ppm")
 ctl "sdr-white 100"
 sleep 0.2
 screenshot "$XDG_RUNTIME_DIR/low-white.ppm"
-read -r lr lg lb ln < <(dominant_surface_color "$XDG_RUNTIME_DIR/low-white.ppm")
+read -r lr lg lb ln < <(surface_color "$XDG_RUNTIME_DIR/low-white.ppm" "$x" "$y" "$w" "$h")
 read -r bg2r bg2g bg2b < <(first_pixel "$XDG_RUNTIME_DIR/low-white.ppm")
 [[ $((lr - 180)) -ge -3 && $((lr - 180)) -le 3 ]]
 [[ $((lg - 120)) -ge -3 && $((lg - 120)) -le 3 ]]

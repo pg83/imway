@@ -5,12 +5,12 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-sample_stripes() { # <ppm>; locate the base surface and sample four stripe centres
+sample_stripes() { # <ppm> <surface-x> <surface-y>; sample four stripe centres
     python3 - "$@" <<'PY'
-import collections
 import sys
 
 path = sys.argv[1]
+x0, y0 = map(int, sys.argv[2:4])
 with open(path, "rb") as source:
     assert source.readline().strip() == b"P6"
     width, height = map(int, source.readline().split())
@@ -18,15 +18,6 @@ with open(path, "rb") as source:
     data = source.read(width * height * 3)
 
 pixels = list(zip(data[::3], data[1::3], data[2::3]))
-colors = collections.Counter(pixels)
-for base, count in colors.most_common():
-    if 43000 <= count <= 47000:
-        break
-else:
-    raise SystemExit("base surface color not found")
-
-positions = [(i % width, i // width) for i, color in enumerate(pixels) if color == base]
-x0, y0 = min(x for x, _ in positions), min(y for _, y in positions)
 result = []
 for offset in (25, 75, 125, 175):
     result.extend(pixels[(y0 + 100) * width + x0 + 50 + offset])
@@ -99,15 +90,17 @@ assert_stripes() { # actual array name, expected array name, label
 start_client
 wait_client "sdr-alpha"
 sleep 0.3
+x=$(dump_field 'app_id=color-alpha' imgx)
+y=$(dump_field 'app_id=color-alpha' imgy)
 screenshot "$XDG_RUNTIME_DIR/sdr-alpha.ppm"
-read -r -a sdr_actual < <(sample_stripes "$XDG_RUNTIME_DIR/sdr-alpha.ppm")
+read -r -a sdr_actual < <(sample_stripes "$XDG_RUNTIME_DIR/sdr-alpha.ppm" "$x" "$y")
 read -r -a sdr_expected < <(expected sdr)
 assert_stripes sdr_actual sdr_expected "sRGB electrical alpha"
 
 wait_client "pq-alpha"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/pq-alpha.ppm"
-read -r -a pq_actual < <(sample_stripes "$XDG_RUNTIME_DIR/pq-alpha.ppm")
+read -r -a pq_actual < <(sample_stripes "$XDG_RUNTIME_DIR/pq-alpha.ppm" "$x" "$y")
 read -r -a pq_expected < <(expected pq)
 assert_stripes pq_actual pq_expected "PQ electrical alpha"
 

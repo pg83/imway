@@ -185,6 +185,30 @@ dump_field() { # <pattern> <field>
         $0 ~ pat { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
 }
 
+# Print rounded mean R G B and pixel count from the inset client content box.
+# Averaging makes color assertions compatible with output dithering while
+# retaining their sub-code luminance/chromaticity checks.
+surface_mean() { # <ppm> <dump-pattern> [inset]
+    local path=$1 pattern=$2 inset=${3:-16}
+    local x y w h
+    x=$(dump_field "$pattern" imgx); y=$(dump_field "$pattern" imgy)
+    w=$(dump_field "$pattern" client_w); h=$(dump_field "$pattern" client_h)
+    python3 - "$path" "$x" "$y" "$w" "$h" "$inset" <<'PY'
+import sys
+path = sys.argv[1]
+x, y, cw, ch, inset = map(int, sys.argv[2:])
+f = open(path, 'rb'); assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split()); assert f.readline().strip() == b'255'
+d = f.read(w*h*3)
+pixels = [d[(yy*w+xx)*3:(yy*w+xx)*3+3]
+          for yy in range(y+inset, y+ch-inset)
+          for xx in range(x+inset, x+cw-inset)]
+assert pixels, 'empty client surface sample'
+print(*(round(sum(p[c] for p in pixels) / len(pixels)) for c in range(3)),
+      len(pixels))
+PY
+}
+
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
 screenshot() {

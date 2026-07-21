@@ -13,8 +13,15 @@ vec3 pqEncode(vec3 nits) {
     return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2));
 }
 
+vec3 dither(vec3 encoded) {
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+        vec2(0.06711056, 0.00583715)))) - 0.5;
+
+    return clamp(encoded + noise / 1023.0, 0.0, 1.0);
+}
+
 void main() {
     ivec2 size = textureSize(scene, 0);
     vec2 uv = gl_FragCoord.xy / vec2(size);
-    fColor = vec4(pqEncode(texture(scene, uv).rgb), 1.0);
+    fColor = vec4(dither(pqEncode(texture(scene, uv).rgb)), 1.0);
 }

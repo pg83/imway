@@ -31,6 +31,18 @@ vec3 pqOetf(vec3 nits) {
     return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2));
 }
 
+vec3 dither(vec3 encoded) {
+    if (pc.mapping.z <= 0.0) return clamp(encoded, 0.0, 1.0);
+
+    // Interleaved gradient noise has a flat distribution and pushes the
+    // quantization error into high spatial frequencies. One shared value
+    // avoids colored speckle on neutral ramps.
+    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+        vec2(0.06711056, 0.00583715)))) - 0.5;
+
+    return clamp(encoded + noise / pc.mapping.z, 0.0, 1.0);
+}
+
 float toneMap(float value, float peak) {
     value = max(value, 0.0);
     float knee = peak * 0.9;
@@ -74,8 +86,8 @@ void main() {
     vec3 target = displayMap(nits2020);
 
     if (pc.mapping.y == 0.0) {
-        fColor = vec4(pqOetf(applyRows(pc.fromTarget, target)), 1.0);
+        fColor = vec4(dither(pqOetf(applyRows(pc.fromTarget, target))), 1.0);
     } else {
-        fColor = vec4(linearToSrgb(clamp(target / pc.mapping.y, 0.0, 1.0)), 1.0);
+        fColor = vec4(dither(linearToSrgb(clamp(target / pc.mapping.y, 0.0, 1.0))), 1.0);
     }
 }

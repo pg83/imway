@@ -83,7 +83,6 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-2. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не могут проверить реальный KMS link и фотометрическую корректность физического дисплея.

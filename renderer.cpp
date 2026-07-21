@@ -2046,6 +2046,8 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
 
     push.row[6][0] = unitSdr ? 1.f : (float)mapping.peakNits;
     push.row[6][1] = unitSdr ? -1.f : mapping.hdr ? 0.f : 203.f;
+    push.row[6][2] = unitSdr ? 0.f :
+        fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 1023.f : 255.f;
     push.row[7][1] = (float)mapping.targetLuma.r;
     push.row[7][2] = (float)mapping.targetLuma.g;
     push.row[7][3] = (float)mapping.targetLuma.b;
