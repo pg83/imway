@@ -130,6 +130,10 @@ struct Surface: SceneNode, GrabNode {
     // one declared-opaque rect covers the whole presented surface
     bool opaqueCovers() const;
 
+    // wp-alpha-modifier: a compositor-side opacity multiplier in [0,1]
+    // applied on top of the buffer's own alpha (1 = unchanged)
+    float alphaMult = 1.f;
+
     float imgX = 0, imgY = 0;
     bool hovered = false;
 

@@ -59,6 +59,11 @@ server_protocol_paths = [
     "staging/ext-idle-notify/ext-idle-notify-v1",
     "staging/linux-drm-syncobj/linux-drm-syncobj-v1",
     "staging/xdg-toplevel-icon/xdg-toplevel-icon-v1",
+    "staging/xdg-system-bell/xdg-system-bell-v1",
+    "staging/alpha-modifier/alpha-modifier-v1",
+    "staging/xdg-dialog/xdg-dialog-v1",
+    "staging/content-type/content-type-v1",
+    "staging/pointer-warp/pointer-warp-v1",
 ]
 
 
@@ -160,6 +165,11 @@ client_protocol_paths = [
     "staging/xdg-toplevel-icon/xdg-toplevel-icon-v1",
     "staging/color-management/color-management-v1",
     "staging/color-representation/color-representation-v1",
+    "staging/xdg-system-bell/xdg-system-bell-v1",
+    "staging/alpha-modifier/alpha-modifier-v1",
+    "staging/xdg-dialog/xdg-dialog-v1",
+    "staging/content-type/content-type-v1",
+    "staging/pointer-warp/pointer-warp-v1",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths]

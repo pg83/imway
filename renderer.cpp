@@ -1825,6 +1825,12 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr; // subsurfaces need composition
     }
 
+    // a compositor-side opacity needs blending, which the primary plane
+    // cannot do
+    if (s->alphaMult < 1.f) {
+        return nullptr;
+    }
+
     // the primary plane does not blend: an alpha-capable format may bypass
     // composition only when the client declares the surface fully opaque
     if ((s->dmabuf->format == kFourccArgb || s->dmabuf->format == kFourccAr30 ||
@@ -2507,13 +2513,16 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
 
         draw->AddCallback(surfaceColorCallback, &s);
 
+        ImU32 tint = IM_COL32(255, 255, 255, (int)(s.alphaMult * 255.f + .5f));
+
         if (s.bufferTransform == 0) {
-            ImGui::Image((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2]);
+            ImGui::ImageWithBg((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2],
+                               ImVec4(0.f, 0.f, 0.f, 0.f), ImVec4(1.f, 1.f, 1.f, s.alphaMult));
         } else {
             ImGui::PushID(&s);
             ImGui::InvisibleButton("surface", ImVec2(w, h));
             draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
-                ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
+                ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3], tint);
             ImGui::PopID();
         }
 
@@ -2575,7 +2584,8 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
 
         draw->AddCallback(surfaceColorCallback, &s);
         draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
-            ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3]);
+            ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3],
+            IM_COL32(255, 255, 255, (int)(s.alphaMult * 255.f + .5f)));
         draw->AddCallback(surfaceColorCallback, nullptr);
         s.imgX = x - gx;
         s.imgY = y - gy;

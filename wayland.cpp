@@ -29,6 +29,7 @@
 
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
+#include <alpha-modifier-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
 #include <fractional-scale-v1-server-protocol.h>
@@ -261,6 +262,11 @@ namespace {
         ColorRepresentation pendRepresentation;
         bool pendRepresentationChanged = false;
 
+        // wp-alpha-modifier surface state
+        wl_resource* alphaModRes = nullptr;
+        bool pendAlphaChanged = false;
+        float pendAlphaMult = 1.f;
+
         XdgSurface* xdg = nullptr;
     };
 
@@ -302,6 +308,8 @@ namespace {
             ColorRepresentation representation;
             // release callback for a synced-subsurface cached buffer (v7)
             wl_resource* releaseCb = nullptr;
+            bool alphaChanged = false;
+            float alphaMult = 1.f;
         } cache;
 
         bool effectiveSync() const;
@@ -922,6 +930,7 @@ namespace {
     void dismissPopupTree(PopupImpl&);
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
+    void alphaModSurfaceGone(SurfaceImpl&);
     void fracSurfaceGone(SurfaceImpl&);
     void constraintSurfaceGone(SurfaceImpl&);
     void constraintApplyPending(SurfaceImpl&);
@@ -1396,6 +1405,11 @@ namespace {
             sub.cache.opaqueChanged = false;
         }
 
+        if (sub.cache.alphaChanged) {
+            s.alphaMult = sub.cache.alphaMult;
+            sub.cache.alphaChanged = false;
+        }
+
         constraintApplyPending(s);
 
         for (wl_resource* cb : sub.cache.frames) {
@@ -1810,6 +1824,16 @@ namespace {
             s.pendRepresentationChanged = false;
         }
 
+        if (s.pendAlphaChanged) {
+            if (toCache) {
+                sub->cache.alphaChanged = true;
+                sub->cache.alphaMult = s.pendAlphaMult;
+            } else {
+                s.alphaMult = s.pendAlphaMult;
+            }
+            s.pendAlphaChanged = false;
+        }
+
         if (s.pending.inputRegionChanged) {
             if (toCache) {
                 sub->cache.inputChanged = true;
@@ -2035,6 +2059,7 @@ namespace {
 
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
+        alphaModSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
@@ -4263,6 +4288,80 @@ namespace {
     void viewportSurfaceGone(SurfaceImpl& s) {
         if (s.vpRes) {
             wl_resource_set_user_data(s.vpRes, nullptr);
+        }
+    }
+
+    // ---- wp-alpha-modifier ----
+    void alphaModSetMultiplier(wl_client*, wl_resource* res, u32 factor) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_ALPHA_MODIFIER_SURFACE_V1_ERROR_NO_SURFACE,
+                                   "the surface was destroyed");
+
+            return;
+        }
+
+        // wire value: 0 fully transparent, UINT32_MAX fully opaque
+        s->pendAlphaMult = (float)((double)factor / (double)UINT32_MAX);
+        s->pendAlphaChanged = true;
+    }
+
+    void alphaModResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->alphaModRes = nullptr;
+            s->pendAlphaMult = 1.f;
+            s->pendAlphaChanged = true;
+        }
+    }
+
+    const struct wp_alpha_modifier_surface_v1_interface alphaModImpl = {
+        .destroy = resDestroy,
+        .set_multiplier = alphaModSetMultiplier,
+    };
+
+    void alphaModManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->alphaModRes) {
+            wl_resource_post_error(res, WP_ALPHA_MODIFIER_V1_ERROR_ALREADY_CONSTRUCTED,
+                                   "surface already has an alpha modifier");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_alpha_modifier_surface_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->alphaModRes = r;
+        wl_resource_set_implementation(r, &alphaModImpl, s, alphaModResourceDestroyed);
+    }
+
+    const struct wp_alpha_modifier_v1_interface alphaModManagerImpl = {
+        .destroy = resDestroy,
+        .get_surface = alphaModManagerGetSurface,
+    };
+
+    void alphaModManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_alpha_modifier_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &alphaModManagerImpl, data, nullptr);
+    }
+
+    void alphaModSurfaceGone(SurfaceImpl& s) {
+        if (s.alphaModRes) {
+            wl_resource_set_user_data(s.alphaModRes, nullptr);
         }
     }
 
@@ -8792,6 +8891,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
     wl_global_create(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
     wl_global_create(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
+    wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
