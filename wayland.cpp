@@ -691,6 +691,9 @@ namespace {
             WaylandImpl* srv = nullptr;
             wl_resource* res = nullptr;
             bool idled = false;
+            // v2 get_input_idle_notification: tracks raw input idleness and
+            // ignores idle inhibitors
+            bool ignoreInhibitors = false;
             ev_timer timer{};
         };
 
@@ -4710,7 +4713,7 @@ namespace {
     void idleNotifCb(struct ev_loop* l, ev_timer* w, int) {
         auto* n = (WaylandImpl::IdleNotif*)w->data;
 
-        if (n->srv->idleBlocked()) {
+        if (!n->ignoreInhibitors && n->srv->idleBlocked()) {
             ev_timer_again(l, w);
 
             return;
@@ -4734,7 +4737,7 @@ namespace {
 
     const struct ext_idle_notification_v1_interface idleNotificationImpl = {.destroy = relPointerDestroy};
 
-    void idleNotifierGetNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, wl_resource*) {
+    void idleMakeNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, bool ignoreInhibitors) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         wl_resource* r = wl_resource_create(client, &ext_idle_notification_v1_interface, wl_resource_get_version(res), id);
 
@@ -4748,6 +4751,7 @@ namespace {
 
         n->srv = srv;
         n->res = r;
+        n->ignoreInhibitors = ignoreInhibitors;
 
         double t = timeoutMs > 0 ? timeoutMs / 1000.0 : 0.001;
 
@@ -4759,9 +4763,18 @@ namespace {
         wl_resource_set_implementation(r, &idleNotificationImpl, n, idleNotificationResourceDestroyed);
     }
 
+    void idleNotifierGetNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, wl_resource*) {
+        idleMakeNotification(client, res, id, timeoutMs, false);
+    }
+
+    void idleNotifierGetInputNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, wl_resource*) {
+        idleMakeNotification(client, res, id, timeoutMs, true);
+    }
+
     const struct ext_idle_notifier_v1_interface idleNotifierImpl = {
         .destroy = relPointerDestroy,
         .get_idle_notification = idleNotifierGetNotification,
+        .get_input_idle_notification = idleNotifierGetInputNotification,
     };
 
     void idleNotifierBind(wl_client* client, void* data, u32 version, u32 id) {
@@ -8701,7 +8714,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
     wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
     wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
-    wl_global_create(display, &ext_idle_notifier_v1_interface, 1, this, idleNotifierBind);
+    wl_global_create(display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
     // Color-management: client electrical values are decoded into the linear
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.

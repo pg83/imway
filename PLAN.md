@@ -16,7 +16,7 @@
 - [ ] zwp_linux_dmabuf_v1 → 6 (set_sampling_device, feedback v6)
 - [ ] wp_presentation 1 → 2 (+ снять ложный VSYNC на софтверном таймстампе)
 - [ ] wp_cursor_shape 1 → 2
-- [ ] ext_idle_notify 1 → 2 (get_input_idle_notification)
+- [x] ~~ext_idle_notify 1 → 2 (get_input_idle_notification)~~ done
 
 ### Этап B — дешёвая мелочь
 - [ ] xdg-system-bell v1
