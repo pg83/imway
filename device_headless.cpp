@@ -88,7 +88,10 @@ namespace {
         ScanoutBuffer* scanoutBuffer(int) override;
         int acquire() override;
         bool supportsRenderFence() const override;
-        void presentImage(int, int) override;
+        bool presentImage(int, int) override;
+        bool prepareScreenshot(Listener&) override;
+        bool takeScreenshot(int, SharedScanout&) override;
+        bool screenshotPending() const override;
         bool presentNeedsPixels() const override;
         void present(const void*) override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
@@ -229,7 +232,20 @@ bool HeadlessOutput::supportsRenderFence() const {
     return false;
 }
 
-void HeadlessOutput::presentImage(int, int) {
+bool HeadlessOutput::presentImage(int, int) {
+    return false;
+}
+
+bool HeadlessOutput::prepareScreenshot(Listener&) {
+    return false;
+}
+
+bool HeadlessOutput::takeScreenshot(int, SharedScanout&) {
+    return false;
+}
+
+bool HeadlessOutput::screenshotPending() const {
+    return false;
 }
 
 bool HeadlessOutput::presentNeedsPixels() const {

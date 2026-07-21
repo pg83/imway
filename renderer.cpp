@@ -154,6 +154,13 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallScreenshotReady: Listener {
+        RendererImpl* parent;
+
+        CallScreenshotReady(RendererImpl* p);
+        void onListen(void*) override;
+    };
+
     struct RendererImpl: public Renderer, public InputSink, public IconResolver, public Listener {
         struct ev_loop* loop = nullptr;
         stl::ObjPool* pool = nullptr;
@@ -225,6 +232,7 @@ namespace {
         bool scanout = false;
         Vector<VkImageView> scanViews;
         Vector<VkFramebuffer> scanFbs;
+        Vector<VkImage> scanImages;
 
         StringView fontPath;
         float uiScale = 1.f;
@@ -412,6 +420,8 @@ namespace {
         bool screenshot(StringView path) override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
+        void beginScreenshot();
+        void syncScanoutTargets();
     };
 
     CallVolumeChanged::CallVolumeChanged(RendererImpl* p)
@@ -430,6 +440,15 @@ namespace {
 
     void CallWifiChanged::onListen(void*) {
         parent->wifiChanged();
+    }
+
+    CallScreenshotReady::CallScreenshotReady(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallScreenshotReady::onListen(void*) {
+        parent->beginScreenshot();
     }
 
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
@@ -516,7 +535,9 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
     setup(scene->outW, scene->outH);
-    shotCapture = ScreenshotCapture::create(comp, vk, width, height, fmt, uiScale);
+    shotCapture = ScreenshotCapture::create(
+        comp, vk, width, height, fmt, uiScale,
+        *comp.pool->make<CallScreenshotReady>(this));
 
     // before any input arrives the cursor sits at the screen center
     posX = scene->outW / 2.0;
@@ -573,6 +594,14 @@ RendererImpl::~RendererImpl() noexcept {
 
     if (syncOut) {
         vkDestroySemaphore(device, syncOut, nullptr);
+    }
+
+    for (VkFramebuffer fb : scanFbs) {
+        vkDestroyFramebuffer(device, fb, nullptr);
+    }
+
+    for (VkImageView view : scanViews) {
+        vkDestroyImageView(device, view, nullptr);
     }
 }
 
@@ -1213,6 +1242,7 @@ void RendererImpl::setup(int w, int h) {
             VkImageView view = VK_NULL_HANDLE;
 
             VK_CHECK(vkCreateImageView(device, &vci, nullptr, &view));
+            scanImages.pushBack(vci.image);
             scanViews.pushBack(view);
 
             VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
@@ -1413,14 +1443,6 @@ void RendererImpl::setup(int w, int h) {
     pooledVk(*pool, device, target);
     pooledVk(*pool, device, targetView);
     pooledVk(*pool, device, framebuffer);
-
-    for (VkImageView v : scanViews) {
-        pooledVk(*pool, device, v);
-    }
-
-    for (VkFramebuffer fb : scanFbs) {
-        pooledVk(*pool, device, fb);
-    }
 
     pooledVk(*pool, device, readbackMemory);
     pooledVk(*pool, device, readback);
@@ -3579,7 +3601,45 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
     output->setCursorPos((int)mp.x - hwHotX, (int)mp.y - hwHotY, true);
 }
 
+void RendererImpl::syncScanoutTargets() {
+    for (int i = 0; i < output->scanoutCount(); i++) {
+        VkImage image = output->scanoutBuffer(i)->image;
+
+        if (scanImages[i] == image) {
+            continue;
+        }
+
+        vkDestroyFramebuffer(device, scanFbs[i], nullptr);
+        vkDestroyImageView(device, scanViews[i], nullptr);
+
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+        vci.image = image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = fmt;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vci, nullptr,
+                                  &scanViews.mut(i)));
+
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+        fci.renderPass = renderPass;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &scanViews[i];
+        fci.width = width;
+        fci.height = height;
+        fci.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr,
+                                     &scanFbs.mut(i)));
+        scanImages.mut(i) = image;
+    }
+}
+
 bool RendererImpl::renderFrame(int scanIdx) {
+    if (scanIdx >= 0) {
+        syncScanoutTargets();
+    }
+
     Vector<SurfaceTexture*> externalFirstUses;
     Vector<VkSemaphore> waits;
     Vector<VkPipelineStageFlags> waitStages;
@@ -3901,12 +3961,6 @@ bool RendererImpl::renderFrame(int scanIdx) {
     frameInFlight = true;
     haveFrame = true;
 
-    if (shotRequested) {
-        shotCapture->submit(lastImage, lastLayout);
-        shotRequested = false;
-        forceComposition = false;
-    }
-
     for (Surface* s : explicitSurfaces) {
         s->syncAcquireWait = false;
     }
@@ -4121,9 +4175,10 @@ void RendererImpl::captureScreenshot() {
         return;
     }
 
-    // Render one composed frame even when the desktop currently uses direct
-    // scanout. renderFrame queues a separate readback submission after it;
-    // neither the key callback nor the compositor event loop waits for it.
+    shotCapture->request();
+}
+
+void RendererImpl::beginScreenshot() {
     shotRequested = true;
     forceComposition = true;
     scene->needsFrame = true;
@@ -4185,6 +4240,7 @@ void RendererImpl::frameNow() {
 
     if (!direct) {
         int idx = output->scanoutCount() > 0 ? output->acquire() : -1;
+        bool accepted = idx < 0;
 
         if (!renderFrame(idx)) {
             scene->needsFrame = true;
@@ -4202,7 +4258,7 @@ void RendererImpl::frameNow() {
                 return;
             }
 
-            output->presentImage(idx, presentFenceFd);
+            accepted = output->presentImage(idx, presentFenceFd);
 
             if (presentFenceFd >= 0) {
                 close(presentFenceFd);
@@ -4210,6 +4266,15 @@ void RendererImpl::frameNow() {
             }
         } else {
             output->present(output->presentNeedsPixels() ? readbackMap : nullptr);
+        }
+
+        if (shotRequested && accepted) {
+            if (shotCapture->submit(idx, lastImage, lastLayout)) {
+                shotRequested = false;
+                forceComposition = false;
+            } else {
+                scene->needsFrame = true;
+            }
         }
     }
 

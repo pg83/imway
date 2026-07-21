@@ -4,14 +4,17 @@
 
 struct Composer;
 struct DeviceVk;
+struct Listener;
 
-// Asynchronous interactive screenshot readback. submit() is called directly
-// after the composed frame submission, on the same Vulkan queue.
+// Interactive screenshot handoff.  KMS gives the viewer the composed
+// scanout's DMA-BUF; backends without exportable scanout use readback.
 struct ScreenshotCapture {
     virtual bool busy() const = 0;
-    virtual bool submit(VkImage image, VkImageLayout layout) = 0;
+    virtual void request() = 0;
+    virtual bool submit(int scanoutIndex, VkImage image,
+                        VkImageLayout layout) = 0;
 
     static ScreenshotCapture* create(Composer& c, const DeviceVk& vk,
                                      int width, int height, VkFormat format,
-                                     float uiScale);
+                                     float uiScale, Listener& ready);
 };

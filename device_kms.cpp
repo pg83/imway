@@ -36,12 +36,15 @@
 #include <std/ios/sys.h>
 #include <std/sys/fs.h>
 #include <std/sys/fd.h>
+#include <std/sys/atomic.h>
+#include <std/sys/event_fd.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sym/i_map.h>
 #include <std/sys/throw.h>
+#include <std/thr/pool.h>
 #include "device_kms.h"
 #include "intr_list.h"
 #include "pooled.h"
@@ -60,6 +63,10 @@ namespace {
     struct ScanBuf {
         ScanoutBuffer pub;
         VkDeviceMemory memory = VK_NULL_HANDLE;
+        u64 allocationSize = 0;
+        u64 modifier = 0;
+        u32 offset = 0;
+        u32 stride = 0;
         u32 gemHandle = 0;
         u32 fbId = 0;
     };
@@ -259,7 +266,10 @@ namespace {
                 continue;
             }
 
-            if (!(m.drmFormatModifierTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+            constexpr VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+                                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+
+            if ((m.drmFormatModifierTilingFeatures & needed) != needed) {
                 continue;
             }
 
@@ -291,7 +301,9 @@ namespace {
             ifi.format = vkFmt;
             ifi.type = VK_IMAGE_TYPE_2D;
             ifi.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-            ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+            ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                        VK_IMAGE_USAGE_SAMPLED_BIT;
 
             VkExternalImageFormatProperties extProps{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
             VkImageFormatProperties2 iprops{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
@@ -302,7 +314,11 @@ namespace {
                 continue;
             }
 
-            if (!(extProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT)) {
+            constexpr VkExternalMemoryFeatureFlags neededExternal =
+                VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
+                VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+
+            if ((extProps.externalMemoryProperties.externalMemoryFeatures & neededExternal) != neededExternal) {
                 continue;
             }
 
@@ -335,7 +351,9 @@ namespace {
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image) != VK_SUCCESS) {
@@ -391,6 +409,10 @@ namespace {
         VkSubresourceLayout layout{};
 
         vkGetImageSubresourceLayout(vk.device, sb.pub.image, &sub, &layout);
+        sb.allocationSize = req.size;
+        sb.modifier = chosen.drmFormatModifier;
+        sb.offset = (u32)layout.offset;
+        sb.stride = (u32)layout.rowPitch;
 
         VkMemoryGetFdInfoKHR gfi{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
 
@@ -470,6 +492,21 @@ namespace {
         ScanBuf scan[2];
         int scanCount = 0;
         int scanNext = 0;
+        int currentScan = -1;
+        int queuedScan = -1;
+        VkFormat scanFormat = VK_FORMAT_UNDEFINED;
+        u32 scanFourcc = 0;
+        u64 scanMods[64] = {};
+        u32 scanModCount = 0;
+
+        ScanBuf screenshotReplacement;
+        int screenshotState = 0;
+        int screenshotResult = 0;
+        int screenshotIndex = -1;
+        bool screenshotWasPresented = false;
+        Listener* screenshotReady = nullptr;
+        EventFD screenshotDone;
+        ev_io* screenshotIo = nullptr;
 
         u32 connectorId = 0;
         StringBuilder connectorLabel;
@@ -609,7 +646,12 @@ namespace {
         ScanoutBuffer* scanoutBuffer(int i) override;
         int acquire() override;
         bool supportsRenderFence() const override;
-        void presentImage(int i, int renderFenceFd) override;
+        bool presentImage(int i, int renderFenceFd) override;
+        bool prepareScreenshot(Listener& ready) override;
+        bool takeScreenshot(int i, SharedScanout& image) override;
+        bool screenshotPending() const override;
+        void screenshotPrepared();
+        void retireScreenshot();
         bool presentNeedsPixels() const override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
@@ -642,6 +684,8 @@ namespace {
         auto* out = (KmsOutput*)data;
 
         out->flipPending = false;
+        out->currentScan = out->queuedScan;
+        out->queuedScan = -1;
         out->flipNs = (u64)sec * 1000000000ull + (u64)usec * 1000ull;
         out->flipSeq = seq;
         out->releaseDirectUse(out->currentDirect, out->currentDirectFrame);
@@ -649,6 +693,7 @@ namespace {
         out->currentDirectFrame = out->queuedDirectFrame;
         out->queuedDirect = nullptr;
         out->queuedDirectFrame = nullptr;
+        out->retireScreenshot();
 
         u32 msec = (u32)(out->flipNs / 1000000ull);
 
@@ -668,6 +713,10 @@ namespace {
     }
 
     void udevIoCb(struct ev_loop*, ev_io* w, int);
+
+    void screenshotDoneCb(struct ev_loop*, ev_io* w, int) {
+        ((KmsOutput*)w->data)->screenshotPrepared();
+    }
 
     struct KmsDevice: public Device {
         Composer* c = nullptr;
@@ -888,6 +937,7 @@ void KmsOutput::hotplug() {
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
     if (modesetDone && commit(lastFb, true)) {
+        queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
         sysO << "imway: connector reconnected, remodeset"_sv << endL;
     }
 }
@@ -903,6 +953,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 {
     c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
+    screenshotIo = createEvIo(*c.pool, c.loop);
+    ev_io_init(screenshotIo, screenshotDoneCb, screenshotDone.fd(), EV_READ);
+    screenshotIo->data = this;
+    ev_io_start(c.loop, screenshotIo);
     pickPipe(connector, modeStr);
 
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
@@ -967,14 +1021,14 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     // a silently failed blob would feed MODE_ID=0 into every modeset
     STD_VERIFY(drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob) == 0);
 
-    u32 scanFourcc = DRM_FORMAT_XRGB8888;
-    VkFormat scanVk = kVkFormat;
+    scanFourcc = DRM_FORMAT_XRGB8888;
+    scanFormat = kVkFormat;
 
     if (hdrNits > 0) {
         if (setupHdr()) {
             hdrActive = true;
             scanFourcc = DRM_FORMAT_XRGB2101010;
-            scanVk = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+            scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
             sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv << hdrNits << " nits"_sv << endL;
 
             if (cursorPlaneId) {
@@ -997,7 +1051,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
         if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, m, 64) > 0) {
             scanFourcc = DRM_FORMAT_XRGB2101010;
-            scanVk = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+            scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
         }
     }
 
@@ -1007,7 +1061,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
 
             for (auto& sb : scan) {
-                if (createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanVk, scanFourcc, sb)) {
+                if (createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
                     scanCount++;
                 } else {
                     break;
@@ -1036,8 +1090,12 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             // out — retry plain 8-bit before falling to the dumb path
             sysE << "imway: 10-bit scanout failed, retrying 8-bit"_sv << endL;
             scanFourcc = DRM_FORMAT_XRGB8888;
-            scanVk = kVkFormat;
+            scanFormat = kVkFormat;
         }
+    }
+
+    if (scanCount >= 2) {
+        scanModCount = planeModifiers(fd, planeId, scanFourcc, scanMods, 64);
     }
 
     if (scanCount > 0) {
@@ -1055,6 +1113,15 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 }
 
 KmsOutput::~KmsOutput() noexcept {
+    if (screenshotState == 1) {
+        c->offload->join();
+    }
+
+    if (ev_is_active(screenshotIo)) {
+        ev_io_stop(loop, screenshotIo);
+    }
+
+    destroyScanBuf(*vk, fd, screenshotReplacement);
     releaseDirectUse(queuedDirect, queuedDirectFrame);
     releaseDirectUse(currentDirect, currentDirectFrame);
 
@@ -1992,6 +2059,7 @@ void KmsOutput::setPowerSave(bool on) {
         u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
         if (commit(lastFb, true)) {
+            queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
             queuedDirect = nullptr;
             queuedDirectFrame = nullptr;
             sysO << "imway: display back on"_sv << endL;
@@ -2125,17 +2193,125 @@ bool KmsOutput::supportsRenderFence() const {
     return plInFenceFd != 0;
 }
 
-void KmsOutput::presentImage(int i, int renderFenceFd) {
+bool KmsOutput::presentImage(int i, int renderFenceFd) {
     if (!started || flipPending || !sessionActive) {
-        return;
+        return false;
     }
 
     if (commit(scan[i].fbId, !modesetDone, renderFenceFd)) {
         modesetDone = true;
         scanNext = i ^ 1;
+        queuedScan = i;
         queuedDirect = nullptr;
         queuedDirectFrame = nullptr;
+
+        return true;
     }
+
+    return false;
+}
+
+bool KmsOutput::prepareScreenshot(Listener& readyListener) {
+    if (scanCount < 2 || screenshotState != 0 || !scanModCount) {
+        return false;
+    }
+
+    screenshotReady = &readyListener;
+    screenshotState = 1;
+    stdAtomicStore(&screenshotResult, 0, MemoryOrder::Relaxed);
+    c->offload->submit([this] {
+        bool ok = createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay,
+                                scanMods, scanModCount, scanFormat,
+                                scanFourcc, screenshotReplacement);
+
+        stdAtomicStore(&screenshotResult, ok ? 1 : -1, MemoryOrder::Release);
+        screenshotDone.signal();
+    });
+
+    return true;
+}
+
+void KmsOutput::screenshotPrepared() {
+    screenshotDone.drain();
+
+    int result = stdAtomicFetch(&screenshotResult, MemoryOrder::Acquire);
+    Listener* listener = screenshotReady;
+
+    screenshotReady = nullptr;
+    screenshotState = result > 0 ? 2 : 0;
+
+    if (listener) {
+        listener->onListen(result > 0 ? this : nullptr);
+    }
+}
+
+bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
+    if (screenshotState != 2 || i < 0 || i >= scanCount) {
+        return false;
+    }
+
+    ScanBuf& sb = scan[i];
+    auto getMemoryFd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(
+        vk->device, "vkGetMemoryFdKHR");
+    VkMemoryGetFdInfoKHR info{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
+
+    info.memory = sb.memory;
+    info.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
+    int dmaFd = -1;
+
+    if (!getMemoryFd || getMemoryFd(vk->device, &info, &dmaFd) != VK_SUCCESS ||
+        dmaFd < 0) {
+        destroyScanBuf(*vk, fd, screenshotReplacement);
+        screenshotState = 0;
+
+        return false;
+    }
+
+    image.fd = dmaFd;
+    image.width = (u32)mode.hdisplay;
+    image.height = (u32)mode.vdisplay;
+    image.format = (u32)sb.pub.format;
+    image.offset = sb.offset;
+    image.stride = sb.stride;
+    image.modifier = sb.modifier;
+    image.allocationSize = sb.allocationSize;
+    image.renderDevice = vk->renderDev;
+
+    screenshotIndex = i;
+    screenshotWasPresented = false;
+    screenshotState = 3;
+
+    return true;
+}
+
+bool KmsOutput::screenshotPending() const {
+    return screenshotState != 0;
+}
+
+void KmsOutput::retireScreenshot() {
+    if (screenshotState != 3) {
+        return;
+    }
+
+    if (currentScan == screenshotIndex) {
+        screenshotWasPresented = true;
+
+        return;
+    }
+
+    if (!screenshotWasPresented) {
+        return;
+    }
+
+    ScanBuf old = scan[screenshotIndex];
+
+    scan[screenshotIndex] = screenshotReplacement;
+    screenshotReplacement = ScanBuf{};
+    destroyScanBuf(*vk, fd, old);
+    screenshotIndex = -1;
+    screenshotWasPresented = false;
+    screenshotState = 0;
 }
 
 void KmsOutput::sessionDisabled() {
@@ -2157,6 +2333,7 @@ void KmsOutput::sessionEnabled() {
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
     if (commit(lastFb, true)) {
+        queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
         queuedDirect = nullptr;
         queuedDirectFrame = nullptr;
         sysO << "imway: session enabled, remodeset"_sv << endL;
@@ -2287,6 +2464,7 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
         frameRef(frame);
         queuedDirect = buf;
         queuedDirectFrame = frame;
+        queuedScan = -1;
 
         return true;
     }
@@ -2350,6 +2528,7 @@ void KmsOutput::present(const void* pixels) {
 
     if (commit(b.fbId, false)) {
         nextBuf ^= 1;
+        queuedScan = -1;
         queuedDirect = nullptr;
         queuedDirectFrame = nullptr;
     }

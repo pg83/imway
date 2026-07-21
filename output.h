@@ -7,6 +7,19 @@
 
 struct ScanoutBuffer;
 struct DmabufBuffer;
+struct Listener;
+
+struct SharedScanout {
+    int fd = -1;
+    u32 width = 0;
+    u32 height = 0;
+    u32 format = 0;
+    u32 offset = 0;
+    u32 stride = 0;
+    u64 modifier = 0;
+    u64 allocationSize = 0;
+    u64 renderDevice = 0;
+};
 
 struct Output {
     virtual int width() const = 0;
@@ -61,7 +74,14 @@ struct Output {
     // primary-plane commit.  The fd passed to presentImage is borrowed and
     // remains owned by the caller.
     virtual bool supportsRenderFence() const = 0;
-    virtual void presentImage(int i, int renderFenceFd) = 0;
+    virtual bool presentImage(int i, int renderFenceFd) = 0;
+
+    // Build a replacement scanout away from the event loop, then transfer
+    // ownership of one rendered slot to a screenshot client.  The backend
+    // retires its handles after KMS has flipped away from that slot.
+    virtual bool prepareScreenshot(Listener& ready) = 0;
+    virtual bool takeScreenshot(int i, SharedScanout& image) = 0;
+    virtual bool screenshotPending() const = 0;
 
     virtual bool presentNeedsPixels() const = 0;
     virtual void present(const void* pixels) = 0;

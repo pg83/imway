@@ -3,6 +3,8 @@
 #include "composer.h"
 #include "device_vk.h"
 #include "main_supervisor.h"
+#include "listener.h"
+#include "output.h"
 #include "pooled_ev.h"
 #include "scene.h"
 #include "util.h"
@@ -29,13 +31,15 @@
 using namespace stl;
 
 namespace {
-    struct ScreenshotCaptureImpl: ScreenshotCapture {
+    struct ScreenshotCaptureImpl: ScreenshotCapture, Listener {
         struct Retained {
             int fd;
             ev_tstamp until;
         };
 
         Composer* comp = nullptr;
+        ::Output* output = nullptr;
+        Listener* renderReady = nullptr;
         VkPhysicalDevice phys = VK_NULL_HANDLE;
         VkDevice device = VK_NULL_HANDLE;
         VkQueue queue = VK_NULL_HANDLE;
@@ -59,19 +63,26 @@ namespace {
         bool busy_ = false;
         bool fencePending = false;
         bool workerPending = false;
+        bool handoff = false;
+        bool waitingRetire = false;
         int resultFd = -1;
+        SharedScanout shared;
         Vector<Retained> retained;
 
         ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h,
-                              VkFormat fmt, float scale);
+                              VkFormat fmt, float scale, Listener& ready);
         ~ScreenshotCaptureImpl() noexcept;
 
         bool busy() const override;
-        bool submit(VkImage image, VkImageLayout layout) override;
+        void request() override;
+        bool submit(int scanoutIndex, VkImage image,
+                    VkImageLayout layout) override;
+        void onListen(void* data) override;
+        void ensureReadback();
         void pollFence();
         int buildFile();
         void ready();
-        void spawn(int mfd);
+        void spawn(int fd, const SharedScanout* image);
         void retain(int mfd);
         void releaseExpired();
     };
@@ -106,8 +117,10 @@ namespace {
 
 ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk,
                                              int w, int h, VkFormat fmt,
-                                             float scale)
+                                             float scale, Listener& ready)
     : comp(&c)
+    , output(c.output)
+    , renderReady(&ready)
     , phys(vk.phys)
     , device(vk.device)
     , queue(vk.queue)
@@ -117,26 +130,6 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk,
     , format(fmt)
     , uiScale(scale)
 {
-    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-
-    bci.size = (VkDeviceSize)width * height * sizeof(u32);
-    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    VK_CHECK(vkCreateBuffer(device, &bci, nullptr, &readback));
-
-    VkMemoryRequirements req{};
-
-    vkGetBufferMemoryRequirements(device, readback, &req);
-
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-
-    mai.allocationSize = req.size;
-    mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &readbackMemory));
-    VK_CHECK(vkBindBufferMemory(device, readback, readbackMemory, 0));
-    VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &readbackMap));
-
     VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 
     cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -192,6 +185,10 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
         close(mfd);
     }
 
+    if (shared.fd >= 0) {
+        close(shared.fd);
+    }
+
     for (const Retained& item : retained) {
         close(item.fd);
     }
@@ -217,9 +214,63 @@ bool ScreenshotCaptureImpl::busy() const {
     return busy_;
 }
 
-bool ScreenshotCaptureImpl::submit(VkImage image, VkImageLayout layout) {
+void ScreenshotCaptureImpl::request() {
     if (busy_) {
+        return;
+    }
+
+    busy_ = true;
+    handoff = output->prepareScreenshot(*this);
+
+    if (!handoff) {
+        renderReady->onListen(this);
+    }
+}
+
+void ScreenshotCaptureImpl::onListen(void* data) {
+    handoff = data != nullptr;
+    renderReady->onListen(this);
+}
+
+void ScreenshotCaptureImpl::ensureReadback() {
+    if (readback) {
+        return;
+    }
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+
+    bci.size = (VkDeviceSize)width * height * sizeof(u32);
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VK_CHECK(vkCreateBuffer(device, &bci, nullptr, &readback));
+
+    VkMemoryRequirements req{};
+
+    vkGetBufferMemoryRequirements(device, readback, &req);
+
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+    mai.allocationSize = req.size;
+    mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits,
+                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &readbackMemory));
+    VK_CHECK(vkBindBufferMemory(device, readback, readbackMemory, 0));
+    VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0,
+                        &readbackMap));
+}
+
+bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image,
+                                   VkImageLayout layout) {
+    if (!busy_ || fencePending || workerPending || waitingRetire) {
         return false;
+    }
+
+    if (handoff && !output->takeScreenshot(scanoutIndex, shared)) {
+        handoff = false;
+    }
+
+    if (!handoff) {
+        ensureReadback();
     }
 
     vkResetCommandBuffer(command, 0);
@@ -234,22 +285,26 @@ bool ScreenshotCaptureImpl::submit(VkImage image, VkImageLayout layout) {
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
 
     bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-    bar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bar.dstAccessMask = handoff ? 0 : VK_ACCESS_TRANSFER_READ_BIT;
     bar.oldLayout = layout;
     bar.newLayout = layout;
-    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.srcQueueFamilyIndex = handoff ? queueFamily : VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = handoff ? VK_QUEUE_FAMILY_EXTERNAL :
+                                        VK_QUEUE_FAMILY_IGNORED;
     bar.image = image;
     bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                         nullptr, 1, &bar);
+                         handoff ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT :
+                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         0, 0, nullptr, 0, nullptr, 1, &bar);
 
-    VkBufferImageCopy region{};
+    if (!handoff) {
+        VkBufferImageCopy region{};
 
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {(u32)width, (u32)height, 1};
-    vkCmdCopyImageToBuffer(command, image, layout, readback, 1, &region);
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {(u32)width, (u32)height, 1};
+        vkCmdCopyImageToBuffer(command, image, layout, readback, 1, &region);
+    }
     vkEndCommandBuffer(command);
 
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -266,8 +321,8 @@ bool ScreenshotCaptureImpl::submit(VkImage image, VkImageLayout layout) {
         return false;
     }
 
-    busy_ = true;
     fencePending = true;
+    comp->scene->needsFrame = handoff;
     ev_timer_set(fenceTimer, 0.001, 0.001);
     ev_timer_start(comp->loop, fenceTimer);
 
@@ -275,6 +330,19 @@ bool ScreenshotCaptureImpl::submit(VkImage image, VkImageLayout layout) {
 }
 
 void ScreenshotCaptureImpl::pollFence() {
+    if (waitingRetire) {
+        if (output->screenshotPending()) {
+            return;
+        }
+
+        ev_timer_stop(comp->loop, fenceTimer);
+        waitingRetire = false;
+        handoff = false;
+        busy_ = false;
+
+        return;
+    }
+
     VkResult status = vkGetFenceStatus(device, fence);
 
     if (status == VK_NOT_READY) {
@@ -288,6 +356,24 @@ void ScreenshotCaptureImpl::pollFence() {
         busy_ = false;
         sysE << "imway: screenshot fence failed ("_sv << (long)status
              << ")"_sv << endL;
+
+        return;
+    }
+
+    if (handoff) {
+        int fd = shared.fd;
+
+        shared.fd = -1;
+        spawn(fd, &shared);
+        waitingRetire = output->screenshotPending();
+
+        if (waitingRetire) {
+            ev_timer_set(fenceTimer, 0.001, 0.001);
+            ev_timer_start(comp->loop, fenceTimer);
+        } else {
+            busy_ = false;
+            handoff = false;
+        }
 
         return;
     }
@@ -409,13 +495,13 @@ void ScreenshotCaptureImpl::ready() {
         return;
     }
 
-    spawn(mfd);
+    spawn(mfd, nullptr);
 }
 
-void ScreenshotCaptureImpl::spawn(int mfd) {
+void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     StringBuilder source;
 
-    source << "/proc/"_sv << (long)getpid() << "/fd/"_sv << mfd;
+    source << "/proc/"_sv << (long)getpid() << "/fd/"_sv << fd;
 
     StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, sv(source)};
     StringBuilder display;
@@ -426,16 +512,30 @@ void ScreenshotCaptureImpl::spawn(int mfd) {
 
     scale << "IMGUI_SCALE="_sv << (long double)uiScale;
 
-    StringView env[] = {sv(display), sv(scale)};
+    StringBuilder metadata;
+
+    if (image) {
+        metadata << "IMWAY_SHOT_DMABUF="_sv
+                 << (unsigned long long)image->width << ":"_sv
+                 << (unsigned long long)image->height << ":"_sv
+                 << (unsigned long long)image->format << ":"_sv
+                 << (unsigned long long)image->offset << ":"_sv
+                 << (unsigned long long)image->stride << ":"_sv
+                 << (unsigned long long)image->modifier << ":"_sv
+                 << (unsigned long long)image->allocationSize << ":"_sv
+                 << (unsigned long long)image->renderDevice;
+    }
+
+    StringView env[] = {sv(display), sv(scale), sv(metadata)};
     SupervisorSpawn spec;
 
     spec.args = args;
     spec.argCount = 3;
     spec.env = env;
-    spec.envCount = 2;
+    spec.envCount = image ? 3 : 2;
 
     comp->supervisor->spawn(spec);
-    retain(mfd);
+    retain(fd);
 }
 
 void ScreenshotCaptureImpl::retain(int mfd) {
@@ -472,7 +572,8 @@ void ScreenshotCaptureImpl::releaseExpired() {
 
 ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk,
                                              int width, int height,
-                                             VkFormat format, float uiScale) {
+                                             VkFormat format, float uiScale,
+                                             Listener& ready) {
     return c.pool->make<ScreenshotCaptureImpl>(c, vk, width, height, format,
-                                                uiScale);
+                                                uiScale, ready);
 }

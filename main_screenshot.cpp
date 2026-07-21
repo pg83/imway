@@ -8,11 +8,13 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 
 #include <std/ios/sys.h>
 #include <std/ios/out_fd.h>
 #include <std/ios/fs_utils.h>
+#include <std/lib/vector.h>
 #include <std/sys/fd.h>
 #include <std/sys/throw.h>
 #include <std/sys/types.h>
@@ -31,12 +33,11 @@
 
 using namespace stl;
 
-// imway screenshot <path>: a standalone GLFW+Vulkan imgui client. the
-// compositor writes a frame into a memfd (self-describing IMW1 header + RGBA
-// rows) and execs us on /proc/self/fd/N; we read it, let the user drag a crop
-// rectangle over it, and save the selection as a png under the pictures dir.
-// vulkan's WSI only bridges an existing native window, so GLFW owns the
-// window/context/input and imgui's glfw+vulkan backends drive the rest.
+// imway screenshot <path>: a standalone GLFW+Vulkan imgui client. On KMS the
+// path names an owned scanout DMA-BUF and metadata comes through the
+// environment; headless uses a self-describing IMW1 memfd.  The viewer samples
+// the shared image directly and reads back only the selected region on
+// Save/Copy. GLFW owns window/input and imgui drives the Vulkan UI.
 
 namespace {
     // a screenshot-specific exception carrying a human message; raised by fail()
@@ -70,13 +71,83 @@ namespace {
         Buffer file;
         u32 w = 0, h = 0;
         const u8* px = nullptr;
+        int dmaFd = -1;
+        u32 format = 0;
+        u32 offset = 0;
+        u32 stride = 0;
+        u64 modifier = 0;
+        u64 allocationSize = 0;
+        u64 renderDevice = 0;
+        bool dmabuf = false;
+
+        bool shared() const;
     };
 
     constexpr u32 kMagic = 0x31574d49u; // 'IMW1' little-endian
 
+    bool Image::shared() const {
+        return dmabuf;
+    }
+
+    bool parseShared(StringView spec, Image& img) {
+        u64 values[8] = {};
+        size_t pos = 0;
+
+        for (int i = 0; i < 8; i++) {
+            size_t begin = pos;
+
+            while (pos < spec.length() && spec[pos] >= '0' &&
+                   spec[pos] <= '9') {
+                u64 digit = (u64)(spec[pos] - '0');
+
+                if (values[i] > (UINT64_MAX - digit) / 10) {
+                    return false;
+                }
+
+                values[i] = values[i] * 10 + digit;
+                pos++;
+            }
+
+            if (pos == begin ||
+                (i < 7 ? pos >= spec.length() || spec[pos] != ':' :
+                         pos != spec.length())) {
+                return false;
+            }
+
+            pos++;
+        }
+
+        img.w = (u32)values[0];
+        img.h = (u32)values[1];
+        img.format = (u32)values[2];
+        img.offset = (u32)values[3];
+        img.stride = (u32)values[4];
+        img.modifier = values[5];
+        img.allocationSize = values[6];
+        img.renderDevice = values[7];
+
+        return img.w && img.h && img.stride && img.allocationSize;
+    }
+
     // throws (ShotError, or the Errno readFileContent raises) on any failure
     void loadImage(StringView path, Image& img) {
         Buffer p(path);
+
+        if (const char* spec = getenv("IMWAY_SHOT_DMABUF")) {
+            if (!parseShared(StringView(spec), img)) {
+                fail("bad shared screenshot metadata"_sv);
+            }
+
+            img.dmaFd = open(p.cStr(), O_RDWR | O_CLOEXEC);
+
+            if (img.dmaFd < 0) {
+                fail("cannot open shared screenshot"_sv);
+            }
+
+            img.dmabuf = true;
+
+            return;
+        }
 
         readFileContent(p, img.file);
 
@@ -406,18 +477,99 @@ namespace {
         }
     }
 
-    void setupVulkan(const char** exts, u32 nexts) {
+    bool hasDeviceExtension(VkPhysicalDevice device, const char* name) {
+        u32 count = 0;
+
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &count, nullptr);
+        Vector<VkExtensionProperties> props;
+
+        props.zero(count);
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
+                                             props.mutData());
+
+        for (const VkExtensionProperties& prop : props) {
+            if (StringView(prop.extensionName) == StringView(name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void setupVulkan(const char** exts, u32 nexts, const Image& img) {
+        VkApplicationInfo app = {};
+
+        app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        app.pApplicationName = "imway screenshot";
+        app.apiVersion = VK_API_VERSION_1_2;
+
         VkInstanceCreateInfo ci = {};
 
         ci.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        ci.pApplicationInfo = &app;
         ci.enabledExtensionCount = nexts;
         ci.ppEnabledExtensionNames = exts;
         vkc(vkCreateInstance(&ci, gAlloc, &gInstance));
 
-        gPhys = ImGui_ImplVulkanH_SelectPhysicalDevice(gInstance);
+        if (img.shared()) {
+            u32 count = 0;
+
+            vkEnumeratePhysicalDevices(gInstance, &count, nullptr);
+            Vector<VkPhysicalDevice> devices;
+
+            devices.zero(count);
+            vkEnumeratePhysicalDevices(gInstance, &count, devices.mutData());
+
+            for (VkPhysicalDevice device : devices) {
+                if (!hasDeviceExtension(
+                        device, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
+                    continue;
+                }
+
+                VkPhysicalDeviceDrmPropertiesEXT drm{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+                VkPhysicalDeviceProperties2 props{
+                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+
+                props.pNext = &drm;
+                vkGetPhysicalDeviceProperties2(device, &props);
+
+                bool render = drm.hasRender &&
+                    (u64)makedev((u32)drm.renderMajor,
+                                 (u32)drm.renderMinor) == img.renderDevice;
+                bool primary = drm.hasPrimary &&
+                    (u64)makedev((u32)drm.primaryMajor,
+                                 (u32)drm.primaryMinor) == img.renderDevice;
+
+                if (render || primary) {
+                    gPhys = device;
+
+                    break;
+                }
+            }
+
+            if (!gPhys) {
+                fail("shared screenshot gpu is unavailable"_sv);
+            }
+        } else {
+            gPhys = ImGui_ImplVulkanH_SelectPhysicalDevice(gInstance);
+        }
+
         gQueueFamily = ImGui_ImplVulkanH_SelectQueueFamilyIndex(gPhys);
 
-        const char* devExts[] = {"VK_KHR_swapchain"};
+        const char* devExts[] = {
+            VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+            VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+            VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
+            VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
+        };
+        u32 devExtCount = img.shared() ? 4 : 1;
+
+        for (u32 i = 0; i < devExtCount; i++) {
+            if (!hasDeviceExtension(gPhys, devExts[i])) {
+                fail("vulkan cannot import shared screenshot"_sv);
+            }
+        }
         float prio = 1.0f;
         VkDeviceQueueCreateInfo qi = {};
 
@@ -431,7 +583,7 @@ namespace {
         dci.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
         dci.queueCreateInfoCount = 1;
         dci.pQueueCreateInfos = &qi;
-        dci.enabledExtensionCount = 1;
+        dci.enabledExtensionCount = devExtCount;
         dci.ppEnabledExtensionNames = devExts;
         vkc(vkCreateDevice(gPhys, &dci, gAlloc, &gDevice));
         vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
@@ -491,6 +643,160 @@ namespace {
         VkSampler sampler = VK_NULL_HANDLE;
         VkDescriptorSet ds = VK_NULL_HANDLE;
     };
+
+    void finishTexture(const Image& img, Texture& tex) {
+        VkImageViewCreateInfo vci = {};
+
+        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        vci.image = tex.image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = img.shared() ? (VkFormat)img.format :
+                                    VK_FORMAT_R8G8B8A8_UNORM;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkc(vkCreateImageView(gDevice, &vci, gAlloc, &tex.view));
+
+        VkSamplerCreateInfo sci = {};
+
+        sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+        sci.magFilter = VK_FILTER_LINEAR;
+        sci.minFilter = VK_FILTER_LINEAR;
+        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.minLod = -1000;
+        sci.maxLod = 1000;
+        vkc(vkCreateSampler(gDevice, &sci, gAlloc, &tex.sampler));
+
+        tex.ds = ImGui_ImplVulkan_AddTexture(
+            tex.sampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    void importTexture(Image& img, Texture& tex) {
+        VkSubresourceLayout plane = {};
+
+        plane.offset = img.offset;
+        plane.rowPitch = img.stride;
+
+        VkImageDrmFormatModifierExplicitCreateInfoEXT modifier = {};
+
+        modifier.sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT;
+        modifier.drmFormatModifier = img.modifier;
+        modifier.drmFormatModifierPlaneCount = 1;
+        modifier.pPlaneLayouts = &plane;
+
+        VkExternalMemoryImageCreateInfo external = {};
+
+        external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO;
+        external.pNext = &modifier;
+        external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
+        VkImageCreateInfo ici = {};
+
+        ici.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        ici.pNext = &external;
+        ici.imageType = VK_IMAGE_TYPE_2D;
+        ici.format = (VkFormat)img.format;
+        ici.extent = {img.w, img.h, 1};
+        ici.mipLevels = 1;
+        ici.arrayLayers = 1;
+        ici.samples = VK_SAMPLE_COUNT_1_BIT;
+        ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                    VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        vkc(vkCreateImage(gDevice, &ici, gAlloc, &tex.image));
+
+        VkMemoryRequirements req = {};
+
+        vkGetImageMemoryRequirements(gDevice, tex.image, &req);
+
+        auto getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
+            gDevice, "vkGetMemoryFdPropertiesKHR");
+        VkMemoryFdPropertiesKHR fdProps{
+            VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+
+        if (!getFdProps ||
+            getFdProps(gDevice, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                       img.dmaFd, &fdProps) != VK_SUCCESS) {
+            fail("cannot query shared screenshot memory"_sv);
+        }
+
+        u32 memoryTypes = req.memoryTypeBits & fdProps.memoryTypeBits;
+
+        if (!memoryTypes) {
+            fail("shared screenshot memory is incompatible"_sv);
+        }
+
+        VkMemoryDedicatedAllocateInfo dedicated{
+            VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+
+        dedicated.image = tex.image;
+
+        VkImportMemoryFdInfoKHR import{
+            VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+
+        import.pNext = &dedicated;
+        import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        import.fd = img.dmaFd;
+
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.pNext = &import;
+        mai.allocationSize = img.allocationSize;
+        mai.memoryTypeIndex = findMemoryType(memoryTypes, 0);
+        vkc(vkAllocateMemory(gDevice, &mai, gAlloc, &tex.memory));
+        img.dmaFd = -1;
+        vkc(vkBindImageMemory(gDevice, tex.image, tex.memory, 0));
+
+        VkCommandPool pool = VK_NULL_HANDLE;
+        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+
+        pci.queueFamilyIndex = gQueueFamily;
+        pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        vkc(vkCreateCommandPool(gDevice, &pci, gAlloc, &pool));
+
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+
+        cai.commandPool = pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        vkc(vkAllocateCommandBuffers(gDevice, &cai, &cmd));
+
+        VkCommandBufferBeginInfo begin{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkc(vkBeginCommandBuffer(cmd, &begin));
+
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+        barrier.dstQueueFamilyIndex = gQueueFamily;
+        barrier.image = tex.image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &barrier);
+        vkc(vkEndCommandBuffer(cmd));
+
+        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmd;
+        vkc(vkQueueSubmit(gQueue, 1, &submit, VK_NULL_HANDLE));
+        vkc(vkQueueWaitIdle(gQueue));
+        vkDestroyCommandPool(gDevice, pool, gAlloc);
+        finishTexture(img, tex);
+    }
 
     // upload the RGBA source image into a device-local sampled texture and
     // register it with imgui. one-shot: staging buffer, copy on a transient
@@ -608,29 +914,139 @@ namespace {
         vkDestroyBuffer(gDevice, staging, gAlloc);
         vkFreeMemory(gDevice, stagingMem, gAlloc);
 
-        VkImageViewCreateInfo vci = {};
+        finishTexture(img, tex);
+    }
 
-        vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        vci.image = tex.image;
-        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCreateImageView(gDevice, &vci, gAlloc, &tex.view);
+    void readTexture(const Image& img, const Texture& tex, int x0, int y0,
+                     int x1, int y1, Image& out) {
+        out.w = (u32)(x1 - x0);
+        out.h = (u32)(y1 - y0);
 
-        VkSamplerCreateInfo sci = {};
+        VkDeviceSize bytes = (VkDeviceSize)out.w * out.h * sizeof(u32);
+        VkBuffer buffer = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 
-        sci.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-        sci.magFilter = VK_FILTER_LINEAR;
-        sci.minFilter = VK_FILTER_LINEAR;
-        sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
-        sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        sci.minLod = -1000;
-        sci.maxLod = 1000;
-        vkCreateSampler(gDevice, &sci, gAlloc, &tex.sampler);
+        bci.size = bytes;
+        bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        vkc(vkCreateBuffer(gDevice, &bci, gAlloc, &buffer));
 
-        tex.ds = ImGui_ImplVulkan_AddTexture(tex.sampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        VkMemoryRequirements req = {};
+
+        vkGetBufferMemoryRequirements(gDevice, buffer, &req);
+
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = findMemoryType(
+            req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        vkc(vkAllocateMemory(gDevice, &mai, gAlloc, &memory));
+        vkc(vkBindBufferMemory(gDevice, buffer, memory, 0));
+
+        VkCommandPool pool = VK_NULL_HANDLE;
+        VkCommandPoolCreateInfo pci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+
+        pci.queueFamilyIndex = gQueueFamily;
+        pci.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+        vkc(vkCreateCommandPool(gDevice, &pci, gAlloc, &pool));
+
+        VkCommandBuffer cmd = VK_NULL_HANDLE;
+        VkCommandBufferAllocateInfo cai{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+
+        cai.commandPool = pool;
+        cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cai.commandBufferCount = 1;
+        vkc(vkAllocateCommandBuffers(gDevice, &cai, &cmd));
+
+        VkCommandBufferBeginInfo begin{
+            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        vkc(vkBeginCommandBuffer(cmd, &begin));
+
+        VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+        barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        barrier.image = tex.image;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
+                             nullptr, 1, &barrier);
+
+        VkBufferImageCopy copy = {};
+
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageOffset = {x0, y0, 0};
+        copy.imageExtent = {out.w, out.h, 1};
+        vkCmdCopyImageToBuffer(cmd, tex.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1,
+                               &copy);
+
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
+                             nullptr, 0, nullptr, 1, &barrier);
+        vkc(vkEndCommandBuffer(cmd));
+
+        VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+        submit.commandBufferCount = 1;
+        submit.pCommandBuffers = &cmd;
+        vkc(vkQueueSubmit(gQueue, 1, &submit, VK_NULL_HANDLE));
+        vkc(vkQueueWaitIdle(gQueue));
+
+        void* map = nullptr;
+
+        vkc(vkMapMemory(gDevice, memory, 0, bytes, 0, &map));
+        out.file.zero((size_t)bytes);
+
+        const u32* source = (const u32*)map;
+        u32* dest = (u32*)out.file.mutData();
+
+        for (size_t i = 0; i < (size_t)out.w * out.h; i++) {
+            u32 pixel = source[i];
+
+            if ((VkFormat)img.format ==
+                VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+                dest[i] = ((pixel >> 22) & 0xff) |
+                          (((pixel >> 12) & 0xff) << 8) |
+                          (((pixel >> 2) & 0xff) << 16) | 0xff000000u;
+            } else {
+                dest[i] = ((pixel >> 16) & 0xff) |
+                          (pixel & 0x0000ff00u) |
+                          ((pixel & 0xff) << 16) | 0xff000000u;
+            }
+        }
+
+        out.px = (const u8*)out.file.data();
+        vkUnmapMemory(gDevice, memory);
+        vkDestroyCommandPool(gDevice, pool, gAlloc);
+        vkDestroyBuffer(gDevice, buffer, gAlloc);
+        vkFreeMemory(gDevice, memory, gAlloc);
+    }
+
+    void encodeSelection(const Image& img, const Texture& tex, int x0, int y0,
+                         int x1, int y1, Buffer& png) {
+        if (!img.shared()) {
+            encodePng(img, x0, y0, x1, y1, png);
+
+            return;
+        }
+
+        Image pixels;
+
+        readTexture(img, tex, x0, y0, x1, y1, pixels);
+        encodePng(pixels, 0, 0, (int)pixels.w, (int)pixels.h, png);
     }
 
     void frameRender(ImDrawData* draw) {
@@ -1179,7 +1595,7 @@ int mainScreenshot(StringView path) {
         u32 nexts = 0;
         const char** exts = glfwGetRequiredInstanceExtensions(&nexts);
 
-        setupVulkan(exts, nexts);
+        setupVulkan(exts, nexts, img);
 
         VkSurfaceKHR surface;
 
@@ -1216,7 +1632,11 @@ int mainScreenshot(StringView path) {
         Texture tex;
 
         if (loaded) {
-            uploadTexture(img, tex);
+            if (img.shared()) {
+                importTexture(img, tex);
+            } else {
+                uploadTexture(img, tex);
+            }
         }
 
         Viewer view; // zoom 50%, no selection (whole frame) until the user drags
@@ -1236,14 +1656,14 @@ int mainScreenshot(StringView path) {
                 if (action == 1) {
                     Buffer png;
 
-                    encodePng(img, x0, y0, x1, y1, png);
+                    encodeSelection(img, tex, x0, y0, x1, y1, png);
 
                     Buffer dest = destPath();
 
                     savePng(png, sv(dest));
                     sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
                 } else {
-                    encodePng(img, x0, y0, x1, y1, gClip.png);
+                    encodeSelection(img, tex, x0, y0, x1, y1, gClip.png);
                     // nothing left to show; hold the selection with no window
                     copyToClipboard(window);
                 }
@@ -1260,6 +1680,21 @@ int mainScreenshot(StringView path) {
         }
 
         vkDeviceWaitIdle(gDevice);
+        if (tex.ds) {
+            ImGui_ImplVulkan_RemoveTexture(tex.ds);
+        }
+        if (tex.sampler) {
+            vkDestroySampler(gDevice, tex.sampler, gAlloc);
+        }
+        if (tex.view) {
+            vkDestroyImageView(gDevice, tex.view, gAlloc);
+        }
+        if (tex.image) {
+            vkDestroyImage(gDevice, tex.image, gAlloc);
+        }
+        if (tex.memory) {
+            vkFreeMemory(gDevice, tex.memory, gAlloc);
+        }
         ImGui_ImplVulkan_Shutdown();
         ImGui_ImplGlfw_Shutdown();
         ImGui::DestroyContext();
@@ -1276,6 +1711,10 @@ int mainScreenshot(StringView path) {
     }
 
     glfwTerminate();
+
+    if (img.dmaFd >= 0) {
+        close(img.dmaFd);
+    }
 
     return rc;
 }
