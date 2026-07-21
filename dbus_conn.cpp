@@ -1,5 +1,6 @@
 #include "dbus_conn.h"
 #include "pooled_ev.h"
+#include "small_obj_allocator.h"
 #include "util.h"
 
 #include <ev.h>
@@ -7,7 +8,6 @@
 #include <dbus/dbus.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -43,10 +43,9 @@ namespace {
     struct DBusConnImpl: public DBusConn {
         struct ev_loop* loop = nullptr;
         DBusConnection* conn = nullptr;
-        ObjList<WatchBox> watchAlloc;
-        ObjList<TimeoutBox> timeoutAlloc;
+        SmallObjAllocator* alloc = nullptr;
 
-        DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection* c);
+        DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* evLoop, DBusConnection* c);
         // closing walks the watch/timeout callbacks back into this impl, so
         // it must happen in the destructor, while the impl is still alive;
         // the pooled prepare hook stops afterwards, which is harmless
@@ -57,11 +56,10 @@ namespace {
     };
 }
 
-DBusConnImpl::DBusConnImpl(ObjPool* pool, struct ev_loop* evLoop, DBusConnection* c)
+DBusConnImpl::DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* evLoop, DBusConnection* c)
     : loop(evLoop)
     , conn(c)
-    , watchAlloc(pool)
-    , timeoutAlloc(pool)
+    , alloc(a)
 {
     dbus_connection_set_exit_on_disconnect(conn, FALSE);
     dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
@@ -149,7 +147,7 @@ namespace {
 
     dbus_bool_t watchAdd(DBusWatch* w, void* data) {
         auto* impl = (DBusConnImpl*)data;
-        WatchBox* box = impl->watchAlloc.make();
+        WatchBox* box = impl->alloc->make<WatchBox>();
 
         box->conn = impl;
         box->watch = w;
@@ -171,7 +169,7 @@ namespace {
         if (box) {
             ev_io_stop(impl->loop, &box->io);
             dbus_watch_set_data(w, nullptr, nullptr);
-            impl->watchAlloc.release(box);
+            impl->alloc->release(box);
         }
     }
 
@@ -193,7 +191,7 @@ namespace {
 
     dbus_bool_t timeoutAdd(DBusTimeout* t, void* data) {
         auto* impl = (DBusConnImpl*)data;
-        TimeoutBox* box = impl->timeoutAlloc.make();
+        TimeoutBox* box = impl->alloc->make<TimeoutBox>();
         double sec = dbus_timeout_get_interval(t) / 1000.0;
 
         box->conn = impl;
@@ -216,7 +214,7 @@ namespace {
         if (box) {
             ev_timer_stop(impl->loop, &box->timer);
             dbus_timeout_set_data(t, nullptr, nullptr);
-            impl->timeoutAlloc.release(box);
+            impl->alloc->release(box);
         }
     }
 
@@ -239,7 +237,7 @@ namespace {
     }
 }
 
-DBusConn* DBusConn::create(ObjPool* pool, struct ev_loop* loop, bool system) {
+DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, bool system) {
     DBusError err;
 
     dbus_error_init(&err);
@@ -253,5 +251,5 @@ DBusConn* DBusConn::create(ObjPool* pool, struct ev_loop* loop, bool system) {
         return nullptr;
     }
 
-    return pool->make<DBusConnImpl>(pool, loop, conn);
+    return pool->make<DBusConnImpl>(pool, alloc, loop, conn);
 }

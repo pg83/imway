@@ -15,6 +15,7 @@
 #include "intr_list.h"
 #include "scene.h"
 #include "session.h"
+#include "small_obj_allocator.h"
 #include "util.h"
 
 #include <errno.h>
@@ -62,7 +63,6 @@
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
@@ -263,7 +263,9 @@ namespace {
         TimelineBox* pendRelTl = nullptr;
         u64 pendAcqPt = 0, pendRelPt = 0;
         bool pendColorChanged = false;
-        ColorDescription pendColor;
+        // lazily boxed: most surfaces never see color management, and the
+        // inline struct is what pushed SurfaceImpl over the allocator limit
+        ColorDescription* pendColor = nullptr;
         ColorRepresentation pendRepresentation;
         bool pendRepresentationChanged = false;
 
@@ -284,6 +286,8 @@ namespace {
 
         XdgSurface* xdg = nullptr;
     };
+
+
 
     struct SubsurfaceImpl: public Subsurface {
         WaylandImpl* srv = nullptr;
@@ -651,6 +655,7 @@ namespace {
     struct WaylandImpl: public Wayland, public InputSink, public Listener {
         Composer* composer = nullptr;
         ObjPool* pool = nullptr;
+        SmallObjAllocator* alloc = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
         wl_display* display = nullptr;
@@ -684,33 +689,12 @@ namespace {
 
         u64 nextToplevelId = 1;
 
-        ObjList<SurfaceImpl> surfaceAlloc;
-        ObjList<SubsurfaceImpl> subsurfaceAlloc;
-        ObjList<XdgSurface> xdgSurfaceAlloc;
-        ObjList<ToplevelImpl> toplevelAlloc;
-        ObjList<PopupImpl> popupAlloc;
-        ObjList<RegionBox> regionAlloc;
-        ObjList<Positioner> positionerAlloc;
-        ObjList<BufferBox> dmabufBoxAlloc;
-        ObjList<DataSource> dataSourceAlloc;
-        ObjList<Offer> offerAlloc;
-        ObjList<SpbBox> spbAlloc;
-        ObjList<Params> dmabufParamsAlloc;
-        ObjList<ConstraintBox> constraintAlloc;
-        ObjList<IconBox> iconAlloc;
-        ObjList<IconBufferWatch> iconBufferWatchAlloc;
-        ObjList<ActivationTokenRequest> activationTokenAlloc;
         IntrusiveList activationTokenRequests;
         Vector<ActivationGrant> activationGrants;
         IconPool* iconPool = nullptr;
         IconStore* icons = nullptr;
 
         // color-management-v1 objects
-        ObjList<CImgDesc> cimgAlloc;
-        ObjList<CParams> cparAlloc;
-        ObjList<CIcc> ciccAlloc;
-        ObjList<CmOutput> cmOutputAlloc;
-        ObjList<CmFeedback> cmFeedbackAlloc;
         Vector<CmOutput*> cmOutputResources;
         Vector<CmFeedback*> cmFeedbackResources;
         u64 cimgIdentity = 0;
@@ -730,9 +714,7 @@ namespace {
             ev_timer timer{};
         };
 
-        ObjList<IdleNotif> idleAlloc;
         IntrusiveList idleNotifs;
-        ObjList<IdleInhibitor> idleInhibitorAlloc;
         IntrusiveList idleInhibitors;
         ::Output* output = nullptr;
         double dpmsSec = 0;
@@ -1825,9 +1807,9 @@ namespace {
         if (s.pendColorChanged) {
             if (toCache) {
                 sub->cache.colorChanged = true;
-                sub->cache.color = s.pendColor;
+                sub->cache.color = *s.pendColor;
             } else {
-                applyColorState(s, s.pendColor);
+                applyColorState(s, *s.pendColor);
             }
 
             s.pendColorChanged = false;
@@ -2116,9 +2098,13 @@ namespace {
             frameUnref(frame);
         }
 
+        if (s->pendColor) {
+            srv->alloc->release(s->pendColor);
+        }
+
         srv->scene->needsFrame = true;
         ((SceneNode*)s)->unlink();
-        srv->surfaceAlloc.release(s);
+        srv->alloc->release(s);
     }
 
     void regionDestroy(wl_client*, wl_resource* res) {
@@ -2199,7 +2185,7 @@ namespace {
     void regionResourceDestroyed(wl_resource* res) {
         auto* box = (RegionBox*)wl_resource_get_user_data(res);
 
-        box->srv->regionAlloc.release(box);
+        box->srv->alloc->release(box);
     }
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
@@ -2212,7 +2198,7 @@ namespace {
             return;
         }
 
-        auto* s = srv->surfaceAlloc.make();
+        auto* s = srv->alloc->make<SurfaceImpl>();
 
         s->srv = srv;
         s->res = sres;
@@ -2237,7 +2223,7 @@ namespace {
             return;
         }
 
-        auto* box = srv->regionAlloc.make();
+        auto* box = srv->alloc->make<RegionBox>();
 
         box->srv = srv;
         wl_resource_set_implementation(rres, &regionImpl, box, regionResourceDestroyed);
@@ -2392,7 +2378,7 @@ namespace {
             sub->surface->sub = nullptr;
         }
 
-        sub->srv->subsurfaceAlloc.release(sub);
+        sub->srv->alloc->release(sub);
     }
 
     void subcompositorDestroy(wl_client*, wl_resource* res) {
@@ -2449,7 +2435,7 @@ namespace {
             return;
         }
 
-        auto* sub = srv->subsurfaceAlloc.make();
+        auto* sub = srv->alloc->make<SubsurfaceImpl>();
 
         sub->srv = srv;
         sub->surface = surface;
@@ -2705,7 +2691,7 @@ namespace {
         t->unlink();
         sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
-        srv->toplevelAlloc.release(t);
+        srv->alloc->release(t);
     }
 
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
@@ -2764,7 +2750,7 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* t = srv->toplevelAlloc.make();
+        auto* t = srv->alloc->make<ToplevelImpl>();
 
         t->srv = srv;
         t->res = tres;
@@ -2870,7 +2856,7 @@ namespace {
             xs->popup->surface = nullptr;
         }
 
-        xs->srv->xdgSurfaceAlloc.release(xs);
+        xs->srv->alloc->release(xs);
     }
 
     Positioner* positionerFrom(wl_resource* res) {
@@ -2983,7 +2969,7 @@ namespace {
     void positionerResourceDestroyed(wl_resource* res) {
         Positioner* p = positionerFrom(res);
 
-        p->srv->positionerAlloc.release(p);
+        p->srv->alloc->release(p);
     }
 
     int clampPosition(i64 v) {
@@ -3101,7 +3087,7 @@ namespace {
 
         p->unlink();
         srv->scene->needsFrame = true;
-        srv->popupAlloc.release(p);
+        srv->alloc->release(p);
     }
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes) {
@@ -3137,7 +3123,7 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* p = srv->popupAlloc.make();
+        auto* p = srv->alloc->make<PopupImpl>();
 
         p->srv = srv;
         p->res = pres;
@@ -3180,7 +3166,7 @@ namespace {
             return;
         }
 
-        Positioner* p = srv->positionerAlloc.make();
+        Positioner* p = srv->alloc->make<Positioner>();
 
         p->srv = srv;
         wl_resource_set_implementation(pres, &positionerImpl, p, positionerResourceDestroyed);
@@ -3209,7 +3195,7 @@ namespace {
             return;
         }
 
-        auto* xs = srv->xdgSurfaceAlloc.make();
+        auto* xs = srv->alloc->make<XdgSurface>();
 
         xs->srv = srv;
         xs->res = xres;
@@ -3633,7 +3619,7 @@ namespace {
         // the orphans keep a valid ring among themselves for their unlinks
         src->offers.clear();
         src->srv->seat.sourceGone(src);
-        src->srv->dataSourceAlloc.release(src);
+        src->srv->alloc->release(src);
     }
 
     u32 chooseDndAction(u32 offered) {
@@ -3783,7 +3769,7 @@ namespace {
         }
 
         offer->unlink();
-        offer->srv->offerAlloc.release(offer);
+        offer->srv->alloc->release(offer);
     }
 
     const struct zwp_primary_selection_offer_v1_interface primaryOfferImpl = {
@@ -3795,7 +3781,7 @@ namespace {
         wl_client* client = wl_resource_get_client(device);
         u32 version = (u32)wl_resource_get_version(device);
         wl_resource* resource;
-        Offer* offer = src->srv->offerAlloc.make();
+        Offer* offer = src->srv->alloc->make<Offer>();
 
         offer->srv = src->srv;
         offer->source = src;
@@ -3807,7 +3793,7 @@ namespace {
 
             if (!resource) {
                 offer->unlink();
-                src->srv->offerAlloc.release(offer);
+                src->srv->alloc->release(offer);
 
                 return nullptr;
             }
@@ -3827,7 +3813,7 @@ namespace {
 
         if (!resource) {
             offer->unlink();
-            src->srv->offerAlloc.release(offer);
+            src->srv->alloc->release(offer);
 
             return nullptr;
         }
@@ -3946,7 +3932,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->dataSourceAlloc.make();
+        DataSource* src = srv->alloc->make<DataSource>();
 
         src->srv = srv;
         src->res = s;
@@ -4039,7 +4025,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->dataSourceAlloc.make();
+        DataSource* src = srv->alloc->make<DataSource>();
 
         src->srv = srv;
         src->res = s;
@@ -4932,7 +4918,7 @@ namespace {
             c->surface->constraint = nullptr;
         }
 
-        c->srv->constraintAlloc.release(c);
+        c->srv->alloc->release(c);
     }
 
     void constraintSetRegion(wl_client*, wl_resource* res, wl_resource* regionRes) {
@@ -4986,7 +4972,7 @@ namespace {
             return;
         }
 
-        ConstraintBox* c = srv->constraintAlloc.make();
+        ConstraintBox* c = srv->alloc->make<ConstraintBox>();
 
         c->srv = srv;
         c->surface = s;
@@ -5148,7 +5134,7 @@ namespace {
         }
 
         inhibitor->unlink();
-        inhibitor->srv->idleInhibitorAlloc.release(inhibitor);
+        inhibitor->srv->alloc->release(inhibitor);
     }
 
     const struct zwp_idle_inhibitor_v1_interface idleInhibitorImpl = {.destroy = relPointerDestroy};
@@ -5163,7 +5149,7 @@ namespace {
             return;
         }
 
-        auto* inhibitor = srv->idleInhibitorAlloc.make();
+        auto* inhibitor = srv->alloc->make<IdleInhibitor>();
 
         inhibitor->srv = srv;
         inhibitor->surface = surfaceFrom(surfaceRes);
@@ -5212,7 +5198,7 @@ namespace {
 
         ev_timer_stop(n->srv->loop, &n->timer);
         n->unlink();
-        n->srv->idleAlloc.release(n);
+        n->srv->alloc->release(n);
     }
 
     const struct ext_idle_notification_v1_interface idleNotificationImpl = {.destroy = relPointerDestroy};
@@ -5227,7 +5213,7 @@ namespace {
             return;
         }
 
-        WaylandImpl::IdleNotif* n = srv->idleAlloc.make();
+        WaylandImpl::IdleNotif* n = srv->alloc->make<WaylandImpl::IdleNotif>();
 
         n->srv = srv;
         n->res = r;
@@ -5440,7 +5426,7 @@ namespace {
     void spbBufferResourceDestroyed(wl_resource* res) {
         SpbBox* box = (SpbBox*)wl_resource_get_user_data(res);
 
-        box->srv->spbAlloc.release(box);
+        box->srv->alloc->release(box);
     }
 
     void spbCreateBuffer(wl_client* client, wl_resource* res, u32 id, u32 r, u32 g, u32 b, u32 a) {
@@ -5453,7 +5439,7 @@ namespace {
             return;
         }
 
-        SpbBox* box = srv->spbAlloc.make();
+        SpbBox* box = srv->alloc->make<SpbBox>();
 
         box->srv = srv;
         box->argb = ((a >> 24) << 24) | ((r >> 24) << 16) | ((g >> 24) << 8) | (b >> 24);
@@ -5483,7 +5469,7 @@ namespace {
         watch->unlink();
         wl_resource_post_error(box->res, XDG_TOPLEVEL_ICON_V1_ERROR_NO_BUFFER,
                                "icon buffer was destroyed before the icon object");
-        box->srv->iconBufferWatchAlloc.release(watch);
+        box->srv->alloc->release(watch);
     }
 
     void iconResourceDestroyed(wl_resource* res) {
@@ -5493,10 +5479,10 @@ namespace {
             auto* watch = (IconBufferWatch*)box->bufferWatches.popFront();
 
             wl_list_remove(&watch->destroy.listener.link);
-            box->srv->iconBufferWatchAlloc.release(watch);
+            box->srv->alloc->release(watch);
         }
 
-        box->srv->iconAlloc.release(box);
+        box->srv->alloc->release(box);
     }
 
     void iconSetName(wl_client*, wl_resource* res, const char* name) {
@@ -5568,7 +5554,7 @@ namespace {
 
         box->bufferWatchCount++;
 
-        IconBufferWatch* watch = box->srv->iconBufferWatchAlloc.make();
+        IconBufferWatch* watch = box->srv->alloc->make<IconBufferWatch>();
 
         watch->icon = box;
         watch->destroy.watch = watch;
@@ -5622,7 +5608,7 @@ namespace {
             return;
         }
 
-        IconBox* box = srv->iconAlloc.make();
+        IconBox* box = srv->alloc->make<IconBox>();
 
         box->srv = srv;
         box->res = r;
@@ -5814,7 +5800,7 @@ namespace {
         auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
         request->unlink();
-        request->srv->activationTokenAlloc.release(request);
+        request->srv->alloc->release(request);
     }
 
     void activationGetToken(wl_client* client, wl_resource* res, u32 id) {
@@ -5827,7 +5813,7 @@ namespace {
         }
 
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        auto* request = srv->activationTokenAlloc.make();
+        auto* request = srv->alloc->make<ActivationTokenRequest>();
 
         request->srv = srv;
         request->client = client;
@@ -5902,7 +5888,7 @@ namespace {
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
 
-        box->srv->dmabufBoxAlloc.release(box);
+        box->srv->alloc->release(box);
     }
 
     Params* paramsFrom(wl_resource* res) {
@@ -5913,7 +5899,7 @@ namespace {
         BufferBox* box = p.pending;
 
         p.pending = nullptr;
-        p.srv->dmabufBoxAlloc.release(box);
+        p.srv->alloc->release(box);
     }
 
     bool dmabufFdsImportable(WaylandImpl& srv, const DmabufBuffer& b) {
@@ -5941,10 +5927,10 @@ namespace {
         Params* p = paramsFrom(res);
 
         if (p->pending) {
-            p->srv->dmabufBoxAlloc.release(p->pending);
+            p->srv->alloc->release(p->pending);
         }
 
-        p->srv->dmabufParamsAlloc.release(p);
+        p->srv->alloc->release(p);
     }
 
     void paramsAdd(wl_client*, wl_resource* res, i32 fd, u32 planeIdx, u32 offset, u32 stride, u32 modifierHi, u32 modifierLo) {
@@ -6126,10 +6112,10 @@ namespace {
             return;
         }
 
-        auto* p = srv->dmabufParamsAlloc.make();
+        auto* p = srv->alloc->make<Params>();
 
         p->srv = srv;
-        p->pending = srv->dmabufBoxAlloc.make();
+        p->pending = srv->alloc->make<BufferBox>();
         p->pending->srv = srv;
         FrameResource* lifetime = frameCreate();
 
@@ -8055,35 +8041,13 @@ void SeatState::toplevelGone(Toplevel* t) {
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     : composer(&comp)
     , pool(comp.pool)
+    , alloc(comp.alloc)
     , loop(comp.loop)
     , scene(comp.scene)
     , socketName(cfg.socketName)
     , keyboard(comp.kb)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
-    , surfaceAlloc(comp.pool)
-    , subsurfaceAlloc(comp.pool)
-    , xdgSurfaceAlloc(comp.pool)
-    , toplevelAlloc(comp.pool)
-    , popupAlloc(comp.pool)
-    , regionAlloc(comp.pool)
-    , positionerAlloc(comp.pool)
-    , dmabufBoxAlloc(comp.pool)
-    , dataSourceAlloc(comp.pool)
-    , offerAlloc(comp.pool)
-    , spbAlloc(comp.pool)
-    , dmabufParamsAlloc(comp.pool)
-    , constraintAlloc(comp.pool)
-    , iconAlloc(comp.pool)
-    , iconBufferWatchAlloc(comp.pool)
-    , activationTokenAlloc(comp.pool)
-    , cimgAlloc(comp.pool)
-    , cparAlloc(comp.pool)
-    , ciccAlloc(comp.pool)
-    , cmOutputAlloc(comp.pool)
-    , cmFeedbackAlloc(comp.pool)
-    , idleAlloc(comp.pool)
-    , idleInhibitorAlloc(comp.pool)
 {
     formats.append(cfg.formats, cfg.formatCount);
 
@@ -8283,7 +8247,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
         if (d && d->srv) {
-            d->srv->cimgAlloc.release(d);
+            d->srv->alloc->release(d);
         }
     }
 
@@ -8297,7 +8261,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             return nullptr;
         }
 
-        CImgDesc* obj = srv->cimgAlloc.make();
+        CImgDesc* obj = srv->alloc->make<CImgDesc>();
 
         *obj = d;
         obj->srv = srv;
@@ -8329,7 +8293,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             return nullptr;
         }
 
-        CImgDesc* obj = srv->cimgAlloc.make();
+        CImgDesc* obj = srv->alloc->make<CImgDesc>();
 
         *obj = {};
         obj->srv = srv;
@@ -8586,7 +8550,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
         if (p && p->srv) {
-            p->srv->cparAlloc.release(p);
+            p->srv->alloc->release(p);
         }
     }
 
@@ -8594,7 +8558,12 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmSurfaceDestroy(wl_client*, wl_resource* res) {
         if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
             s->pendColorChanged = true;
-            s->pendColor = ColorDescription::sRgb();
+
+            if (!s->pendColor) {
+                s->pendColor = s->srv->alloc->make<ColorDescription>();
+            }
+
+            *s->pendColor = ColorDescription::sRgb();
         }
 
         wl_resource_destroy(res);
@@ -8626,7 +8595,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         s->pendColorChanged = true;
-        s->pendColor = d->color;
+
+        if (!s->pendColor) {
+            s->pendColor = s->srv->alloc->make<ColorDescription>();
+        }
+
+        *s->pendColor = d->color;
     }
 
     void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
@@ -8640,7 +8614,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         s->pendColorChanged = true;
-        s->pendColor = ColorDescription::sRgb();
+
+        if (!s->pendColor) {
+            s->pendColor = s->srv->alloc->make<ColorDescription>();
+        }
+
+        *s->pendColor = ColorDescription::sRgb();
     }
 
     const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
@@ -8697,7 +8676,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
         if (obj) {
             removeOne(obj->srv->cmOutputResources, obj);
-            obj->srv->cmOutputAlloc.release(obj);
+            obj->srv->alloc->release(obj);
         }
     }
 
@@ -8741,7 +8720,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             }
 
             removeOne(obj->srv->cmFeedbackResources, obj);
-            obj->srv->cmFeedbackAlloc.release(obj);
+            obj->srv->alloc->release(obj);
         }
     }
 
@@ -8760,7 +8739,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CmOutput* obj = srv->cmOutputAlloc.make();
+        CmOutput* obj = srv->alloc->make<CmOutput>();
 
         *obj = {};
         obj->srv = srv;
@@ -8801,7 +8780,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CmFeedback* obj = srv->cmFeedbackAlloc.make();
+        CmFeedback* obj = srv->alloc->make<CmFeedback>();
 
         *obj = {};
         obj->srv = srv;
@@ -8823,7 +8802,7 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        CParams* p = srv->cparAlloc.make();
+        CParams* p = srv->alloc->make<CParams>();
 
         *p = {};
         p->srv = srv;
@@ -8930,7 +8909,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* icc = (CIcc*)wl_resource_get_user_data(res);
 
         if (icc && icc->srv) {
-            icc->srv->ciccAlloc.release(icc);
+            icc->srv->alloc->release(icc);
         }
     }
 
@@ -8946,7 +8925,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CIcc* icc = srv->ciccAlloc.make();
+        CIcc* icc = srv->alloc->make<CIcc>();
 
         icc->srv = srv;
         wl_resource_set_implementation(creator, &cmIccImpl, icc,

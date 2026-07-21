@@ -3,6 +3,7 @@
 #include "listener.h"
 #include "wifi.h"
 #include "wifi_nm.h"
+#include "small_obj_allocator.h"
 #include "dbus_conn.h"
 #include "scene.h"
 #include "util.h"
@@ -10,7 +11,6 @@
 #include <dbus/dbus.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -72,16 +72,8 @@ namespace {
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
-        ObjList<WifiNetwork> netAlloc;
         Vector<WifiNetwork*> nets;      // committed, ui-facing
-
-        ObjList<Known> knownAlloc;
         Vector<Known*> known;           // committed
-
-        // per-refresh transients: member free lists, so every refresh reuses
-        // the chunks instead of abandoning them in the composer pool
-        ObjList<StringBuilder> pathAlloc;
-        ObjList<Ctx> ctxAlloc;
 
         bool wantPass = false;
         StringBuilder passAp;
@@ -229,10 +221,6 @@ namespace {
 NmWifi::NmWifi(Composer& comp, DBusConnection* c)
     : c(&comp)
     , conn(c)
-    , netAlloc(comp.pool)
-    , knownAlloc(comp.pool)
-    , pathAlloc(comp.pool)
-    , ctxAlloc(comp.pool)
 {
     // fire-and-forget match registration (NULL error = no blocking round trip)
     dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
@@ -339,13 +327,13 @@ void NmWifi::resetScratch() {
     curActive.reset();
 
     for (WifiNetwork* n : netBuild) {
-        netAlloc.release(n);
+        c->alloc->release(n);
     }
 
     netBuild.clear();
 
     for (Known* k : knownBuild) {
-        knownAlloc.release(k);
+        c->alloc->release(k);
     }
 
     knownBuild.clear();
@@ -382,7 +370,7 @@ void NmWifi::devicesReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = pathAlloc.make();
+                StringBuilder* p = c->alloc->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 paths.pushBack(p);
@@ -400,19 +388,19 @@ void NmWifi::devicesReply(DBusMessage* reply) {
     devPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = ctxAlloc.make();
+        Ctx* cx = c->alloc->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
 
         if (!getAll(sv(*p), kDev, deviceCb, cx)) {
-            ctxAlloc.release(cx);
+            c->alloc->release(cx);
             deviceItemDone();
         }
     }
 
     for (StringBuilder* p : paths) {
-        pathAlloc.release(p);
+        c->alloc->release(p);
     }
 }
 
@@ -448,7 +436,7 @@ void NmWifi::onDevicesDone() {
 
         // commit an empty list
         for (WifiNetwork* n : nets) {
-            netAlloc.release(n);
+            c->alloc->release(n);
         }
 
         nets.clear();
@@ -484,7 +472,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = pathAlloc.make();
+                StringBuilder* p = c->alloc->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 paths.pushBack(p);
@@ -502,7 +490,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
     knownPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = ctxAlloc.make();
+        Ctx* cx = c->alloc->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
@@ -511,13 +499,13 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
         DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
 
         if (!call(msg, connectionCb, cx)) {
-            ctxAlloc.release(cx);
+            c->alloc->release(cx);
             knownItemDone();
         }
     }
 
     for (StringBuilder* p : paths) {
-        pathAlloc.release(p);
+        c->alloc->release(p);
     }
 }
 
@@ -558,14 +546,14 @@ void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
 
                         dbus_message_iter_recurse(&kv, &var);
 
-                        Known* k = knownAlloc.make();
+                        Known* k = c->alloc->make<Known>();
 
                         readSsid(&var, k->ssid);
                         k->path.reset();
                         k->path << sv(cx->path);
 
                         if (k->ssid.empty()) {
-                            knownAlloc.release(k);
+                            c->alloc->release(k);
                         } else {
                             knownBuild.pushBack(k);
                         }
@@ -608,7 +596,7 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
             dbus_message_iter_recurse(var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = pathAlloc.make();
+                StringBuilder* p = c->alloc->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 aps.pushBack(p);
@@ -626,19 +614,19 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
     apPending = (int)aps.length();
 
     for (StringBuilder* p : aps) {
-        Ctx* cx = ctxAlloc.make();
+        Ctx* cx = c->alloc->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
 
         if (!getAll(sv(*p), kAp, apCb, cx)) {
-            ctxAlloc.release(cx);
+            c->alloc->release(cx);
             apItemDone();
         }
     }
 
     for (StringBuilder* p : aps) {
-        pathAlloc.release(p);
+        c->alloc->release(p);
     }
 }
 
@@ -659,7 +647,7 @@ void NmWifi::apReply(Ctx* cx, DBusMessage* reply) {
     });
 
     if (!ssid.empty()) {
-        WifiNetwork* n = netAlloc.make();
+        WifiNetwork* n = c->alloc->make<WifiNetwork>();
 
         n->name.reset();
         n->name << sv(ssid);
@@ -685,7 +673,7 @@ void NmWifi::apItemDone() {
 void NmWifi::onApsDone() {
     // commit the freshly built lists, then notify
     for (WifiNetwork* n : nets) {
-        netAlloc.release(n);
+        c->alloc->release(n);
     }
 
     nets.clear();
@@ -697,7 +685,7 @@ void NmWifi::onApsDone() {
     netBuild.clear();
 
     for (Known* k : known) {
-        knownAlloc.release(k);
+        c->alloc->release(k);
     }
 
     known.clear();
@@ -940,7 +928,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
-        w->ctxAlloc.release(cx);
+        w->c->alloc->release(cx);
     }
 
     void connectionsCb(DBusPendingCall* pc, void* data) {
@@ -965,7 +953,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
-        w->ctxAlloc.release(cx);
+        w->c->alloc->release(cx);
     }
 
     void wirelessCb(DBusPendingCall* pc, void* data) {
@@ -990,7 +978,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
-        w->ctxAlloc.release(cx);
+        w->c->alloc->release(cx);
     }
 
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data) {

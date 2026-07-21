@@ -19,6 +19,7 @@
 #include "scene.h"
 #include "status_notifier.h"
 #include "session.h"
+#include "small_obj_allocator.h"
 #include "util.h"
 #include "wayland.h"
 #include "wifi.h"
@@ -186,6 +187,7 @@ int mainComposer(int argc, char** argv) {
     Composer& c = *pool->make<Composer>(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
+    c.alloc = SmallObjAllocator::create(pool.mutPtr());
     c.loop = loop;
     c.offload = ThreadPool::simple(c.pool, 1);
     c.supervisor = Supervisor::create(c);
@@ -261,7 +263,7 @@ int mainComposer(int argc, char** argv) {
         // post to it regardless of a bus); the dbus service is layered on
         // top only when the session bus is reachable
         c.notifier = Notifier::create(c);
-        c.bus = DBusConn::create(pool.mutPtr(), loop, false);
+        c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, false);
 
         if (c.bus) {
             c.notes = Notifications::create(c);
@@ -270,7 +272,7 @@ int mainComposer(int argc, char** argv) {
 
         c.mixer = Mixer::create(c);
 
-        c.sysbus = DBusConn::create(pool.mutPtr(), loop, true);
+        c.sysbus = DBusConn::create(pool.mutPtr(), c.alloc, loop, true);
         c.wifi = c.sysbus ? Wifi::create(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);

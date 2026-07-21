@@ -1,6 +1,7 @@
 #include "icon.h"
 #include "composer.h"
 #include "icon_store.h"
+#include "small_obj_allocator.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "pooled_ev.h"
@@ -21,7 +22,6 @@
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
 #include <std/sys/fs.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -49,8 +49,6 @@ namespace {
 
         // pool-backed: stl::Vector wants trivial elements, the strings live
         // in the objects and recycle with them
-        ObjList<DesktopIcon> indexAlloc;
-        ObjList<CachedIcon> cacheAlloc;
         Vector<DesktopIcon*> index;
         Vector<CachedIcon*> cache;
 
@@ -92,8 +90,6 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     : c(&comp)
     , loop(comp.loop)
     , icons(comp.iconPool)
-    , indexAlloc(comp.pool)
-    , cacheAlloc(comp.pool)
 {
     buildIndex();
 
@@ -138,13 +134,13 @@ void IconStoreImpl::clearCaches() {
             icons->release(cached->icon);
         }
 
-        cacheAlloc.release(cached);
+        c->alloc->release(cached);
     }
 
     cache.clear();
 
     for (DesktopIcon* desktop : index) {
-        indexAlloc.release(desktop);
+        c->alloc->release(desktop);
     }
 
     index.clear();
@@ -152,7 +148,7 @@ void IconStoreImpl::clearCaches() {
 
 void IconStoreImpl::buildIndex() {
     for (DesktopIcon* di : index) {
-        indexAlloc.release(di);
+        c->alloc->release(di);
     }
 
     index.clear();
@@ -187,7 +183,7 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
 
     bool inSection = false;
     StringView rest = sv(data);
-    DesktopIcon* di = indexAlloc.make();
+    DesktopIcon* di = c->alloc->make<DesktopIcon>();
 
     di->fileId << fileId;
 
@@ -224,7 +220,7 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
     if (!di->icon.empty()) {
         index.pushBack(di);
     } else {
-        indexAlloc.release(di);
+        c->alloc->release(di);
     }
 }
 
@@ -250,7 +246,7 @@ void IconStoreImpl::reload() {
             old.pushBack(c->icon);
         }
 
-        cacheAlloc.release(c);
+        this->c->alloc->release(c);
     }
 
     cache.clear();
@@ -298,7 +294,7 @@ Icon* IconStoreImpl::cached(StringView key, auto&& load) {
         }
     }
 
-    CachedIcon* c = cacheAlloc.make();
+    CachedIcon* c = this->c->alloc->make<CachedIcon>();
 
     c->key << key;
     c->icon = load();

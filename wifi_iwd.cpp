@@ -3,6 +3,7 @@
 #include "listener.h"
 #include "wifi.h"
 #include "wifi_iwd.h"
+#include "small_obj_allocator.h"
 #include "dbus_conn.h"
 #include "scene.h"
 #include "util.h"
@@ -10,7 +11,6 @@
 #include <dbus/dbus.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -44,10 +44,8 @@ namespace {
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
-        ObjList<NetInfo> infoAlloc;
         Vector<NetInfo*> infos;   // rebuilt on every GetManagedObjects
 
-        ObjList<WifiNetwork> netAlloc;
         Vector<WifiNetwork*> nets; // the ordered, ui-facing list
 
         bool refreshInFlight = false;
@@ -110,8 +108,6 @@ namespace {
 IwdWifi::IwdWifi(Composer& comp, DBusConnection* c)
     : c(&comp)
     , conn(c)
-    , infoAlloc(comp.pool)
-    , netAlloc(comp.pool)
 {
     // fire-and-forget match registration (NULL error = no blocking round trip)
     dbus_bus_add_match(conn, "type='signal',sender='net.connman.iwd',interface='org.freedesktop.DBus.ObjectManager'", nullptr);
@@ -192,7 +188,7 @@ void IwdWifi::refresh() {
 
 void IwdWifi::managedReply(DBusMessage* reply) {
     for (NetInfo* n : infos) {
-        infoAlloc.release(n);
+        this->c->alloc->release(n);
     }
 
     infos.clear();
@@ -244,7 +240,7 @@ void IwdWifi::managedReply(DBusMessage* reply) {
                 }
 
                 if (isNetwork) {
-                    net = infoAlloc.make();
+                    net = this->c->alloc->make<NetInfo>();
                     net->path.reset();
                     net->path << StringView(path);
                     net->name.reset();
@@ -318,7 +314,7 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 
     if (stationPath.empty()) {
         for (WifiNetwork* n : nets) {
-            netAlloc.release(n);
+            c->alloc->release(n);
         }
 
         nets.clear();
@@ -344,7 +340,7 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 
 void IwdWifi::orderedReply(DBusMessage* reply) {
     for (WifiNetwork* n : nets) {
-        netAlloc.release(n);
+        c->alloc->release(n);
     }
 
     nets.clear();
@@ -373,7 +369,7 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
             }
 
             if (NetInfo* info = infoByPath(StringView(path))) {
-                WifiNetwork* n = netAlloc.make();
+                WifiNetwork* n = this->c->alloc->make<WifiNetwork>();
 
                 n->name.reset();
                 n->name << sv(info->name);

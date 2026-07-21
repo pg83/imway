@@ -26,6 +26,7 @@
 #include "pooled_vk.h"
 #include "render_filter.h"
 #include "settings.h"
+#include "small_obj_allocator.h"
 #include "wifi.h"
 #include "wifi_ui.h"
 #include "output.h"
@@ -72,7 +73,6 @@
 #include <std/ios/sys.h>
 #include <std/sys/fs.h>
 #include <std/lib/vector.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
 #include <std/sys/fd.h>
@@ -279,7 +279,7 @@ namespace {
         VkTexturePool* texPool = nullptr;
 
         // color-management conversion compute pipeline
-        ObjList<SurfaceTexture> textureAlloc;
+        SmallObjAllocator* alloc = nullptr;
         IntrusiveList textures;
 
         // icon textures keyed by Icon::gen; entries the previous frame did
@@ -599,7 +599,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , device(vk.device)
     , queueFamily(vk.queueFamily)
     , queue(vk.queue)
-    , textureAlloc(comp.pool)
+    , alloc(comp.alloc)
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
@@ -836,7 +836,7 @@ u64 RendererImpl::iconTexture(const Icon* icon) {
 }
 
 SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
-    SurfaceTexture* tex = textureAlloc.make();
+    SurfaceTexture* tex = alloc->make<SurfaceTexture>();
 
     tex->w = w;
     tex->h = h;
@@ -1907,7 +1907,7 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
     tex->unlink();
 
     if (!tex->arenaOwned) {
-        textureAlloc.release(tex);
+        alloc->release(tex);
     }
 }
 

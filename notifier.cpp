@@ -2,13 +2,13 @@
 #include "intr_list.h"
 #include "listener.h"
 #include "notifier.h"
+#include "small_obj_allocator.h"
 #include "scene.h"
 #include "util.h"
 
 #include <ev.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -32,7 +32,6 @@ namespace {
     struct NotifierImpl: public Notifier {
         Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
-        ObjList<ToastImpl> alloc;
         IntrusiveList toasts; // newest last
         u32 lastId = 0;
         bool dndOn = false;
@@ -57,7 +56,6 @@ namespace {
 NotifierImpl::NotifierImpl(Composer& comp)
     : c(&comp)
     , loop(comp.loop)
-    , alloc(comp.pool)
 {
 }
 
@@ -103,7 +101,7 @@ void NotifierImpl::trim() {
         }
 
         victim->unlink();
-        alloc.release((ToastImpl*)victim);
+        c->alloc->release((ToastImpl*)victim);
     }
 }
 
@@ -111,7 +109,7 @@ u32 NotifierImpl::post(const Post& p) {
     ToastImpl* t = p.replacesId ? byId(p.replacesId) : nullptr;
 
     if (!t) {
-        t = alloc.make();
+        t = c->alloc->make<ToastImpl>();
         t->store = this;
         t->id = ++lastId;
         toasts.pushBack(t);
@@ -190,7 +188,7 @@ void NotifierImpl::clearHistory() {
 
         if (!t->onScreen) {
             t->unlink();
-            alloc.release((ToastImpl*)t);
+            c->alloc->release((ToastImpl*)t);
         }
     }
 

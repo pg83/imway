@@ -5,12 +5,12 @@
 #include "icon.h"
 #include "icon_pool.h"
 #include "scene.h"
+#include "small_obj_allocator.h"
 #include "util.h"
 
 #include <dbus/dbus.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -46,8 +46,6 @@ namespace {
     struct StatusNotifierImpl: public StatusNotifier {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
-        ObjList<ItemBox> itemAlloc;
-        ObjList<StatusMenuItem> menuAlloc;
         Vector<ItemBox*> all;
         bool ownsWatcher = false;
 
@@ -315,7 +313,7 @@ namespace {
         StatusMenuItem* entry = nullptr;
 
         if (id != 0) {
-            entry = impl.menuAlloc.make();
+            entry = impl.c->alloc->make<StatusMenuItem>();
             entry->action = {&item, StatusActionKind::menu, id};
             entry->open = {&item, StatusActionKind::menuOpen, id};
             item.menuNodes.pushBack(entry);
@@ -392,8 +390,6 @@ namespace {
 StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     : c(&comp)
     , conn(comp.bus->raw())
-    , itemAlloc(comp.pool)
-    , menuAlloc(comp.pool)
 {
     DBusError err;
 
@@ -551,7 +547,7 @@ void StatusNotifierImpl::clearMenu(ItemBox& item) {
     item.menu.clear();
 
     for (StatusMenuItem* entry : item.menuNodes) {
-        menuAlloc.release(entry);
+        c->alloc->release(entry);
     }
 
     item.menuNodes.clear();
@@ -602,7 +598,7 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
     ItemBox* item = find(service, path);
 
     if (!item) {
-        item = itemAlloc.make();
+        item = c->alloc->make<ItemBox>();
         item->impl = this;
         assign(item->service, service);
         assign(item->path, path);

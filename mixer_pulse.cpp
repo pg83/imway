@@ -4,6 +4,7 @@
 #include "mixer.h"
 #include "mixer_pulse.h"
 #include "pooled.h"
+#include "small_obj_allocator.h"
 
 #if __has_include(<pulse/pulseaudio.h>)
 
@@ -17,7 +18,6 @@
 #include <pulse/pulseaudio.h>
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_list.h>
 #include <std/mem/obj_pool.h>
 
 using namespace stl;
@@ -57,19 +57,17 @@ struct pa_defer_event {
 
 namespace {
     // the allocator context behind pa_mainloop_api::userdata: event objects
-    // come from composer-pool free lists (dbus_conn.cpp's WatchBox pattern),
-    // not the raw heap. Kept trivially destructible: the pool preserves the
-    // storage until its own death, so PulseMixer's pooledGuard teardown —
-    // which runs after the impl dies and frees the surviving events through
-    // io_free/time_free/defer_free — still releases into live lists
+    // come from the composer's small-object allocator (the dbus_conn WatchBox
+    // pattern), not the raw heap. Kept trivially destructible: the pool
+    // preserves the storage until its own death, so PulseMixer's pooledGuard
+    // teardown — which runs after the impl dies and frees the surviving
+    // events through io_free/time_free/defer_free — still releases safely
     struct PulseApi {
         pa_mainloop_api api{};
         struct ev_loop* loop = nullptr;
-        ObjList<pa_io_event> ioAlloc;
-        ObjList<pa_time_event> timeAlloc;
-        ObjList<pa_defer_event> deferAlloc;
+        SmallObjAllocator* alloc = nullptr;
 
-        PulseApi(ObjPool* pool, struct ev_loop* l);
+        PulseApi(SmallObjAllocator* a, struct ev_loop* l);
     };
 
     PulseApi* apiCtx(pa_mainloop_api* a) {
@@ -106,7 +104,7 @@ namespace {
     }
 
     pa_io_event* ioNew(pa_mainloop_api* a, int fd, pa_io_event_flags_t f, pa_io_event_cb_t cb, void* userdata) {
-        pa_io_event* e = apiCtx(a)->ioAlloc.make();
+        pa_io_event* e = apiCtx(a)->alloc->make<pa_io_event>();
 
         e->loop = apiCtx(a)->loop;
         e->api = a;
@@ -132,7 +130,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->ioAlloc.release(e);
+        apiCtx(e->api)->alloc->release(e);
     }
 
     void ioSetDestroy(pa_io_event* e, pa_io_event_destroy_cb_t cb) {
@@ -163,7 +161,7 @@ namespace {
     }
 
     pa_time_event* timeNew(pa_mainloop_api* a, const struct timeval* tv, pa_time_event_cb_t cb, void* userdata) {
-        pa_time_event* e = apiCtx(a)->timeAlloc.make();
+        pa_time_event* e = apiCtx(a)->alloc->make<pa_time_event>();
 
         e->loop = apiCtx(a)->loop;
         e->api = a;
@@ -189,7 +187,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->timeAlloc.release(e);
+        apiCtx(e->api)->alloc->release(e);
     }
 
     void timeSetDestroy(pa_time_event* e, pa_time_event_destroy_cb_t cb) {
@@ -203,7 +201,7 @@ namespace {
     }
 
     pa_defer_event* deferNew(pa_mainloop_api* a, pa_defer_event_cb_t cb, void* userdata) {
-        pa_defer_event* e = apiCtx(a)->deferAlloc.make();
+        pa_defer_event* e = apiCtx(a)->alloc->make<pa_defer_event>();
 
         e->loop = apiCtx(a)->loop;
         e->api = a;
@@ -236,7 +234,7 @@ namespace {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->deferAlloc.release(e);
+        apiCtx(e->api)->alloc->release(e);
     }
 
     void deferSetDestroy(pa_defer_event* e, pa_defer_event_destroy_cb_t cb) {
@@ -266,11 +264,9 @@ namespace {
     }
 }
 
-PulseApi::PulseApi(ObjPool* pool, struct ev_loop* l)
+PulseApi::PulseApi(SmallObjAllocator* a, struct ev_loop* l)
     : loop(l)
-    , ioAlloc(pool)
-    , timeAlloc(pool)
-    , deferAlloc(pool)
+    , alloc(a)
 {
 }
 
@@ -311,7 +307,7 @@ namespace {
 PulseMixer::PulseMixer(Composer& comp)
     : c(&comp)
 {
-    papi = comp.pool->make<PulseApi>(comp.pool, comp.loop);
+    papi = comp.pool->make<PulseApi>(comp.alloc, comp.loop);
     fillApi(*papi);
     ctx = pa_context_new(&papi->api, "imway");
 

@@ -25,6 +25,7 @@ struct Output;
 struct Renderer;
 struct Scene;
 struct Session;
+struct SmallObjAllocator;
 struct StatusNotifier;
 struct Supervisor;
 struct Wayland;
@@ -42,6 +43,7 @@ struct Composer {
 
     Theme theme;
     stl::ObjPool* pool = nullptr;
+    SmallObjAllocator* alloc = nullptr;
     struct ev_loop* loop = nullptr;
     stl::ThreadPool* offload = nullptr;
     Scene* scene = nullptr;
