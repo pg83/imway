@@ -304,7 +304,8 @@ void ControlImpl::dumpState(StringView outPath) {
                 << " imgy="_sv << (int)s->imgY
                 << " client_w="_sv << s->geomW()
                 << " client_h="_sv << s->geomH()
-                << " content_type="_sv << s->contentType;
+                << " content_type="_sv << s->contentType
+                << " tearing="_sv << (int)s->tearingAsync;
         }
 
         out << " app_id="_sv << sv(t.appId)

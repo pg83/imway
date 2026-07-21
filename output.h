@@ -97,6 +97,10 @@ struct Output {
     virtual bool directScanout(DmabufBuffer* buf, FrameResource* frame) = 0;
     virtual void dropScanoutFb(DmabufBuffer* buf) = 0;
 
+    // wp-tearing-control: allow an async (immediate) page flip for the next
+    // direct-scanout present. Best-effort; ignored without hardware support.
+    virtual void setTearingHint(bool allow) = 0;
+
     // format+modifier pairs the primary plane can scan out; feeds the dmabuf
     // feedback scanout tranche so clients allocate bypass-capable buffers
     virtual void scanoutFormatsImpl(stl::VisitorFace&& vis) = 0;

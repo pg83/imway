@@ -31,6 +31,7 @@
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
 #include <content-type-v1-server-protocol.h>
+#include <tearing-control-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -275,6 +276,11 @@ namespace {
         wl_resource* contentTypeRes = nullptr;
         bool pendContentChanged = false;
         u32 pendContentType = 0;
+
+        // wp-tearing-control surface state
+        wl_resource* tearingRes = nullptr;
+        bool pendTearingChanged = false;
+        bool pendTearingAsync = false;
 
         XdgSurface* xdg = nullptr;
     };
@@ -943,6 +949,7 @@ namespace {
     void viewportSurfaceGone(SurfaceImpl&);
     void alphaModSurfaceGone(SurfaceImpl&);
     void contentTypeSurfaceGone(SurfaceImpl&);
+    void tearingSurfaceGone(SurfaceImpl&);
     void fracSurfaceGone(SurfaceImpl&);
     void constraintSurfaceGone(SurfaceImpl&);
     void constraintApplyPending(SurfaceImpl&);
@@ -1852,6 +1859,11 @@ namespace {
             s.pendContentChanged = false;
         }
 
+        if (s.pendTearingChanged) {
+            s.tearingAsync = s.pendTearingAsync;
+            s.pendTearingChanged = false;
+        }
+
         if (s.pending.inputRegionChanged) {
             if (toCache) {
                 sub->cache.inputChanged = true;
@@ -2079,6 +2091,7 @@ namespace {
         viewportSurfaceGone(*s);
         alphaModSurfaceGone(*s);
         contentTypeSurfaceGone(*s);
+        tearingSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
@@ -4423,6 +4436,72 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &pointerWarpImpl, data, nullptr);
+    }
+
+    // ---- wp-tearing-control ----
+    void tearingSetHint(wl_client*, wl_resource* res, u32 hint) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->pendTearingAsync = hint == WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC;
+            s->pendTearingChanged = true;
+        }
+    }
+
+    void tearingResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->tearingRes = nullptr;
+            s->pendTearingAsync = false;
+            s->pendTearingChanged = true;
+        }
+    }
+
+    const struct wp_tearing_control_v1_interface tearingImpl = {
+        .set_presentation_hint = tearingSetHint,
+        .destroy = resDestroy,
+    };
+
+    void tearingManagerGetControl(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->tearingRes) {
+            wl_resource_post_error(res, WP_TEARING_CONTROL_MANAGER_V1_ERROR_TEARING_CONTROL_EXISTS,
+                                   "surface already has a tearing control");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_tearing_control_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->tearingRes = r;
+        wl_resource_set_implementation(r, &tearingImpl, s, tearingResourceDestroyed);
+    }
+
+    const struct wp_tearing_control_manager_v1_interface tearingManagerImpl = {
+        .destroy = resDestroy,
+        .get_tearing_control = tearingManagerGetControl,
+    };
+
+    void tearingManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_tearing_control_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &tearingManagerImpl, data, nullptr);
+    }
+
+    void tearingSurfaceGone(SurfaceImpl& s) {
+        if (s.tearingRes) {
+            wl_resource_set_user_data(s.tearingRes, nullptr);
+        }
     }
 
     // ---- wp-content-type ----
@@ -9123,6 +9202,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
     wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
     wl_global_create(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
+    wl_global_create(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
     wl_global_create(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     wl_global_create(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);

@@ -64,6 +64,9 @@ server_protocol_paths = [
     "staging/xdg-dialog/xdg-dialog-v1",
     "staging/content-type/content-type-v1",
     "staging/pointer-warp/pointer-warp-v1",
+    "staging/tearing-control/tearing-control-v1",
+    "staging/fifo/fifo-v1",
+    "staging/commit-timing/commit-timing-v1",
 ]
 
 
@@ -170,6 +173,9 @@ client_protocol_paths = [
     "staging/xdg-dialog/xdg-dialog-v1",
     "staging/content-type/content-type-v1",
     "staging/pointer-warp/pointer-warp-v1",
+    "staging/tearing-control/tearing-control-v1",
+    "staging/fifo/fifo-v1",
+    "staging/commit-timing/commit-timing-v1",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths]

@@ -4594,6 +4594,9 @@ void RendererImpl::frameNow() {
 
     scene->scanoutCandidateId = cand && cand->toplevel ? cand->toplevel->id : 0;
 
+    // let a fullscreen client that opted into tearing get async page flips
+    output->setTearingHint(cand && cand->tearingAsync);
+
     bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);
 
     lastFrameDirect = direct;

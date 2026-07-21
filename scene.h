@@ -138,6 +138,10 @@ struct Surface: SceneNode, GrabNode {
     // frame-pacing hint, not a correctness input
     u32 contentType = 0;
 
+    // wp-tearing-control: the client allows tearing (async page flip) for
+    // this surface's fullscreen presentation
+    bool tearingAsync = false;
+
     float imgX = 0, imgY = 0;
     bool hovered = false;
 

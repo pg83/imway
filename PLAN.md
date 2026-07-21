@@ -26,7 +26,7 @@
 - [x] ~~wp-content-type v1~~ done
 
 ### Этап C — frame pacing
-- [ ] wp-tearing-control v1 (+ async page flip, железо)
+- [x] ~~wp-tearing-control v1~~ done (async page flip wired via DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP; hardware-unverified here)
 - [ ] wp-fifo v1
 - [ ] wp-commit-timing v1
 

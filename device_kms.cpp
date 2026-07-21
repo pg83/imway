@@ -598,6 +598,8 @@ namespace {
         DmabufBuffer* currentDirect = nullptr;
         FrameResource* queuedDirectFrame = nullptr;
         FrameResource* currentDirectFrame = nullptr;
+        bool asyncFlipCap = false;  // DRM_CAP_ASYNC_PAGE_FLIP
+        bool tearingAllowed = false;
         long ddcMax = 0;
         int ddcCur = 0;
         int ddcPending = -1;
@@ -711,6 +713,7 @@ namespace {
         bool presentNeedsPixels() const override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
+        void setTearingHint(bool allow) override { tearingAllowed = allow && asyncFlipCap; }
         void scanoutFormatsImpl(stl::VisitorFace&& vis) override;
         u32 importDirectFb(DmabufBuffer* buf);
         void gemHandleRef(u32 handle);
@@ -1107,6 +1110,11 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         sysE << "imway: connector cannot select requested RGB range"_sv << endL;
         Errno(ENOTSUP).raise("--rgb-range unsupported"_sv);
     }
+
+    // atomic async (tearing) page flips for wp-tearing-control
+    u64 asyncCap = 0;
+
+    asyncFlipCap = drmGetCap(fd, DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP, &asyncCap) == 0 && asyncCap;
 
     if (cursorPlaneId) {
         try {
@@ -1775,6 +1783,11 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
 
     if (doModeset) {
         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
+    }
+
+    // async flip requested by wp-tearing-control on the direct-scanout buffer
+    if (!testOnly && !doModeset && tearingAllowed && (queuedDirect || currentDirect)) {
+        flags |= DRM_MODE_PAGE_FLIP_ASYNC;
     }
 
     int ret = drmModeAtomicCommit(fd, req, flags, testOnly ? nullptr : this);
