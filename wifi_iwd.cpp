@@ -56,6 +56,7 @@ namespace {
         StringBuilder passNet;
 
         IwdWifi(Composer& comp, DBusConnection* c);
+        ~IwdWifi() noexcept;
 
         WifiState state() override;
         void networksImpl(VisitorFace&& vis) override;
@@ -121,6 +122,16 @@ IwdWifi::IwdWifi(Composer& comp, DBusConnection* c)
 
     registerAgent();
     refresh();
+}
+
+IwdWifi::~IwdWifi() noexcept {
+    for (NetInfo* n : infos) {
+        c->alloc->release(n);
+    }
+
+    for (WifiNetwork* n : nets) {
+        c->alloc->release(n);
+    }
 }
 
 WifiState IwdWifi::state() {

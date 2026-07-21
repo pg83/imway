@@ -37,6 +37,7 @@ namespace {
         bool dndOn = false;
 
         NotifierImpl(Composer& comp);
+        ~NotifierImpl() noexcept;
 
         u32 post(const Post& p) override;
         void close(u32 id, u32 reason) override;
@@ -57,6 +58,15 @@ NotifierImpl::NotifierImpl(Composer& comp)
     : c(&comp)
     , loop(comp.loop)
 {
+}
+
+NotifierImpl::~NotifierImpl() noexcept {
+    while (!toasts.empty()) {
+        auto* t = (ToastImpl*)(Toast*)toasts.popFront();
+
+        ev_timer_stop(loop, &t->timer);
+        c->alloc->release(t);
+    }
 }
 
 ToastImpl* NotifierImpl::byId(u32 id) {

@@ -425,6 +425,9 @@ StatusNotifierImpl::~StatusNotifierImpl() noexcept {
         if (item->attentionIconPixmap) {
             c->iconPool->release(item->attentionIconPixmap);
         }
+
+        clearMenu(*item);
+        c->alloc->release(item);
     }
 }
 

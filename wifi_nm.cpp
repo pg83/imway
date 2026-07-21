@@ -75,6 +75,10 @@ namespace {
         Vector<WifiNetwork*> nets;      // committed, ui-facing
         Vector<Known*> known;           // committed
 
+        // contexts riding un-notified pending calls; the destructor is the
+        // only place they can still be reclaimed
+        Vector<Ctx*> inflight;
+
         bool wantPass = false;
         StringBuilder passAp;
         StringBuilder passSsid;
@@ -94,6 +98,7 @@ namespace {
         int apPending = 0;
 
         NmWifi(Composer& comp, DBusConnection* c);
+        ~NmWifi() noexcept;
 
         WifiState state() override;
         void networksImpl(VisitorFace&& vis) override;
@@ -107,6 +112,7 @@ namespace {
         void cancelPassphrase() override;
 
         WifiNetwork* byPath(StringView path);
+        void inflightDrop(Ctx* cx);
         Known* knownBuilt(StringView ssid);
         Known* knownForSsid(StringView ssid);
         void notify();
@@ -226,6 +232,33 @@ NmWifi::NmWifi(Composer& comp, DBusConnection* c)
     dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.NetworkManager',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
     dbus_connection_add_filter(conn, onSignal, this, nullptr);
     refresh();
+}
+
+NmWifi::~NmWifi() noexcept {
+    for (Ctx* cx : inflight) {
+        c->alloc->release(cx);
+    }
+
+    for (WifiNetwork* n : nets) {
+        c->alloc->release(n);
+    }
+
+    for (Known* k : known) {
+        c->alloc->release(k);
+    }
+
+    resetScratch();
+}
+
+void NmWifi::inflightDrop(Ctx* cx) {
+    for (size_t i = 0; i < inflight.length(); i++) {
+        if (inflight[i] == cx) {
+            inflight.mut(i) = inflight.back();
+            inflight.popBack();
+
+            return;
+        }
+    }
 }
 
 WifiState NmWifi::state() {
@@ -393,7 +426,9 @@ void NmWifi::devicesReply(DBusMessage* reply) {
         cx->w = this;
         cx->path << sv(*p);
 
-        if (!getAll(sv(*p), kDev, deviceCb, cx)) {
+        if (getAll(sv(*p), kDev, deviceCb, cx)) {
+            inflight.pushBack(cx);
+        } else {
             c->alloc->release(cx);
             deviceItemDone();
         }
@@ -498,7 +533,9 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
         Buffer pb(sv(*p));
         DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
 
-        if (!call(msg, connectionCb, cx)) {
+        if (call(msg, connectionCb, cx)) {
+            inflight.pushBack(cx);
+        } else {
             c->alloc->release(cx);
             knownItemDone();
         }
@@ -619,7 +656,9 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
         cx->w = this;
         cx->path << sv(*p);
 
-        if (!getAll(sv(*p), kAp, apCb, cx)) {
+        if (getAll(sv(*p), kAp, apCb, cx)) {
+            inflight.pushBack(cx);
+        } else {
             c->alloc->release(cx);
             apItemDone();
         }
@@ -928,6 +967,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
+        w->inflightDrop(cx);
         w->c->alloc->release(cx);
     }
 
@@ -953,6 +993,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
+        w->inflightDrop(cx);
         w->c->alloc->release(cx);
     }
 
@@ -978,6 +1019,7 @@ namespace {
             dbus_message_unref(reply);
         }
 
+        w->inflightDrop(cx);
         w->c->alloc->release(cx);
     }
 

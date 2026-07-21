@@ -1,6 +1,10 @@
 #include "small_obj_allocator.h"
+#include "util.h"
+
+#include <stdlib.h>
 
 #include <std/dbg/verify.h>
+#include <std/ios/sys.h>
 #include <std/mem/free_list.h>
 #include <std/mem/obj_pool.h>
 
@@ -20,12 +24,24 @@ namespace {
     struct SmallObjAllocatorImpl: public SmallObjAllocator {
         ObjPool* pool = nullptr;
         FreeList* classes[kClasses] = {};
+        i64 live = 0;
 
         SmallObjAllocatorImpl(ObjPool* p);
+        // the allocator is the composer's first component, so this runs
+        // after every subsystem destructor: a nonzero balance is an object
+        // someone forgot to release, and that is a bug in any build
+        ~SmallObjAllocatorImpl() noexcept;
 
         void* allocate(size_t len) override;
         void deallocate(void* ptr, size_t len) override;
     };
+}
+
+SmallObjAllocatorImpl::~SmallObjAllocatorImpl() noexcept {
+    if (live != 0) {
+        sysE << "imway: small-object allocator torn down with "_sv << live << " live objects"_sv << endL;
+        abort();
+    }
 }
 
 SmallObjAllocatorImpl::SmallObjAllocatorImpl(ObjPool* p)
@@ -40,10 +56,13 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
         fl = FreeList::create(pool, kMinSize << classFor(len));
     }
 
+    live++;
+
     return fl->allocate();
 }
 
 void SmallObjAllocatorImpl::deallocate(void* ptr, size_t len) {
+    live--;
     classes[classFor(len)]->release(ptr);
 }
 
