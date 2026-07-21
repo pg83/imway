@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 
+#include "color.h"
 #include "visitor.h"
 
 namespace stl {
@@ -31,6 +32,7 @@ struct Device {
         dmabufFormatsImpl(visitEach<DmabufFormat>(f));
     }
 
-    virtual Output* createOutput(stl::StringView connector, stl::StringView mode, double hdrNits) = 0;
+    virtual Output* createOutput(stl::StringView connector, stl::StringView mode,
+                                 const OutputConfiguration& config) = 0;
     virtual Renderer* createRenderer(struct Composer& c, stl::StringView fontPath, float uiScale, int framesLimit) = 0;
 };

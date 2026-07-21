@@ -70,28 +70,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 Практически я бы ориентировался на KWin: tone mapping в ICtCp, сохранение reference anchor, компрессия яркости до реального display peak и отдельное gamut mapping.
 
-## Мы почти ничего не знаем о дисплее
-
-`setupHdr()` проверяет наличие KMS properties и XR30 plane, но не разбирает EDID/DisplayID: [device_kms.cpp](/home/pg/monorepo/imway/device_kms.cpp:1372).
-
-Текущий монитор действительно сообщает:
-
-- PQ;
-- HLG;
-- BT.2020 RGB/YCC.
-
-Но luminance bytes в EDID отсутствуют. Следовательно, нынешние 1000 nit — не характеристика дисплея, а придуманная константа.
-
-Нужно через libdisplay-info получить:
-
-- поддержанные EOTF;
-- colorimetry;
-- min/peak/full-frame luminance, если присутствует;
-- native primaries;
-- режимы и ограничения link bandwidth.
-
-При отсутствии luminance metadata нужна конфигурация/калибровка пользователя.
-
 ## KMS metadata сейчас несогласована с пикселями
 
 Всегда выставляется примерно:
@@ -111,20 +89,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 4. Выставить metadata, согласованную с полученным output.
 
 Полностью доверять MaxCLL приложений нельзя, но declared metadata можно использовать как исходную подсказку.
-
-## XR30 ещё не означает 10 bpc на проводе
-
-Framebuffer XR30 гарантирует только формат буфера. Driver может вывести его через 8 bpc link из-за bandwidth, режима или настроек connector.
-
-Сейчас imway не управляет:
-
-- `max bpc`;
-- фактическим link bpc;
-- RGB full/limited range;
-- fallback при недостаточной полосе;
-- DSC/chroma/mode policy.
-
-Нужно делать atomic test modeset с требуемыми 10/12 bpc и проверять фактический результат. В свежем DRM сейчас как раз развивается `link bpc` feedback, потому что одного `max bpc` недостаточно.
 
 ## Wayland-протокол всё ещё ограничен
 
@@ -224,12 +188,11 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
-2. Реализовать tone mapping и gamut mapping.
-3. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
-4. Убрать постоянные полноэкранные RGBA16F surface conversions.
-5. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
-6. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-7. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Реализовать tone mapping и gamut mapping.
+2. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
+3. Убрать постоянные полноэкранные RGBA16F surface conversions.
+4. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+5. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+6. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не покрывают tone/gamut mapping, output metadata, link depth и реальную фотометрическую корректность.

@@ -299,7 +299,7 @@ static int wait_desc(struct desc_state* state) {
     return 0;
 }
 
-static int run_info(int hdr) {
+static int run_info(int hdr, uint32_t target_min, uint32_t target_max) {
     struct wp_color_management_output_v1* cm_output =
         wp_color_manager_v1_get_output(color_mgr, output);
     wp_color_management_output_v1_add_listener(cm_output, &cm_output_listener, NULL);
@@ -328,8 +328,8 @@ static int run_info(int hdr) {
     uint32_t want_min = hdr ? 50 : 2000;
     uint32_t want_max = hdr ? 10000 : 80;
     uint32_t want_ref = hdr ? 203 : 80;
-    uint32_t want_target_min = hdr ? 1 : want_min;
-    uint32_t want_target_max = hdr ? 1000 : want_max;
+    uint32_t want_target_min = target_min ? target_min : hdr ? 1 : want_min;
+    uint32_t want_target_max = target_max ? target_max : hdr ? 1000 : want_max;
 
     if (info.done != 1 || info.primaries_xy != 1 || info.primaries_named != 1 || info.tf_named != 1 ||
         info.luminances != 1 || info.target_primaries != 1 || info.target_luminance != 1 ||
@@ -470,9 +470,12 @@ static int run_feedback_inert(void) {
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(15);
-    if (argc != 2 || boot_color() || check_manager()) return 2;
-    if (!strcmp(argv[1], "info-sdr")) return run_info(0);
-    if (!strcmp(argv[1], "info-hdr")) return run_info(1);
+    if (argc < 2 || boot_color() || check_manager()) return 2;
+    if (!strcmp(argv[1], "info-sdr") && argc == 2) return run_info(0, 0, 0);
+    if (!strcmp(argv[1], "info-hdr") && argc == 2) return run_info(1, 0, 0);
+    if (!strcmp(argv[1], "info-volume") && argc == 4)
+        return run_info(1, (uint32_t)strtoul(argv[2], NULL, 10),
+                        (uint32_t)strtoul(argv[3], NULL, 10));
     if (!strcmp(argv[1], "pq-defaults")) return run_pq_defaults();
     if (!strcmp(argv[1], "changes")) return run_changes();
     if (!strcmp(argv[1], "output-resource-lifetime")) return run_output_resource_lifetime();

@@ -165,6 +165,50 @@ namespace {
         return found;
     }
 
+    bool getRangeProp(int fd, u32 objId, u32 objType, const char* name,
+                      u32* propId, u64* min, u64* max) {
+        drmModeObjectProperties* props = drmModeObjectGetProperties(fd, objId, objType);
+
+        if (!props) {
+            return false;
+        }
+
+        bool found = false;
+
+        for (u32 i = 0; i < props->count_props && !found; i++) {
+            drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
+
+            if (p && StringView(p->name) == StringView(name) &&
+                (p->flags & DRM_MODE_PROP_RANGE) && p->count_values >= 2) {
+                *propId = p->prop_id;
+                *min = p->values[0];
+                *max = p->values[1];
+                found = true;
+            }
+
+            if (p) drmModeFreeProperty(p);
+        }
+
+        drmModeFreeObjectProperties(props);
+        return found;
+    }
+
+    bool readEdidColorCapabilities(int fd, u32 connectorId,
+                                   DisplayColorCapabilities& capabilities) {
+        u64 blobId = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
+                                  "EDID", 0);
+        drmModePropertyBlobRes* blob = blobId ?
+            drmModeGetPropertyBlob(fd, (u32)blobId) : nullptr;
+
+        if (!blob) {
+            return false;
+        }
+
+        bool ok = parseEdidColorCapabilities(blob->data, blob->length, capabilities);
+        drmModeFreePropertyBlob(blob);
+        return ok;
+    }
+
     u32 planeModifiers(int fd, u32 planeId, u32 fourcc, u64* out, u32 max) {
         u32 propId = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "IN_FORMATS");
         u32 n = 0;
@@ -561,8 +605,14 @@ namespace {
         ev_timer* ddcTimer = nullptr;
 
         OutputColorState color;
+        OutputConfiguration config;
+        DisplayColorCapabilities displayCapabilities;
         u32 connColorspace = 0, connHdrMeta = 0;
         u64 colorspaceBt2020 = 0, colorspaceDefault = 0;
+        u32 connMaxBpc = 0, connRange = 0, connLinkBpc = 0;
+        u64 maxBpcValue = 0, rangeValue = 0;
+        u64 rangeFullValue = 0, rangeLimitedValue = 0;
+        bool signalFeedbackLogged = false;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
         u32 hdrMetaBlob = 0;
         double tempK = 0; // night light color temperature, 0 = neutral
@@ -589,7 +639,8 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits);
+        KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector,
+                  StringView modeStr, const OutputConfiguration& config);
 
         void sessionEnabled();
         void sessionDisabled();
@@ -612,9 +663,11 @@ namespace {
         double colorTemp() const override;
         bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
-        int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1);
+        int tryCommit(u32 fbId, bool doModeset, bool withCursor,
+                      int inFenceFd = -1, bool testOnly = false);
         void drainPendingFlip();
         bool commit(u32 fbId, bool doModeset, int inFenceFd = -1);
+        void updateSignalFeedback();
         void addCursorProps(drmModeAtomicReq* req);
 
         int cursorCapW() const override;
@@ -690,6 +743,7 @@ namespace {
         out->queuedDirect = nullptr;
         out->queuedDirectFrame = nullptr;
         out->retireScreenshot();
+        out->updateSignalFeedback();
 
         u32 msec = (u32)(out->flipNs / 1000000ull);
 
@@ -733,7 +787,8 @@ namespace {
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
-        ::Output* createOutput(StringView connector, StringView modeStr, double hdrNits) override;
+        ::Output* createOutput(StringView connector, StringView modeStr,
+                               const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
 
@@ -851,8 +906,9 @@ void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     }
 }
 
-::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, double hdrNits) {
-    output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, hdrNits);
+::Output* KmsDevice::createOutput(StringView connector, StringView modeStr,
+                                  const OutputConfiguration& config) {
+    output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, config);
 
     return output;
 }
@@ -917,6 +973,10 @@ void KmsOutput::hotplug() {
     drmModeFreeConnector(conn);
 
     if (connected == connectorConnected) {
+        if (connected) {
+            signalFeedbackLogged = false;
+            updateSignalFeedback();
+        }
         return;
     }
 
@@ -938,14 +998,15 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, double hdrWhiteNits)
+KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector,
+                     StringView modeStr, const OutputConfiguration& outputConfig)
     : c(&c)
     , pool(c.pool)
     , loop(c.loop)
     , fd(drmFd)
     , vk(v)
     , gemHandles(c.pool)
-    , color(hdrWhiteNits > 0 ? OutputColorState::hdr10(hdrWhiteNits) : OutputColorState::sdr())
+    , config(outputConfig)
 {
     c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
@@ -954,6 +1015,21 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     screenshotIo->data = this;
     ev_io_start(c.loop, screenshotIo);
     pickPipe(connector, modeStr);
+
+    if (!readEdidColorCapabilities(fd, connectorId, displayCapabilities)) {
+        sysE << "imway: display EDID unavailable or invalid; color volume requires overrides"_sv << endL;
+    }
+
+    color = outputColorState(config, displayCapabilities);
+
+    if (color.hdr() && displayCapabilities.valid &&
+        (!displayCapabilities.pq || !displayCapabilities.bt2020Rgb)) {
+        sysE << "imway: display EDID does not advertise PQ + BT.2020 RGB"_sv << endL;
+        color = OutputColorState::sdr();
+    } else if (color.hdr() && !config.displayPeakNits &&
+               !displayCapabilities.peakNits) {
+        sysE << "imway: display has no HDR peak luminance; using 1000 nit fallback (use --hdr-peak)"_sv << endL;
+    }
 
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
     crtcModeId = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "MODE_ID");
@@ -978,6 +1054,46 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
     connHdrMeta = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "HDR_OUTPUT_METADATA");
     getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "Default", &connColorspace, &colorspaceDefault);
+
+    u64 minBpc = 0, maxBpc = 0;
+
+    if (getRangeProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "max bpc",
+                     &connMaxBpc, &minBpc, &maxBpc)) {
+        maxBpcValue = color.bpc;
+
+        if (maxBpcValue < minBpc || maxBpcValue > maxBpc) {
+            sysE << "imway: requested "_sv << maxBpcValue << " bpc is outside connector range "_sv
+                 << minBpc << ".."_sv << maxBpc << endL;
+            Errno(EINVAL).raise("invalid --bpc"_sv);
+        }
+    } else if (config.bpc) {
+        sysE << "imway: connector has no max bpc property for explicit --bpc"_sv << endL;
+        Errno(ENOTSUP).raise("--bpc unsupported"_sv);
+    } else if (color.hdr()) {
+        sysE << "imway: connector has no max bpc property; HDR link depth cannot be requested"_sv << endL;
+    }
+
+    connLinkBpc = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "link bpc");
+
+    u32 rangeProp = 0;
+    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Full",
+                &rangeProp, &rangeFullValue);
+    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited 16:235",
+                     &rangeProp, &rangeLimitedValue)) {
+        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited",
+                    &rangeProp, &rangeLimitedValue);
+    }
+
+    const char* rangeName = config.range == OutputRange::limited ?
+        (rangeLimitedValue ? "Limited 16:235" : "Limited") :
+        config.range == OutputRange::full ? "Full" : "Automatic";
+    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", rangeName,
+                &connRange, &rangeValue);
+
+    if (config.range != OutputRange::automatic && !connRange) {
+        sysE << "imway: connector cannot select requested RGB range"_sv << endL;
+        Errno(ENOTSUP).raise("--rgb-range unsupported"_sv);
+    }
 
     if (cursorPlaneId) {
         try {
@@ -1023,8 +1139,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         if (setupHdr()) {
             scanFourcc = DRM_FORMAT_XRGB2101010;
             scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-            sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv
-                 << color.sdrWhiteNits << " nits"_sv << endL;
+            sysO << "imway: HDR output: BT.2020 + PQ, target "_sv
+                 << color.displayMinNits << ".."_sv << color.displayPeakNits
+                 << " nits, maxFALL "_sv << color.displayMaxFallNits
+                 << ", sdr white "_sv << color.sdrWhiteNits << " nits"_sv << endL;
 
             if (cursorPlaneId) {
                 // AMD cursor planes consume ARGB8888 outside the primary
@@ -1103,7 +1221,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         }
     }
 
-    color.bpc = scanCount > 0 && scanFourcc == DRM_FORMAT_XRGB2101010 ? 10 : 8;
+    if (color.hdr() && !(scanCount > 0 && scanFourcc == DRM_FORMAT_XRGB2101010)) {
+        Errno(ENOTSUP).raise("HDR requires 10-bit scanout"_sv);
+    }
 
     initBacklight();
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
@@ -1482,7 +1602,8 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd) {
+int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd,
+                         bool testOnly) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     STD_VERIFY(req);
@@ -1491,6 +1612,14 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         drmModeAtomicAddProperty(req, connectorId, connCrtcId, crtcId);
         drmModeAtomicAddProperty(req, crtcId, crtcModeId, modeBlob);
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 1);
+
+        if (connMaxBpc) {
+            drmModeAtomicAddProperty(req, connectorId, connMaxBpc, maxBpcValue);
+        }
+
+        if (connRange) {
+            drmModeAtomicAddProperty(req, connectorId, connRange, rangeValue);
+        }
 
         if (color.hdr()) {
             drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
@@ -1548,13 +1677,14 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         }
     }
 
-    u32 flags = DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
+    u32 flags = testOnly ? DRM_MODE_ATOMIC_TEST_ONLY :
+                           DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
 
     if (doModeset) {
         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
     }
 
-    int ret = drmModeAtomicCommit(fd, req, flags, this);
+    int ret = drmModeAtomicCommit(fd, req, flags, testOnly ? nullptr : this);
 
     drmModeAtomicFree(req);
 
@@ -1564,7 +1694,31 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
 }
 
 bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
-    int err = tryCommit(fbId, doModeset, true, inFenceFd);
+    bool withCursor = true;
+
+    if (doModeset) {
+        int testErr = tryCommit(fbId, true, true, inFenceFd, true);
+
+        if (testErr != 0 && cursorPlaneId && cursorEnabled) {
+            testErr = tryCommit(fbId, true, false, inFenceFd, true);
+            withCursor = false;
+        }
+
+        if (testErr != 0) {
+            sysE << "imway: atomic test modeset rejected color/link configuration, errno "_sv
+                 << testErr << endL;
+            return false;
+        }
+
+        if (!withCursor) {
+            sysE << "imway: cursor plane rejected by atomic test, software cursor"_sv << endL;
+            cursorPlaneId = 0;
+            curW = curH = 0;
+            cursorEnabled = false;
+        }
+    }
+
+    int err = tryCommit(fbId, doModeset, withCursor, inFenceFd);
 
     if (err == EBUSY) {
         return false;
@@ -1598,6 +1752,53 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
     flipPending = true;
 
     return true;
+}
+
+void KmsOutput::updateSignalFeedback() {
+    if (!modesetDone || signalFeedbackLogged) {
+        return;
+    }
+
+    signalFeedbackLogged = true;
+
+    if (connLinkBpc) {
+        u64 linkBpc = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
+                                   "link bpc", color.bpc);
+
+        if (linkBpc > 0) {
+            color.bpc = (u32)linkBpc;
+
+            if (color.hdr() && linkBpc < 10) {
+                sysE << "imway: HDR link degraded to "_sv << linkBpc
+                     << " bpc; falling back to SDR"_sv << endL;
+                OutputConfiguration sdrConfig = config;
+
+                sdrConfig.hdrSdrWhiteNits = 0;
+                sdrConfig.displayMinNits = 0;
+                sdrConfig.displayPeakNits = 0;
+                sdrConfig.displayMaxFallNits = 0;
+                color = outputColorState(sdrConfig, displayCapabilities);
+                color.bpc = (u32)linkBpc;
+                modesetDone = false;
+                signalFeedbackLogged = false;
+                c->scene->needsFrame = true;
+                return;
+            }
+        }
+    } else if (color.hdr()) {
+        sysE << "imway: link bpc feedback unavailable; actual HDR link depth is unverified"_sv << endL;
+    }
+
+    if (rangeFullValue || rangeLimitedValue) {
+        u64 value = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
+                                 "Broadcast RGB", rangeValue);
+
+        if (value == rangeFullValue) {
+            color.range = OutputRange::full;
+        } else if (value == rangeLimitedValue) {
+            color.range = OutputRange::limited;
+        }
+    }
 }
 
 // the cursor plane rides the per-frame atomic commit and nothing else:

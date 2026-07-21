@@ -18,6 +18,12 @@ enum class ColorPrimaries {
     custom,
 };
 
+enum class OutputRange {
+    automatic,
+    full,
+    limited,
+};
+
 struct Chromaticities {
     i32 rx = 0, ry = 0;
     i32 gx = 0, gy = 0;
@@ -53,6 +59,27 @@ struct ColorDescription {
     bool operator!=(const ColorDescription& other) const;
 };
 
+struct DisplayColorCapabilities {
+    bool valid = false;
+    bool pq = false;
+    bool hlg = false;
+    bool bt2020Rgb = false;
+    bool hasPrimaries = false;
+    Chromaticities primaries;
+    double minNits = 0;
+    double peakNits = 0;
+    double maxFallNits = 0;
+};
+
+struct OutputConfiguration {
+    double hdrSdrWhiteNits = 0;
+    double displayMinNits = 0;
+    double displayPeakNits = 0;
+    double displayMaxFallNits = 0;
+    u32 bpc = 0;
+    OutputRange range = OutputRange::automatic;
+};
+
 struct OutputColorState {
     ColorDescription encoding;
     double sdrWhiteNits = 80.0;
@@ -60,7 +87,7 @@ struct OutputColorState {
     double displayPeakNits = 80.0;
     double displayMaxFallNits = 80.0;
     u32 bpc = 8;
-    bool fullRange = true;
+    OutputRange range = OutputRange::automatic;
 
     static OutputColorState sdr();
     static OutputColorState hdr10(double sdrWhiteNits);
@@ -68,6 +95,11 @@ struct OutputColorState {
     bool operator==(const OutputColorState& other) const;
     bool operator!=(const OutputColorState& other) const;
 };
+
+bool parseEdidColorCapabilities(const void* data, size_t size,
+                                DisplayColorCapabilities& capabilities);
+OutputColorState outputColorState(const OutputConfiguration& config,
+                                  const DisplayColorCapabilities& capabilities);
 
 bool directScanoutColorCompatible(const OutputColorState& output,
                                   const ColorDescription& surface);

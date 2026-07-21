@@ -52,12 +52,12 @@ namespace {
         StringView controlPath;
         int framesLimit = 0;
         double dpmsSec = 0;
-        double hdrNits = 0;
+        OutputConfiguration outputColor;
         char** cmdArgv = nullptr;
     };
 
     void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS] [--list] [-- CMD ARG...]"_sv << endL;
+        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]" " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]" " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
 }
@@ -110,7 +110,28 @@ int mainComposer(int argc, char** argv) {
         } else if (arg == "--dpms"_sv) {
             cfg.dpmsSec = parseFloat(StringView(next()));
         } else if (arg == "--hdr"_sv) {
-            cfg.hdrNits = parseFloat(StringView(next()));
+            cfg.outputColor.hdrSdrWhiteNits = parseFloat(StringView(next()));
+        } else if (arg == "--hdr-min"_sv) {
+            cfg.outputColor.displayMinNits = parseFloat(StringView(next()));
+        } else if (arg == "--hdr-peak"_sv) {
+            cfg.outputColor.displayPeakNits = parseFloat(StringView(next()));
+        } else if (arg == "--hdr-fall"_sv) {
+            cfg.outputColor.displayMaxFallNits = parseFloat(StringView(next()));
+        } else if (arg == "--bpc"_sv) {
+            cfg.outputColor.bpc = (u32)StringView(next()).stou();
+        } else if (arg == "--rgb-range"_sv) {
+            StringView range = next();
+
+            if (range == "auto"_sv) {
+                cfg.outputColor.range = OutputRange::automatic;
+            } else if (range == "full"_sv) {
+                cfg.outputColor.range = OutputRange::full;
+            } else if (range == "limited"_sv) {
+                cfg.outputColor.range = OutputRange::limited;
+            } else {
+                usage(argv[0]);
+                return 2;
+            }
         } else if (arg == "--screenshot"_sv) {
             cfg.screenshotPath = next();
         } else if (arg == "--control"_sv) {
@@ -134,6 +155,21 @@ int mainComposer(int argc, char** argv) {
 
             return 2;
         }
+    }
+
+    const OutputConfiguration& oc = cfg.outputColor;
+
+    if (oc.hdrSdrWhiteNits < 0 || oc.displayMinNits < 0 ||
+        oc.displayPeakNits < 0 || oc.displayMaxFallNits < 0 ||
+        (oc.bpc && oc.bpc != 8 && oc.bpc != 10 && oc.bpc != 12) ||
+        (!oc.hdrSdrWhiteNits &&
+         (oc.displayMinNits || oc.displayPeakNits || oc.displayMaxFallNits)) ||
+        (oc.displayMinNits && oc.displayPeakNits &&
+         oc.displayMinNits >= oc.displayPeakNits) ||
+        (oc.displayMaxFallNits && oc.displayPeakNits &&
+         oc.displayMaxFallNits > oc.displayPeakNits)) {
+        usage(argv[0]);
+        return 2;
     }
 
     bool kms = cfg.devicePath != "headless"_sv;
@@ -173,7 +209,7 @@ int mainComposer(int argc, char** argv) {
 
         Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(c);
 
-        ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.hdrNits);
+        ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.outputColor);
 
         c.output = output;
 

@@ -1,5 +1,11 @@
 #include "color.h"
 
+extern "C" {
+#include <libdisplay-info/info.h>
+}
+
+#include <math.h>
+
 Chromaticities Chromaticities::sRgb() {
     return {640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000};
 }
@@ -86,7 +92,98 @@ bool OutputColorState::operator==(const OutputColorState& o) const {
     return encoding == o.encoding && sdrWhiteNits == o.sdrWhiteNits &&
            displayMinNits == o.displayMinNits && displayPeakNits == o.displayPeakNits &&
            displayMaxFallNits == o.displayMaxFallNits && bpc == o.bpc &&
-           fullRange == o.fullRange;
+           range == o.range;
+}
+
+bool parseEdidColorCapabilities(const void* data, size_t size,
+                                DisplayColorCapabilities& capabilities) {
+    capabilities = {};
+
+    di_info* info = di_info_parse_edid(data, size);
+
+    if (!info) {
+        return false;
+    }
+
+    capabilities.valid = true;
+
+    const di_hdr_static_metadata* hdr = di_info_get_hdr_static_metadata(info);
+    const di_supported_signal_colorimetry* signal =
+        di_info_get_supported_signal_colorimetry(info);
+    const di_color_primaries* primaries = di_info_get_default_color_primaries(info);
+
+    capabilities.pq = hdr->pq;
+    capabilities.hlg = hdr->hlg;
+    capabilities.bt2020Rgb = signal->bt2020_rgb;
+    capabilities.minNits = hdr->desired_content_min_luminance;
+    capabilities.peakNits = hdr->desired_content_max_luminance;
+    capabilities.maxFallNits = hdr->desired_content_max_frame_avg_luminance;
+    capabilities.hasPrimaries = primaries->has_primaries &&
+                                primaries->has_default_white_point;
+
+    if (capabilities.hasPrimaries) {
+        auto scaled = [](float value) { return (i32)lround((double)value * 1000000.0); };
+
+        capabilities.primaries = {
+            scaled(primaries->primary[0].x), scaled(primaries->primary[0].y),
+            scaled(primaries->primary[1].x), scaled(primaries->primary[1].y),
+            scaled(primaries->primary[2].x), scaled(primaries->primary[2].y),
+            scaled(primaries->default_white.x), scaled(primaries->default_white.y),
+        };
+    }
+
+    di_info_destroy(info);
+
+    return true;
+}
+
+OutputColorState outputColorState(const OutputConfiguration& config,
+                                  const DisplayColorCapabilities& capabilities) {
+    OutputColorState state = config.hdrSdrWhiteNits > 0 ?
+        OutputColorState::hdr10(config.hdrSdrWhiteNits) : OutputColorState::sdr();
+
+    if (state.hdr()) {
+        if (capabilities.peakNits > 0) {
+            state.displayPeakNits = capabilities.peakNits;
+        }
+
+        if (capabilities.maxFallNits > 0) {
+            state.displayMaxFallNits = capabilities.maxFallNits;
+        }
+
+        if (capabilities.minNits > 0) {
+            state.displayMinNits = capabilities.minNits;
+        }
+
+        if (capabilities.hasPrimaries) {
+            state.encoding.target = capabilities.primaries;
+        }
+    }
+
+    if (state.hdr()) {
+        if (config.displayMinNits > 0) {
+            state.displayMinNits = config.displayMinNits;
+        }
+
+        if (config.displayPeakNits > 0) {
+            state.displayPeakNits = config.displayPeakNits;
+        }
+
+        if (config.displayMaxFallNits > 0) {
+            state.displayMaxFallNits = config.displayMaxFallNits;
+        }
+
+        if (state.displayMaxFallNits > state.displayPeakNits) {
+            state.displayMaxFallNits = state.displayPeakNits;
+        }
+    }
+
+    state.bpc = config.bpc ? config.bpc : (state.hdr() ? 10 : 8);
+    state.range = config.range;
+    state.encoding.targetMinNits = state.displayMinNits;
+    state.encoding.targetMaxNits = state.displayPeakNits;
+
+    return state;
 }
 
 bool OutputColorState::operator!=(const OutputColorState& o) const {

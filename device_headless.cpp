@@ -59,7 +59,8 @@ namespace {
         // (rasterizeShape) that a real headless output otherwise never hits
         int curCap = 0;
 
-        HeadlessOutput(Composer& comp, int width, int height, double refresh, double hdrWhite);
+        HeadlessOutput(Composer& comp, int width, int height, double refresh,
+                       const OutputConfiguration& config);
 
         int width() const override;
         int height() const override;
@@ -113,17 +114,19 @@ namespace {
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
-        ::Output* createOutput(StringView, StringView modeStr, double hdrNits) override;
+        ::Output* createOutput(StringView, StringView modeStr,
+                               const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
 }
 
-HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh, double hdrWhite)
+HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh,
+                               const OutputConfiguration& config)
     : c(&comp)
     , w(width)
     , h(height)
     , hz(refresh)
-    , color(hdrWhite > 0 ? OutputColorState::hdr10(hdrWhite) : OutputColorState::sdr())
+    , color(outputColorState(config, {}))
 {
     if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
         curCap = 64;
@@ -325,14 +328,15 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     }
 }
 
-::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, double hdrNits) {
+::Output* HeadlessDevice::createOutput(StringView, StringView modeStr,
+                                       const OutputConfiguration& config) {
     ModeSpec m{1280, 800, 60};
 
     if (!modeStr.empty()) {
         STD_VERIFY(m.parse(modeStr));
     }
 
-    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, hdrNits);
+    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, config);
 }
 
 Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
