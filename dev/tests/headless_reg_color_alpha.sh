@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-args: --hdr 203
+# imway-args: --hdr 203 --hdr-peak 10000
 # Wayland ARGB8888 is electrical-premultiplied. Verify that both sRGB and PQ
 # are unpremultiplied before EOTF and then blended in the linear-nits scene.
 set -euo pipefail

@@ -6,6 +6,10 @@
 #include "wl_util.h"
 #include <color-management-v1-client-protocol.h>
 
+#ifndef COLOR_PIXEL
+#define COLOR_PIXEL 0xFFB4783C
+#endif
+
 static struct wp_color_manager_v1* cm;
 static struct wl_toplevel_ctx top;
 static int got_intent, got_feature, cm_done;
@@ -59,7 +63,7 @@ int main(void) {
 
     // a mixed opaque color so both the PQ transfer and the BT.2020 gamut shift
     // are visible after conversion
-    wl_make_toplevel(&top, "client_feat_color_mgmt", 300, 200, 0xFFB4783C); // rgb(180,120,60)
+    wl_make_toplevel(&top, "client_feat_color_mgmt", 300, 200, COLOR_PIXEL);
     printf("client_feat_color_mgmt: raw\n");
     pump(1000);
 

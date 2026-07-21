@@ -4,19 +4,14 @@ layout(location = 0) out vec4 fColor;
 layout(set = 0, binding = 0) uniform sampler2D sceneImage;
 
 layout(push_constant) uniform OutputPush {
-    int hdr;
-    float sdrWhiteNits;
-    float temperatureR;
-    float temperatureG;
-    float temperatureB;
+    vec4 toTarget[3];
+    vec4 fromTarget[3];
+    vec4 mapping; // peak nits, SDR scale (0 = PQ, -1 = unit bypass), temp R/G
+    vec4 color;   // temp B, target luminance coefficients
 } pc;
 
-vec3 bt2020ToBt709(vec3 c) {
-    return mat3(
-         1.660491, -0.124550, -0.018151,
-        -0.587641,  1.132900, -0.100579,
-        -0.072850, -0.008349,  1.118730
-    ) * c;
+vec3 applyRows(vec4 rows[3], vec3 c) {
+    return vec3(dot(rows[0].xyz, c), dot(rows[1].xyz, c), dot(rows[2].xyz, c));
 }
 
 vec3 linearToSrgb(vec3 c) {
@@ -36,15 +31,52 @@ vec3 pqOetf(vec3 nits) {
     return pow((c1 + c2 * p) / (1.0 + c3 * p), vec3(m2));
 }
 
+float toneMap(float value, float peak) {
+    value = max(value, 0.0);
+    float knee = peak * 0.9;
+    if (value <= knee) return value;
+    float headroom = peak - knee;
+    return peak - headroom * headroom / (headroom + value - knee);
+}
+
+vec3 displayMap(vec3 scene) {
+    vec3 target = applyRows(pc.toTarget, scene);
+    float luminance = dot(pc.color.yzw, target);
+    float mappedLuminance = toneMap(luminance, pc.mapping.x);
+
+    if (luminance > 1e-6) target *= mappedLuminance / luminance;
+    else target = vec3(0.0);
+
+    float chromaScale = 1.0;
+    for (int i = 0; i < 3; i++) {
+        if (target[i] < 0.0) {
+            chromaScale = min(chromaScale,
+                mappedLuminance / (mappedLuminance - target[i]));
+        } else if (target[i] > pc.mapping.x) {
+            chromaScale = min(chromaScale,
+                (pc.mapping.x - mappedLuminance) / (target[i] - mappedLuminance));
+        }
+    }
+
+    return vec3(mappedLuminance) +
+           (target - vec3(mappedLuminance)) * clamp(chromaScale, 0.0, 1.0);
+}
+
 void main() {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(sceneImage, 0));
-    vec3 temperature = vec3(pc.temperatureR, pc.temperatureG, pc.temperatureB);
+    vec3 temperature = vec3(pc.mapping.zw, pc.color.x);
     vec3 nits2020 = texture(sceneImage, uv).rgb * temperature;
 
-    if (pc.hdr != 0) {
-        fColor = vec4(pqOetf(nits2020), 1.0);
+    if (pc.mapping.y < 0.0) {
+        fColor = vec4(clamp(nits2020, 0.0, 1.0), 1.0);
+        return;
+    }
+
+    vec3 target = displayMap(nits2020);
+
+    if (pc.mapping.y == 0.0) {
+        fColor = vec4(pqOetf(applyRows(pc.fromTarget, target)), 1.0);
     } else {
-        vec3 relative709 = bt2020ToBt709(nits2020) / max(pc.sdrWhiteNits, 1.0);
-        fColor = vec4(linearToSrgb(clamp(relative709, 0.0, 1.0)), 1.0);
+        fColor = vec4(linearToSrgb(clamp(target / pc.mapping.y, 0.0, 1.0)), 1.0);
     }
 }

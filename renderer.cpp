@@ -387,7 +387,8 @@ namespace {
         void setupOutputTransform();
         void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer,
                                    VkDescriptorSet source, int w, int h,
-                                   bool hdr, float sdrWhite, double kelvin);
+                                   const OutputColorState& color, bool unitSdr,
+                                   double kelvin);
 
         void setupColorConvert();
         void ensureConversion(SurfaceTexture* tex, Surface& s);
@@ -2054,7 +2055,7 @@ void RendererImpl::setupOutputTransform() {
     dlci.pBindings = &binding;
     VK_CHECK(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &outputSetLayout));
 
-    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 5 * sizeof(u32)};
+    VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 * sizeof(float)};
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 
     plci.setLayoutCount = 1;
@@ -2173,7 +2174,8 @@ void RendererImpl::setupOutputTransform() {
 void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
                                          VkFramebuffer outputFramebuffer,
                                          VkDescriptorSet source, int w, int h,
-                                         bool hdr, float sdrWhite,
+                                         const OutputColorState& outputColor,
+                                         bool unitSdr,
                                          double kelvin) {
     VkClearValue clear{};
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -2194,19 +2196,34 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     vkCmdSetViewport(commands, 0, 1, &viewport);
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
+    OutputMapping mapping = outputMapping(outputColor);
     struct {
-        i32 hdr;
-        float sdrWhite;
-        float temperature[3];
-    } push = {hdr ? 1 : 0, sdrWhite, {1.f, 1.f, 1.f}};
+        float row[8][4];
+    } push{};
+
+    for (int row = 0; row < 3; row++) {
+        for (int col = 0; col < 3; col++) {
+            push.row[row][col] = (float)mapping.toTarget.v[row * 3 + col];
+            push.row[row + 3][col] = (float)mapping.fromTarget.v[row * 3 + col];
+        }
+    }
+
+    push.row[6][0] = unitSdr ? 1.f : (float)mapping.peakNits;
+    push.row[6][1] = unitSdr ? -1.f : mapping.hdr ? 0.f : 203.f;
+    push.row[6][2] = 1.f;
+    push.row[6][3] = 1.f;
+    push.row[7][0] = 1.f;
+    push.row[7][1] = (float)mapping.targetLuma.r;
+    push.row[7][2] = (float)mapping.targetLuma.g;
+    push.row[7][3] = (float)mapping.targetLuma.b;
 
     if (kelvin > 0 && kelvin < 6500) {
         double t = kelvin / 100.0;
 
-        push.temperature[1] = (float)((99.4708025861 * log(t) - 161.1195681661) / 255.0);
-        push.temperature[2] = t <= 19.0 ? 0.f : (float)((138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0);
-        push.temperature[1] = push.temperature[1] < 0 ? 0 : push.temperature[1] > 1 ? 1 : push.temperature[1];
-        push.temperature[2] = push.temperature[2] < 0 ? 0 : push.temperature[2] > 1 ? 1 : push.temperature[2];
+        push.row[6][3] = (float)((99.4708025861 * log(t) - 161.1195681661) / 255.0);
+        push.row[7][0] = t <= 19.0 ? 0.f : (float)((138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0);
+        push.row[6][3] = push.row[6][3] < 0 ? 0 : push.row[6][3] > 1 ? 1 : push.row[6][3];
+        push.row[7][0] = push.row[7][0] < 0 ? 0 : push.row[7][0] > 1 ? 1 : push.row[7][0];
     }
 
     vkCmdPushConstants(commands, outputPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
@@ -2789,7 +2806,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     vkCmdEndRenderPass(curCmd);
 
     recordOutputTransform(curCmd, curFb, cursorOutputDesc, hwCapW, hwCapH,
-                          false, 1.f, 0);
+                          OutputColorState::sdr(), true, 0);
 
     VkImageLayout layout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -4237,7 +4254,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     renderCtx.finish();
 
     recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer,
-                          outputDesc, width, height, outputColor.hdr(), white,
+                          outputDesc, width, height, outputColor, false,
                           output->colorTemp());
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;

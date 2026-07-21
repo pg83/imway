@@ -96,10 +96,32 @@ struct OutputColorState {
     bool operator!=(const OutputColorState& other) const;
 };
 
+struct ColorRgb {
+    double r = 0, g = 0, b = 0;
+};
+
+struct ColorMatrix {
+    double v[9] = {};
+
+    static ColorMatrix identity();
+    ColorRgb apply(const ColorRgb& color) const;
+};
+
+struct OutputMapping {
+    ColorMatrix toTarget;
+    ColorMatrix fromTarget;
+    ColorRgb targetLuma;
+    double referenceNits = 100;
+    double peakNits = 203;
+    bool hdr = false;
+};
+
 bool parseEdidColorCapabilities(const void* data, size_t size,
                                 DisplayColorCapabilities& capabilities);
 OutputColorState outputColorState(const OutputConfiguration& config,
                                   const DisplayColorCapabilities& capabilities);
+OutputMapping outputMapping(const OutputColorState& output);
+ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
 
 bool directScanoutColorCompatible(const OutputColorState& output,
                                   const ColorDescription& surface);
