@@ -32,6 +32,10 @@
 #define REG_XDG_VERSION 3
 #endif
 
+#ifndef REG_COMPOSITOR_VERSION
+#define REG_COMPOSITOR_VERSION 4
+#endif
+
 __attribute__((unused)) static struct wl_display* wl_dpy;
 __attribute__((unused)) static struct wl_compositor* wl_comp;
 __attribute__((unused)) static struct wl_subcompositor* wl_subcomp;
@@ -197,7 +201,7 @@ static void wl_reg_global(void* d, struct wl_registry* r, uint32_t name, const c
                           uint32_t version) {
     (void)d; (void)version;
     if (!strcmp(iface, wl_compositor_interface.name))
-        wl_comp = (struct wl_compositor*)wl_registry_bind(r, name, &wl_compositor_interface, 4);
+        wl_comp = (struct wl_compositor*)wl_registry_bind(r, name, &wl_compositor_interface, REG_COMPOSITOR_VERSION);
     else if (!strcmp(iface, wl_subcompositor_interface.name))
         wl_subcomp = (struct wl_subcompositor*)wl_registry_bind(r, name, &wl_subcompositor_interface, 1);
     else if (!strcmp(iface, wl_shm_interface.name))

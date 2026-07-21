@@ -1043,6 +1043,15 @@ namespace {
     void surfaceAttach(wl_client*, wl_resource* res, wl_resource* buffer, i32 x, i32 y) {
         SurfaceImpl& s = *surfaceFrom(res);
 
+        // v5 split the attach offset into wl_surface.offset; attaching with a
+        // non-zero offset is a protocol error there
+        if ((x || y) && wl_resource_get_version(res) >= WL_SURFACE_OFFSET_SINCE_VERSION) {
+            wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_OFFSET,
+                                   "attach offset must be zero since version 5");
+
+            return;
+        }
+
         detachPendingBuffer(s);
         s.pending.buffer = buffer;
         s.pending.newlyAttached = true;
@@ -1828,7 +1837,13 @@ namespace {
         unionRect(surfaceFrom(res)->pending.damage, {x, y, w, h});
     }
 
-    void surfaceOffset(wl_client*, wl_resource*, i32, i32) {
+    void surfaceOffset(wl_client*, wl_resource* res, i32 x, i32 y) {
+        SurfaceImpl& s = *surfaceFrom(res);
+
+        // double-buffered: the offset moves the buffer relative to the surface
+        // and applies with the next commit alongside the pending attach
+        s.pending.attachX = x;
+        s.pending.attachY = y;
     }
 
     const struct wl_surface_interface surfaceImpl = {
@@ -2069,6 +2084,13 @@ namespace {
         s->res = sres;
         srv->scene->surfaces.pushBack((SceneNode*)s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
+
+        // v6: we present every buffer at scale 1, untransformed; tell the
+        // client so it can pick a matching buffer up front
+        if (wl_resource_get_version(sres) >= WL_SURFACE_PREFERRED_BUFFER_SCALE_SINCE_VERSION) {
+            wl_surface_send_preferred_buffer_scale(sres, 1);
+            wl_surface_send_preferred_buffer_transform(sres, WL_OUTPUT_TRANSFORM_NORMAL);
+        }
     }
 
     void compositorCreateRegion(wl_client* client, wl_resource* res, u32 id) {
@@ -8655,7 +8677,7 @@ WaylandImpl::~WaylandImpl() noexcept {
 
 
 void WaylandImpl::createGlobals() {
-    wl_global_create(display, &wl_compositor_interface, 4, this, compositorBind);
+    wl_global_create(display, &wl_compositor_interface, 6, this, compositorBind);
     wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
     wl_global_create(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
     wl_global_create(display, &wl_output_interface, 4, this, outputBind);

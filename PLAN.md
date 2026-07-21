@@ -8,7 +8,8 @@
 
 ### Этап A — версии реализованного
 - [x] ~~wl_seat 5 → 11 (axis_value120, axis_relative_direction; warp deferred to pointer-warp)~~ done
-- [ ] wl_compositor/wl_surface 4 → 7 (preferred_buffer_scale/transform, get_release)
+- [x] ~~wl_compositor/wl_surface 4 → 6 (preferred_buffer_scale/transform, offset fix)~~ done
+- [ ] wl_surface v7 get_release (per-commit buffer release callback)
 - [ ] wl_shm 1 → 3
 - [ ] wl_data_device_manager 3 → 4
 - [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done
