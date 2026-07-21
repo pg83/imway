@@ -205,9 +205,8 @@ const OutputColorState& HeadlessOutput::colorState() const {
 }
 
 void HeadlessOutput::setSdrWhite(double nits) {
-    if (color.hdr() && nits > 0) {
-        color.sdrWhiteNits = nits;
-        color.encoding.referenceNits = nits;
+    if (color.hdr() && nits > 0 && nits != color.sdrWhiteNits) {
+        color.setSdrWhite(nits);
         c->scene->needsFrame = true;
     }
 }

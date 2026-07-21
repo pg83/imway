@@ -1238,6 +1238,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     }
 
     initBacklight();
+    if (color.hdr() && hasBrightness()) {
+        sysO << "imway: HDR holds hardware brightness at its calibration point; brightness keys adjust SDR white"_sv << endL;
+    }
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
 }
 
@@ -1584,8 +1587,7 @@ void KmsOutput::setSdrWhite(double nits) {
         return;
     }
 
-    color.sdrWhiteNits = nits;
-    color.encoding.referenceNits = nits;
+    color.setSdrWhite(nits);
     c->scene->needsFrame = true;
 }
 

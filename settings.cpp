@@ -3,6 +3,7 @@
 #include "dialog.h"
 
 #include <imgui.h>
+#include <math.h>
 
 using namespace stl;
 
@@ -64,8 +65,15 @@ void Dialog::draw(Settings& s, bool& open) {
     }
 
     if (s.sdrNits > 0.f) {
+        float high = fminf(300.f, s.hdrPeakNits);
+        float low = fminf(80.f, high);
+
         ImGui::SetNextItemWidth(180.f * s.uiScale);
-        s.sdrChanged = ImGui::SliderFloat("hdr", &s.sdrNits, 80.f, 300.f, "%.0f nits", ImGuiSliderFlags_AlwaysClamp);
+        s.sdrChanged = ImGui::SliderFloat("hdr", &s.sdrNits, low, high,
+                                          "%.0f nits",
+                                          ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SameLine();
+        ImGui::TextDisabled("%.1fx", s.hdrPeakNits / s.sdrNits);
     } else {
         ImGui::TextDisabled("hdr off (start with --hdr)");
     }

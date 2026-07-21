@@ -66,10 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-## Brightness
-
-Настройка SDR white в nits математически реализована правильно, но физически эти nits не гарантированы: аппаратная яркость монитора меняется независимо. Для настоящего результата нужен output brightness/headroom policy и хотя бы пользовательская калибровка.
-
 ## Где сейчас SOTA
 
 Наиболее полезные ориентиры:

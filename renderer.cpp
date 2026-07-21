@@ -998,12 +998,21 @@ bool RendererImpl::key(u32 code, bool pressed) {
     bool consumed = false;
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
-    if (!locked && pressed && output->hasBrightness() && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
-        float delta = code == KEY_BRIGHTNESSUP ? 0.05f : -0.05f;
+    if (!locked && pressed &&
+        (output->hasBrightness() || output->colorState().hdr()) &&
+        (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
+        bool up = code == KEY_BRIGHTNESSUP;
 
-        output->setBrightness(output->brightness() + delta);
+        if (output->colorState().hdr()) {
+            output->setSdrWhite(output->colorState().sdrWhiteNits +
+                                (up ? 10.0 : -10.0));
+            osdKind = 3;
+        } else {
+            output->setBrightness(output->brightness() + (up ? .05f : -.05f));
+            osdKind = 2;
+        }
+
         osdMs = nowMsec() + 1500;
-        osdKind = 2;
         scene->needsFrame = true;
         consumed = true;
     }
@@ -3115,7 +3124,9 @@ void RendererImpl::buildUi(Scene& scene) {
         settings.volume = -1.f;
     }
 
-    settings.brightness = output->hasBrightness() ? output->brightness() : -1.f;
+    settings.brightness = output->hasBrightness() && !output->colorState().hdr() ?
+        output->brightness() : -1.f;
+    settings.hdrPeakNits = (float)output->colorState().displayPeakNits;
     settings.hasDnd = notifier != nullptr;
 
     if (notifier) {
@@ -3174,6 +3185,11 @@ void RendererImpl::buildUi(Scene& scene) {
                 drawOsd(width, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
             } else if (osdKind == 2) {
                 drawOsd(width, uiScale, "brightness"_sv, output->brightness(), false, alpha);
+            } else if (osdKind == 3 && output->colorState().hdr()) {
+                drawOsd(width, uiScale, "hdr"_sv,
+                        (float)(output->colorState().sdrWhiteNits /
+                                output->colorState().displayPeakNits),
+                        false, alpha);
             }
 
             scene.needsFrame = true;

@@ -5,7 +5,7 @@
 // the settings dialog model: the caller owns one of these, the widget edits
 // the values in place and raises the *Changed flags for whatever moved this
 // frame — the caller applies the side effects (rescale, kms sdr white,
-// gamma ramp) and the flags reset on the next draw
+// output color transform) and the flags reset on the next draw
 struct Settings {
     float uiScale = 1.f;   // in: the current scale, sizes the menu items
     float volume = -1.f;   // 0..1; < 0 = no mixer, the row is hidden
@@ -16,6 +16,7 @@ struct Settings {
                            // applying mid-drag would rescale the slider
                            // under the cursor
     float sdrNits = -1.f;  // sdr white; <= 0 renders the hdr row disabled
+    float hdrPeakNits = 0.f;
     bool nightOn = false;  // night light toggle + temperature
     float nightK = 3400.f;
     ThemeColor neutral;

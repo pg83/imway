@@ -43,9 +43,9 @@ struct Output {
     // false turns the display off (DPMS), true brings it back
     virtual void setPowerSave(bool on) = 0;
 
-    // physical panel brightness 0..1 — the sysfs backlight matched to the
-    // connector. multiplies everything including hdr, unlike the sdr-white
-    // knob which rescales the signal; absent on outputs without a panel
+    // Physical panel brightness 0..1 — the sysfs/DDC backlight matched to the
+    // connector. The renderer uses it only for SDR: changing it under HDR
+    // would invalidate the calibrated absolute PQ luminance and headroom.
     virtual bool hasBrightness() const = 0;
     virtual float brightness() const = 0;
     virtual void setBrightness(float v) = 0;

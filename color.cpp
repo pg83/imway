@@ -255,6 +255,19 @@ OutputColorState OutputColorState::hdr10(double white) {
     return state;
 }
 
+void OutputColorState::setSdrWhite(double nits) {
+    if (!hdr() || nits <= 0) {
+        return;
+    }
+
+    sdrWhiteNits = fmin(nits, displayPeakNits);
+    encoding.referenceNits = sdrWhiteNits;
+}
+
+double OutputColorState::hdrHeadroom() const {
+    return hdr() && sdrWhiteNits > 0 ? displayPeakNits / sdrWhiteNits : 1.0;
+}
+
 bool OutputColorState::hdr() const {
     return encoding.hdr();
 }
@@ -365,6 +378,7 @@ OutputColorState outputColorState(const OutputConfiguration& config,
     state.range = config.range;
     state.encoding.targetMinNits = state.displayMinNits;
     state.encoding.targetMaxNits = state.displayPeakNits;
+    state.setSdrWhite(state.sdrWhiteNits);
 
     return state;
 }

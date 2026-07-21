@@ -100,6 +100,8 @@ struct OutputColorState {
 
     static OutputColorState sdr();
     static OutputColorState hdr10(double sdrWhiteNits);
+    void setSdrWhite(double nits);
+    double hdrHeadroom() const;
     bool hdr() const;
     bool operator==(const OutputColorState& other) const;
     bool operator!=(const OutputColorState& other) const;

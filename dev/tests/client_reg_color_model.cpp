@@ -65,6 +65,21 @@ int main() {
         return 1;
     }
 
+    hdrOutput.setSdrWhite(200.0);
+    if (hdrOutput.sdrWhiteNits != 200.0 ||
+        hdrOutput.encoding.referenceNits != 200.0 ||
+        hdrOutput.hdrHeadroom() != 5.0) {
+        fputs("bad HDR headroom policy\n", stderr);
+        return 1;
+    }
+    hdrOutput.setSdrWhite(2000.0);
+    if (hdrOutput.sdrWhiteNits != 1000.0 ||
+        hdrOutput.encoding.referenceNits != 1000.0 ||
+        hdrOutput.hdrHeadroom() != 1.0) {
+        fputs("SDR white exceeds calibrated HDR peak\n", stderr);
+        return 1;
+    }
+
     ColorRgb neutralWhite = neutralMapping.toTarget.apply({100, 100, 100});
     ColorRgb warmWhite = warmMapping.toTarget.apply({100, 100, 100});
     double warmY = warmMapping.targetLuma.r * warmWhite.r +
