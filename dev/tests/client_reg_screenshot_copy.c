@@ -6,6 +6,7 @@
 
 #include <jxl/color_encoding.h>
 #include <jxl/decode.h>
+#include <math.h>
 
 static struct wl_toplevel_ctx top;
 static struct wl_data_device* device;
@@ -178,9 +179,15 @@ static int validate_hdr_jxl(const unsigned char* data, size_t size) {
 
     int basic_ok = 0;
     int color_ok = 0;
+    int pixels_ok = 0;
+    JxlBasicInfo basic = {0};
+    uint16_t* pixels = NULL;
+    size_t pixels_size = 0;
+    JxlPixelFormat format = {3, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
 
     if (JxlDecoderSubscribeEvents(
-            dec, JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING) !=
+            dec, JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING |
+                 JXL_DEC_FULL_IMAGE) !=
             JXL_DEC_SUCCESS ||
         JxlDecoderSetInput(dec, data, size) != JXL_DEC_SUCCESS) {
         JxlDecoderDestroy(dec);
@@ -193,10 +200,10 @@ static int validate_hdr_jxl(const unsigned char* data, size_t size) {
         JxlDecoderStatus status = JxlDecoderProcessInput(dec);
 
         if (status == JXL_DEC_BASIC_INFO) {
-            JxlBasicInfo info;
-
-            if (JxlDecoderGetBasicInfo(dec, &info) == JXL_DEC_SUCCESS) {
-                basic_ok = info.bits_per_sample == 16;
+            if (JxlDecoderGetBasicInfo(dec, &basic) == JXL_DEC_SUCCESS) {
+                basic_ok = basic.bits_per_sample == 16 &&
+                           fabsf(basic.intensity_target - 600.0f) < 0.01f &&
+                           fabsf(basic.min_nits - 0.01f) < 0.0001f;
             }
         } else if (status == JXL_DEC_COLOR_ENCODING) {
             JxlColorEncoding color;
@@ -209,8 +216,32 @@ static int validate_hdr_jxl(const unsigned char* data, size_t size) {
                            color.primaries == JXL_PRIMARIES_2100 &&
                            color.transfer_function == JXL_TRANSFER_FUNCTION_PQ;
             }
-        } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER ||
-                   status == JXL_DEC_SUCCESS) {
+        } else if (status == JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+            if (JxlDecoderImageOutBufferSize(dec, &format, &pixels_size) !=
+                    JXL_DEC_SUCCESS ||
+                !(pixels = (uint16_t*)malloc(pixels_size)) ||
+                JxlDecoderSetImageOutBuffer(dec, &format, pixels, pixels_size) !=
+                    JXL_DEC_SUCCESS) {
+                break;
+            }
+        } else if (status == JXL_DEC_FULL_IMAGE) {
+            size_t count = pixels_size / (3 * sizeof(*pixels));
+            size_t green = 0;
+
+            for (size_t i = 0; i < count; i++) {
+                uint16_t r = pixels[i * 3 + 0];
+                uint16_t g = pixels[i * 3 + 1];
+                uint16_t b = pixels[i * 3 + 2];
+
+                if (r >= 29000 && r <= 32000 &&
+                    g >= 36000 && g <= 39000 &&
+                    b >= 21500 && b <= 24500) {
+                    green++;
+                }
+            }
+
+            pixels_ok = green >= 1000;
+        } else if (status == JXL_DEC_SUCCESS) {
             break;
         } else if (status == JXL_DEC_ERROR ||
                    status == JXL_DEC_NEED_MORE_INPUT) {
@@ -218,8 +249,9 @@ static int validate_hdr_jxl(const unsigned char* data, size_t size) {
         }
     }
 
+    free(pixels);
     JxlDecoderDestroy(dec);
-    return basic_ok && color_ok;
+    return basic_ok && color_ok && pixels_ok;
 }
 
 int main(void) {
@@ -279,7 +311,7 @@ int main(void) {
     size_t jxl_size = receive_all("image/jxl", &jxl);
 
     if (!jxl_size || !validate_hdr_jxl(jxl, jxl_size)) {
-        fprintf(stderr, "JPEG XL screenshot lacks 16-bit BT.2020/PQ metadata\n");
+        fprintf(stderr, "JPEG XL screenshot metadata or decoded pixels are wrong\n");
         free(jxl);
         return 1;
     }

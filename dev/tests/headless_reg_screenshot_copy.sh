@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-args: --hdr 203
+# imway-args: --hdr 203 --hdr-min 0.01 --hdr-peak 600 --hdr-fall 300
 # Copy from the screenshot cropper must install image/jxl and the image/png
 # compatibility selection, then exit after another focused client replaces it.
 set -euo pipefail

@@ -68,13 +68,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 ## Screenshots
 
-JXL-путь хороший, но стоит дополнить:
-
-- `intensity_target`;
-- `min_nits`;
-- явной информацией о фактическом target volume;
-- проверкой декодированных pixel values, а не только тегов.
-
 PNG clipboard fallback сейчас плох: PQ XR30 просто ужимается до 8 бит и записывается без HDR metadata и без tone mapping. Обычный PNG viewer воспримет это как SDR и покажет неверно.
 
 Правильно:

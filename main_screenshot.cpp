@@ -148,13 +148,25 @@ namespace {
         Buffer p(path);
 
         if (const char* color = getenv("IMWAY_SHOT_COLOR")) {
-            StringView value(color), hs, ns;
+            StringView value(color), hs, rest;
 
-            if (value.split(':', hs, ns)) {
-                double white = parseFloat(ns);
+            if (value.split(':', hs, rest)) {
+                StringView whiteString, minString, peakString, fallString;
+                bool volume = rest.split(':', whiteString, rest) &&
+                              rest.split(':', minString, rest) &&
+                              rest.split(':', peakString, fallString);
+                double white = parseFloat(volume ? whiteString : rest);
 
                 img.color = hs == "1"_sv ? OutputColorState::hdr10(white) :
                                              OutputColorState::sdr();
+
+                if (volume) {
+                    img.color.displayMinNits = parseFloat(minString);
+                    img.color.displayPeakNits = parseFloat(peakString);
+                    img.color.displayMaxFallNits = parseFloat(fallString);
+                    img.color.encoding.targetMinNits = img.color.displayMinNits;
+                    img.color.encoding.targetMaxNits = img.color.displayPeakNits;
+                }
             }
         }
 
@@ -275,6 +287,13 @@ namespace {
         info.bits_per_sample = 16;
         info.num_color_channels = 3;
         info.uses_original_profile = JXL_TRUE;
+
+        if (img.color.hdr()) {
+            info.intensity_target = (float)img.color.displayPeakNits;
+            info.min_nits = (float)img.color.displayMinNits;
+            info.relative_to_max_display = JXL_FALSE;
+            info.linear_below = (float)img.color.displayMinNits;
+        }
 
         JxlColorEncoding color{};
 

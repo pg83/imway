@@ -519,7 +519,10 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
 
     color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv
-          << (long double)sdrWhite;
+          << (long double)sdrWhite << ":"_sv
+          << (long double)shotColor.displayMinNits << ":"_sv
+          << (long double)shotColor.displayPeakNits << ":"_sv
+          << (long double)shotColor.displayMaxFallNits;
 
     if (image) {
         metadata << "IMWAY_SHOT_DMABUF="_sv
