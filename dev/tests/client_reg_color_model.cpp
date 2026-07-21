@@ -13,6 +13,8 @@ int main() {
                                                    Chromaticities::bt2020());
     OutputColorState sdrOutput = OutputColorState::sdr();
     OutputColorState hdrOutput = OutputColorState::hdr10(203.0);
+    OutputMapping neutralMapping = outputMapping(hdrOutput);
+    OutputMapping warmMapping = outputMapping(hdrOutput, 3400.0);
 
     if (sdr.managed() || sdr.hdr() || sdr.transfer != ColorTransfer::sRgb ||
         sdr.primaries != ColorPrimaries::sRgb || sdr.minNits != .2 ||
@@ -59,6 +61,22 @@ int main() {
         hdrOutput.displayPeakNits != 1000.0 || hdrOutput.bpc != 10 ||
         hdrOutput == sdrOutput) {
         fputs("bad output color state\n", stderr);
+
+        return 1;
+    }
+
+    ColorRgb neutralWhite = neutralMapping.toTarget.apply({100, 100, 100});
+    ColorRgb warmWhite = warmMapping.toTarget.apply({100, 100, 100});
+    double warmY = warmMapping.targetLuma.r * warmWhite.r +
+                   warmMapping.targetLuma.g * warmWhite.g +
+                   warmMapping.targetLuma.b * warmWhite.b;
+
+    if (neutralWhite.r < 99.999 || neutralWhite.r > 100.001 ||
+        neutralWhite.g < 99.999 || neutralWhite.g > 100.001 ||
+        neutralWhite.b < 99.999 || neutralWhite.b > 100.001 ||
+        warmWhite.r <= warmWhite.g || warmWhite.g <= warmWhite.b ||
+        warmY < 99.999 || warmY > 100.001) {
+        fputs("bad Bradford night-light adaptation\n", stderr);
 
         return 1;
     }

@@ -69,6 +69,44 @@ namespace {
         return primaries;
     }
 
+    ColorMatrix chromaticAdaptation(double kelvin) {
+        if (kelvin <= 0 || kelvin >= 6500) {
+            return ColorMatrix::identity();
+        }
+
+        double t = fmax(1667.0, fmin(25000.0, kelvin));
+        double x = t <= 4000.0 ?
+            -.2661239e9 / (t * t * t) - .2343580e6 / (t * t) +
+                .8776956e3 / t + .179910 :
+            -3.0258469e9 / (t * t * t) + 2.1070379e6 / (t * t) +
+                .2226347e3 / t + .240390;
+        double y = t <= 2222.0 ?
+            -1.1063814 * x * x * x - 1.34811020 * x * x +
+                2.18555832 * x - .20219683 :
+            t <= 4000.0 ?
+                -.9549476 * x * x * x - 1.37418593 * x * x +
+                    2.09137015 * x - .16748867 :
+                3.0817580 * x * x * x - 5.87338670 * x * x +
+                    3.75112997 * x - .37001483;
+        ColorRgb source{.3127 / .3290, 1.0,
+                        (1.0 - .3127 - .3290) / .3290};
+        ColorRgb target{x / y, 1.0, (1.0 - x - y) / y};
+        ColorMatrix bradford{{
+            .8951, .2664, -.1614,
+            -.7502, 1.7135, .0367,
+            .0389, -.0685, 1.0296,
+        }};
+        ColorRgb sourceCone = bradford.apply(source);
+        ColorRgb targetCone = bradford.apply(target);
+        ColorMatrix scale{{
+            targetCone.r / sourceCone.r, 0, 0,
+            0, targetCone.g / sourceCone.g, 0,
+            0, 0, targetCone.b / sourceCone.b,
+        }};
+
+        return multiply(inverse(bradford), multiply(scale, bradford));
+    }
+
     double toneMap(double value, const OutputMapping& mapping) {
         value = value > 0 ? value : 0;
         double knee = mapping.peakNits * .9;
@@ -331,14 +369,17 @@ OutputColorState outputColorState(const OutputConfiguration& config,
     return state;
 }
 
-OutputMapping outputMapping(const OutputColorState& output) {
+OutputMapping outputMapping(const OutputColorState& output,
+                            double colorTemperature) {
     OutputMapping mapping;
     Chromaticities target = output.hdr() ?
         output.encoding.target : Chromaticities::sRgb();
     ColorMatrix sceneToXyz = rgbToXyz(Chromaticities::bt2020());
     ColorMatrix targetToXyz = rgbToXyz(target);
 
-    mapping.toTarget = multiply(inverse(targetToXyz), sceneToXyz);
+    mapping.toTarget = multiply(
+        inverse(targetToXyz),
+        multiply(chromaticAdaptation(colorTemperature), sceneToXyz));
     mapping.fromTarget = multiply(inverse(sceneToXyz), targetToXyz);
     mapping.targetLuma = {targetToXyz.v[3], targetToXyz.v[4], targetToXyz.v[5]};
     mapping.hdr = output.hdr();

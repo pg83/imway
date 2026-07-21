@@ -263,6 +263,8 @@ void ControlImpl::handleLine(StringView cmd) {
         sysO << "imway: screenshot by command: "_sv << args << endL;
     } else if (verb == "sdr-white"_sv) {
         comp->output->setSdrWhite(parseFloat(args));
+    } else if (verb == "night"_sv) {
+        comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
     } else if (verb == "quit"_sv) {

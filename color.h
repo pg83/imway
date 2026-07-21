@@ -153,7 +153,8 @@ bool parseEdidColorCapabilities(const void* data, size_t size,
                                 DisplayColorCapabilities& capabilities);
 OutputColorState outputColorState(const OutputConfiguration& config,
                                   const DisplayColorCapabilities& capabilities);
-OutputMapping outputMapping(const OutputColorState& output);
+OutputMapping outputMapping(const OutputColorState& output,
+                            double colorTemperature = 0);
 ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
 HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
                                     const HdrContentMetadata& content);

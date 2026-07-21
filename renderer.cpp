@@ -1740,6 +1740,12 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr;
     }
 
+    // Night light is part of the composed output transform. A client buffer
+    // cannot carry that adaptation, so direct scanout would visibly bypass it.
+    if (output->colorTemp() > 0) {
+        return nullptr;
+    }
+
     // any open compositor ui needs composition
     if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || pickPending ||
         settingsState || altTabActive || osdMs) {
@@ -2026,7 +2032,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     vkCmdSetViewport(commands, 0, 1, &viewport);
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
-    OutputMapping mapping = outputMapping(outputColor);
+    OutputMapping mapping = outputMapping(outputColor, kelvin);
     struct {
         float row[8][4];
     } push{};
@@ -2040,21 +2046,9 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
 
     push.row[6][0] = unitSdr ? 1.f : (float)mapping.peakNits;
     push.row[6][1] = unitSdr ? -1.f : mapping.hdr ? 0.f : 203.f;
-    push.row[6][2] = 1.f;
-    push.row[6][3] = 1.f;
-    push.row[7][0] = 1.f;
     push.row[7][1] = (float)mapping.targetLuma.r;
     push.row[7][2] = (float)mapping.targetLuma.g;
     push.row[7][3] = (float)mapping.targetLuma.b;
-
-    if (kelvin > 0 && kelvin < 6500) {
-        double t = kelvin / 100.0;
-
-        push.row[6][3] = (float)((99.4708025861 * log(t) - 161.1195681661) / 255.0);
-        push.row[7][0] = t <= 19.0 ? 0.f : (float)((138.5177312231 * log(t - 10.0) - 305.0447927307) / 255.0);
-        push.row[6][3] = push.row[6][3] < 0 ? 0 : push.row[6][3] > 1 ? 1 : push.row[6][3];
-        push.row[7][0] = push.row[7][0] < 0 ? 0 : push.row[7][0] > 1 ? 1 : push.row[7][0];
-    }
 
     vkCmdPushConstants(commands, outputPipeLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(push), &push);
     vkCmdDraw(commands, 3, 1, 0, 0);

@@ -6,8 +6,8 @@ layout(set = 0, binding = 0) uniform sampler2D sceneImage;
 layout(push_constant) uniform OutputPush {
     vec4 toTarget[3];
     vec4 fromTarget[3];
-    vec4 mapping; // peak nits, SDR scale (0 = PQ, -1 = unit bypass), temp R/G
-    vec4 color;   // temp B, target luminance coefficients
+    vec4 mapping; // peak nits, SDR scale (0 = PQ, -1 = unit bypass)
+    vec4 color;   // target luminance coefficients in yzw
 } pc;
 
 vec3 applyRows(vec4 rows[3], vec3 c) {
@@ -64,8 +64,7 @@ vec3 displayMap(vec3 scene) {
 
 void main() {
     vec2 uv = gl_FragCoord.xy / vec2(textureSize(sceneImage, 0));
-    vec3 temperature = vec3(pc.mapping.zw, pc.color.x);
-    vec3 nits2020 = texture(sceneImage, uv).rgb * temperature;
+    vec3 nits2020 = texture(sceneImage, uv).rgb;
 
     if (pc.mapping.y < 0.0) {
         fColor = vec4(clamp(nits2020, 0.0, 1.0), 1.0);

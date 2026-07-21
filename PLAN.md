@@ -66,16 +66,7 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-## Night light и brightness
-
-Night light сейчас — RGB-множители в linear BT.2020. Это не полноценная chromatic adaptation:
-
-- меняется экспозиция;
-- возможен gamut clipping;
-- absolute HDR luminance дрейфует;
-- не учитываются primaries реального output.
-
-Нужен CAT16/Bradford-подобный transform в XYZ либо общий output color pipeline.
+## Brightness
 
 Настройка SDR white в nits математически реализована правильно, но физически эти nits не гарантированы: аппаратная яркость монитора меняется независимо. Для настоящего результата нужен output brightness/headroom policy и хотя бы пользовательская калибровка.
 

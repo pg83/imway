@@ -1058,9 +1058,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     plCrtcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     plCrtcH = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
 
-    // the whole color pipeline is fetched up front: gamma serves the night
-    // light without hdr, and ALL of it is needed for the startup scrub —
-    // kms color state survives compositor restarts
+    // Fetch the whole legacy color pipeline for the startup scrub: KMS color
+    // state survives compositor restarts even though our transform is in the
+    // output shader.
     crtcGammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "GAMMA_LUT");
     crtcDegammaProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "DEGAMMA_LUT");
     crtcCtmProp = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "CTM");
