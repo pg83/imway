@@ -231,6 +231,26 @@ namespace {
         ((Buffer*)png_get_io_ptr(png))->append(data, (size_t)len);
     }
 
+    double pqToNits(double value) {
+        constexpr double m1 = 2610.0 / 16384.0;
+        constexpr double m2 = 2523.0 / 32.0;
+        constexpr double c1 = 3424.0 / 4096.0;
+        constexpr double c2 = 2413.0 / 128.0;
+        constexpr double c3 = 2392.0 / 128.0;
+        double p = pow(fmax(value, 0.0), 1.0 / m2);
+
+        return pow(fmax(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1) *
+               10000.0;
+    }
+
+    u8 linearToSrgb8(double value) {
+        value = fmax(0.0, fmin(1.0, value));
+        double encoded = value <= .0031308 ? value * 12.92 :
+            1.055 * pow(value, 1.0 / 2.4) - .055;
+
+        return (u8)lround(encoded * 255.0);
+    }
+
     // encode the [x0,y0,x1,y1) region of img (image px, already clamped) as an
     // RGBA png into out; throws on failure
     void encodePng(const Image& img, int x0, int y0, int x1, int y1, Buffer& out) {
@@ -247,10 +267,53 @@ namespace {
 
         png_set_write_fn(png, &out, pngWrite, nullptr);
         png_set_IHDR(png, info, (u32)(x1 - x0), (u32)(y1 - y0), 8, PNG_COLOR_TYPE_RGBA, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT);
+        png_set_sRGB(png, info, PNG_sRGB_INTENT_PERCEPTUAL);
         png_write_info(png, info);
 
-        for (int y = y0; y < y1; y++) {
-            png_write_row(png, (png_bytep)(img.px + ((size_t)y * img.w + x0) * 4));
+        if (!img.color.hdr()) {
+            for (int y = y0; y < y1; y++) {
+                png_write_row(png, (png_bytep)(img.px + ((size_t)y * img.w + x0) * 4));
+            }
+        } else {
+            Buffer row;
+            row.zero((size_t)(x1 - x0) * 4);
+            OutputMapping mapping = outputMapping(OutputColorState::sdr());
+
+            for (int y = y0; y < y1; y++) {
+                u8* dst = (u8*)row.mutData();
+
+                for (int x = x0; x < x1; x++) {
+                    size_t source = ((size_t)y * img.w + x);
+                    ColorRgb pq;
+
+                    if (img.rgb16.length()) {
+                        const u16* src = (const u16*)img.rgb16.data() + source * 3;
+
+                        pq = {(double)src[0] / 65535.0,
+                              (double)src[1] / 65535.0,
+                              (double)src[2] / 65535.0};
+                    } else {
+                        const u8* src = img.px + source * 4;
+
+                        pq = {(double)src[0] / 255.0,
+                              (double)src[1] / 255.0,
+                              (double)src[2] / 255.0};
+                    }
+
+                    ColorRgb nits{pqToNits(pq.r), pqToNits(pq.g),
+                                  pqToNits(pq.b)};
+                    ColorRgb mapped = mapping.toTarget.apply(
+                        mapOutputNits(mapping, nits));
+                    size_t at = (size_t)(x - x0) * 4;
+
+                    dst[at + 0] = linearToSrgb8(mapped.r / 203.0);
+                    dst[at + 1] = linearToSrgb8(mapped.g / 203.0);
+                    dst[at + 2] = linearToSrgb8(mapped.b / 203.0);
+                    dst[at + 3] = 255;
+                }
+
+                png_write_row(png, (png_bytep)dst);
+            }
         }
 
         png_write_end(png, nullptr);
@@ -1474,6 +1537,7 @@ namespace {
         Image pixels;
 
         readTexture(img, tex, x0, y0, x1, y1, pixels);
+        pixels.color = img.color;
         encodePng(pixels, 0, 0, (int)pixels.w, (int)pixels.h, png);
     }
 

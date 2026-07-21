@@ -173,7 +173,7 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
     test_deps = [client_protocols, wayland_client, drm, dbus]
 
     if name == "client_reg_screenshot_copy":
-        test_deps.append(jxl)
+        test_deps += [jxl, png]
 
     if name in ("client_reg_color_icc", "client_reg_color_icc_validation"):
         test_deps.append(lcms)

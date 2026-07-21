@@ -7,6 +7,7 @@
 #include <jxl/color_encoding.h>
 #include <jxl/decode.h>
 #include <math.h>
+#include <png.h>
 
 static struct wl_toplevel_ctx top;
 static struct wl_data_device* device;
@@ -172,6 +173,70 @@ static size_t receive_all(const char* mime, unsigned char** result) {
     return used;
 }
 
+static int validate_sdr_png(const unsigned char* data, size_t size) {
+    int srgb = 0;
+
+    for (size_t at = 8; at + 12 <= size;) {
+        uint32_t length = ((uint32_t)data[at] << 24) |
+                          ((uint32_t)data[at + 1] << 16) |
+                          ((uint32_t)data[at + 2] << 8) | data[at + 3];
+
+        if ((size_t)length > size - at - 12) return 0;
+        if (!memcmp(data + at + 4, "sRGB", 4)) srgb = 1;
+        at += 12 + length;
+    }
+
+    png_image image = {0};
+    image.version = PNG_IMAGE_VERSION;
+
+    if (!srgb || !png_image_begin_read_from_memory(&image, data, size)) {
+        return 0;
+    }
+
+    image.format = PNG_FORMAT_RGB;
+    size_t bytes = PNG_IMAGE_SIZE(image);
+    unsigned char* pixels = (unsigned char*)malloc(bytes);
+
+    if (!pixels || !png_image_finish_read(&image, NULL, pixels, 0, NULL)) {
+        free(pixels);
+        png_image_free(&image);
+        return 0;
+    }
+
+    size_t green = 0;
+    int best_score = -1000;
+    unsigned char best[3] = {0};
+
+    for (size_t at = 0; at + 2 < bytes; at += 3) {
+        int score = (int)pixels[at + 1] - pixels[at] - pixels[at + 2];
+
+        if (score > best_score) {
+            best_score = score;
+            memcpy(best, pixels + at, 3);
+        }
+
+        // The headless capture is an 8-bit PQ compatibility path, so decoding
+        // its quantized dark channels can leave a small SDR residue. The green
+        // channel must nevertheless recover to the original saturated SDR
+        // surface rather than remain near its PQ code value.
+        if (pixels[at] <= 50 && pixels[at + 1] >= 240 &&
+            pixels[at + 2] <= 50) {
+            green++;
+        }
+    }
+
+    free(pixels);
+    png_image_free(&image);
+
+    if (green < 1000) {
+        fprintf(stderr, "PNG diagnostics: srgb=%d size=%ux%u green=%zu best=%u,%u,%u\n",
+                srgb, image.width, image.height, green,
+                best[0], best[1], best[2]);
+    }
+
+    return green >= 1000;
+}
+
 static int validate_hdr_jxl(const unsigned char* data, size_t size) {
     JxlDecoder* dec = JxlDecoderCreate(NULL);
 
@@ -290,6 +355,17 @@ int main(void) {
         fprintf(stderr, "screenshot clipboard payload is not PNG\n");
         return 1;
     }
+
+    unsigned char* png = NULL;
+    size_t png_size = receive_all("image/png", &png);
+
+    if (!png_size || !validate_sdr_png(png, png_size)) {
+        fprintf(stderr, "PNG screenshot is not tagged and tone-mapped SDR sRGB\n");
+        free(png);
+        return 1;
+    }
+
+    free(png);
 
     memset(signature, 0, sizeof(signature));
     used = receive_prefix("image/jxl", signature, sizeof(signature));

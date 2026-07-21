@@ -66,16 +66,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 - полноценные output/preferred image descriptions, 64-битные identities и change events;
 - perceptual intent — номинально.
 
-## Screenshots
-
-PNG clipboard fallback сейчас плох: PQ XR30 просто ужимается до 8 бит и записывается без HDR metadata и без tone mapping. Обычный PNG viewer воспримет это как SDR и покажет неверно.
-
-Правильно:
-
-- JXL — HDR master;
-- PNG clipboard — tone-mapped и gamut-mapped SDR sRGB с корректным profile/chunks;
-- при желании отдельно добавить современный HDR PNG/cICP, но не использовать его как compatibility fallback.
-
 ## Night light и brightness
 
 Night light сейчас — RGB-множители в linear BT.2020. Это не полноценная chromatic adaptation:
