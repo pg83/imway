@@ -35,15 +35,28 @@ static const struct wp_color_manager_v1_listener cm_listener = {
 static void desc_ready_ev(void* d, struct wp_image_description_v1* z, uint32_t id) {
     (void)d; (void)z; (void)id; desc_ready = 1;
 }
+static void desc_ready2_ev(void* d, struct wp_image_description_v1* z, uint32_t hi, uint32_t lo) {
+    (void)d; (void)z; (void)hi; (void)lo; desc_ready = 1;
+}
 static void desc_failed_ev(void* d, struct wp_image_description_v1* z, uint32_t c, const char* m) {
     (void)d; (void)z; (void)c; (void)m;
 }
-static const struct wp_image_description_v1_listener desc_listener = {desc_failed_ev, desc_ready_ev};
+static const struct wp_image_description_v1_listener desc_listener = {
+    .failed = desc_failed_ev,
+    .ready = desc_ready_ev,
+    .ready2 = desc_ready2_ev,
+};
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
     if (!strcmp(iface, wp_color_manager_v1_interface.name))
-        cm = wl_registry_bind(r, name, &wp_color_manager_v1_interface, 1);
+        cm = wl_registry_bind(r, name, &wp_color_manager_v1_interface,
+#ifdef COLOR_WINDOWS_BT2100
+                              v < 3 ? v : 3
+#else
+                              1
+#endif
+        );
 }
 static void reg2_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener reg2_listener = {reg2_global, reg2_remove};
@@ -76,6 +89,10 @@ int main(void) {
     pump(1000);
 
     // build the requested image description and attach it to the surface
+#ifdef COLOR_WINDOWS_BT2100
+    struct wp_image_description_v1* desc =
+        wp_color_manager_v1_create_windows_bt2100(cm);
+#else
     struct wp_image_description_creator_params_v1* params = wp_color_manager_v1_create_parametric_creator(cm);
     wp_image_description_creator_params_v1_set_tf_named(params, COLOR_TRANSFER);
 #ifdef COLOR_CUSTOM_PRIMARIES
@@ -92,6 +109,7 @@ int main(void) {
     wp_image_description_creator_params_v1_set_max_fall(params, COLOR_MAX_FALL);
 #endif
     struct wp_image_description_v1* desc = wp_image_description_creator_params_v1_create(params);
+#endif
     wp_image_description_v1_add_listener(desc, &desc_listener, NULL);
     for (int i = 0; i < 100 && !desc_ready; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
     if (!desc_ready) { fprintf(stderr, "image description not ready\n"); return 1; }

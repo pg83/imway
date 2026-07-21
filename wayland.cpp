@@ -8218,9 +8218,12 @@ WaylandImpl::~WaylandImpl() noexcept {
                               "foreign image description references are unsupported");
     }
 
-    void cmManagerCreateWindowsBt2100(wl_client*, wl_resource* res, u32) {
-        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "Windows-BT.2100 was not advertised");
+    void cmManagerCreateWindowsBt2100(wl_client* client, wl_resource* res, u32 id) {
+        CImgDesc description;
+
+        description.color = ColorDescription::bt2100Pq();
+        cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
+                        wl_resource_get_version(res), id, description);
     }
 
     const struct wp_color_manager_v1_interface cmManagerImpl = {
@@ -8251,6 +8254,10 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
+        if (version >= 3) {
+            wp_color_manager_v1_send_supported_feature(
+                res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_BT2100);
+        }
         if (version >= 2) {
             wp_color_manager_v1_send_supported_tf_named(
                 res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4);

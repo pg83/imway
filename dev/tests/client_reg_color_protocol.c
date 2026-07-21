@@ -61,7 +61,7 @@ static const struct wl_registry_listener extra_listener = {extra_global, extra_r
 
 static int got_intent;
 static int got_parametric, got_luminances, got_primaries_feature, got_mastering;
-static int got_icc, got_windows_scrgb, got_other_feature;
+static int got_icc, got_windows_scrgb, got_windows_bt2100, got_other_feature;
 static int got_srgb_tf, got_compound_tf, got_bt1886_tf, got_gamma22_tf;
 static int got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf;
 static int got_srgb_prim, got_bt2020_prim, got_p3_prim, got_other_prim;
@@ -79,6 +79,7 @@ static void manager_feature(void* d, struct wp_color_manager_v1* m, uint32_t val
     else if (value == WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES) got_mastering++;
     else if (value == WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES) got_primaries_feature++;
     else if (value == WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB) got_windows_scrgb++;
+    else if (value == WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_BT2100) got_windows_bt2100++;
     else got_other_feature++;
 }
 static void manager_tf(void* d, struct wp_color_manager_v1* m, uint32_t value) {
@@ -285,15 +286,15 @@ static int boot_color(void) {
 static int check_manager(void) {
     if (color_version != 3 || !manager_done || got_intent != 1 ||
         got_parametric != 1 || got_luminances != 1 || got_primaries_feature != 1 || got_mastering ||
-        got_icc != 1 || got_windows_scrgb != 1 || got_other_feature ||
+        got_icc != 1 || got_windows_scrgb != 1 || got_windows_bt2100 != 1 || got_other_feature ||
         got_srgb_tf || got_compound_tf != 1 || got_bt1886_tf != 1 ||
         got_gamma22_tf != 1 || got_linear_tf != 1 || got_pq_tf != 1 ||
         got_hlg_tf != 1 || got_other_tf ||
         got_srgb_prim != 1 || got_bt2020_prim != 1 || got_p3_prim != 1 || got_other_prim) {
-        fprintf(stderr, "bad manager: v=%u done=%d intent=%d features=%d/%d/%d/%d/%d/%d/%d "
+        fprintf(stderr, "bad manager: v=%u done=%d intent=%d features=%d/%d/%d/%d/%d/%d/%d/%d "
                 "tf=%d/%d/%d/%d/%d/%d/%d/%d prim=%d/%d/%d/%d\n", color_version, manager_done,
                 got_intent, got_icc, got_parametric, got_luminances, got_primaries_feature,
-                got_mastering, got_windows_scrgb, got_other_feature,
+                got_mastering, got_windows_scrgb, got_windows_bt2100, got_other_feature,
                 got_srgb_tf, got_compound_tf, got_bt1886_tf, got_gamma22_tf,
                 got_linear_tf, got_pq_tf, got_hlg_tf, got_other_tf,
                 got_srgb_prim, got_bt2020_prim, got_p3_prim, got_other_prim);
@@ -428,6 +429,21 @@ static int run_windows_scrgb(void) {
     return 0;
 }
 
+static int run_windows_bt2100(void) {
+    struct desc_state state = {0};
+    struct wp_image_description_v1* desc =
+        wp_color_manager_v1_create_windows_bt2100(color_mgr);
+    wp_image_description_v1_add_listener(desc, &desc_listener, &state);
+    if (wait_desc(&state)) return 1;
+    wp_image_description_v1_get_information(desc);
+    if (wl_expect_error(wp_image_description_v1_interface.name,
+                        WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION)) {
+        return 1;
+    }
+    printf("color-protocol: Windows-BT.2100 ready\n");
+    return 0;
+}
+
 static int run_changes(void) {
     struct wp_color_management_output_v1* cm_output =
         wp_color_manager_v1_get_output(color_mgr, output);
@@ -508,6 +524,7 @@ int main(int argc, char** argv) {
                         (uint32_t)strtoul(argv[3], NULL, 10));
     if (!strcmp(argv[1], "pq-defaults")) return run_pq_defaults();
     if (!strcmp(argv[1], "windows-scrgb")) return run_windows_scrgb();
+    if (!strcmp(argv[1], "windows-bt2100")) return run_windows_bt2100();
     if (!strcmp(argv[1], "changes")) return run_changes();
     if (!strcmp(argv[1], "output-resource-lifetime")) return run_output_resource_lifetime();
     if (!strcmp(argv[1], "feedback-inert")) return run_feedback_inert();
