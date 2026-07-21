@@ -1,5 +1,6 @@
 #pragma once
 
+#include "color.h"
 #include "frame_resource.h"
 
 #include <std/sys/types.h>
@@ -19,8 +20,7 @@ struct SharedScanout {
     u64 modifier = 0;
     u64 allocationSize = 0;
     u64 renderDevice = 0;
-    bool hdr = false;
-    double sdrWhiteNits = 0;
+    OutputColorState color;
 };
 
 struct Output {
@@ -52,8 +52,7 @@ struct Output {
 
     // macOS-style "sdr white": brightness of SDR 1.0 on the HDR pipeline in
     // nits, 0 means the hdr path is off; HDR client luminance stays absolute
-    virtual bool isHdr() const = 0;
-    virtual double sdrWhiteNits() const = 0;
+    virtual const OutputColorState& colorState() const = 0;
     virtual void setSdrWhite(double nits) = 0;
 
     // night light: color temperature in kelvin, <= 0 or >= 6500 is neutral

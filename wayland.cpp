@@ -76,21 +76,8 @@ namespace {
     struct CImgDesc {
         WaylandImpl* srv = nullptr;
         u64 identity = 0;
-        bool hdr = false;   // st2084_pq transfer
-        bool wide = false;  // bt2020 primaries
         bool allowInfo = false;
-        u32 tf = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
-        u32 primaries = WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
-        u32 minLum = 2000;
-        u32 maxLum = 80;
-        u32 refLum = 80;
-        i32 targetPrimaries[8] = {};
-        u32 targetMinLum = 2000;
-        u32 targetMaxLum = 80;
-        u32 maxCll = 0;
-        u32 maxFall = 0;
-        bool maxCllSet = false;
-        bool maxFallSet = false;
+        ColorDescription color;
         bool ready = true;
     };
 
@@ -248,11 +235,7 @@ namespace {
         TimelineBox* pendRelTl = nullptr;
         u64 pendAcqPt = 0, pendRelPt = 0;
         bool pendColorChanged = false;
-        bool pendColorManaged = false;
-        bool pendColorPq = false;
-        bool pendColorWide = false;
-        u32 pendColorMaxCll = 0;
-        u32 pendColorRefLum = 0;
+        ColorDescription pendColor;
 
         XdgSurface* xdg = nullptr;
     };
@@ -288,11 +271,7 @@ namespace {
             bool inputChanged = false, inputSet = false;
             Vector<RectI> inputRegion;
             bool colorChanged = false;
-            bool colorManaged = false;
-            bool colorPq = false;
-            bool colorWide = false;
-            u32 colorMaxCll = 0;
-            u32 colorRefLum = 0;
+            ColorDescription color;
         } cache;
 
         bool effectiveSync() const;
@@ -679,8 +658,7 @@ namespace {
         Vector<CmFeedback*> cmFeedbackResources;
         u64 cimgIdentity = 0;
         u64 cmDisplayIdentity = 0;
-        bool cmDisplayHdr = false;
-        u32 cmDisplayRefLum = 80;
+        OutputColorState cmDisplayColor;
 
         int drmFd = -1;
         bool explicitSyncSupported = false;
@@ -1201,14 +1179,8 @@ namespace {
         }
     }
 
-    void applyColorState(Surface& s, bool managed, bool pq, bool wide, u32 maxCll, u32 refLum) {
-        s.hdrContent = pq && wide;
-        s.hdrMaxCll = maxCll;
-        s.hdrMaxLum = refLum;
-        s.colorManaged = managed;
-        s.colorPq = pq;
-        s.colorWide = wide;
-        s.colorRefLum = refLum;
+    void applyColorState(Surface& s, const ColorDescription& color) {
+        s.color = color;
         s.colorGeneration++;
     }
 
@@ -1228,8 +1200,7 @@ namespace {
         }
 
         if (sub.cache.colorChanged) {
-            applyColorState(s, sub.cache.colorManaged, sub.cache.colorPq,
-                            sub.cache.colorWide, sub.cache.colorMaxCll, sub.cache.colorRefLum);
+            applyColorState(s, sub.cache.color);
             sub.cache.colorChanged = false;
         }
 
@@ -1651,14 +1622,9 @@ namespace {
         if (s.pendColorChanged) {
             if (toCache) {
                 sub->cache.colorChanged = true;
-                sub->cache.colorManaged = s.pendColorManaged;
-                sub->cache.colorPq = s.pendColorPq;
-                sub->cache.colorWide = s.pendColorWide;
-                sub->cache.colorMaxCll = s.pendColorMaxCll;
-                sub->cache.colorRefLum = s.pendColorRefLum;
+                sub->cache.color = s.pendColor;
             } else {
-                applyColorState(s, s.pendColorManaged, s.pendColorPq,
-                                s.pendColorWide, s.pendColorMaxCll, s.pendColorRefLum);
+                applyColorState(s, s.pendColor);
             }
 
             s.pendColorChanged = false;
@@ -7380,8 +7346,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     wlLoop = wl_display_get_event_loop(display);
 
     output = cfg.output;
-    cmDisplayHdr = output && output->isHdr();
-    cmDisplayRefLum = cmDisplayHdr ? (u32)(output->sdrWhiteNits() + .5) : 80;
+    cmDisplayColor = output ? output->colorState() : OutputColorState::sdr();
     cmDisplayIdentity = ++cimgIdentity;
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
@@ -7450,6 +7415,28 @@ WaylandImpl::~WaylandImpl() noexcept {
         wl_resource_destroy(res);
     }
 
+    u32 cmTfNamed(const ColorDescription& d, u32 version) {
+        if (d.transfer == ColorTransfer::pq) {
+            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+        }
+
+        return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
+                              WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
+    }
+
+    u32 cmPrimariesNamed(const ColorDescription& d) {
+        return d.primaries == ColorPrimaries::bt2020 ?
+            WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 : WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+    }
+
+    u32 cmMinLuminance(double nits) {
+        return (u32)(nits * 10000.0 + .5);
+    }
+
+    u32 cmLuminance(double nits) {
+        return (u32)(nits + .5);
+    }
+
     void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
         auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
@@ -7476,28 +7463,31 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        wp_image_description_info_v1_send_primaries_named(info, d->primaries);
-        wp_image_description_info_v1_send_primaries(
-            info, d->targetPrimaries[0], d->targetPrimaries[1],
-            d->targetPrimaries[2], d->targetPrimaries[3],
-            d->targetPrimaries[4], d->targetPrimaries[5],
-            d->targetPrimaries[6], d->targetPrimaries[7]);
-        wp_image_description_info_v1_send_tf_named(info, d->tf);
-        wp_image_description_info_v1_send_luminances(info, d->minLum, d->maxLum, d->refLum);
-        wp_image_description_info_v1_send_target_primaries(
-            info, d->targetPrimaries[0], d->targetPrimaries[1],
-            d->targetPrimaries[2], d->targetPrimaries[3],
-            d->targetPrimaries[4], d->targetPrimaries[5],
-            d->targetPrimaries[6], d->targetPrimaries[7]);
-        wp_image_description_info_v1_send_target_luminance(
-            info, d->targetMinLum, d->targetMaxLum);
+        const ColorDescription& color = d->color;
+        const Chromaticities& primary = color.primary;
+        const Chromaticities& target = color.target;
 
-        if (d->maxCllSet) {
-            wp_image_description_info_v1_send_target_max_cll(info, d->maxCll);
+        wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
+        wp_image_description_info_v1_send_primaries(
+            info, primary.rx, primary.ry, primary.gx, primary.gy,
+            primary.bx, primary.by, primary.wx, primary.wy);
+        wp_image_description_info_v1_send_tf_named(
+            info, cmTfNamed(color, wl_resource_get_version(res)));
+        wp_image_description_info_v1_send_luminances(
+            info, cmMinLuminance(color.minNits), cmLuminance(color.maxNits),
+            cmLuminance(color.referenceNits));
+        wp_image_description_info_v1_send_target_primaries(
+            info, target.rx, target.ry, target.gx, target.gy,
+            target.bx, target.by, target.wx, target.wy);
+        wp_image_description_info_v1_send_target_luminance(
+            info, cmMinLuminance(color.targetMinNits), cmLuminance(color.targetMaxNits));
+
+        if (color.maxCllSet) {
+            wp_image_description_info_v1_send_target_max_cll(info, color.maxCll);
         }
 
-        if (d->maxFallSet) {
-            wp_image_description_info_v1_send_target_max_fall(info, d->maxFall);
+        if (color.maxFallSet) {
+            wp_image_description_info_v1_send_target_max_fall(info, color.maxFall);
         }
 
         wp_image_description_info_v1_send_done(info);
@@ -7594,15 +7584,20 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        p->d.tf = tf;
-        p->d.hdr = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+        p->d.color.transfer = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ ?
+            ColorTransfer::pq : ColorTransfer::sRgb;
 
-        if (p->d.hdr && !p->lumSet) {
-            p->d.minLum = 50;
-            p->d.maxLum = 10000;
-            p->d.refLum = 203;
-        } else if (p->d.hdr) {
-            p->d.maxLum = 10000 + p->d.minLum / 10000;
+        if (p->d.color.hdr() && !p->lumSet) {
+            ColorDescription pq = ColorDescription::bt2100Pq();
+
+            p->d.color.minNits = pq.minNits;
+            p->d.color.maxNits = pq.maxNits;
+            p->d.color.referenceNits = pq.referenceNits;
+            p->d.color.targetMinNits = pq.targetMinNits;
+            p->d.color.targetMaxNits = pq.targetMaxNits;
+        } else if (p->d.color.hdr()) {
+            p->d.color.maxNits = 10000.0 + p->d.color.minNits;
+            p->d.color.targetMaxNits = p->d.color.maxNits;
         }
 
         p->tfSet = true;
@@ -7631,8 +7626,11 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        p->d.primaries = prim;
-        p->d.wide = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
+        p->d.color.primaries = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 ?
+            ColorPrimaries::bt2020 : ColorPrimaries::sRgb;
+        p->d.color.primary = p->d.color.primaries == ColorPrimaries::bt2020 ?
+            Chromaticities::bt2020() : Chromaticities::sRgb();
+        p->d.color.target = p->d.color.primary;
         p->primSet = true;
     }
 
@@ -7656,7 +7654,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         if (cmInvalidLumRange(minLum, refLum) ||
-            (p->tfSet && !p->d.hdr && cmInvalidLumRange(minLum, maxLum))) {
+            (p->tfSet && !p->d.color.hdr() && cmInvalidLumRange(minLum, maxLum))) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "primary max and reference luminance must exceed min luminance");
 
@@ -7664,9 +7662,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         p->lumSet = true;
-        p->d.minLum = minLum;
-        p->d.maxLum = p->d.hdr ? 10000 + minLum / 10000 : maxLum;
-        p->d.refLum = refLum;
+        p->d.color.minNits = (double)minLum / 10000.0;
+        p->d.color.maxNits = p->d.color.hdr() ?
+            10000.0 + p->d.color.minNits : (double)maxLum;
+        p->d.color.referenceNits = (double)refLum;
+        p->d.color.targetMinNits = p->d.color.minNits;
+        p->d.color.targetMaxNits = p->d.color.maxNits;
     }
 
     void cmParamsSetMasteringPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
@@ -7682,16 +7683,16 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
-        p->d.maxCll = v;
-        p->d.maxCllSet = true;
+        p->d.color.maxCll = v;
+        p->d.color.maxCllSet = true;
         p->maxCllSet = true;
     }
 
     void cmParamsSetMaxFall(wl_client*, wl_resource* res, u32 v) {
         auto* p = (CParams*)wl_resource_get_user_data(res);
 
-        p->d.maxFall = v;
-        p->d.maxFallSet = true;
+        p->d.color.maxFall = v;
+        p->d.color.maxFallSet = true;
         p->maxFallSet = true;
     }
 
@@ -7704,41 +7705,32 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        if (!p->d.hdr && cmInvalidLumRange(p->d.minLum, p->d.maxLum)) {
+        u32 minLum = cmMinLuminance(p->d.color.minNits);
+        u32 maxLum = cmLuminance(p->d.color.maxNits);
+
+        if (!p->d.color.hdr() && cmInvalidLumRange(minLum, maxLum)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "primary max luminance must exceed min luminance");
 
             return;
         }
 
-        u32 minLum = p->d.minLum;
-        u32 maxLum = p->d.maxLum;
         auto levelInMasteringRange = [minLum, maxLum](u32 level) {
             return (u64)level * 10000 > minLum && level <= maxLum;
         };
 
         bool version1RangeError = wl_resource_get_version(res) < 2 &&
-            ((p->maxCllSet && !levelInMasteringRange(p->d.maxCll)) ||
-             (p->maxFallSet && !levelInMasteringRange(p->d.maxFall)));
+            ((p->maxCllSet && !levelInMasteringRange(p->d.color.maxCll)) ||
+             (p->maxFallSet && !levelInMasteringRange(p->d.color.maxFall)));
 
         if (version1RangeError ||
-            (p->maxCllSet && p->maxFallSet && p->d.maxFall > p->d.maxCll)) {
+            (p->maxCllSet && p->maxFallSet && p->d.color.maxFall > p->d.color.maxCll)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "content light levels are outside the mastering luminance range");
 
             return;
         }
 
-        static constexpr i32 srgb[8] = {
-            640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000,
-        };
-        static constexpr i32 bt2020[8] = {
-            708000, 292000, 170000, 797000, 131000, 46000, 312700, 329000,
-        };
-
-        memcpy(p->d.targetPrimaries, p->d.wide ? bt2020 : srgb, sizeof(p->d.targetPrimaries));
-        p->d.targetMinLum = p->d.minLum;
-        p->d.targetMaxLum = p->d.maxLum;
         cmMakeImageDesc(p->srv, client, wl_resource_get_version(res), id, p->d);
         wl_resource_destroy(res); // create consumes the creator
     }
@@ -7768,11 +7760,7 @@ WaylandImpl::~WaylandImpl() noexcept {
     void cmSurfaceDestroy(wl_client*, wl_resource* res) {
         if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
             s->pendColorChanged = true;
-            s->pendColorManaged = false;
-            s->pendColorPq = false;
-            s->pendColorWide = false;
-            s->pendColorMaxCll = 0;
-            s->pendColorRefLum = 0;
+            s->pendColor = ColorDescription::sRgb();
         }
 
         wl_resource_destroy(res);
@@ -7804,11 +7792,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         s->pendColorChanged = true;
-        s->pendColorPq = d->hdr;
-        s->pendColorWide = d->wide;
-        s->pendColorManaged = d->hdr || d->wide;
-        s->pendColorMaxCll = d->maxCll;
-        s->pendColorRefLum = d->refLum;
+        s->pendColor = d->color;
     }
 
     void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
@@ -7822,11 +7806,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         s->pendColorChanged = true;
-        s->pendColorManaged = false;
-        s->pendColorPq = false;
-        s->pendColorWide = false;
-        s->pendColorMaxCll = 0;
-        s->pendColorRefLum = 0;
+        s->pendColor = ColorDescription::sRgb();
     }
 
     const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
@@ -7844,29 +7824,12 @@ WaylandImpl::~WaylandImpl() noexcept {
     // Output and preferred descriptions refer to the same immutable record and
     // therefore carry the same identity until the output color state changes.
     CImgDesc cmDisplayDesc(WaylandImpl* srv, u32 version) {
-        static constexpr i32 srgb[8] = {
-            640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000,
-        };
-        static constexpr i32 bt2020[8] = {
-            708000, 292000, 170000, 797000, 131000, 46000, 312700, 329000,
-        };
+        (void)version;
         CImgDesc d;
 
         d.identity = srv->cmDisplayIdentity;
-        d.hdr = srv->cmDisplayHdr;
-        d.wide = d.hdr;
         d.allowInfo = true;
-        d.tf = d.hdr ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ :
-            (version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
-                            WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
-        d.primaries = d.hdr ? WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 :
-                              WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
-        d.minLum = d.hdr ? 50 : 2000;
-        d.maxLum = d.hdr ? 10000 : 80;
-        d.refLum = d.hdr ? srv->cmDisplayRefLum : 80;
-        d.targetMinLum = d.minLum;
-        d.targetMaxLum = d.maxLum;
-        memcpy(d.targetPrimaries, d.hdr ? bt2020 : srgb, sizeof(d.targetPrimaries));
+        d.color = srv->cmDisplayColor.encoding;
 
         return d;
     }
@@ -8168,15 +8131,13 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 }
 
 void WaylandImpl::syncColorState() {
-    bool hdr = output && output->isHdr();
-    u32 refLum = hdr ? (u32)(output->sdrWhiteNits() + .5) : 80;
+    OutputColorState color = output ? output->colorState() : OutputColorState::sdr();
 
-    if (hdr == cmDisplayHdr && refLum == cmDisplayRefLum) {
+    if (color == cmDisplayColor) {
         return;
     }
 
-    cmDisplayHdr = hdr;
-    cmDisplayRefLum = refLum;
+    cmDisplayColor = color;
     cmDisplayIdentity = ++cimgIdentity;
 
     for (CmOutput* obj : cmOutputResources) {

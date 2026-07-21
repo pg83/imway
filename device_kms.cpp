@@ -560,8 +560,7 @@ namespace {
         bool ddcTimerOn = false;
         ev_timer* ddcTimer = nullptr;
 
-        double hdrNits = 0;
-        bool hdrActive = false;
+        OutputColorState color;
         u32 connColorspace = 0, connHdrMeta = 0;
         u64 colorspaceBt2020 = 0, colorspaceDefault = 0;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
@@ -607,8 +606,7 @@ namespace {
         void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
 
-        bool isHdr() const override;
-        double sdrWhiteNits() const override;
+        const OutputColorState& colorState() const override;
         void setSdrWhite(double nits) override;
         void setColorTemp(double kelvin) override;
         double colorTemp() const override;
@@ -947,7 +945,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     , fd(drmFd)
     , vk(v)
     , gemHandles(c.pool)
-    , hdrNits(hdrWhiteNits)
+    , color(hdrWhiteNits > 0 ? OutputColorState::hdr10(hdrWhiteNits) : OutputColorState::sdr())
 {
     c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
@@ -1021,12 +1019,12 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     scanFourcc = DRM_FORMAT_XRGB8888;
     scanFormat = kVkFormat;
 
-    if (hdrNits > 0) {
+    if (color.hdr()) {
         if (setupHdr()) {
-            hdrActive = true;
             scanFourcc = DRM_FORMAT_XRGB2101010;
             scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-            sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv << hdrNits << " nits"_sv << endL;
+            sysO << "imway: HDR output: BT.2020 + PQ, sdr white "_sv
+                 << color.sdrWhiteNits << " nits"_sv << endL;
 
             if (cursorPlaneId) {
                 // AMD cursor planes consume ARGB8888 outside the primary
@@ -1037,13 +1035,13 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             }
         } else {
             sysE << "imway: HDR unsupported here, staying SDR"_sv << endL;
-            hdrNits = 0;
+            color = OutputColorState::sdr();
         }
     }
 
     // 10 bits for sdr too when the plane takes it: ui gradients and the
     // night-light ramp quantize at framebuffer depth, not lut depth
-    if (!hdrActive && vk->hasDmabuf) {
+    if (!color.hdr() && vk->hasDmabuf) {
         u64 m[64];
 
         if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, m, 64) > 0) {
@@ -1104,6 +1102,8 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             createDumb(b, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888);
         }
     }
+
+    color.bpc = scanCount > 0 && scanFourcc == DRM_FORMAT_XRGB2101010 ? 10 : 8;
 
     initBacklight();
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
@@ -1395,34 +1395,39 @@ bool KmsOutput::setupHdr() {
     meta.metadata_type = 0;
     meta.hdmi_metadata_type1.metadata_type = 0;
     meta.hdmi_metadata_type1.eotf = 2; // SMPTE ST 2084 (PQ)
-    // BT.2020 primaries in 0.00002 units, R/G/B then D65 white
-    meta.hdmi_metadata_type1.display_primaries[0] = {35400, 14600};
-    meta.hdmi_metadata_type1.display_primaries[1] = {8500, 39850};
-    meta.hdmi_metadata_type1.display_primaries[2] = {6550, 2300};
-    meta.hdmi_metadata_type1.white_point = {15635, 16450};
-    meta.hdmi_metadata_type1.max_display_mastering_luminance = 1000; // 1 nit units
-    meta.hdmi_metadata_type1.min_display_mastering_luminance = 1;    // 0.0001 nit units
-    meta.hdmi_metadata_type1.max_cll = 1000;
-    meta.hdmi_metadata_type1.max_fall = 400;
+    // CTA metadata uses chromaticity units of 0.00002 and minimum
+    // luminance units of 0.0001 nit.
+    const Chromaticities& p = color.encoding.target;
+    auto chroma = [](i32 value) { return (u16)((value + 10) / 20); };
+
+    meta.hdmi_metadata_type1.display_primaries[0] = {chroma(p.rx), chroma(p.ry)};
+    meta.hdmi_metadata_type1.display_primaries[1] = {chroma(p.gx), chroma(p.gy)};
+    meta.hdmi_metadata_type1.display_primaries[2] = {chroma(p.bx), chroma(p.by)};
+    meta.hdmi_metadata_type1.white_point = {chroma(p.wx), chroma(p.wy)};
+    meta.hdmi_metadata_type1.max_display_mastering_luminance =
+        (u16)(color.displayPeakNits + .5);
+    meta.hdmi_metadata_type1.min_display_mastering_luminance =
+        (u16)(color.displayMinNits * 10000.0 + .5);
+    meta.hdmi_metadata_type1.max_cll = color.encoding.maxCllSet ?
+        (u16)color.encoding.maxCll : (u16)(color.displayPeakNits + .5);
+    meta.hdmi_metadata_type1.max_fall = color.encoding.maxFallSet ?
+        (u16)color.encoding.maxFall : (u16)(color.displayMaxFallNits + .5);
     drmModeCreatePropertyBlob(fd, &meta, sizeof(meta), &hdrMetaBlob);
 
     return hdrMetaBlob != 0;
 }
 
-bool KmsOutput::isHdr() const {
-    return hdrActive;
-}
-
-double KmsOutput::sdrWhiteNits() const {
-    return hdrActive ? hdrNits : 0;
+const OutputColorState& KmsOutput::colorState() const {
+    return color;
 }
 
 void KmsOutput::setSdrWhite(double nits) {
-    if (!hdrActive || nits <= 0 || nits == hdrNits) {
+    if (!color.hdr() || nits <= 0 || nits == color.sdrWhiteNits) {
         return;
     }
 
-    hdrNits = nits;
+    color.sdrWhiteNits = nits;
+    color.encoding.referenceNits = nits;
     c->scene->needsFrame = true;
 }
 
@@ -1487,7 +1492,7 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         drmModeAtomicAddProperty(req, crtcId, crtcModeId, modeBlob);
         drmModeAtomicAddProperty(req, crtcId, crtcActive, 1);
 
-        if (hdrActive) {
+        if (color.hdr()) {
             drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
             drmModeAtomicAddProperty(req, connectorId, connHdrMeta, hdrMetaBlob);
             if (crtcDegammaProp) drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
@@ -1618,11 +1623,11 @@ void KmsOutput::addCursorProps(drmModeAtomicReq* req) {
 }
 
 int KmsOutput::cursorCapW() const {
-    return hdrActive ? 0 : curW;
+    return color.hdr() ? 0 : curW;
 }
 
 int KmsOutput::cursorCapH() const {
-    return hdrActive ? 0 : curH;
+    return color.hdr() ? 0 : curH;
 }
 
 void KmsOutput::setCursorImage(const u32* argb) {
@@ -2165,8 +2170,7 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
     image.modifier = sb.modifier;
     image.allocationSize = sb.allocationSize;
     image.renderDevice = vk->renderDev;
-    image.hdr = hdrActive;
-    image.sdrWhiteNits = hdrActive ? hdrNits : 0;
+    image.color = color;
 
     screenshotIndex = i;
     screenshotWasPresented = false;
@@ -2333,7 +2337,7 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 }
 
 bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
-    if (hdrActive || !started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
+    if (color.hdr() || !started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
         return false;
     }
 

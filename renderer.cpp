@@ -1638,7 +1638,7 @@ void RendererImpl::setupColorConvert() {
 // surface, or tear it down when the surface stopped being color-managed.
 // Repoints tex->ds so ImGui samples the converted result.
 void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
-    if (!s.colorManaged) {
+    if (!s.color.managed()) {
         if (tex->converted) {
             freeConversion(tex);
             texPool->free(tex->ds, tex->dsPool);
@@ -1696,7 +1696,7 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
     }
     tex->ds = texPool->alloc(tex->convView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
     tex->converted = true;
-    tex->encoding = s.colorPq ? 2 : 1;
+    tex->encoding = s.color.transfer == ColorTransfer::pq ? 2 : 1;
     tex->convGen = s.colorGeneration;
     tex->convFresh = true;
 }
@@ -1739,7 +1739,11 @@ void RendererImpl::recordConversion(VkCommandBuffer cb, SurfaceTexture* tex, Sur
         i32 pq;
         i32 wide;
         float refWhite;
-    } pc = {s.colorPq ? 1 : 0, s.colorWide ? 1 : 0, s.colorRefLum > 0 ? (float)s.colorRefLum : 203.f};
+    } pc = {
+        s.color.transfer == ColorTransfer::pq ? 1 : 0,
+        s.color.primaries == ColorPrimaries::bt2020 ? 1 : 0,
+        (float)s.color.referenceNits,
+    };
 
     vkCmdPushConstants(cb, cmPipeLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
     vkCmdDispatch(cb, ((u32)tex->w + 7) / 8, ((u32)tex->h + 7) / 8, 1);
@@ -1970,7 +1974,7 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr;
     }
 
-    if (!directScanoutColorCompatible(output->isHdr(), s->colorManaged)) {
+    if (!directScanoutColorCompatible(output->colorState(), s->color)) {
         return nullptr;
     }
 
@@ -3219,7 +3223,7 @@ void RendererImpl::buildUi(Scene& scene) {
     }
 
     if (settings.sdrNits < 0.f) {
-        settings.sdrNits = (float)output->sdrWhiteNits();
+        settings.sdrNits = (float)output->colorState().sdrWhiteNits;
     }
 
     settings.uiScale = uiScale;
@@ -4196,7 +4200,9 @@ bool RendererImpl::renderFrame(int scanIdx) {
         }
     });
 
-    ImGui_ImplVulkan_SetSdrWhite(output->isHdr() ? (float)output->sdrWhiteNits() : 203.f);
+    const OutputColorState& outputColor = output->colorState();
+
+    ImGui_ImplVulkan_SetSdrWhite(outputColor.hdr() ? (float)outputColor.sdrWhiteNits : 203.f);
 
     RenderContext renderCtx;
 
@@ -4215,7 +4221,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     float r = srgbToLinear(desktopColor.r);
     float g = srgbToLinear(desktopColor.g);
     float b = srgbToLinear(desktopColor.b);
-    float white = output->isHdr() ? (float)output->sdrWhiteNits() : 203.f;
+    float white = outputColor.hdr() ? (float)outputColor.sdrWhiteNits : 203.f;
 
     renderCtx.clearColor[0] = (0.627404f * r + 0.329283f * g + 0.043313f * b) * white;
     renderCtx.clearColor[1] = (0.069097f * r + 0.919540f * g + 0.011362f * b) * white;
@@ -4231,7 +4237,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     renderCtx.finish();
 
     recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer,
-                          outputDesc, width, height, output->isHdr(), white,
+                          outputDesc, width, height, outputColor.hdr(), white,
                           output->colorTemp());
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;

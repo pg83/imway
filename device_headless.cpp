@@ -51,7 +51,7 @@ namespace {
         Composer* c = nullptr;
         int w = 0, h = 0;
         double hz = 60.0;
-        double hdrNits = 0;
+        OutputColorState color;
         double tempK = 0;
 
         // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
@@ -78,8 +78,7 @@ namespace {
         bool hasBrightness() const override;
         float brightness() const override;
         void setBrightness(float) override;
-        bool isHdr() const override;
-        double sdrWhiteNits() const override;
+        const OutputColorState& colorState() const override;
         void setSdrWhite(double) override;
         void setColorTemp(double) override;
         double colorTemp() const override;
@@ -124,7 +123,7 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     , w(width)
     , h(height)
     , hz(refresh)
-    , hdrNits(hdrWhite)
+    , color(hdrWhite > 0 ? OutputColorState::hdr10(hdrWhite) : OutputColorState::sdr())
 {
     if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
         curCap = 64;
@@ -190,17 +189,14 @@ void HeadlessOutput::setBrightness(float) {
 void HeadlessOutput::setPowerSave(bool) {
 }
 
-bool HeadlessOutput::isHdr() const {
-    return hdrNits > 0;
-}
-
-double HeadlessOutput::sdrWhiteNits() const {
-    return hdrNits;
+const OutputColorState& HeadlessOutput::colorState() const {
+    return color;
 }
 
 void HeadlessOutput::setSdrWhite(double nits) {
-    if (hdrNits > 0 && nits > 0) {
-        hdrNits = nits;
+    if (color.hdr() && nits > 0) {
+        color.sdrWhiteNits = nits;
+        color.encoding.referenceNits = nits;
         c->scene->needsFrame = true;
     }
 }

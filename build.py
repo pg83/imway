@@ -171,7 +171,7 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
     if name == "client_reg_screenshot_copy":
         test_deps.append(jxl)
 
-    if name == "client_reg_direct_scanout_color":
+    if name in ("client_reg_color_model", "client_reg_direct_scanout_color"):
         test_sources.append("$(S)/color.cpp")
 
     tests.append(program(

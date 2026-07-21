@@ -1,4 +1,5 @@
 #include "main_screenshot.h"
+#include "color.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -83,8 +84,7 @@ namespace {
         u64 allocationSize = 0;
         u64 renderDevice = 0;
         bool dmabuf = false;
-        bool hdr = false;
-        double sdrWhiteNits = 0;
+        OutputColorState color;
         Buffer rgb16;
 
         bool shared() const;
@@ -148,8 +148,10 @@ namespace {
             StringView value(color), hs, ns;
 
             if (value.split(':', hs, ns)) {
-                img.hdr = hs == "1"_sv;
-                img.sdrWhiteNits = parseFloat(ns);
+                double white = parseFloat(ns);
+
+                img.color = hs == "1"_sv ? OutputColorState::hdr10(white) :
+                                             OutputColorState::sdr();
             }
         }
 
@@ -273,7 +275,7 @@ namespace {
 
         JxlColorEncoding color{};
 
-        if (img.hdr) {
+        if (img.color.hdr()) {
             color.color_space = JXL_COLOR_SPACE_RGB;
             color.white_point = JXL_WHITE_POINT_D65;
             color.primaries = JXL_PRIMARIES_2100;
@@ -343,8 +345,7 @@ namespace {
             }
         }
 
-        selected.hdr = img.hdr;
-        selected.sdrWhiteNits = img.sdrWhiteNits;
+        selected.color = img.color;
         encodeJxlPixels(selected, (const u16*)selected.rgb16.data(),
                         selected.w, selected.h, out);
     }
@@ -625,7 +626,7 @@ namespace {
             instanceExts.pushBack(exts[i]);
         }
 
-        if (img.hdr) {
+        if (img.color.hdr()) {
             instanceExts.pushBack(VK_EXT_SWAPCHAIN_COLOR_SPACE_EXTENSION_NAME);
         }
 
@@ -1450,7 +1451,7 @@ namespace {
 
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
-        if (img.hdr) {
+        if (img.color.hdr()) {
             dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback,
                             (void*)(intptr_t)2);
         }
@@ -1458,7 +1459,7 @@ namespace {
         dl->AddImage((ImTextureID)tex.ds, origin,
                      ImVec2(origin.x + content.x, origin.y + content.y));
 
-        if (img.hdr) {
+        if (img.color.hdr()) {
             dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
         }
 
@@ -1772,7 +1773,7 @@ int mainScreenshot(StringView path) {
         int fbw, fbh;
 
         glfwGetFramebufferSize(window, &fbw, &fbh);
-        setupVulkanWindow(surface, fbw, fbh, loaded && img.hdr);
+        setupVulkanWindow(surface, fbw, fbh, loaded && img.color.hdr());
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
@@ -1795,7 +1796,7 @@ int mainScreenshot(StringView path) {
         ii.PipelineInfoMain.Subpass = 0;
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
-        if (loaded && img.hdr) {
+        if (loaded && img.color.hdr()) {
             ii.CustomShaderFragCreateInfo.sType =
                 VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             ii.CustomShaderFragCreateInfo.codeSize = sizeof(screenshot_pq_spv);
@@ -1804,7 +1805,7 @@ int mainScreenshot(StringView path) {
 
         ImGui_ImplVulkan_Init(&ii);
         ImGui_ImplVulkan_SetSdrWhite(
-            img.sdrWhiteNits > 0 ? (float)img.sdrWhiteNits : 203.f);
+            img.color.hdr() ? (float)img.color.sdrWhiteNits : 203.f);
         initClipboard();
 
         Texture tex;

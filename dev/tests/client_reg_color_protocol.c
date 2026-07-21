@@ -328,6 +328,8 @@ static int run_info(int hdr) {
     uint32_t want_min = hdr ? 50 : 2000;
     uint32_t want_max = hdr ? 10000 : 80;
     uint32_t want_ref = hdr ? 203 : 80;
+    uint32_t want_target_min = hdr ? 1 : want_min;
+    uint32_t want_target_max = hdr ? 1000 : want_max;
 
     if (info.done != 1 || info.primaries_xy != 1 || info.primaries_named != 1 || info.tf_named != 1 ||
         info.luminances != 1 || info.target_primaries != 1 || info.target_luminance != 1 ||
@@ -335,7 +337,8 @@ static int run_info(int hdr) {
         info.tf != want_tf || info.min_lum != want_min || info.max_lum != want_max ||
         info.ref_lum != want_ref || memcmp(info.primary, target, sizeof(info.primary)) ||
         memcmp(info.target, target, sizeof(info.target)) ||
-        info.target_min_lum != want_min || info.target_max_lum != want_max) {
+        info.target_min_lum != want_target_min ||
+        info.target_max_lum != want_target_max) {
         fprintf(stderr, "incomplete/wrong info: done=%d prim=%d:%u tf=%d:%u "
                 "lum=%d:%u/%u/%u target=%d/%d:%u/%u cll=%d fall=%d\n",
                 info.done, info.primaries_named, info.primaries, info.tf_named, info.tf,

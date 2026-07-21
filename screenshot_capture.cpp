@@ -514,9 +514,9 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
 
     StringBuilder metadata;
     StringBuilder color;
-    bool hdr = image ? image->hdr : output->isHdr();
-    double sdrWhite = image ? image->sdrWhiteNits :
-                              (hdr ? output->sdrWhiteNits() : 0);
+    const OutputColorState& shotColor = image ? image->color : output->colorState();
+    bool hdr = shotColor.hdr();
+    double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
 
     color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv
           << (long double)sdrWhite;

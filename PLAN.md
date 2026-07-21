@@ -224,13 +224,12 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Ввести `ColorDescription` и `OutputColorState` как единые модели для renderer, Wayland feedback, KMS metadata и screenshots.
-2. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
-3. Реализовать tone mapping и gamut mapping.
-4. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
-5. Убрать постоянные полноэкранные RGBA16F surface conversions.
-6. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
-7. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-8. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. EDID/libdisplay-info, overrides, реальный target display volume, bpc/range negotiation.
+2. Реализовать tone mapping и gamut mapping.
+3. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
+4. Убрать постоянные полноэкранные RGBA16F surface conversions.
+5. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+6. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+7. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
 Профильные HDR-тесты пока не покрывают tone/gamut mapping, output metadata, link depth и реальную фотометрическую корректность.
