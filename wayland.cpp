@@ -31,6 +31,7 @@
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
 #include <content-type-v1-server-protocol.h>
+#include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
@@ -640,6 +641,7 @@ namespace {
     };
 
     struct WaylandImpl: public Wayland, public InputSink, public Listener {
+        Composer* composer = nullptr;
         ObjPool* pool = nullptr;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
@@ -4306,6 +4308,56 @@ namespace {
         }
     }
 
+    // ---- wp-pointer-warp ----
+    void pointerWarp(wl_client* client, wl_resource* res, wl_resource* surfaceRes,
+                     wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        // only the focused surface, with a serial that matches its pointer
+        // enter, may place the cursor — and only within the surface
+        if (!s || srv->seat.ptrFocus != s ||
+            !srv->seat.validPointerEnter(pointerRes, serial) ||
+            wl_resource_get_client(resOf(s)) != client) {
+            return;
+        }
+
+        double lx = wl_fixed_to_double(x);
+        double ly = wl_fixed_to_double(y);
+
+        if (lx < 0 || ly < 0 || lx >= s->viewW() || ly >= s->viewH()) {
+            return;
+        }
+
+        // inject an absolute motion through the same sink chain a real device
+        // uses: the renderer moves its cursor, the seat re-delivers motion
+        PointerMotionEvent ev;
+
+        ev.x = s->imgX + lx;
+        ev.y = s->imgY + ly;
+
+        if (srv->composer && srv->composer->entry) {
+            srv->composer->entry->pointerMotion(ev);
+        }
+    }
+
+    const struct wp_pointer_warp_v1_interface pointerWarpImpl = {
+        .destroy = resDestroy,
+        .warp_pointer = pointerWarp,
+    };
+
+    void pointerWarpBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_pointer_warp_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &pointerWarpImpl, data, nullptr);
+    }
+
     // ---- wp-content-type ----
     void contentTypeSetType(wl_client*, wl_resource* res, u32 type) {
         if (SurfaceImpl* s = surfaceFrom(res)) {
@@ -7855,7 +7907,8 @@ void SeatState::toplevelGone(Toplevel* t) {
 }
 
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
-    : pool(comp.pool)
+    : composer(&comp)
+    , pool(comp.pool)
     , loop(comp.loop)
     , scene(comp.scene)
     , socketName(cfg.socketName)
@@ -9003,6 +9056,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
     wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
     wl_global_create(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
+    wl_global_create(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);

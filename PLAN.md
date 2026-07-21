@@ -21,7 +21,7 @@
 ### Этап B — дешёвая мелочь
 - [x] ~~xdg-system-bell v1~~ done
 - [x] ~~wp-alpha-modifier v1~~ done
-- [ ] wp-pointer-warp v1
+- [x] ~~wp-pointer-warp v1~~ done
 - [ ] xdg-wm-dialog v1
 - [x] ~~wp-content-type v1~~ done
 
