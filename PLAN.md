@@ -13,7 +13,7 @@
 - [~] wl_shm — capped at v1 by wl_display_init_shm (libwayland-gated, not imway source)
 - [x] ~~wl_data_device_manager 3 → 4 (release)~~ done
 - [x] ~~xdg_wm_base 3 → 7 (configure_bounds, wm_capabilities, suspended)~~ done
-- [ ] zwp_linux_dmabuf_v1 → 6 (set_sampling_device, feedback v6)
+- [x] ~~zwp_linux_dmabuf_v1 4 → 5~~ done (v6 set_sampling_device gated by installed wayland-protocols v5)
 - [x] ~~wp_presentation 1 → 2 (+ dropped false VSYNC on software timestamps)~~ done
 - [x] ~~wp_cursor_shape 1 → 2 (zoom, dnd_ask, all_resize shapes)~~ done
 - [x] ~~ext_idle_notify 1 → 2 (get_input_idle_notification)~~ done

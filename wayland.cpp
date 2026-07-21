@@ -8752,7 +8752,9 @@ void WaylandImpl::createGlobals() {
             }
 
             fcntl(fbTableFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
-            dmabufVersion = 4;
+            // v5 adds no new interface members over v4 (v6's
+            // set_sampling_device is not in the installed wayland-protocols)
+            dmabufVersion = 5;
         }
 
         wl_global_create(display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
