@@ -30,6 +30,7 @@
 #include <ev.h>
 #include <linux-dmabuf-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
+#include <content-type-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
 #include <cursor-shape-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
@@ -267,6 +268,11 @@ namespace {
         wl_resource* alphaModRes = nullptr;
         bool pendAlphaChanged = false;
         float pendAlphaMult = 1.f;
+
+        // wp-content-type surface state
+        wl_resource* contentTypeRes = nullptr;
+        bool pendContentChanged = false;
+        u32 pendContentType = 0;
 
         XdgSurface* xdg = nullptr;
     };
@@ -932,6 +938,7 @@ namespace {
     void viewportApplyPending(SurfaceImpl&);
     void viewportSurfaceGone(SurfaceImpl&);
     void alphaModSurfaceGone(SurfaceImpl&);
+    void contentTypeSurfaceGone(SurfaceImpl&);
     void fracSurfaceGone(SurfaceImpl&);
     void constraintSurfaceGone(SurfaceImpl&);
     void constraintApplyPending(SurfaceImpl&);
@@ -1835,6 +1842,12 @@ namespace {
             s.pendAlphaChanged = false;
         }
 
+        if (s.pendContentChanged) {
+            // a scanout/pacing hint only; no cache dance needed
+            s.contentType = s.pendContentType;
+            s.pendContentChanged = false;
+        }
+
         if (s.pending.inputRegionChanged) {
             if (toCache) {
                 sub->cache.inputChanged = true;
@@ -2061,6 +2074,7 @@ namespace {
         releaseHeldDmabuf(*s);
         viewportSurfaceGone(*s);
         alphaModSurfaceGone(*s);
+        contentTypeSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
@@ -4289,6 +4303,72 @@ namespace {
     void viewportSurfaceGone(SurfaceImpl& s) {
         if (s.vpRes) {
             wl_resource_set_user_data(s.vpRes, nullptr);
+        }
+    }
+
+    // ---- wp-content-type ----
+    void contentTypeSetType(wl_client*, wl_resource* res, u32 type) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->pendContentType = type;
+            s->pendContentChanged = true;
+        }
+    }
+
+    void contentTypeResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->contentTypeRes = nullptr;
+            s->pendContentType = 0;
+            s->pendContentChanged = true;
+        }
+    }
+
+    const struct wp_content_type_v1_interface contentTypeImpl = {
+        .destroy = resDestroy,
+        .set_content_type = contentTypeSetType,
+    };
+
+    void contentTypeManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->contentTypeRes) {
+            wl_resource_post_error(res, WP_CONTENT_TYPE_MANAGER_V1_ERROR_ALREADY_CONSTRUCTED,
+                                   "surface already has a content type object");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_content_type_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->contentTypeRes = r;
+        wl_resource_set_implementation(r, &contentTypeImpl, s, contentTypeResourceDestroyed);
+    }
+
+    const struct wp_content_type_manager_v1_interface contentTypeManagerImpl = {
+        .destroy = resDestroy,
+        .get_surface_content_type = contentTypeManagerGetSurface,
+    };
+
+    void contentTypeManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_content_type_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &contentTypeManagerImpl, data, nullptr);
+    }
+
+    void contentTypeSurfaceGone(SurfaceImpl& s) {
+        if (s.contentTypeRes) {
+            wl_resource_set_user_data(s.contentTypeRes, nullptr);
         }
     }
 
@@ -8922,6 +9002,7 @@ void WaylandImpl::createGlobals() {
     wl_global_create(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
     wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
     wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
+    wl_global_create(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
     wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);

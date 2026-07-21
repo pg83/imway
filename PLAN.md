@@ -23,7 +23,7 @@
 - [x] ~~wp-alpha-modifier v1~~ done
 - [ ] wp-pointer-warp v1
 - [ ] xdg-wm-dialog v1
-- [ ] wp-content-type v1
+- [x] ~~wp-content-type v1~~ done
 
 ### Этап C — frame pacing
 - [ ] wp-tearing-control v1 (+ async page flip, железо)

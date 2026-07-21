@@ -134,6 +134,10 @@ struct Surface: SceneNode, GrabNode {
     // applied on top of the buffer's own alpha (1 = unchanged)
     float alphaMult = 1.f;
 
+    // wp-content-type hint (0 none, 1 photo, 2 video, 3 game); a scanout /
+    // frame-pacing hint, not a correctness input
+    u32 contentType = 0;
+
     float imgX = 0, imgY = 0;
     bool hovered = false;
 
