@@ -32,11 +32,20 @@ void main() {
     vec3 color;
 
     if (pc.textureEncoding == 0) {
-        // Ordinary Wayland buffers and compositor UI are SDR sRGB/BT.709.
+        // ImGui textures use straight SDR sRGB/BT.709.
         color = bt709ToBt2020(srgbToLinear(sampled.rgb) * tint709) * pc.sdrWhiteNits;
+    } else if (pc.textureEncoding == 3) {
+        // Wayland buffers are premultiplied in the electrical domain. Return
+        // straight linear RGB: fixed-function SRC_ALPHA performs the one and
+        // only premultiplication during composition.
+        vec3 straight = sampled.a > 0.0
+            ? clamp(sampled.rgb / sampled.a, 0.0, 1.0)
+            : vec3(0.0);
+        color = bt709ToBt2020(srgbToLinear(straight) * tint709) * pc.sdrWhiteNits;
     } else {
         // Converted color-managed textures are already linear BT.2020.
-        // Relative textures use 1.0 == SDR white; absolute ones contain nits.
+        // They contain straight RGB; relative textures use 1.0 == SDR white,
+        // absolute ones contain nits.
         vec3 tint2020 = bt709ToBt2020(tint709);
         float scale = pc.textureEncoding == 1 ? pc.sdrWhiteNits : 1.0;
         color = sampled.rgb * tint2020 * scale;

@@ -27,7 +27,10 @@ void main() {
     ivec2 sz = imageSize(dst);
     if (p.x >= sz.x || p.y >= sz.y) return;
     vec4 s = texture(src, (vec2(p) + 0.5) / vec2(sz));
-    vec3 c = s.rgb;
+    // Wayland buffer RGB is premultiplied after transfer-function encoding.
+    // Recover straight electrical values before the nonlinear EOTF; the FP16
+    // conversion image stays straight for the SRC_ALPHA composition pass.
+    vec3 c = s.a > 0.0 ? clamp(s.rgb / s.a, 0.0, 1.0) : vec3(0.0);
     if (pc.pq != 0) {
         c = pq_eotf(c) * 10000.0; // absolute nits
     } else {

@@ -112,7 +112,7 @@ struct SurfaceTexture: stl::IntrusiveNode {
     u32 convGen = 0xffffffffu;               // colorGeneration reflected by convImage
     bool converted = false;                  // ds currently points at convView
     bool convFresh = false;                  // convImage layout still UNDEFINED
-    int encoding = 0;                        // 0 sRGB, 1 relative linear, 2 absolute nits
+    int encoding = 0; // 0 ImGui sRGB, 1 relative linear, 2 absolute nits, 3 Wayland sRGB
 };
 
 struct TextureLease {
@@ -1643,7 +1643,7 @@ void RendererImpl::ensureConversion(SurfaceTexture* tex, Surface& s) {
             texPool->free(tex->ds, tex->dsPool);
             tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
             tex->converted = false;
-            tex->encoding = 0;
+            tex->encoding = 3;
         }
         return;
     }
@@ -1799,6 +1799,7 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex->arenaOwned = true;
         tex->w = s.width;
         tex->h = s.height;
+        tex->encoding = 3;
         s.frame = frame;
 
         try {
@@ -2239,6 +2240,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     tex->h = b->height;
     tex->external = true;
     tex->arenaOwned = true;
+    tex->encoding = 3;
 
     VkSubresourceLayout planes[kDmabufMaxPlanes] = {};
     bool disjoint = false;
@@ -4181,8 +4183,8 @@ bool RendererImpl::renderFrame(int scanIdx) {
         tex->firstUse = false;
     });
 
-    // color-managed surfaces: convert their (now uploaded) source into the
-    // sRGB composition space before ImGui samples the converted texture
+    // Color-managed surfaces: unpremultiply and convert their uploaded source
+    // into straight linear BT.2020 before ImGui samples the converted texture.
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
         if (s.texture && s.texture->converted && surfaceVisible(&s)) {
             recordConversion(cmd, s.texture, s);
