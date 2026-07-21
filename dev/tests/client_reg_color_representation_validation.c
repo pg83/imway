@@ -36,8 +36,15 @@ int main(int argc, char** argv) {
     }
     if (!strcmp(argv[1], "invalid-coefficients")) {
         wp_color_representation_surface_v1_set_coefficients_and_range(
-            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_FCC,
             WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+        return wl_expect_error(wp_color_representation_surface_v1_interface.name,
+                               WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS);
+    }
+    if (!strcmp(argv[1], "invalid-range")) {
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
         return wl_expect_error(wp_color_representation_surface_v1_interface.name,
                                WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS);
     }
@@ -49,6 +56,15 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[1], "chroma-rgb")) {
         wp_color_representation_surface_v1_set_chroma_location(
             repr, WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0);
+        wl_surface_attach(surface, wl_solid(16, 16, 0xffffffff), 0, 0);
+        wl_surface_commit(surface);
+        return wl_expect_error(wp_color_representation_surface_v1_interface.name,
+                               WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT);
+    }
+    if (!strcmp(argv[1], "coefficients-rgb")) {
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
         wl_surface_attach(surface, wl_solid(16, 16, 0xffffffff), 0, 0);
         wl_surface_commit(surface);
         return wl_expect_error(wp_color_representation_surface_v1_interface.name,

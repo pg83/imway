@@ -1616,11 +1616,15 @@ namespace {
             targetRepresentation = s.pendRepresentation;
         }
 
-        if (targetHasContent && targetRepresentation.chromaLocation) {
+        if (targetHasContent &&
+            (targetRepresentation.chromaLocation ||
+             (targetRepresentation.coefficients &&
+              targetRepresentation.coefficients !=
+                  WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY))) {
             wl_resource_post_error(
                 s.representationRes,
                 WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT,
-                "chroma location is incompatible with an RGB buffer");
+                "YCbCr representation is incompatible with an RGB buffer");
 
             return;
         }
@@ -8356,8 +8360,14 @@ WaylandImpl::~WaylandImpl() noexcept {
                                    "the wl_surface is gone");
             return;
         }
-        if (coefficients != WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY ||
-            range != WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) {
+        bool rgb = coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY &&
+                   range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL;
+        bool yuv = (coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709 ||
+                    coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601 ||
+                    coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020) &&
+                   (range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL ||
+                    range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
+        if (!rgb && !yuv) {
             wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS,
                                    "unsupported coefficients and range combination");
             return;
@@ -8448,6 +8458,17 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
             res, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY,
             WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+        constexpr u32 yuvCoefficients[] = {
+            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020,
+        };
+        for (u32 coefficients : yuvCoefficients) {
+            wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
+                res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+            wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
+                res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
+        }
         wp_color_representation_manager_v1_send_done(res);
     }
 

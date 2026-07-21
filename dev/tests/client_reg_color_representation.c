@@ -3,7 +3,8 @@
 
 static struct wp_color_representation_manager_v1* manager;
 static int alpha_electrical, alpha_optical, alpha_straight;
-static int identity_full, other_coefficients, done;
+static int identity_full, bt709_full, bt709_limited, bt601_full, bt601_limited;
+static int bt2020_full, bt2020_limited, other_coefficients, done;
 
 static void alpha(void* data, struct wp_color_representation_manager_v1* obj,
                   uint32_t mode) {
@@ -18,6 +19,18 @@ static void coefficients(void* data, struct wp_color_representation_manager_v1* 
     (void)data; (void)obj;
     if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY &&
         range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) identity_full++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) bt709_full++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED) bt709_limited++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) bt601_full++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED) bt601_limited++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL) bt2020_full++;
+    else if (coeff == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020 &&
+             range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED) bt2020_limited++;
     else other_coefficients++;
 }
 
@@ -58,7 +71,9 @@ int main(void) {
     wp_color_representation_manager_v1_add_listener(manager, &manager_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (alpha_electrical != 1 || alpha_optical != 1 || alpha_straight != 1 ||
-        identity_full != 1 || other_coefficients || done != 1) return 1;
+        identity_full != 1 || bt709_full != 1 || bt709_limited != 1 ||
+        bt601_full != 1 || bt601_limited != 1 || bt2020_full != 1 ||
+        bt2020_limited != 1 || other_coefficients || done != 1) return 1;
 
     struct wl_toplevel_ctx top = {};
     wl_make_toplevel(&top, "color-representation", 300, 200, 0xff204080);
