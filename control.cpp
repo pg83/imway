@@ -338,6 +338,8 @@ void ControlImpl::dumpState(StringView outPath) {
         << " max="_sv << metadata.maxNits
         << " max_cll="_sv << metadata.maxCll
         << " max_fall="_sv << metadata.maxFall << "\n"_sv;
+    out << "color_intermediate_bytes="_sv << renderer->colorIntermediateBytes()
+        << "\n"_sv;
 
     StringBuilder tmpPath;
 

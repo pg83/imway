@@ -1181,7 +1181,6 @@ namespace {
 
     void applyColorState(Surface& s, const ColorDescription& color) {
         s.color = color;
-        s.colorGeneration++;
     }
 
     void applySubsurfaceCache(SubsurfaceImpl& sub) {

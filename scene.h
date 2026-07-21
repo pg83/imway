@@ -119,8 +119,6 @@ struct Surface: SceneNode, GrabNode {
 
     // Immutable color description committed with the current surface state.
     ColorDescription color;
-    // bumped whenever the description changes, to invalidate a cached conversion
-    u32 colorGeneration = 0;
 
     Subsurface* sub = nullptr;
 

@@ -7,8 +7,10 @@ layout(location = 0) in struct { vec4 Color; vec2 UV; } In;
 layout(push_constant) uniform PushConstant {
     vec2 scale;
     vec2 translate;
-    int textureEncoding;
+    int textureSource;
     float sdrWhiteNits;
+    int texturePrimaries;
+    float textureReferenceNits;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -26,29 +28,43 @@ vec3 bt709ToBt2020(vec3 c) {
     ) * c;
 }
 
+vec3 pqEotf(vec3 e) {
+    const float m1 = 0.1593017578125, m2 = 78.84375;
+    const float c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+    vec3 p = pow(max(e, 0.0), vec3(1.0 / m2));
+    return pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1)) * 10000.0;
+}
+
 void main() {
     vec4 sampled = texture(sTexture, In.UV.st);
     vec3 tint709 = srgbToLinear(In.Color.rgb);
     vec3 color;
 
-    if (pc.textureEncoding == 0) {
+    if (pc.textureSource == 0) {
         // ImGui textures use straight SDR sRGB/BT.709.
         color = bt709ToBt2020(srgbToLinear(sampled.rgb) * tint709) * pc.sdrWhiteNits;
-    } else if (pc.textureEncoding == 3) {
-        // Wayland buffers are premultiplied in the electrical domain. Return
-        // straight linear RGB: fixed-function SRC_ALPHA performs the one and
-        // only premultiplication during composition.
+    } else if (pc.textureSource == 2) {
+        // Renderer-owned FP16 textures (lock-screen blur) are already
+        // straight linear BT.2020 in absolute nits.
+        color = sampled.rgb * bt709ToBt2020(tint709);
+    } else {
+        // Wayland RGB is premultiplied after transfer encoding. Decode the
+        // straight electrical value inline; fixed-function SRC_ALPHA performs
+        // the only premultiplication, directly into the FP16 scene.
         vec3 straight = sampled.a > 0.0
             ? clamp(sampled.rgb / sampled.a, 0.0, 1.0)
             : vec3(0.0);
-        color = bt709ToBt2020(srgbToLinear(straight) * tint709) * pc.sdrWhiteNits;
-    } else {
-        // Converted color-managed textures are already linear BT.2020.
-        // They contain straight RGB; relative textures use 1.0 == SDR white,
-        // absolute ones contain nits.
+        color = pc.textureSource == 4 ? pqEotf(straight) : srgbToLinear(straight);
+
+        if (pc.texturePrimaries == 0) {
+            color = bt709ToBt2020(color);
+        }
+
         vec3 tint2020 = bt709ToBt2020(tint709);
-        float scale = pc.textureEncoding == 1 ? pc.sdrWhiteNits : 1.0;
-        color = sampled.rgb * tint2020 * scale;
+        float scale = pc.textureSource == 1
+            ? (pc.textureReferenceNits > 0.0 ? pc.textureReferenceNits : pc.sdrWhiteNits)
+            : 1.0;
+        color *= tint2020 * scale;
     }
 
     fColor = vec4(color, sampled.a * In.Color.a);
