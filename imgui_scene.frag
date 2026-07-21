@@ -2,6 +2,7 @@
 
 layout(location = 0) out vec4 fColor;
 layout(set = 0, binding = 0) uniform sampler2D sTexture;
+layout(set = 0, binding = 1) uniform sampler2D sChroma;
 layout(location = 0) in struct { vec4 Color; vec2 UV; } In;
 
 layout(push_constant) uniform PushConstant {
@@ -18,6 +19,10 @@ layout(push_constant) uniform PushConstant {
     float p20; float p21; float p22;
     float gammaR; float gammaG; float gammaB;
     int alphaMode;
+    int yuvCoefficients;
+    int yuvRange;
+    int yuvChromaLocation;
+    int yuvBits;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -66,8 +71,59 @@ vec3 bt1886Eotf(vec3 e) {
     return pow(max(e * (white - black) + black, 0.0), vec3(gamma));
 }
 
+vec2 chromaUv(vec2 uv) {
+    vec2 lumaSize = vec2(textureSize(sTexture, 0));
+    vec2 chromaSize = vec2(textureSize(sChroma, 0));
+    float xOffset = pc.yuvChromaLocation == 2 ||
+                    pc.yuvChromaLocation == 4 ||
+                    pc.yuvChromaLocation == 6 ? 0.5 : 0.0;
+    float yOffset = pc.yuvChromaLocation <= 2 ? 0.5 :
+                    pc.yuvChromaLocation <= 4 ? 0.0 : 1.0;
+    vec2 lumaPosition = uv * lumaSize - 0.5;
+
+    return ((lumaPosition - vec2(xOffset, yOffset)) * 0.5 + 0.5) /
+           chromaSize;
+}
+
+vec3 sampleYuv(vec2 uv) {
+    float y = texture(sTexture, uv).r;
+    vec2 cbcr = texture(sChroma, chromaUv(uv)).rg;
+    float maxCode = pc.yuvBits == 10 ? 1023.0 : 255.0;
+
+    if (pc.yuvBits == 10) {
+        // P010 stores each ten-bit code in the high bits of a 16-bit word.
+        y *= 65535.0 / (64.0 * 1023.0);
+        cbcr *= 65535.0 / (64.0 * 1023.0);
+    }
+
+    if (pc.yuvRange == 2) {
+        float scale = pc.yuvBits == 10 ? 4.0 : 1.0;
+
+        y = (y - 16.0 * scale / maxCode) /
+            (219.0 * scale / maxCode);
+        cbcr = (cbcr - vec2(128.0 * scale / maxCode)) /
+               (224.0 * scale / maxCode);
+    } else {
+        cbcr -= vec2((pc.yuvBits == 10 ? 512.0 : 128.0) / maxCode);
+    }
+
+    float kr = pc.yuvCoefficients == 4 ? 0.299 :
+               pc.yuvCoefficients == 6 ? 0.2627 : 0.2126;
+    float kb = pc.yuvCoefficients == 4 ? 0.114 :
+               pc.yuvCoefficients == 6 ? 0.0593 : 0.0722;
+    float r = y + 2.0 * (1.0 - kr) * cbcr.y;
+    float b = y + 2.0 * (1.0 - kb) * cbcr.x;
+    float g = (y - kr * r - kb * b) / (1.0 - kr - kb);
+
+    return vec3(r, g, b);
+}
+
 void main() {
     vec4 sampled = texture(sTexture, In.UV.st);
+
+    if (pc.yuvCoefficients != 0) {
+        sampled = vec4(sampleYuv(In.UV.st), 1.0);
+    }
     vec3 tint709 = srgbToLinear(In.Color.rgb);
     vec3 color;
 

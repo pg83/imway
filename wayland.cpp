@@ -1,6 +1,7 @@
 
 #include "composer.h"
 #include "wayland.h"
+#include "device_vk.h"
 #include "icon.h"
 #include "icon_pool.h"
 #include "icon_store.h"
@@ -1616,15 +1617,26 @@ namespace {
             targetRepresentation = s.pendRepresentation;
         }
 
-        if (targetHasContent &&
-            (targetRepresentation.chromaLocation ||
-             (targetRepresentation.coefficients &&
-              targetRepresentation.coefficients !=
-                  WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY))) {
+        DmabufBuffer* targetDmabuf =
+            toCache && sub->cache.valid ? sub->cache.dmabuf : s.dmabuf;
+        bool targetYuv = targetDmabuf &&
+            (targetDmabuf->format == kFourccNv12 ||
+             targetDmabuf->format == kFourccP010);
+        bool incompatibleRepresentation = targetYuv ?
+            targetRepresentation.coefficients ==
+                WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY :
+            targetRepresentation.chromaLocation ||
+                (targetRepresentation.coefficients &&
+                 targetRepresentation.coefficients !=
+                    WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY);
+
+        if (targetHasContent && incompatibleRepresentation) {
             wl_resource_post_error(
                 s.representationRes,
                 WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT,
-                "YCbCr representation is incompatible with an RGB buffer");
+                targetYuv ?
+                    "identity coefficients are incompatible with a YCbCr buffer" :
+                    "YCbCr representation is incompatible with an RGB buffer");
 
             return;
         }
@@ -5416,10 +5428,12 @@ namespace {
             return nullptr;
         }
 
-        // DeviceVk currently advertises only packed ARGB/XRGB formats.
-        if (b.nplanes != 1) {
+        int expectedPlanes = format == kFourccNv12 || format == kFourccP010 ? 2 : 1;
+
+        if (b.nplanes != expectedPlanes) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE,
-                                   "packed format requires exactly one plane");
+                                   "format 0x%x requires exactly %d plane(s)",
+                                   format, expectedPlanes);
 
             return nullptr;
         }

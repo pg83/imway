@@ -537,8 +537,8 @@ static void ImGui_ImplVulkan_SetupRenderState(ImDrawData* draw_data, VkPipeline 
         int texture_source = 0;
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 4, sizeof(texture_source), &texture_source);
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 5, sizeof(bd->SdrWhiteNits), &bd->SdrWhiteNits);
-        struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; int alpha_mode; } color = {
-            0, 0.0f, 0.0f, 0.0f, {1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 1, 1}, 0};
+        struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; int alpha_mode; int yuv_coefficients; int yuv_range; int yuv_chroma_location; int yuv_bits; } color = {
+            0, 0.0f, 0.0f, 0.0f, {1, 0, 0, 0, 1, 0, 0, 0, 1}, {1, 1, 1}, 0, 0, 0, 0, 0};
         vkCmdPushConstants(command_buffer, bd->PipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, sizeof(float) * 6, sizeof(color), &color);
     }
 }
@@ -550,14 +550,15 @@ void ImGui_ImplVulkan_SetSdrWhite(float nits)
         bd->SdrWhiteNits = nits > 0.0f ? nits : 203.0f;
 }
 
-void ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020, const float* gamma, int alpha_mode)
+void ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference_nits, float min_nits, float max_nits, const float* primaries_to_bt2020, const float* gamma, int alpha_mode, int yuv_coefficients, int yuv_range, int yuv_chroma_location, int yuv_bits)
 {
     ImGui_ImplVulkan_Data* bd = ImGui_ImplVulkan_GetBackendData();
     ImGui_ImplVulkan_RenderState* state = (ImGui_ImplVulkan_RenderState*)ImGui::GetPlatformIO().Renderer_RenderState;
     if (!bd || !state)
         return;
-    struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; int alpha_mode; } color = {
-        primaries, reference_nits, min_nits, max_nits, {}, {}, alpha_mode};
+    struct { int primaries; float reference_nits; float min_nits; float max_nits; float matrix[9]; float gamma[3]; int alpha_mode; int yuv_coefficients; int yuv_range; int yuv_chroma_location; int yuv_bits; } color = {
+        primaries, reference_nits, min_nits, max_nits, {}, {}, alpha_mode,
+        yuv_coefficients, yuv_range, yuv_chroma_location, yuv_bits};
     for (int i = 0; i < 9; i++)
         color.matrix[i] = primaries_to_bt2020 ? primaries_to_bt2020[i] : (i % 4 == 0 ? 1.0f : 0.0f);
     for (int i = 0; i < 3; i++)
@@ -568,7 +569,7 @@ void ImGui_ImplVulkan_SetTextureColor(int source, int primaries, float reference
 
 void ImGui_ImplVulkan_TextureEncodingCallback(const ImDrawList*, const ImDrawCmd* cmd)
 {
-    ImGui_ImplVulkan_SetTextureColor((int)(intptr_t)cmd->UserCallbackData, 0, 0.0f, 0.0f, 0.0f, nullptr, nullptr, 0);
+    ImGui_ImplVulkan_SetTextureColor((int)(intptr_t)cmd->UserCallbackData, 0, 0.0f, 0.0f, 0.0f, nullptr, nullptr, 0, 0, 0, 0, 0);
 }
 
 // Render function
@@ -1127,13 +1128,17 @@ bool ImGui_ImplVulkan_CreateDeviceObjects()
 
     if (!bd->DescriptorSetLayout)
     {
-        VkDescriptorSetLayoutBinding binding[1] = {};
-        binding[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        binding[0].descriptorCount = 1;
-        binding[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        VkDescriptorSetLayoutBinding binding[2] = {};
+        for (uint32_t i = 0; i < 2; i++)
+        {
+            binding[i].binding = i;
+            binding[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            binding[i].descriptorCount = 1;
+            binding[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        }
         VkDescriptorSetLayoutCreateInfo info = {};
         info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        info.bindingCount = 1;
+        info.bindingCount = 2;
         info.pBindings = binding;
         err = vkCreateDescriptorSetLayout(v->Device, &info, v->Allocator, &bd->DescriptorSetLayout);
         check_vk_result(err);
@@ -1142,7 +1147,7 @@ bool ImGui_ImplVulkan_CreateDeviceObjects()
     if (v->DescriptorPoolSize != 0)
     {
         IM_ASSERT(v->DescriptorPoolSize >= IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE);
-        VkDescriptorPoolSize pool_size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, v->DescriptorPoolSize };
+        VkDescriptorPoolSize pool_size = { VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, v->DescriptorPoolSize * 2 };
         VkDescriptorPoolCreateInfo pool_info = {};
         pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
         pool_info.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -1160,7 +1165,7 @@ bool ImGui_ImplVulkan_CreateDeviceObjects()
         VkPushConstantRange push_constants[1] = {};
         push_constants[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
         push_constants[0].offset = sizeof(float) * 0;
-        push_constants[0].size = sizeof(float) * 23;
+        push_constants[0].size = sizeof(float) * 27;
         VkDescriptorSetLayout set_layout[1] = { bd->DescriptorSetLayout };
         VkPipelineLayoutCreateInfo layout_info = {};
         layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -1448,17 +1453,22 @@ VkDescriptorSet ImGui_ImplVulkan_AddTexture(VkSampler sampler, VkImageView image
 
     // Update the Descriptor Set:
     {
-        VkDescriptorImageInfo desc_image[1] = {};
+        VkDescriptorImageInfo desc_image[2] = {};
         desc_image[0].sampler = sampler;
         desc_image[0].imageView = image_view;
         desc_image[0].imageLayout = image_layout;
-        VkWriteDescriptorSet write_desc[1] = {};
-        write_desc[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        write_desc[0].dstSet = descriptor_set;
-        write_desc[0].descriptorCount = 1;
-        write_desc[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write_desc[0].pImageInfo = desc_image;
-        vkUpdateDescriptorSets(v->Device, 1, write_desc, 0, nullptr);
+        desc_image[1] = desc_image[0];
+        VkWriteDescriptorSet write_desc[2] = {};
+        for (uint32_t i = 0; i < 2; i++)
+        {
+            write_desc[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            write_desc[i].dstSet = descriptor_set;
+            write_desc[i].dstBinding = i;
+            write_desc[i].descriptorCount = 1;
+            write_desc[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write_desc[i].pImageInfo = &desc_image[i];
+        }
+        vkUpdateDescriptorSets(v->Device, 2, write_desc, 0, nullptr);
     }
     return descriptor_set;
 }

@@ -281,11 +281,16 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
             }
 
             DmabufFormat alpha{alphaFourcc, m.drmFormatModifier};
-            DmabufFormat opaque{opaqueFourcc, m.drmFormatModifier};
 
             vis.visit(&alpha);
-            vis.visit(&opaque);
-            n += 2;
+            n++;
+
+            if (opaqueFourcc) {
+                DmabufFormat opaque{opaqueFourcc, m.drmFormatModifier};
+
+                vis.visit(&opaque);
+                n++;
+            }
         }
     };
 
@@ -296,6 +301,9 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
               kFourccAb30, kFourccXb30);
     addFormat(VK_FORMAT_R16G16B16A16_SFLOAT,
               kFourccAb4h, kFourccXb4h);
+    addFormat(VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, kFourccNv12, 0);
+    addFormat(VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+              kFourccP010, 0);
 
     sysO << "imway: dmabuf formats: "_sv << n << endL;
 }

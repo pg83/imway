@@ -87,6 +87,7 @@ struct SurfaceTexture: stl::IntrusiveNode {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkDeviceMemory extraMemory[3] = {};
     VkImageView view = VK_NULL_HANDLE;
+    VkImageView chromaView = VK_NULL_HANDLE;
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
     void* stagingMap = nullptr;
@@ -131,7 +132,8 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr, 0);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr,
+                                             0, 0, 0, 0, 0);
 
             return;
         }
@@ -164,10 +166,29 @@ namespace {
             gamma[i] = (float)surface->color.gamma[i];
         }
 
+        int coefficients = 0;
+        int range = 0;
+        int chromaLocation = 0;
+        int yuvBits = 0;
+
+        if (surface->dmabuf &&
+            (surface->dmabuf->format == kFourccNv12 ||
+             surface->dmabuf->format == kFourccP010)) {
+            coefficients = surface->representation.coefficients ?
+                (int)surface->representation.coefficients : 2;
+            range = surface->representation.range ?
+                (int)surface->representation.range : 2;
+            chromaLocation = surface->representation.chromaLocation ?
+                (int)surface->representation.chromaLocation : 1;
+            yuvBits = surface->dmabuf->format == kFourccP010 ? 10 : 8;
+        }
+
         ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
                                          (float)surface->color.minNits,
                                          (float)surface->color.maxNits, matrix,
-                                         gamma, (int)surface->representation.alphaMode);
+                                         gamma, (int)surface->representation.alphaMode,
+                                         coefficients, range, chromaLocation,
+                                         yuvBits);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
@@ -1768,6 +1789,7 @@ Surface* RendererImpl::scanoutCandidate() {
 
     if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 ||
         s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst ||
+        s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 ||
         s->representation.alphaMode != 0 || s->representation.coefficients ||
         s->representation.chromaLocation) {
         return nullptr;
@@ -1820,6 +1842,10 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
 
     if (tex->view) {
         vkDestroyImageView(device, tex->view, nullptr);
+    }
+
+    if (tex->chromaView) {
+        vkDestroyImageView(device, tex->chromaView, nullptr);
     }
 
     if (tex->image) {
@@ -2059,7 +2085,13 @@ bool RendererImpl::importDmabuf(Surface& s) {
     }
 
     auto* tex = b->lifetime->make<SurfaceTexture>();
-    VkFormat vkFormat = b->format == kFourccAr30 ||
+    bool yuv = b->format == kFourccNv12 || b->format == kFourccP010;
+    bool p010 = b->format == kFourccP010;
+    VkFormat vkFormat = b->format == kFourccNv12 ?
+                        VK_FORMAT_G8_B8R8_2PLANE_420_UNORM :
+                        b->format == kFourccP010 ?
+                        VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 :
+                        b->format == kFourccAr30 ||
                         b->format == kFourccXr30 ?
                         VK_FORMAT_A2R10G10B10_UNORM_PACK32 :
                         b->format == kFourccAb30 ||
@@ -2102,6 +2134,20 @@ bool RendererImpl::importDmabuf(Surface& s) {
     extInfo.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
     extInfo.pNext = &modInfo;
 
+    VkFormat planeFormats[2] = {
+        p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM,
+        p010 ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM,
+    };
+    VkImageFormatListCreateInfo formatList{
+        VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
+
+    if (yuv) {
+        formatList.viewFormatCount = 2;
+        formatList.pViewFormats = planeFormats;
+        formatList.pNext = extInfo.pNext;
+        extInfo.pNext = &formatList;
+    }
+
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.pNext = &extInfo;
@@ -2114,6 +2160,10 @@ bool RendererImpl::importDmabuf(Surface& s) {
     ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
     ici.usage = VK_IMAGE_USAGE_SAMPLED_BIT;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+    if (yuv) {
+        ici.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+    }
 
     if (disjoint) {
         ici.flags |= VK_IMAGE_CREATE_DISJOINT_BIT;
@@ -2258,17 +2308,37 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = vkFormat;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vci.format = yuv ? planeFormats[0] : vkFormat;
+    vci.subresourceRange = {
+        yuv ? VK_IMAGE_ASPECT_PLANE_0_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
+        0, 1, 0, 1};
 
     if (b->format == kFourccXrgb || b->format == kFourccXr30 ||
         b->format == kFourccXb30 || b->format == kFourccXb4h) {
         vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
     }
 
-    vkCreateImageView(device, &vci, nullptr, &tex->view);
+    if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
+        sysE << "imway: dmabuf image view failed"_sv << endL;
+        destroyTexture(tex);
 
-    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
+        return false;
+    }
+
+    if (yuv) {
+        vci.format = planeFormats[1];
+        vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
+
+        if (vkCreateImageView(device, &vci, nullptr, &tex->chromaView) != VK_SUCCESS) {
+            sysE << "imway: dmabuf chroma view failed"_sv << endL;
+            destroyTexture(tex);
+
+            return false;
+        }
+    }
+
+    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                             tex->dsPool, tex->chromaView);
 
     if (!tex->ds) {
         // genuine device OOM: drop this import, the surface stays untextured

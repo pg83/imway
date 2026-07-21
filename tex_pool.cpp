@@ -17,11 +17,14 @@ namespace {
     struct VkTexturePoolImpl: public VkTexturePool {
         VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler);
 
-        VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool) override;
+        VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout,
+                              VkDescriptorPool& outPool,
+                              VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
 
         VkDescriptorPool grow();
-        void write(VkDescriptorSet set, VkImageView view, VkImageLayout imageLayout);
+        void write(VkDescriptorSet set, VkImageView view, VkImageView chromaView,
+                   VkImageLayout imageLayout);
 
         ObjPool& pool;
         VkDevice device;
@@ -36,20 +39,21 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s)
     , device(d)
     , sampler(s)
 {
-    // identical to imgui's texture descriptor set layout (imgui_impl_vulkan:
-    // one combined image sampler at binding 0, fragment stage, sampler carried
-    // in the write rather than the layout), so imgui binds our sets as-is
-    VkDescriptorSetLayoutBinding binding{};
+    // identical to imgui's texture descriptor set layout, so imgui binds our
+    // sets as-is. Binding 1 carries the interleaved UV plane for NV12/P010.
+    VkDescriptorSetLayoutBinding bindings[2]{};
 
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    for (u32 i = 0; i < 2; i++) {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
 
     VkDescriptorSetLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 
-    dlci.bindingCount = 1;
-    dlci.pBindings = &binding;
+    dlci.bindingCount = 2;
+    dlci.pBindings = bindings;
     STD_VERIFY(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout) == VK_SUCCESS);
     pooledVk(pool, device, layout);
 
@@ -60,7 +64,7 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
     u32 shift = chunks.length() < kMaxShift ? (u32)chunks.length() : kMaxShift;
     u32 cap = kFirstChunk << shift;
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cap};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cap * 2};
     VkDescriptorPoolCreateInfo dpci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
 
     dpci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -80,18 +84,30 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
     return p;
 }
 
-void VkTexturePoolImpl::write(VkDescriptorSet set, VkImageView view, VkImageLayout imageLayout) {
-    VkDescriptorImageInfo image{sampler, view, imageLayout};
-    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+void VkTexturePoolImpl::write(VkDescriptorSet set, VkImageView view,
+                              VkImageView chromaView,
+                              VkImageLayout imageLayout) {
+    VkDescriptorImageInfo images[2] = {
+        {sampler, view, imageLayout},
+        {sampler, chromaView ? chromaView : view, imageLayout},
+    };
+    VkWriteDescriptorSet writes[2]{};
 
-    w.dstSet = set;
-    w.descriptorCount = 1;
-    w.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    w.pImageInfo = &image;
-    vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+    for (u32 i = 0; i < 2; i++) {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &images[i];
+    }
+    vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
 }
 
-VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool) {
+VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view,
+                                         VkImageLayout imageLayout,
+                                         VkDescriptorPool& outPool,
+                                         VkImageView chromaView) {
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 
     ai.descriptorSetCount = 1;
@@ -111,7 +127,7 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
         VkResult r = vkAllocateDescriptorSets(device, &ai, &set);
 
         if (r == VK_SUCCESS) {
-            write(set, view, imageLayout);
+            write(set, view, chromaView, imageLayout);
             outPool = p;
 
             return set;
