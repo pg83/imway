@@ -68,8 +68,6 @@ Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для
 
 Нет:
 
-- Display P3;
-- custom primaries;
 - ICC profiles;
 - Windows BT.2100;
 - `color-representation-v1`;

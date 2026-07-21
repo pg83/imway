@@ -83,6 +83,11 @@ namespace {
     }
 }
 
+ColorMatrix colorPrimariesTransform(const Chromaticities& from,
+                                    const Chromaticities& to) {
+    return multiply(inverse(rgbToXyz(to)), rgbToXyz(from));
+}
+
 Chromaticities Chromaticities::sRgb() {
     return {640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000};
 }

@@ -1,0 +1,4 @@
+#define COLOR_PIXEL 0xFFB4783C
+#define COLOR_TRANSFER WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB
+#define COLOR_CUSTOM_PRIMARIES 1
+#include "client_feat_color_mgmt.c"

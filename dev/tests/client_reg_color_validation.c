@@ -94,13 +94,6 @@ int main(int argc, char** argv) {
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
     }
 
-    if (!strcmp(argv[1], "unsupported-primaries")) {
-        wp_image_description_creator_params_v1_set_primaries(
-            params, 640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000);
-        return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
-    }
-
     if (!strcmp(argv[1], "duplicate-luminances")) {
         wp_image_description_creator_params_v1_set_luminances(params, 2000, 80, 80);
         wp_image_description_creator_params_v1_set_luminances(params, 2000, 100, 100);

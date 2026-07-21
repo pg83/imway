@@ -112,6 +112,9 @@ struct ColorMatrix {
     ColorRgb apply(const ColorRgb& color) const;
 };
 
+ColorMatrix colorPrimariesTransform(const Chromaticities& from,
+                                    const Chromaticities& to);
+
 struct OutputMapping {
     ColorMatrix toTarget;
     ColorMatrix fromTarget;

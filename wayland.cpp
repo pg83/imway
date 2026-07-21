@@ -7441,7 +7441,10 @@ WaylandImpl::~WaylandImpl() noexcept {
 
     u32 cmPrimariesNamed(const ColorDescription& d) {
         return d.primaries == ColorPrimaries::bt2020 ?
-            WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 : WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+            WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 :
+            d.primaries == ColorPrimaries::displayP3 ?
+            WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 :
+            WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
     }
 
     u32 cmMinLuminance(double nits) {
@@ -7482,7 +7485,9 @@ WaylandImpl::~WaylandImpl() noexcept {
         const Chromaticities& primary = color.primary;
         const Chromaticities& target = color.target;
 
-        wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
+        if (color.primaries != ColorPrimaries::custom) {
+            wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
+        }
         wp_image_description_info_v1_send_primaries(
             info, primary.rx, primary.ry, primary.gx, primary.gy,
             primary.bx, primary.by, primary.wx, primary.wy);
@@ -7658,7 +7663,8 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         if (prim != WP_COLOR_MANAGER_V1_PRIMARIES_SRGB &&
-            prim != WP_COLOR_MANAGER_V1_PRIMARIES_BT2020) {
+            prim != WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 &&
+            prim != WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_PRIMARIES_NAMED,
                                    "primaries were not advertised");
 
@@ -7666,16 +7672,33 @@ WaylandImpl::~WaylandImpl() noexcept {
         }
 
         p->d.color.primaries = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 ?
-            ColorPrimaries::bt2020 : ColorPrimaries::sRgb;
+            ColorPrimaries::bt2020 :
+            prim == WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 ?
+            ColorPrimaries::displayP3 : ColorPrimaries::sRgb;
         p->d.color.primary = p->d.color.primaries == ColorPrimaries::bt2020 ?
-            Chromaticities::bt2020() : Chromaticities::sRgb();
+            Chromaticities::bt2020() :
+            p->d.color.primaries == ColorPrimaries::displayP3 ?
+            Chromaticities::displayP3() : Chromaticities::sRgb();
         p->d.color.target = p->d.color.primary;
         p->primSet = true;
     }
 
-    void cmParamsSetPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
-        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "custom primaries were not advertised");
+    void cmParamsSetPrim(wl_client*, wl_resource* res,
+                         i32 rx, i32 ry, i32 gx, i32 gy,
+                         i32 bx, i32 by, i32 wx, i32 wy) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p->primSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "primaries are already set");
+
+            return;
+        }
+
+        p->d.color.primaries = ColorPrimaries::custom;
+        p->d.color.primary = {rx, ry, gx, gy, bx, by, wx, wy};
+        p->d.color.target = p->d.color.primary;
+        p->primSet = true;
     }
 
     bool cmInvalidLumRange(u32 minLum, u32 maxLum) {
@@ -8095,6 +8118,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
         if (version >= 2) {
             wp_color_manager_v1_send_supported_tf_named(
@@ -8110,6 +8134,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3);
         wp_color_manager_v1_send_done(res);
     }
 

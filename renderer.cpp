@@ -131,7 +131,7 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr);
 
             return;
         }
@@ -145,9 +145,17 @@ namespace {
         float reference = source == 6 ? (float)surface->color.linearOneNits :
                           source == 8 ? (float)surface->color.referenceNits : 0;
 
+        ColorMatrix transform = colorPrimariesTransform(surface->color.primary,
+                                                        Chromaticities::bt2020());
+        float matrix[9];
+
+        for (int i = 0; i < 9; i++) {
+            matrix[i] = (float)transform.v[i];
+        }
+
         ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
                                          (float)surface->color.minNits,
-                                         (float)surface->color.maxNits);
+                                         (float)surface->color.maxNits, matrix);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);

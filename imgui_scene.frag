@@ -13,6 +13,9 @@ layout(push_constant) uniform PushConstant {
     float textureReferenceNits;
     float textureMinNits;
     float textureMaxNits;
+    float p00; float p01; float p02;
+    float p10; float p11; float p12;
+    float p20; float p21; float p22;
 } pc;
 
 vec3 srgbToLinear(vec3 c) {
@@ -22,12 +25,20 @@ vec3 srgbToLinear(vec3 c) {
     return mix(b, a, lo);
 }
 
+vec3 textureToBt2020(vec3 c) {
+    return vec3(
+        pc.p00 * c.r + pc.p01 * c.g + pc.p02 * c.b,
+        pc.p10 * c.r + pc.p11 * c.g + pc.p12 * c.b,
+        pc.p20 * c.r + pc.p21 * c.g + pc.p22 * c.b
+    );
+}
+
 vec3 bt709ToBt2020(vec3 c) {
-    return mat3(
-        0.627404, 0.069097, 0.016391,
-        0.329283, 0.919540, 0.088013,
-        0.043313, 0.011362, 0.895595
-    ) * c;
+    return vec3(
+        0.627404 * c.r + 0.329283 * c.g + 0.043313 * c.b,
+        0.069097 * c.r + 0.919540 * c.g + 0.011362 * c.b,
+        0.016391 * c.r + 0.088013 * c.g + 0.895595 * c.b
+    );
 }
 
 vec3 pqEotf(vec3 e) {
@@ -37,17 +48,13 @@ vec3 pqEotf(vec3 e) {
     return pow(max(p - c1, 0.0) / (c2 - c3 * p), vec3(1.0 / m1)) * 10000.0;
 }
 
-vec3 hlgEotf(vec3 e, int primaries) {
+vec3 hlgInverseOetf(vec3 e) {
     const float a = 0.17883277;
     const float b = 0.28466892;
     const float c = 0.55991073;
     bvec3 low = lessThanEqual(e, vec3(0.5));
     vec3 scene = mix((exp((e - c) / a) + b) / 12.0, e * e / 3.0, low);
-    vec3 luma = primaries == 1
-        ? vec3(0.2627, 0.6780, 0.0593)
-        : vec3(0.2126, 0.7152, 0.0722);
-    float y = max(dot(scene, luma), 0.0);
-    return scene * (1000.0 * pow(y, 0.2));
+    return scene;
 }
 
 vec3 bt1886Eotf(vec3 e) {
@@ -80,14 +87,17 @@ void main() {
         }
 
         color = pc.textureSource == 4 ? pqEotf(straight) :
-                pc.textureSource == 5 ? hlgEotf(straight, pc.texturePrimaries) :
+                pc.textureSource == 5 ? hlgInverseOetf(straight) :
                 pc.textureSource == 6 ? straight :
                 pc.textureSource == 7 ? bt1886Eotf(straight) :
                 pc.textureSource == 8 ? pow(max(straight, 0.0), vec3(2.2)) :
                 srgbToLinear(straight);
 
-        if (pc.texturePrimaries == 0) {
-            color = bt709ToBt2020(color);
+        color = textureToBt2020(color);
+
+        if (pc.textureSource == 5) {
+            float y = max(dot(color, vec3(0.2627, 0.6780, 0.0593)), 0.0);
+            color *= 1000.0 * pow(y, 0.2);
         }
 
         vec3 tint2020 = bt709ToBt2020(tint709);

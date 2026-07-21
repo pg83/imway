@@ -9,6 +9,8 @@ int main() {
     ColorDescription linear = ColorDescription::extendedLinear();
     ColorDescription bt1886 = ColorDescription::bt1886();
     ColorDescription gamma22 = ColorDescription::gamma22();
+    ColorMatrix p3To2020 = colorPrimariesTransform(Chromaticities::displayP3(),
+                                                   Chromaticities::bt2020());
     OutputColorState sdrOutput = OutputColorState::sdr();
     OutputColorState hdrOutput = OutputColorState::hdr10(203.0);
 
@@ -33,6 +35,17 @@ int main() {
         gamma22.maxNits != 80.0 || gamma22.referenceNits != 80.0) {
         fputs("bad standard color description\n", stderr);
 
+        return 1;
+    }
+
+    ColorRgb p3Red = p3To2020.apply({1, 0, 0});
+    ColorRgb p3White = p3To2020.apply({1, 1, 1});
+    if (p3Red.r < .7 || p3Red.r > .8 || p3Red.g < .03 || p3Red.g > .07 ||
+        p3Red.b < -.02 || p3Red.b > .01 ||
+        p3White.r < .999 || p3White.r > 1.001 ||
+        p3White.g < .999 || p3White.g > 1.001 ||
+        p3White.b < .999 || p3White.b > 1.001) {
+        fputs("bad Display P3 to BT.2020 matrix\n", stderr);
         return 1;
     }
 

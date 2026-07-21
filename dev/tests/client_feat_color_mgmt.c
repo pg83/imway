@@ -78,7 +78,13 @@ int main(void) {
     // build the requested image description and attach it to the surface
     struct wp_image_description_creator_params_v1* params = wp_color_manager_v1_create_parametric_creator(cm);
     wp_image_description_creator_params_v1_set_tf_named(params, COLOR_TRANSFER);
+#ifdef COLOR_CUSTOM_PRIMARIES
+    wp_image_description_creator_params_v1_set_primaries(
+        params, 680000, 320000, 265000, 690000,
+        150000, 60000, 312700, 329000);
+#else
     wp_image_description_creator_params_v1_set_primaries_named(params, COLOR_PRIMARIES);
+#endif
 #ifdef COLOR_MAX_CLL
     wp_image_description_creator_params_v1_set_max_cll(params, COLOR_MAX_CLL);
 #endif
