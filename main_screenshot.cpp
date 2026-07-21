@@ -1,5 +1,6 @@
 #include "main_screenshot.h"
 #include "color.h"
+#include "pooled.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -709,7 +710,7 @@ namespace {
         return false;
     }
 
-    void setupVulkan(const char** exts, u32 nexts, const Image& img) {
+    void setupVulkan(ObjPool& shot, const char** exts, u32 nexts, const Image& img) {
         VkApplicationInfo app = {};
 
         app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -733,6 +734,9 @@ namespace {
         ci.enabledExtensionCount = (u32)instanceExts.length();
         ci.ppEnabledExtensionNames = instanceExts.data();
         vkc(vkCreateInstance(&ci, gAlloc, &gInstance));
+        pooledGuard(shot, [] {
+            vkDestroyInstance(gInstance, gAlloc);
+        });
 
         if (img.shared()) {
             u32 count = 0;
@@ -809,6 +813,9 @@ namespace {
         dci.enabledExtensionCount = devExtCount;
         dci.ppEnabledExtensionNames = devExts;
         vkc(vkCreateDevice(gPhys, &dci, gAlloc, &gDevice));
+        pooledGuard(shot, [] {
+            vkDestroyDevice(gDevice, gAlloc);
+        });
         vkGetDeviceQueue(gDevice, gQueueFamily, 0, &gQueue);
 
         VkDescriptorPoolSize sz = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, IMGUI_IMPL_VULKAN_MINIMUM_IMAGE_SAMPLER_POOL_SIZE};
@@ -820,9 +827,12 @@ namespace {
         pi.poolSizeCount = 1;
         pi.pPoolSizes = &sz;
         vkc(vkCreateDescriptorPool(gDevice, &pi, gAlloc, &gDescPool));
+        pooledGuard(shot, [] {
+            vkDestroyDescriptorPool(gDevice, gDescPool, gAlloc);
+        });
     }
 
-    void setupVulkanWindow(VkSurfaceKHR surface, int w, int h, bool hdr) {
+    void setupVulkanWindow(ObjPool& shot, VkSurfaceKHR surface, int w, int h, bool hdr) {
         ImGui_ImplVulkanH_Window* wd = &gWin;
 
         wd->Surface = surface;
@@ -863,6 +873,9 @@ namespace {
 
         wd->PresentMode = ImGui_ImplVulkanH_SelectPresentMode(gPhys, surface, modes, 1);
         ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, wd, gQueueFamily, gAlloc, w, h, gMinImageCount, 0);
+        pooledGuard(shot, [] {
+            ImGui_ImplVulkanH_DestroyWindow(gInstance, gDevice, &gWin, gAlloc);
+        });
     }
 
     u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
@@ -970,7 +983,9 @@ namespace {
         vkUpdateDescriptorSets(gDevice, 1, &write, 0, nullptr);
     }
 
-    void setupLinearHdr(u32 width, u32 height) {
+    void destroyLinearHdr();
+
+    void setupLinearHdr(ObjPool& shot, u32 width, u32 height) {
         VkAttachmentDescription attachment{};
 
         attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -1104,6 +1119,10 @@ namespace {
 
         createSceneTarget(width, height);
         gLinearHdr = true;
+        pooledGuard(shot, [] {
+            destroyLinearHdr();
+            gLinearHdr = false;
+        });
     }
 
     void destroyLinearHdr() {
@@ -2127,10 +2146,21 @@ int mainScreenshot(StringView path) {
     int rc = 0;
 
     try {
+        // pooled unwind: every stage registers its teardown right after it
+        // succeeds, so the arena's LIFO death replays the epilogue in order
+        // and an exception mid-setup unwinds exactly the completed stages.
+        // tex outlives the pool: its guard reads it at pool-death time
+        Texture tex;
+        ObjPool::Ref shot = ObjPool::fromMemory();
+
+        pooledGuard(*shot, [window] {
+            glfwDestroyWindow(window);
+        });
+
         u32 nexts = 0;
         const char** exts = glfwGetRequiredInstanceExtensions(&nexts);
 
-        setupVulkan(exts, nexts, img);
+        setupVulkan(*shot, exts, nexts, img);
 
         VkSurfaceKHR surface;
 
@@ -2139,18 +2169,24 @@ int mainScreenshot(StringView path) {
         int fbw, fbh;
 
         glfwGetFramebufferSize(window, &fbw, &fbh);
-        setupVulkanWindow(surface, fbw, fbh, loaded && img.color.hdr());
+        setupVulkanWindow(*shot, surface, fbw, fbh, loaded && img.color.hdr());
 
         if (loaded && img.color.hdr()) {
-            setupLinearHdr((u32)fbw, (u32)fbh);
+            setupLinearHdr(*shot, (u32)fbw, (u32)fbh);
         }
 
         IMGUI_CHECKVERSION();
         ImGui::CreateContext();
+        pooledGuard(*shot, [] {
+            ImGui::DestroyContext();
+        });
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetStyle() = uiStyle;
 
         ImGui_ImplGlfw_InitForVulkan(window, true);
+        pooledGuard(*shot, [] {
+            ImGui_ImplGlfw_Shutdown();
+        });
 
         ImGui_ImplVulkan_InitInfo ii = {};
 
@@ -2174,19 +2210,45 @@ int mainScreenshot(StringView path) {
         }
 
         ImGui_ImplVulkan_Init(&ii);
+        pooledGuard(*shot, [] {
+            ImGui_ImplVulkan_Shutdown();
+        });
         ImGui_ImplVulkan_SetSdrWhite(
             img.color.hdr() ? (float)img.color.sdrWhiteNits : 203.f);
         initClipboard();
 
-        Texture tex;
-
         if (loaded) {
+            // registered before the import so a mid-import throw still
+            // releases the partially built handles
+            pooledGuard(*shot, [t = &tex] {
+                if (t->ds) {
+                    ImGui_ImplVulkan_RemoveTexture(t->ds);
+                }
+                if (t->sampler) {
+                    vkDestroySampler(gDevice, t->sampler, gAlloc);
+                }
+                if (t->view) {
+                    vkDestroyImageView(gDevice, t->view, gAlloc);
+                }
+                if (t->image) {
+                    vkDestroyImage(gDevice, t->image, gAlloc);
+                }
+                if (t->memory) {
+                    vkFreeMemory(gDevice, t->memory, gAlloc);
+                }
+            });
+
             if (img.shared()) {
                 importTexture(img, tex);
             } else {
                 uploadTexture(img, tex);
             }
         }
+
+        // last in, first out: the queue drains before anything above dies
+        pooledGuard(*shot, [] {
+            vkDeviceWaitIdle(gDevice);
+        });
 
         Viewer view; // zoom 50%, no selection (whole frame) until the user drags
 
@@ -2229,37 +2291,11 @@ int mainScreenshot(StringView path) {
             }
         }
 
-        vkDeviceWaitIdle(gDevice);
-        if (tex.ds) {
-            ImGui_ImplVulkan_RemoveTexture(tex.ds);
-        }
-        if (tex.sampler) {
-            vkDestroySampler(gDevice, tex.sampler, gAlloc);
-        }
-        if (tex.view) {
-            vkDestroyImageView(gDevice, tex.view, gAlloc);
-        }
-        if (tex.image) {
-            vkDestroyImage(gDevice, tex.image, gAlloc);
-        }
-        if (tex.memory) {
-            vkFreeMemory(gDevice, tex.memory, gAlloc);
-        }
-        ImGui_ImplVulkan_Shutdown();
-        if (gLinearHdr) {
-            destroyLinearHdr();
-            gLinearHdr = false;
-        }
-        ImGui_ImplGlfw_Shutdown();
-        ImGui::DestroyContext();
-        ImGui_ImplVulkanH_DestroyWindow(gInstance, gDevice, &gWin, gAlloc);
-        vkDestroyDescriptorPool(gDevice, gDescPool, gAlloc);
-        vkDestroyDevice(gDevice, gAlloc);
-        vkDestroyInstance(gInstance, gAlloc);
-        glfwDestroyWindow(window);
+        // teardown happens here: the pool ref dies at the end of the block
+        // and its guards unwind the whole stack in reverse creation order
     } catch (...) {
-        // vulkan/imgui setup blew up — nothing to show it on; log and leave the
-        // rest for the OS to reclaim on exit
+        // vulkan/imgui setup blew up — nothing to show it on; the pool has
+        // already unwound the stages that did come up; log and leave
         sysE << "imway screenshot: "_sv << Exception::current() << endL;
         rc = 1;
     }

@@ -420,10 +420,13 @@ int ScreenshotCaptureImpl::buildFile() {
     };
 
     constexpr size_t chunkCapacity = 1024 * 1024;
-    auto* chunk = (u32*)malloc(chunkCapacity);
+    Vector<u32> chunkBuf;
 
-    if (!chunk || !writeAll(&header, sizeof(header))) {
-        free(chunk);
+    chunkBuf.zero(chunkCapacity / sizeof(u32));
+
+    u32* chunk = chunkBuf.mutData();
+
+    if (!writeAll(&header, sizeof(header))) {
         close(mfd);
 
         return -1;
@@ -466,7 +469,6 @@ int ScreenshotCaptureImpl::buildFile() {
         }
 
         if (!writeAll(chunk, chunkBytes)) {
-            free(chunk);
             close(mfd);
 
             return -1;
@@ -474,8 +476,6 @@ int ScreenshotCaptureImpl::buildFile() {
 
         offset += chunkBytes;
     }
-
-    free(chunk);
 
     return mfd;
 }
