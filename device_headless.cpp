@@ -52,6 +52,7 @@ namespace {
         int w = 0, h = 0;
         double hz = 60.0;
         OutputColorState color;
+        HdrOutputMetadata metadata;
         double tempK = 0;
 
         // a fake hardware cursor plane, opt-in via IMWAY_FAKE_CURSOR_PLANE,
@@ -81,6 +82,8 @@ namespace {
         void setBrightness(float) override;
         const OutputColorState& colorState() const override;
         void setSdrWhite(double) override;
+        const HdrOutputMetadata& hdrMetadata() const override;
+        void setHdrMetadata(const HdrOutputMetadata&) override;
         void setColorTemp(double) override;
         double colorTemp() const override;
         bool lastFlip(u64&, u32&) const override;
@@ -128,6 +131,11 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     , hz(refresh)
     , color(outputColorState(config, {}))
 {
+    HdrContentMetadata content;
+
+    content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
+    metadata = hdrOutputMetadata(color, content);
+
     if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
         curCap = 64;
     }
@@ -202,6 +210,14 @@ void HeadlessOutput::setSdrWhite(double nits) {
         color.encoding.referenceNits = nits;
         c->scene->needsFrame = true;
     }
+}
+
+const HdrOutputMetadata& HeadlessOutput::hdrMetadata() const {
+    return metadata;
+}
+
+void HeadlessOutput::setHdrMetadata(const HdrOutputMetadata& value) {
+    metadata = value;
 }
 
 void HeadlessOutput::setColorTemp(double kelvin) {

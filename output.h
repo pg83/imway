@@ -54,6 +54,8 @@ struct Output {
     // nits, 0 means the hdr path is off; HDR client luminance stays absolute
     virtual const OutputColorState& colorState() const = 0;
     virtual void setSdrWhite(double nits) = 0;
+    virtual const HdrOutputMetadata& hdrMetadata() const = 0;
+    virtual void setHdrMetadata(const HdrOutputMetadata& metadata) = 0;
 
     // night light: color temperature in kelvin, <= 0 or >= 6500 is neutral
     virtual void setColorTemp(double kelvin) = 0;

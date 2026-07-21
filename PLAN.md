@@ -12,7 +12,7 @@ client image
   → KMS
 ```
 
-Это правильнее большинства небольших композиторов. Непрозрачный HDR10/PQ happy path работает хорошо. Но до полноценного production-grade color management ещё далеко: неполная реализация Wayland-протокола, нет display-aware tone/gamut mapping и нет гарантии, что XR30 действительно уходит по проводу как 10 bpc.
+Это правильнее большинства небольших композиторов. Непрозрачный HDR10/PQ happy path работает хорошо. Но до полноценного production-grade color management ещё далеко: остаются дорогие промежуточные surface conversions, неполный набор форматов и transfer functions, а реальный KMS link нельзя везде проверить программно.
 
 Моя приблизительная оценка:
 
@@ -21,8 +21,8 @@ client image
 | Основная HDR-математика для opaque RGB | 8/10 |
 | Внутреннее пространство композиции | 9/10 |
 | Wayland color-management | 6/10 |
-| Tone/gamut mapping | 2/10 |
-| KMS metadata и физический сигнал | 4/10 |
+| Tone/gamut mapping | 7/10 |
+| KMS metadata и физический сигнал | 7/10 |
 | HDR screenshot/JXL | 8/10 |
 | HDR/SDR interoperability | 4/10 |
 | Общая production-готовность | около 5/10 |
@@ -51,26 +51,6 @@ HDR scanout использует XR30, `BT2020_RGB` и `HDR_OUTPUT_METADATA`; ha
 - JXL сохраняется lossless, в PQ/BT.2100, с 16-битным контейнером для 10-битных данных: [main_screenshot.cpp](/home/pg/monorepo/imway/main_screenshot.cpp:257).
 
 Viewer правильно просит `VK_COLOR_SPACE_HDR10_ST2084_EXT`. Для Wayland WSI Vulkan сам управляет `wp_color_management_surface_v1`, поэтому отдельная ручная реализация протокола viewer’ом не нужна: [Vulkan WSI specification](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html).
-
-## KMS metadata сейчас несогласована с пикселями
-
-Всегда выставляется примерно:
-
-- mastering max 1000;
-- min 0.0001;
-- MaxCLL 1000;
-- MaxFALL 400.
-
-Но shader способен выдать сигнал до 10 000 nit. То есть metadata говорит «максимум 1000», а пиксели могут утверждать обратное.
-
-Правильная последовательность:
-
-1. Определить target display volume.
-2. Собрать content metadata видимых поверхностей.
-3. Выполнить tone/gamut mapping в target volume.
-4. Выставить metadata, согласованную с полученным output.
-
-Полностью доверять MaxCLL приложений нельзя, но declared metadata можно использовать как исходную подсказку.
 
 ## Wayland-протокол всё ещё ограничен
 
@@ -170,10 +150,9 @@ imway уже ближе к Gamescope/KWin по внутренней модели
 
 ## Рекомендуемый порядок доведения
 
-1. Согласовать HDR_OUTPUT_METADATA с результатом mapping.
-2. Убрать постоянные полноэкранные RGBA16F surface conversions.
-3. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
-4. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
-5. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
+1. Убрать постоянные полноэкранные RGBA16F surface conversions.
+2. Добавить `color-representation-v1`, P010/NV12, HLG и scRGB.
+3. Dithering, корректный night light, linear screenshot viewer и SDR PNG fallback.
+4. Затем аппаратный DRM color pipeline и безопасный HDR direct scanout.
 
-Профильные HDR-тесты пока не покрывают output metadata, link depth и реальную фотометрическую корректность.
+Профильные HDR-тесты пока не могут проверить реальный KMS link и фотометрическую корректность физического дисплея.

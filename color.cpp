@@ -340,6 +340,77 @@ ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color) {
     return mapping.fromTarget.apply(target);
 }
 
+void HdrContentMetadata::add(const ColorDescription& color, double sdrWhiteNits) {
+    if (!color.hdr()) {
+        maxCllNits = fmax(maxCllNits, sdrWhiteNits);
+        maxFallNits = fmax(maxFallNits, sdrWhiteNits);
+
+        return;
+    }
+
+    if (color.maxCllSet) {
+        maxCllNits = fmax(maxCllNits, color.maxCll);
+    } else {
+        maxCllUnknown = true;
+    }
+
+    if (color.maxFallSet) {
+        maxFallNits = fmax(maxFallNits, color.maxFall);
+    } else {
+        maxFallUnknown = true;
+    }
+}
+
+bool HdrOutputMetadata::operator==(const HdrOutputMetadata& o) const {
+    return primaries == o.primaries && minNits == o.minNits &&
+           maxNits == o.maxNits && maxCll == o.maxCll &&
+           maxFall == o.maxFall && hdr == o.hdr;
+}
+
+bool HdrOutputMetadata::operator!=(const HdrOutputMetadata& o) const {
+    return !(*this == o);
+}
+
+HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
+                                    const HdrContentMetadata& content) {
+    HdrOutputMetadata metadata;
+
+    if (!output.hdr()) {
+        return metadata;
+    }
+
+    metadata.hdr = true;
+    metadata.primaries = output.encoding.target;
+    metadata.minNits = output.displayMinNits;
+    metadata.maxNits = output.displayPeakNits;
+
+    OutputMapping mapping = outputMapping(output);
+    auto mappedNeutral = [&](double nits) {
+        ColorRgb mapped = mapOutputNits(mapping, {nits, nits, nits});
+        ColorRgb target = mapping.toTarget.apply(mapped);
+
+        return mapping.targetLuma.r * target.r +
+               mapping.targetLuma.g * target.g +
+               mapping.targetLuma.b * target.b;
+    };
+
+    double sourceCll = content.maxCllUnknown ?
+        output.encoding.maxNits : content.maxCllNits;
+    double sourceFall = content.maxFallUnknown ?
+        output.displayMaxFallNits : content.maxFallNits;
+    double mappedCll = mappedNeutral(sourceCll);
+    double mappedFall = mappedNeutral(sourceFall);
+
+    mappedCll = fmax(output.sdrWhiteNits, mappedCll);
+    mappedCll = fmin(output.displayPeakNits, mappedCll);
+    mappedFall = fmax(output.sdrWhiteNits, mappedFall);
+    mappedFall = fmin(mappedCll, mappedFall);
+    metadata.maxCll = (u32)lround(mappedCll);
+    metadata.maxFall = (u32)lround(mappedFall);
+
+    return metadata;
+}
+
 bool OutputColorState::operator!=(const OutputColorState& o) const {
     return !(*this == o);
 }

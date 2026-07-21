@@ -614,7 +614,10 @@ namespace {
         u64 rangeFullValue = 0, rangeLimitedValue = 0;
         bool signalFeedbackLogged = false;
         u32 crtcDegammaProp = 0, crtcCtmProp = 0, crtcGammaProp = 0;
+        HdrOutputMetadata metadata;
         u32 hdrMetaBlob = 0;
+        u32 pendingHdrMetaBlob = 0;
+        bool hdrMetaDirty = false;
         double tempK = 0; // night light color temperature, 0 = neutral
 
         // last completed pageflip, for presentation-time feedback
@@ -656,9 +659,13 @@ namespace {
         int physicalHeightMm() const override;
         void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
+        bool createHdrMetadataBlob(const HdrOutputMetadata& metadata, u32& blob);
+        void applyPendingHdrMetadata();
 
         const OutputColorState& colorState() const override;
         void setSdrWhite(double nits) override;
+        const HdrOutputMetadata& hdrMetadata() const override;
+        void setHdrMetadata(const HdrOutputMetadata& metadata) override;
         void setColorTemp(double kelvin) override;
         double colorTemp() const override;
         bool lastFlip(u64& nsec, u32& seq) const override;
@@ -1031,6 +1038,11 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         sysE << "imway: display has no HDR peak luminance; using 1000 nit fallback (use --hdr-peak)"_sv << endL;
     }
 
+    HdrContentMetadata initialContent;
+
+    initialContent.add(ColorDescription::sRgb(), color.sdrWhiteNits);
+    metadata = hdrOutputMetadata(color, initialContent);
+
     connCrtcId = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "CRTC_ID");
     crtcModeId = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "MODE_ID");
     crtcActive = getPropId(fd, crtcId, DRM_MODE_OBJECT_CRTC, "ACTIVE");
@@ -1312,6 +1324,10 @@ KmsOutput::~KmsOutput() noexcept {
     if (hdrMetaBlob) {
         drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
     }
+
+    if (pendingHdrMetaBlob) {
+        drmModeDestroyPropertyBlob(fd, pendingHdrMetaBlob);
+    }
 }
 
 int KmsOutput::width() const {
@@ -1510,6 +1526,14 @@ bool KmsOutput::setupHdr() {
         return false;
     }
 
+    return createHdrMetadataBlob(metadata, hdrMetaBlob);
+}
+
+bool KmsOutput::createHdrMetadataBlob(const HdrOutputMetadata& value, u32& blob) {
+    if (!value.hdr) {
+        return false;
+    }
+
     hdr_output_metadata meta{};
 
     meta.metadata_type = 0;
@@ -1517,24 +1541,38 @@ bool KmsOutput::setupHdr() {
     meta.hdmi_metadata_type1.eotf = 2; // SMPTE ST 2084 (PQ)
     // CTA metadata uses chromaticity units of 0.00002 and minimum
     // luminance units of 0.0001 nit.
-    const Chromaticities& p = color.encoding.target;
-    auto chroma = [](i32 value) { return (u16)((value + 10) / 20); };
+    const Chromaticities& p = value.primaries;
+    auto chroma = [](i32 v) { return (u16)((v + 10) / 20); };
 
     meta.hdmi_metadata_type1.display_primaries[0] = {chroma(p.rx), chroma(p.ry)};
     meta.hdmi_metadata_type1.display_primaries[1] = {chroma(p.gx), chroma(p.gy)};
     meta.hdmi_metadata_type1.display_primaries[2] = {chroma(p.bx), chroma(p.by)};
     meta.hdmi_metadata_type1.white_point = {chroma(p.wx), chroma(p.wy)};
     meta.hdmi_metadata_type1.max_display_mastering_luminance =
-        (u16)(color.displayPeakNits + .5);
+        (u16)lround(fmin(value.maxNits, 65535.0));
     meta.hdmi_metadata_type1.min_display_mastering_luminance =
-        (u16)(color.displayMinNits * 10000.0 + .5);
-    meta.hdmi_metadata_type1.max_cll = color.encoding.maxCllSet ?
-        (u16)color.encoding.maxCll : (u16)(color.displayPeakNits + .5);
-    meta.hdmi_metadata_type1.max_fall = color.encoding.maxFallSet ?
-        (u16)color.encoding.maxFall : (u16)(color.displayMaxFallNits + .5);
-    drmModeCreatePropertyBlob(fd, &meta, sizeof(meta), &hdrMetaBlob);
+        (u16)lround(fmin(value.minNits * 10000.0, 65535.0));
+    meta.hdmi_metadata_type1.max_cll = (u16)(value.maxCll > 65535 ? 65535 : value.maxCll);
+    meta.hdmi_metadata_type1.max_fall = (u16)(value.maxFall > 65535 ? 65535 : value.maxFall);
 
-    return hdrMetaBlob != 0;
+    blob = 0;
+    drmModeCreatePropertyBlob(fd, &meta, sizeof(meta), &blob);
+
+    return blob != 0;
+}
+
+void KmsOutput::applyPendingHdrMetadata() {
+    if (!hdrMetaDirty) {
+        return;
+    }
+
+    if (hdrMetaBlob) {
+        drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
+    }
+
+    hdrMetaBlob = pendingHdrMetaBlob;
+    pendingHdrMetaBlob = 0;
+    hdrMetaDirty = false;
 }
 
 const OutputColorState& KmsOutput::colorState() const {
@@ -1549,6 +1587,38 @@ void KmsOutput::setSdrWhite(double nits) {
     color.sdrWhiteNits = nits;
     color.encoding.referenceNits = nits;
     c->scene->needsFrame = true;
+}
+
+const HdrOutputMetadata& KmsOutput::hdrMetadata() const {
+    return metadata;
+}
+
+void KmsOutput::setHdrMetadata(const HdrOutputMetadata& value) {
+    if (value == metadata) {
+        return;
+    }
+
+    if (!color.hdr() || !value.hdr || !hdrMetaBlob) {
+        metadata = value;
+
+        return;
+    }
+
+    u32 blob = 0;
+
+    if (!createHdrMetadataBlob(value, blob)) {
+        sysE << "imway: cannot create updated HDR metadata blob"_sv << endL;
+
+        return;
+    }
+
+    if (pendingHdrMetaBlob) {
+        drmModeDestroyPropertyBlob(fd, pendingHdrMetaBlob);
+    }
+
+    metadata = value;
+    pendingHdrMetaBlob = blob;
+    hdrMetaDirty = true;
 }
 
 void KmsOutput::setColorTemp(double kelvin) {
@@ -1623,7 +1693,8 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
 
         if (color.hdr()) {
             drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
-            drmModeAtomicAddProperty(req, connectorId, connHdrMeta, hdrMetaBlob);
+            drmModeAtomicAddProperty(req, connectorId, connHdrMeta,
+                                     hdrMetaDirty ? pendingHdrMetaBlob : hdrMetaBlob);
             if (crtcDegammaProp) drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
             if (crtcCtmProp) drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
             if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
@@ -1648,6 +1719,10 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
 
             if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
         }
+    }
+
+    if (!doModeset && color.hdr() && hdrMetaDirty) {
+        drmModeAtomicAddProperty(req, connectorId, connHdrMeta, pendingHdrMetaBlob);
     }
 
     drmModeAtomicAddProperty(req, planeId, plFbId, fbId);
@@ -1735,6 +1810,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
             curW = curH = 0;
             cursorEnabled = false;
 
+            applyPendingHdrMetadata();
             flipPending = true;
 
             return true;
@@ -1749,6 +1825,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
         return false;
     }
 
+    applyPendingHdrMetadata();
     flipPending = true;
 
     return true;

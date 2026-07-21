@@ -71,6 +71,12 @@ int main(void) {
     struct wp_image_description_creator_params_v1* params = wp_color_manager_v1_create_parametric_creator(cm);
     wp_image_description_creator_params_v1_set_tf_named(params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
     wp_image_description_creator_params_v1_set_primaries_named(params, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+#ifdef COLOR_MAX_CLL
+    wp_image_description_creator_params_v1_set_max_cll(params, COLOR_MAX_CLL);
+#endif
+#ifdef COLOR_MAX_FALL
+    wp_image_description_creator_params_v1_set_max_fall(params, COLOR_MAX_FALL);
+#endif
     struct wp_image_description_v1* desc = wp_image_description_creator_params_v1_create(params);
     wp_image_description_v1_add_listener(desc, &desc_listener, NULL);
     for (int i = 0; i < 100 && !desc_ready; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }

@@ -4580,6 +4580,20 @@ void RendererImpl::frameNow() {
         }
     });
 
+    HdrContentMetadata contentMetadata;
+    const OutputColorState& outputColor = output->colorState();
+
+    // The desktop and compositor UI are SDR content even when no client is
+    // visible. Client metadata is advisory, but it lets the output describe
+    // the result of the same display mapping that the pixels pass through.
+    contentMetadata.add(ColorDescription::sRgb(), outputColor.sdrWhiteNits);
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
+        if (s.hasContent && surfaceVisible(&s)) {
+            contentMetadata.add(s.color, outputColor.sdrWhiteNits);
+        }
+    });
+    output->setHdrMetadata(hdrOutputMetadata(outputColor, contentMetadata));
+
     Surface* cand = scanoutCandidate();
     bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);
 

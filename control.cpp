@@ -331,6 +331,14 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "cursor shape="_sv << (int)scene->cursorShape
         << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
 
+    const HdrOutputMetadata& metadata = comp->output->hdrMetadata();
+
+    out << "hdr metadata="_sv << (int)metadata.hdr
+        << " min="_sv << metadata.minNits
+        << " max="_sv << metadata.maxNits
+        << " max_cll="_sv << metadata.maxCll
+        << " max_fall="_sv << metadata.maxFall << "\n"_sv;
+
     StringBuilder tmpPath;
 
     tmpPath << outPath << ".tmp"_sv;

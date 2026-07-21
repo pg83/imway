@@ -116,12 +116,35 @@ struct OutputMapping {
     bool hdr = false;
 };
 
+struct HdrContentMetadata {
+    double maxCllNits = 0;
+    double maxFallNits = 0;
+    bool maxCllUnknown = false;
+    bool maxFallUnknown = false;
+
+    void add(const ColorDescription& color, double sdrWhiteNits);
+};
+
+struct HdrOutputMetadata {
+    Chromaticities primaries;
+    double minNits = 0;
+    double maxNits = 0;
+    u32 maxCll = 0;
+    u32 maxFall = 0;
+    bool hdr = false;
+
+    bool operator==(const HdrOutputMetadata& other) const;
+    bool operator!=(const HdrOutputMetadata& other) const;
+};
+
 bool parseEdidColorCapabilities(const void* data, size_t size,
                                 DisplayColorCapabilities& capabilities);
 OutputColorState outputColorState(const OutputConfiguration& config,
                                   const DisplayColorCapabilities& capabilities);
 OutputMapping outputMapping(const OutputColorState& output);
 ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
+HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
+                                    const HdrContentMetadata& content);
 
 bool directScanoutColorCompatible(const OutputColorState& output,
                                   const ColorDescription& surface);
