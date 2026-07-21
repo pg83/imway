@@ -1825,6 +1825,14 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr; // subsurfaces need composition
     }
 
+    // the primary plane does not blend: an alpha-capable format may bypass
+    // composition only when the client declares the surface fully opaque
+    if ((s->dmabuf->format == kFourccArgb || s->dmabuf->format == kFourccAr30 ||
+         s->dmabuf->format == kFourccAb30 || s->dmabuf->format == kFourccAb4h) &&
+        !s->opaqueCovers()) {
+        return nullptr;
+    }
+
     if (s->geomW() != scene->outW || s->geomH() != scene->outH) {
         return nullptr;
     }
@@ -2077,9 +2085,18 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
         }
     }
 
+    // dither for the narrowest stage that quantizes: a 10-bit framebuffer
+    // through an 8-bit link truncates at the connector, so the framebuffer
+    // depth alone would make the noise sub-LSB
+    u32 fbBits = fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 10u : 8u;
+    u32 ditherBits = outputColor.bpc && outputColor.bpc < fbBits ? outputColor.bpc : fbBits;
+
     push.row[6][0] = (float)mapping.peakNits;
     push.row[6][1] = mapping.hdr ? 0.f : 203.f;
-    push.row[6][2] = fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32 ? 1023.f : 255.f;
+    push.row[6][2] = (float)((1u << ditherBits) - 1);
+    // temporal dither: shift the noise pattern every frame so quantization
+    // structure does not freeze in screen space
+    push.row[6][3] = (float)(scene->framesDone % 64);
     // the roll-off knee reshapes in-range content, so it only runs when
     // something visible can actually exceed the output peak
     push.row[7][0] = sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
@@ -3795,9 +3812,12 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
         // client-provided cursor surface: feed its pixels to the cursor plane.
         // The plane copies raw buffer pixels, so a scaled/transformed/viewport
         // cursor (HiDPI themes) must fall back to composition or it shows up
-        // double-size with a misplaced hotspot
+        // double-size with a misplaced hotspot; likewise anything that needs
+        // the color pipeline (managed description, non-default alpha)
         bool plainBuffer = cs->bufferScale == 1 && cs->bufferTransform == 0 && !cs->vp.hasSrc && !cs->vp.hasDst;
-        bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
+        bool plainColor = !cs->color.managed() && cs->representation.alphaMode == 0 &&
+                          !cs->representation.coefficients;
+        bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
 
         if (hwOk) {
             if (hwSurf != cs || hwSurfStale) {
@@ -3987,23 +4007,33 @@ bool RendererImpl::renderFrame(int scanIdx) {
                         drmSyncobjDestroy(drmFd, binary);
                     }
 
-                    // still no fence: skip just this surface and retry next
-                    // frame; failing the whole render would stall frame
-                    // callbacks for every client
-                    if (!exported) {
-                        if (syncFd >= 0) {
-                            close(syncFd);
-                        }
-
-                        scene->needsFrame = true;
-
-                        return;
+                    if (!exported && syncFd >= 0) {
+                        close(syncFd);
+                        syncFd = -1;
                     }
 
-                    if (!waitOnSyncFile(syncFd)) {
-                        scene->needsFrame = true;
+                    if (!exported || !waitOnSyncFile(syncFd)) {
+                        // no GPU wait available, but the surface is still
+                        // drawn below: block briefly on the CPU instead of
+                        // sampling a buffer whose acquire point has not
+                        // signaled
+                        struct timespec now{};
 
-                        return;
+                        clock_gettime(CLOCK_MONOTONIC, &now);
+
+                        u32 handle = s->syncAcquireHandle;
+                        u64 point = s->syncAcquirePoint;
+                        i64 deadline = (i64)now.tv_sec * 1000000000ll +
+                                       now.tv_nsec + 100000000ll;
+
+                        if (drmSyncobjTimelineWait(drmFd, &handle, &point, 1,
+                                                   deadline,
+                                                   DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
+                                                   nullptr) != 0) {
+                            // the point never signaled: give up on this
+                            // acquire once instead of stalling every frame
+                            sysE << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
+                        }
                     }
 
                     explicitSurfaces.pushBack(s);
@@ -4534,6 +4564,9 @@ void RendererImpl::frameNow() {
     output->setHdrMetadata(hdrOutputMetadata(outputColor, contentMetadata));
 
     Surface* cand = scanoutCandidate();
+
+    scene->scanoutCandidateId = cand && cand->toplevel ? cand->toplevel->id : 0;
+
     bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);
 
     lastFrameDirect = direct;

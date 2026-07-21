@@ -229,6 +229,12 @@ int mainComposer(int argc, char** argv) {
             formats.pushBack(f);
         });
 
+        Vector<DmabufFormat> scanoutFormats;
+
+        output->scanoutFormats([&scanoutFormats](const DmabufFormat& f) {
+            scanoutFormats.pushBack(f);
+        });
+
         Keyboard* kb = Keyboard::create(pool.mutPtr(), cfg.xkbLayout, cfg.xkbOptions);
 
         c.kb = kb;
@@ -238,6 +244,8 @@ int mainComposer(int argc, char** argv) {
         wcfg.socketName = cfg.socketName;
         wcfg.formats = formats.data();
         wcfg.formatCount = formats.length();
+        wcfg.scanoutFormats = scanoutFormats.data();
+        wcfg.scanoutFormatCount = scanoutFormats.length();
         wcfg.mainDevice = device->renderDevice();
         wcfg.output = output;
         wcfg.dpmsSec = kms ? cfg.dpmsSec : 0;

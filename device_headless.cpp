@@ -102,6 +102,7 @@ namespace {
         void present(const void*) override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
+        void scanoutFormatsImpl(stl::VisitorFace&&) override;
     };
 
     struct HeadlessDevice: public Device {
@@ -367,4 +368,7 @@ bool HeadlessOutput::directScanout(DmabufBuffer*, FrameResource*) {
 }
 
 void HeadlessOutput::dropScanoutFb(DmabufBuffer*) {
+}
+
+void HeadlessOutput::scanoutFormatsImpl(stl::VisitorFace&&) {
 }

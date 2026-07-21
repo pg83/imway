@@ -24,6 +24,9 @@ struct WaylandConfig {
     stl::StringView socketName = "imway-0";
     const DmabufFormat* formats = nullptr;
     size_t formatCount = 0;
+    // subset the primary plane can scan out (dmabuf feedback scanout tranche)
+    const DmabufFormat* scanoutFormats = nullptr;
+    size_t scanoutFormatCount = 0;
     unsigned long long mainDevice = 0;
     Output* output = nullptr;
     double dpmsSec = 0;

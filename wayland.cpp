@@ -218,6 +218,9 @@ namespace {
             bool inputRegionSet = false;
             bool inputRegionChanged = false;
             Vector<RectI> inputRegion;
+            bool opaqueRegionSet = false;
+            bool opaqueRegionChanged = false;
+            Vector<RectI> opaqueRegion;
             RectI damage;
             bool damageAll = false;
             int scale = 0;
@@ -285,6 +288,8 @@ namespace {
             int dw = 0, dh = 0;
             bool inputChanged = false, inputSet = false;
             Vector<RectI> inputRegion;
+            bool opaqueChanged = false, opaqueSet = false;
+            Vector<RectI> opaqueRegion;
             bool colorChanged = false;
             ColorDescription color;
             bool representationChanged = false;
@@ -621,6 +626,7 @@ namespace {
         StringView socketName;
         Keyboard* keyboard = nullptr;
         Vector<DmabufFormat> formats;
+        Vector<u16> scanoutIndices;
         u64 mainDevice = 0;
         int fbTableFd = -1;
         u32 fbTableSize = 0;
@@ -1099,7 +1105,23 @@ namespace {
         s.pending.frames.pushBack(cb);
     }
 
-    void surfaceSetOpaqueRegion(wl_client*, wl_resource*, wl_resource*) {
+    void surfaceSetOpaqueRegion(wl_client*, wl_resource* res, wl_resource* region) {
+        SurfaceImpl& s = *surfaceFrom(res);
+
+        s.pending.opaqueRegionChanged = true;
+
+        if (!region) {
+            s.pending.opaqueRegionSet = false;
+            s.pending.opaqueRegion.clear();
+
+            return;
+        }
+
+        auto* box = (RegionBox*)wl_resource_get_user_data(region);
+
+        s.pending.opaqueRegionSet = true;
+        s.pending.opaqueRegion.clear();
+        s.pending.opaqueRegion.append(box->rects.begin(), box->rects.length());
     }
 
     void surfaceSetInputRegion(wl_client*, wl_resource* res, wl_resource* region) {
@@ -1316,6 +1338,14 @@ namespace {
 
             sub.cache.inputRegion.clear();
             sub.cache.inputChanged = false;
+        }
+
+        if (sub.cache.opaqueChanged) {
+            s.opaqueRegionSet = sub.cache.opaqueSet;
+            s.opaqueRegion.clear();
+            s.opaqueRegion.append(sub.cache.opaqueRegion.begin(), sub.cache.opaqueRegion.length());
+            sub.cache.opaqueRegion.clear();
+            sub.cache.opaqueChanged = false;
         }
 
         constraintApplyPending(s);
@@ -1733,6 +1763,22 @@ namespace {
 
             s.pending.inputRegionChanged = false;
             s.pending.inputRegion.clear();
+        }
+
+        if (s.pending.opaqueRegionChanged) {
+            if (toCache) {
+                sub->cache.opaqueChanged = true;
+                sub->cache.opaqueSet = s.pending.opaqueRegionSet;
+                sub->cache.opaqueRegion.clear();
+                sub->cache.opaqueRegion.append(s.pending.opaqueRegion.begin(), s.pending.opaqueRegion.length());
+            } else {
+                s.opaqueRegionSet = s.pending.opaqueRegionSet;
+                s.opaqueRegion.clear();
+                s.opaqueRegion.append(s.pending.opaqueRegion.begin(), s.pending.opaqueRegion.length());
+            }
+
+            s.pending.opaqueRegionChanged = false;
+            s.pending.opaqueRegion.clear();
         }
 
         if (toCache) {
@@ -5564,8 +5610,25 @@ namespace {
         wl_array_init(&dev);
         *(u64*)wl_array_add(&dev, sizeof(u64)) = srv->mainDevice;
         zwp_linux_dmabuf_feedback_v1_send_main_device(res, &dev);
-        zwp_linux_dmabuf_feedback_v1_send_tranche_target_device(res, &dev);
-        wl_array_release(&dev);
+
+        // preference order: the scanout-capable subset first, so fullscreen
+        // clients allocate buffers eligible for the direct scanout bypass
+        if (!srv->scanoutIndices.empty()) {
+            wl_array scanout;
+
+            wl_array_init(&scanout);
+
+            for (u16 index : srv->scanoutIndices) {
+                *(u16*)wl_array_add(&scanout, sizeof(u16)) = index;
+            }
+
+            zwp_linux_dmabuf_feedback_v1_send_tranche_target_device(res, &dev);
+            zwp_linux_dmabuf_feedback_v1_send_tranche_formats(res, &scanout);
+            wl_array_release(&scanout);
+            zwp_linux_dmabuf_feedback_v1_send_tranche_flags(
+                res, ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS_SCANOUT);
+            zwp_linux_dmabuf_feedback_v1_send_tranche_done(res);
+        }
 
         wl_array indices;
 
@@ -5575,11 +5638,13 @@ namespace {
             *(u16*)wl_array_add(&indices, sizeof(u16)) = i;
         }
 
+        zwp_linux_dmabuf_feedback_v1_send_tranche_target_device(res, &dev);
         zwp_linux_dmabuf_feedback_v1_send_tranche_formats(res, &indices);
         wl_array_release(&indices);
         zwp_linux_dmabuf_feedback_v1_send_tranche_flags(res, 0);
         zwp_linux_dmabuf_feedback_v1_send_tranche_done(res);
         zwp_linux_dmabuf_feedback_v1_send_done(res);
+        wl_array_release(&dev);
     }
 
     void dmabufGetDefaultFeedback(wl_client* client, wl_resource* res, u32 id) {
@@ -7437,6 +7502,18 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 {
     formats.append(cfg.formats, cfg.formatCount);
 
+    // scanout tranche indices into the shared format table: only pairs the
+    // render device can also sample qualify
+    for (size_t i = 0; i < cfg.scanoutFormatCount; i++) {
+        for (u16 j = 0; j < (u16)formats.length(); j++) {
+            if (formats[j].fourcc == cfg.scanoutFormats[i].fourcc &&
+                formats[j].modifier == cfg.scanoutFormats[i].modifier) {
+                scanoutIndices.pushBack(j);
+                break;
+            }
+        }
+    }
+
     display = wl_display_create();
     STD_VERIFY(display);
 
@@ -7890,6 +7967,15 @@ WaylandImpl::~WaylandImpl() noexcept {
             (p->maxCllSet && p->maxFallSet && p->d.color.maxFall > p->d.color.maxCll)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
                                    "content light levels are outside the mastering luminance range");
+
+            return;
+        }
+
+        if (!p->d.color.primary.valid()) {
+            cmMakeFailedImageDesc(p->srv, client, wl_resource_get_version(res), id,
+                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
+                                  "degenerate primaries");
+            wl_resource_destroy(res);
 
             return;
         }

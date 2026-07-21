@@ -139,6 +139,30 @@ Chromaticities Chromaticities::displayP3() {
     return {680000, 320000, 265000, 690000, 150000, 60000, 312700, 329000};
 }
 
+bool Chromaticities::valid() const {
+    if (ry <= 0 || gy <= 0 || by <= 0 || wy <= 0) {
+        return false;
+    }
+
+    ColorMatrix m = rgbToXyz(*this);
+    double determinant =
+        m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) -
+        m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) +
+        m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
+
+    if (!isfinite(determinant) || fabs(determinant) < 1e-9) {
+        return false;
+    }
+
+    for (double value : m.v) {
+        if (!isfinite(value)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 bool Chromaticities::operator==(const Chromaticities& o) const {
     return rx == o.rx && ry == o.ry && gx == o.gx && gy == o.gy &&
            bx == o.bx && by == o.by && wx == o.wx && wy == o.wy;

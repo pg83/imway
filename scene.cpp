@@ -51,6 +51,22 @@ int Surface::geomH() const {
     return geom.h < avail ? geom.h : (avail > 0 ? avail : viewH());
 }
 
+bool Surface::opaqueCovers() const {
+    if (!opaqueRegionSet) {
+        return false;
+    }
+
+    // conservative: full coverage by a single rect (the common client shape);
+    // multi-rect tilings that only jointly cover the surface do not count
+    for (const RectI& r : opaqueRegion) {
+        if (r.x <= 0 && r.y <= 0 && r.x + r.w >= viewW() && r.y + r.h >= viewH()) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool Surface::inputContains(double sx, double sy) const {
     if (!inputRegionSet) {
         return true;

@@ -2,12 +2,14 @@
 
 #include "color.h"
 #include "frame_resource.h"
+#include "visitor.h"
 
 #include <std/sys/types.h>
 #include <std/str/view.h>
 
 struct ScanoutBuffer;
 struct DmabufBuffer;
+struct DmabufFormat;
 struct Listener;
 
 struct SharedScanout {
@@ -94,4 +96,13 @@ struct Output {
     // drm fb when the client buffer dies
     virtual bool directScanout(DmabufBuffer* buf, FrameResource* frame) = 0;
     virtual void dropScanoutFb(DmabufBuffer* buf) = 0;
+
+    // format+modifier pairs the primary plane can scan out; feeds the dmabuf
+    // feedback scanout tranche so clients allocate bypass-capable buffers
+    virtual void scanoutFormatsImpl(stl::VisitorFace&& vis) = 0;
+
+    template <typename F>
+    void scanoutFormats(F f) {
+        scanoutFormatsImpl(visitEach<DmabufFormat>(f));
+    }
 };

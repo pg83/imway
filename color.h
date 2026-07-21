@@ -34,6 +34,10 @@ struct Chromaticities {
     static Chromaticities sRgb();
     static Chromaticities bt2020();
     static Chromaticities displayP3();
+    // false for coordinates whose primaries matrix math degenerates
+    // (zero y components, collapsed triangle): they divide by zero and
+    // would poison the shader with NaN/Inf
+    bool valid() const;
     bool operator==(const Chromaticities& other) const;
 };
 

@@ -6,7 +6,7 @@ layout(set = 0, binding = 0) uniform sampler2D sceneImage;
 layout(push_constant) uniform OutputPush {
     vec4 toTarget[3];
     vec4 fromTarget[3];
-    vec4 mapping; // peak nits, SDR scale (0 = PQ), dither divisor
+    vec4 mapping; // peak nits, SDR scale (0 = PQ), dither divisor, frame
     vec4 color;   // tone map enable in x, target luminance coefficients in yzw
 } pc;
 
@@ -36,8 +36,10 @@ vec3 dither(vec3 encoded) {
 
     // Interleaved gradient noise has a flat distribution and pushes the
     // quantization error into high spatial frequencies. One shared value
-    // avoids colored speckle on neutral ramps.
-    float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy,
+    // avoids colored speckle on neutral ramps; the per-frame offset keeps
+    // the pattern from freezing in screen space.
+    vec2 at = gl_FragCoord.xy + vec2(5.588238 * pc.mapping.w);
+    float noise = fract(52.9829189 * fract(dot(at,
         vec2(0.06711056, 0.00583715)))) - 0.5;
 
     return clamp(encoded + noise / pc.mapping.z, 0.0, 1.0);

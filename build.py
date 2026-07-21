@@ -193,6 +193,10 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         test_sources.append("$(S)/color.cpp")
         test_deps.append(display_info)
 
+    if name == "client_reg_scanout_opaque_policy":
+        test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp"]
+        test_deps.append(display_info)
+
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",

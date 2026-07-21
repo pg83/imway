@@ -711,6 +711,7 @@ namespace {
         bool presentNeedsPixels() const override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
+        void scanoutFormatsImpl(stl::VisitorFace&& vis) override;
         u32 importDirectFb(DmabufBuffer* buf);
         void gemHandleRef(u32 handle);
         void gemHandleUnref(u32 handle);
@@ -1223,6 +1224,18 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         scanModCount = planeModifiers(fd, planeId, scanFourcc, scanMods, 64);
     }
 
+    // a 10-bit framebuffer behind the default max-bpc-8 link dies at the
+    // connector, and the 1/1023 dither is sub-LSB for an 8-bit link: ask
+    // for a 10-bit link to match (the link bpc feedback reports what the
+    // display actually negotiated)
+    if (!color.hdr() && scanFourcc == DRM_FORMAT_XRGB2101010 && connMaxBpc &&
+        !config.bpc) {
+        maxBpcValue = maxBpc < 10 ? maxBpc : 10;
+        color.bpc = (u32)maxBpcValue;
+        sysO << "imway: requesting "_sv << maxBpcValue
+             << " bpc link for the 10-bit framebuffer"_sv << endL;
+    }
+
     if (scanCount > 0) {
         sysO << "imway: scanout swapchain: "_sv << scanCount << " images"_sv << endL;
     } else {
@@ -1239,7 +1252,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
     initBacklight();
     if (color.hdr() && hasBrightness()) {
-        sysO << "imway: HDR holds hardware brightness at its calibration point; brightness keys adjust SDR white"_sv << endL;
+        // absolute PQ luminance assumes the panel sits at its calibration
+        // point; actually put it there instead of hoping
+        setBrightness(1.f);
+        sysO << "imway: HDR pins hardware brightness to full; brightness keys adjust SDR white"_sv << endL;
     }
     sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
 }
@@ -1779,6 +1795,29 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
         if (testErr != 0 && cursorPlaneId && cursorEnabled) {
             testErr = tryCommit(fbId, true, false, inFenceFd, true);
             withCursor = false;
+        }
+
+        if (testErr != 0 && color.hdr()) {
+            // the connector rejected the HDR color/link configuration:
+            // degrade to SDR on the same framebuffer instead of never
+            // lighting up
+            sysE << "imway: HDR modeset rejected (errno "_sv << testErr
+                 << "), falling back to SDR"_sv << endL;
+
+            OutputConfiguration sdrConfig = config;
+
+            sdrConfig.hdrSdrWhiteNits = 0;
+            sdrConfig.displayMinNits = 0;
+            sdrConfig.displayPeakNits = 0;
+            sdrConfig.displayMaxFallNits = 0;
+            color = outputColorState(sdrConfig, displayCapabilities);
+            withCursor = true;
+            testErr = tryCommit(fbId, true, true, inFenceFd, true);
+
+            if (testErr != 0 && cursorPlaneId && cursorEnabled) {
+                testErr = tryCommit(fbId, true, false, inFenceFd, true);
+                withCursor = false;
+            }
         }
 
         if (testErr != 0) {
@@ -2670,6 +2709,24 @@ void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
         directFbs.popBack();
 
         return;
+    }
+}
+
+void KmsOutput::scanoutFormatsImpl(stl::VisitorFace&& vis) {
+    // the RGB formats the direct scanout policy accepts; YUV stays out
+    // until the plane has a color pipeline for it
+    const u32 fourccs[] = {kFourccArgb, kFourccXrgb, kFourccAr30, kFourccXr30,
+                           kFourccAb30, kFourccXb30, kFourccAb4h, kFourccXb4h};
+
+    for (u32 fourcc : fourccs) {
+        u64 mods[64];
+        u32 count = planeModifiers(fd, planeId, fourcc, mods, 64);
+
+        for (u32 i = 0; i < count; i++) {
+            DmabufFormat format{fourcc, mods[i]};
+
+            vis.visit(&format);
+        }
     }
 }
 

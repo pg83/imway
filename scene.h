@@ -123,6 +123,13 @@ struct Surface: SceneNode, GrabNode {
     stl::Vector<RectI> inputRegion;
     bool inputContains(double sx, double sy) const;
 
+    // wl_surface.set_opaque_region, surface-local; consumed by the direct
+    // scanout policy for alpha-capable formats
+    bool opaqueRegionSet = false;
+    stl::Vector<RectI> opaqueRegion;
+    // one declared-opaque rect covers the whole presented surface
+    bool opaqueCovers() const;
+
     float imgX = 0, imgY = 0;
     bool hovered = false;
 
@@ -267,6 +274,9 @@ struct Scene {
 
     // written by the renderer (imgui truth of the last frame), read by wayland
     Toplevel* focusedToplevel = nullptr;
+    // toplevel id of the current direct scanout candidate (0 = none),
+    // written by the renderer each frame; surfaced through the state dump
+    u64 scanoutCandidateId = 0;
     bool kbCaptured = false;
     bool ptrCaptured = false;
     bool shortcutsInhibited = false;
