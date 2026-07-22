@@ -5,7 +5,6 @@
 #include "icon.h"
 #include "icon_pool.h"
 #include "scene.h"
-#include "small_obj_allocator.h"
 #include "util.h"
 
 #include <dbus/dbus.h>
@@ -33,20 +32,35 @@ namespace {
     void menuReply(DBusPendingCall* pc, void* data);
 
     struct ItemBox: public StatusNotifierItem {
+        // menu generation arena: every GetLayout reply rebuilds it wholesale
+        ObjPool* menuPool = nullptr;
         StatusNotifierImpl* impl = nullptr;
         StringBuilder service;
         StringBuilder path;
-        StringBuilder owner;
         StringBuilder menuPath;
-        Vector<StatusMenuItem*> menuNodes;
-        bool registered = false;
+        // replies still holding `this`; canceled when the item dies
+        Vector<DBusPendingCall*> pending;
         bool itemIsMenu = false;
+
+        ~ItemBox() noexcept;
+
+        void dropPending(DBusPendingCall* pc);
+    };
+
+    // a connection on the bus: the lifetime unit of everything tray. The
+    // peer box is the first object of its own arena, its items are members
+    // of that arena, and NameOwnerChanged (the owner leaving) is the
+    // arena's death
+    struct Peer {
+        ObjPool* pool = nullptr;
+        StringBuilder name; // the unique bus name
+        Vector<ItemBox*> items;
     };
 
     struct StatusNotifierImpl: public StatusNotifier {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
-        Vector<ItemBox*> all;
+        Vector<Peer*> peers;
         bool ownsWatcher = false;
 
         StatusNotifierImpl(Composer& comp);
@@ -55,7 +69,8 @@ namespace {
         void itemsImpl(VisitorFace&& vis) override;
         void activate(const StatusAction& action, int x, int y) override;
 
-        ItemBox* find(StringView service, StringView path);
+        Peer* peerFor(StringView name);
+        ItemBox* find(Peer& peer, StringView service, StringView path);
         ItemBox* findSignal(DBusMessage* msg);
         void registerItem(DBusMessage* msg);
         void unregisterOwner(StringView owner);
@@ -66,7 +81,7 @@ namespace {
         void readProperties(ItemBox& item, DBusMessage* reply);
         void readMenu(ItemBox& item, DBusMessage* reply);
         void changed(ItemBox& item);
-        bool sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data);
+        bool sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, ItemBox& item);
         void sendSimple(ItemBox& item, const char* iface, const char* method, int x, int y);
         void sendMenuEvent(ItemBox& item, i32 id);
         void watcherGet(DBusMessage* msg);
@@ -313,10 +328,9 @@ namespace {
         StatusMenuItem* entry = nullptr;
 
         if (id != 0) {
-            entry = impl.c->alloc->make<StatusMenuItem>();
+            entry = item.menuPool->make<StatusMenuItem>();
             entry->action = {&item, StatusActionKind::menu, id};
             entry->open = {&item, StatusActionKind::menuOpen, id};
-            item.menuNodes.pushBack(entry);
             count++;
         }
 
@@ -417,17 +431,36 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
 }
 
 StatusNotifierImpl::~StatusNotifierImpl() noexcept {
-    for (ItemBox* item : all) {
-        if (item->iconPixmap) {
-            c->iconPool->release(item->iconPixmap);
-        }
+    for (Peer* peer : peers) {
+        delete peer->pool;
+    }
+}
 
-        if (item->attentionIconPixmap) {
-            c->iconPool->release(item->attentionIconPixmap);
-        }
+ItemBox::~ItemBox() noexcept {
+    for (DBusPendingCall* pc : pending) {
+        dbus_pending_call_cancel(pc);
+        dbus_pending_call_unref(pc);
+    }
 
-        clearMenu(*item);
-        c->alloc->release(item);
+    if (iconPixmap) {
+        impl->c->iconPool->release(iconPixmap);
+    }
+
+    if (attentionIconPixmap) {
+        impl->c->iconPool->release(attentionIconPixmap);
+    }
+
+    delete menuPool;
+}
+
+void ItemBox::dropPending(DBusPendingCall* pc) {
+    for (size_t i = 0; i < pending.length(); i++) {
+        if (pending[i] == pc) {
+            pending.mut(i) = pending.back();
+            pending.popBack();
+
+            return;
+        }
     }
 }
 
@@ -436,15 +469,32 @@ void StatusNotifierImpl::itemsImpl(VisitorFace&& vis) {
         return;
     }
 
-    for (ItemBox* item : all) {
-        if (item->registered) {
+    for (Peer* peer : peers) {
+        for (ItemBox* item : peer->items) {
             vis.visit(item);
         }
     }
 }
 
-ItemBox* StatusNotifierImpl::find(StringView service, StringView path) {
-    for (ItemBox* item : all) {
+Peer* StatusNotifierImpl::peerFor(StringView name) {
+    for (Peer* peer : peers) {
+        if (sv(peer->name) == name) {
+            return peer;
+        }
+    }
+
+    ObjPool* pool = ObjPool::fromMemoryRaw();
+    Peer* peer = pool->make<Peer>();
+
+    peer->pool = pool;
+    assign(peer->name, name);
+    peers.pushBack(peer);
+
+    return peer;
+}
+
+ItemBox* StatusNotifierImpl::find(Peer& peer, StringView service, StringView path) {
+    for (ItemBox* item : peer.items) {
         if (text(item->service) == service && text(item->path) == path) {
             return item;
         }
@@ -457,10 +507,12 @@ ItemBox* StatusNotifierImpl::find(StringView service, StringView path) {
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
     StringView path(dbus_message_get_path(msg) ? dbus_message_get_path(msg) : "");
 
-    for (ItemBox* item : all) {
-        if (item->registered && (text(item->path) == path || text(item->menuPath) == path) &&
-            (text(item->owner) == sender || text(item->service) == sender)) {
-            return item;
+    for (Peer* peer : peers) {
+        for (ItemBox* item : peer->items) {
+            if ((text(item->path) == path || text(item->menuPath) == path) &&
+                (sv(peer->name) == sender || text(item->service) == sender)) {
+                return item;
+            }
         }
     }
 
@@ -475,7 +527,7 @@ void StatusNotifierImpl::changed(ItemBox& item) {
     }
 }
 
-bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data) {
+bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, ItemBox& item) {
     DBusPendingCall* pc = nullptr;
 
     if (!msg || !dbus_connection_send_with_reply(conn, msg, &pc, kTimeout) || !pc) {
@@ -486,7 +538,10 @@ bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFuncti
         return false;
     }
 
-    dbus_pending_call_set_notify(pc, cb, data, nullptr);
+    dbus_pending_call_set_notify(pc, cb, &item, nullptr);
+    // the initial pc ref rides here until the notify (which steals it) or
+    // the burial (which cancels and drops it)
+    item.pending.pushBack(pc);
     dbus_message_unref(msg);
 
     return true;
@@ -498,11 +553,11 @@ void StatusNotifierImpl::getProperties(ItemBox& item) {
     DBusMessage* msg = dbus_message_new_method_call(service.cStr(), path.cStr(), kProps, "GetAll");
 
     dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID);
-    sendReply(msg, propertiesReply, &item);
+    sendReply(msg, propertiesReply, item);
 }
 
 void StatusNotifierImpl::getMenu(ItemBox& item) {
-    if (!item.registered || item.menuPath.empty()) {
+    if (item.menuPath.empty()) {
         return;
     }
 
@@ -516,7 +571,7 @@ void StatusNotifierImpl::getMenu(ItemBox& item) {
     dbus_message_iter_append_basic(&it, DBUS_TYPE_INT32, &depth);
     dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "s", &names);
     dbus_message_iter_close_container(&it, &names);
-    sendReply(msg, menuReply, &item);
+    sendReply(msg, menuReply, item);
 }
 
 void StatusNotifierImpl::aboutToShow(ItemBox& item, i32 id) {
@@ -548,12 +603,8 @@ void StatusNotifierImpl::readProperties(ItemBox& item, DBusMessage* reply) {
 
 void StatusNotifierImpl::clearMenu(ItemBox& item) {
     item.menu.clear();
-
-    for (StatusMenuItem* entry : item.menuNodes) {
-        c->alloc->release(entry);
-    }
-
-    item.menuNodes.clear();
+    delete item.menuPool;
+    item.menuPool = nullptr;
 }
 
 void StatusNotifierImpl::readMenu(ItemBox& item, DBusMessage* reply) {
@@ -565,6 +616,8 @@ void StatusNotifierImpl::readMenu(ItemBox& item, DBusMessage* reply) {
     }
 
     clearMenu(item);
+    item.menuPool = ObjPool::fromMemoryRaw();
+
     int count = 0;
 
     parseMenuNode(*this, item, &it, nullptr, 0, count);
@@ -598,25 +651,23 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
     StringView service = arg[0] == '/' ? sender : StringView(arg);
     StringView path = arg[0] == '/' ? StringView(arg) : "/StatusNotifierItem"_sv;
-    ItemBox* item = find(service, path);
+    Peer* peer = peerFor(sender);
+    ItemBox* item = find(*peer, service, path);
+    bool newItem = !item;
 
     if (!item) {
-        item = c->alloc->make<ItemBox>();
+        item = peer->pool->make<ItemBox>();
         item->impl = this;
         assign(item->service, service);
         assign(item->path, path);
         item->primary = {item, StatusActionKind::primary, 0};
         item->context = {item, StatusActionKind::context, 0};
-        all.pushBack(item);
+        peer->items.pushBack(item);
     }
 
-    assign(item->owner, sender);
-    bool newlyRegistered = !item->registered;
-
-    item->registered = true;
     getProperties(*item);
 
-    if (newlyRegistered) {
+    if (newItem) {
         emitItem("StatusNotifierItemRegistered", *item);
     }
 
@@ -628,12 +679,23 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
 }
 
 void StatusNotifierImpl::unregisterOwner(StringView owner) {
-    for (ItemBox* item : all) {
-        if (item->registered && text(item->owner) == owner) {
-            item->registered = false;
-            emitItem("StatusNotifierItemUnregistered", *item);
-            clearMenu(*item);
+    for (size_t i = 0; i < peers.length(); i++) {
+        if (sv(peers[i]->name) != owner) {
+            continue;
         }
+
+        Peer* peer = peers[i];
+
+        peers.mut(i) = peers.back();
+        peers.popBack();
+
+        for (ItemBox* item : peer->items) {
+            emitItem("StatusNotifierItemUnregistered", *item);
+        }
+
+        delete peer->pool;
+
+        break;
     }
 
     c->scene->needsFrame = true;
@@ -675,7 +737,7 @@ void StatusNotifierImpl::sendMenuEvent(ItemBox& item, i32 id) {
 void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
     auto* item = (ItemBox*)action.item;
 
-    if (!item || !item->registered || item->impl != this) {
+    if (!item || item->impl != this) {
         return;
     }
 
@@ -728,8 +790,8 @@ void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
         dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "as", &var);
         dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
 
-        for (ItemBox* item : all) {
-            if (item->registered) {
+        for (Peer* peer : peers) {
+            for (ItemBox* item : peer->items) {
                 StringBuilder value;
 
                 value << text(item->service) << text(item->path);
@@ -767,8 +829,8 @@ void StatusNotifierImpl::watcherGetAll(DBusMessage* msg) {
     dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "as", &var);
     dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
 
-    for (ItemBox* item : all) {
-        if (item->registered) {
+    for (Peer* peer : peers) {
+        for (ItemBox* item : peer->items) {
             StringBuilder value;
 
             value << text(item->service) << text(item->path);
@@ -789,9 +851,12 @@ void StatusNotifierImpl::watcherGetAll(DBusMessage* msg) {
 namespace {
     void propertiesReply(DBusPendingCall* pc, void* data) {
         auto* item = (ItemBox*)data;
+
+        item->dropPending(pc);
+
         DBusMessage* reply = steal(pc);
 
-        if (reply && item->registered) {
+        if (reply) {
             item->impl->readProperties(*item, reply);
         }
 
@@ -802,9 +867,12 @@ namespace {
 
     void menuReply(DBusPendingCall* pc, void* data) {
         auto* item = (ItemBox*)data;
+
+        item->dropPending(pc);
+
         DBusMessage* reply = steal(pc);
 
-        if (reply && item->registered) {
+        if (reply) {
             item->impl->readMenu(*item, reply);
         }
 
