@@ -137,12 +137,14 @@ namespace {
     struct ConstraintBox;
     struct IdleInhibitor;
 
-    struct CmOutput {
+    // the node links it into WaylandImpl::cmOutputResources
+    struct CmOutput: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
     };
 
-    struct CmFeedback {
+    // the node links it into WaylandImpl::cmFeedbackResources
+    struct CmFeedback: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         // weak ring into the surface: nulls itself when the surface dies
@@ -445,7 +447,8 @@ namespace {
         WlrCopyFrame* frame = nullptr;
     };
 
-    struct WlrCopyFrame {
+    // the node links it into WaylandImpl::screencopyFrames
+    struct WlrCopyFrame: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         wl_resource* buffer = nullptr;
@@ -510,7 +513,8 @@ namespace {
     // security-context-v1: a sandbox (flatpak) proxies its clients through a
     // listen fd; every client accepted on it is tagged, and the display's
     // global filter hides privileged protocols from tagged clients
-    struct SandboxTag {
+    // the node links it into WaylandImpl::sandboxed
+    struct SandboxTag: IntrusiveNode {
         wl_listener destroy{};
         WaylandImpl* srv = nullptr;
         wl_client* client = nullptr;
@@ -538,7 +542,8 @@ namespace {
     // tablet-v2: one client's view of the (single virtual) tablet + tool.
     // Created with the tablet_seat; tool events route to the client whose
     // surface is under the tool, mirroring the pointer
-    struct TabletDev {
+    // the node links it into WaylandImpl::tablets
+    struct TabletDev: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* seat = nullptr;
         wl_resource* tablet = nullptr;
@@ -550,14 +555,16 @@ namespace {
     // xdg-foreign: an exported toplevel handle and its importers. The
     // export owns the token; every import references the export and is
     // notified (and detached) when the export or its toplevel dies
-    struct ForeignExport {
+    // the node links it into WaylandImpl::foreignExports
+    struct ForeignExport: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         ToplevelImpl* toplevel = nullptr;
         StringBuilder handle;
     };
 
-    struct ForeignImport {
+    // the node links it into WaylandImpl::foreignImports
+    struct ForeignImport: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         ForeignExport* source = nullptr;
@@ -566,13 +573,15 @@ namespace {
     // ext-foreign-toplevel-list: one binding of the list global and one
     // handle per (binding, toplevel); the toplevel pointer nulls when the
     // window dies (the handle then only answers destroy)
-    struct ForeignList {
+    // the node links it into WaylandImpl::foreignLists
+    struct ForeignList: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         bool stopped = false;
     };
 
-    struct ForeignTLHandle {
+    // the node links it into WaylandImpl::foreignTLHandles
+    struct ForeignTLHandle: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         ToplevelImpl* toplevel = nullptr;
@@ -601,7 +610,8 @@ namespace {
         bool finished = false;
     };
 
-    struct CaptureCursorSession {
+    // the node links it into WaylandImpl::cursorSessions
+    struct CaptureCursorSession: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         bool haveSession = false;
@@ -1003,12 +1013,13 @@ namespace {
         u32 fbTableSize = 0;
         u64 tokenCounter = 0;
 
-        struct WmBasePing {
+        // the node links it into wmBases; one box per xdg_wm_base binding
+        struct WmBasePing: IntrusiveNode {
             wl_resource* res = nullptr;
             bool acked = true;
         };
 
-        Vector<WmBasePing> wmBases;
+        IntrusiveList wmBases;
         Vector<wl_resource*> outputResources;
         ev_timer pingTimer{};
         u32 pingSerial = 0;
@@ -1030,8 +1041,8 @@ namespace {
         IntMap<Icon*> windowIcons;
 
         // color-management-v1 objects
-        Vector<CmOutput*> cmOutputResources;
-        Vector<CmFeedback*> cmFeedbackResources;
+        IntrusiveList cmOutputResources;
+        IntrusiveList cmFeedbackResources;
         u64 cimgIdentity = 0;
         u64 cmDisplayIdentity = 0;
         OutputColorState cmDisplayColor;
@@ -1052,14 +1063,14 @@ namespace {
         IntrusiveList idleNotifs;
         IntrusiveList idleInhibitors;
         IntrusiveList captureSessions;
-        Vector<CaptureCursorSession*> cursorSessions;
-        Vector<SandboxTag*> sandboxed;
-        Vector<TabletDev*> tablets;
-        Vector<ForeignExport*> foreignExports;
-        Vector<ForeignImport*> foreignImports;
-        Vector<ForeignList*> foreignLists;
-        Vector<ForeignTLHandle*> foreignTLHandles;
-        Vector<WlrCopyFrame*> screencopyFrames;
+        IntrusiveList cursorSessions;
+        IntrusiveList sandboxed;
+        IntrusiveList tablets;
+        IntrusiveList foreignExports;
+        IntrusiveList foreignImports;
+        IntrusiveList foreignLists;
+        IntrusiveList foreignTLHandles;
+        IntrusiveList screencopyFrames;
         ::Output* output = nullptr;
         double dpmsSec = 0;
         bool dpmsOff = false;
@@ -1167,9 +1178,9 @@ namespace {
     void wmBasePong(wl_client*, wl_resource* res, u32) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        for (size_t i = 0; i < srv->wmBases.length(); i++) {
-            if (srv->wmBases[i].res == res) {
-                srv->wmBases.mut(i).acked = true;
+        for (WaylandImpl::WmBasePing* ping : each<WaylandImpl::WmBasePing>(srv->wmBases)) {
+            if (ping->res == res) {
+                ping->acked = true;
             }
         }
     }
@@ -1185,28 +1196,24 @@ namespace {
             }
         });
 
-        for (size_t i = 0; i < srv->wmBases.length(); i++) {
-            if (srv->wmBases[i].res == res) {
-                srv->wmBases.mut(i) = srv->wmBases.back();
-                srv->wmBases.popBack();
-
-                break;
+        forEach<WaylandImpl::WmBasePing>(srv->wmBases, [&](WaylandImpl::WmBasePing& ping) {
+            if (ping.res == res) {
+                ping.unlink();
+                srv->alloc->release(&ping);
             }
-        }
+        });
     }
 
     void pingTimerCb(struct ev_loop*, ev_timer* w, int) {
         auto* srv = (WaylandImpl*)w->data;
 
-        for (size_t i = 0; i < srv->wmBases.length(); i++) {
-            auto& p = srv->wmBases.mut(i);
-
-            if (!p.acked) {
+        for (WaylandImpl::WmBasePing* ping : each<WaylandImpl::WmBasePing>(srv->wmBases)) {
+            if (!ping->acked) {
                 sysE << "imway: client is not answering ping"_sv << endL;
             }
 
-            p.acked = false;
-            xdg_wm_base_send_ping(p.res, ++srv->pingSerial);
+            ping->acked = false;
+            xdg_wm_base_send_ping(ping->res, ++srv->pingSerial);
         }
     }
 
@@ -3657,7 +3664,10 @@ namespace {
 
         auto* srv = (WaylandImpl*)data;
 
-        srv->wmBases.pushBack({res, true});
+        auto* ping = srv->alloc->make<WaylandImpl::WmBasePing>();
+
+        ping->res = res;
+        srv->wmBases.pushBack(ping);
     }
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h) {
@@ -4954,7 +4964,7 @@ namespace {
 
     // ---- xdg-foreign-v2 ----
     void foreignDetachImports(ForeignExport* ex) {
-        for (ForeignImport* im : ex->srv->foreignImports) {
+        for (ForeignImport* im : each<ForeignImport>(ex->srv->foreignImports)) {
             if (im->source == ex) {
                 im->source = nullptr;
                 zxdg_imported_v2_send_destroyed(im->res);
@@ -4974,7 +4984,7 @@ namespace {
         auto* ex = (ForeignExport*)wl_resource_get_user_data(res);
 
         foreignDetachImports(ex);
-        removeOne(ex->srv->foreignExports, ex);
+        ex->unlink();
         ex->srv->alloc->release(ex);
     }
 
@@ -4983,7 +4993,7 @@ namespace {
     void foreignToplevelGone(WaylandImpl* srv, ToplevelImpl* t) {
         // native transient children detach through the weak ring; only the
         // export bookkeeping (with its imported_v2.destroyed events) is ours
-        for (ForeignExport* ex : srv->foreignExports) {
+        for (ForeignExport* ex : each<ForeignExport>(srv->foreignExports)) {
             if (ex->toplevel == t) {
                 foreignDetachImports(ex);
                 ex->toplevel = nullptr;
@@ -5050,7 +5060,7 @@ namespace {
         auto* im = (ForeignImport*)wl_resource_get_user_data(res);
 
         // the parent relationship survives the handle object per the spec
-        removeOne(im->srv->foreignImports, im);
+        im->unlink();
         im->srv->alloc->release(im);
     }
 
@@ -5092,7 +5102,7 @@ namespace {
         im->srv = srv;
         im->res = r;
 
-        for (ForeignExport* ex : srv->foreignExports) {
+        for (ForeignExport* ex : each<ForeignExport>(srv->foreignExports)) {
             if (ex->toplevel && sv(ex->handle) == StringView(handle)) {
                 im->source = ex;
 
@@ -5130,7 +5140,7 @@ namespace {
     void foreignTLHandleDestroyed(wl_resource* res) {
         auto* h = (ForeignTLHandle*)wl_resource_get_user_data(res);
 
-        removeOne(h->srv->foreignTLHandles, h);
+        h->unlink();
         h->srv->alloc->release(h);
     }
 
@@ -5172,7 +5182,7 @@ namespace {
     }
 
     void foreignListToplevelMapped(WaylandImpl* srv, ToplevelImpl* t) {
-        for (ForeignList* list : srv->foreignLists) {
+        for (ForeignList* list : each<ForeignList>(srv->foreignLists)) {
             if (!list->stopped) {
                 foreignListAnnounce(list, t);
             }
@@ -5180,7 +5190,7 @@ namespace {
     }
 
     void foreignListToplevelUpdated(WaylandImpl* srv, ToplevelImpl* t) {
-        for (ForeignTLHandle* h : srv->foreignTLHandles) {
+        for (ForeignTLHandle* h : each<ForeignTLHandle>(srv->foreignTLHandles)) {
             if (h->toplevel == t) {
                 foreignTLSendState(h);
             }
@@ -5188,7 +5198,7 @@ namespace {
     }
 
     void foreignListToplevelGone(WaylandImpl* srv, ToplevelImpl* t) {
-        for (ForeignTLHandle* h : srv->foreignTLHandles) {
+        for (ForeignTLHandle* h : each<ForeignTLHandle>(srv->foreignTLHandles)) {
             if (h->toplevel == t) {
                 h->toplevel = nullptr;
                 ext_foreign_toplevel_handle_v1_send_closed(h->res);
@@ -5206,7 +5216,7 @@ namespace {
     void foreignListResourceDestroyed(wl_resource* res) {
         auto* list = (ForeignList*)wl_resource_get_user_data(res);
 
-        removeOne(list->srv->foreignLists, list);
+        list->unlink();
         list->srv->alloc->release(list);
     }
 
@@ -6184,7 +6194,7 @@ namespace {
             wl_resource_set_user_data(dev->tablet, nullptr);
         }
 
-        removeOne(dev->srv->tablets, dev);
+        dev->unlink();
         dev->srv->alloc->release(dev);
     }
 
@@ -6264,7 +6274,7 @@ namespace {
     }
 
     bool clientSandboxed(WaylandImpl* srv, const wl_client* client) {
-        for (SandboxTag* t : srv->sandboxed) {
+        for (SandboxTag* t : each<SandboxTag>(srv->sandboxed)) {
             if (t->client == client) {
                 return true;
             }
@@ -6276,7 +6286,7 @@ namespace {
     void sandboxTagDestroyed(wl_listener* l, void*) {
         auto* tag = (SandboxTag*)((char*)l - offsetof(SandboxTag, destroy));
 
-        removeOne(tag->srv->sandboxed, tag);
+        tag->unlink();
         tag->srv->alloc->release(tag);
     }
 
@@ -6953,7 +6963,7 @@ namespace {
     void captureCursorSessionResourceDestroyed(wl_resource* res) {
         auto* cc = (CaptureCursorSession*)wl_resource_get_user_data(res);
 
-        removeOne(cc->srv->cursorSessions, cc);
+        cc->unlink();
         cc->srv->alloc->release(cc);
     }
 
@@ -7176,7 +7186,7 @@ namespace {
         auto* f = (WlrCopyFrame*)wl_resource_get_user_data(res);
 
         wlrCopyDrop(f);
-        removeOne(f->srv->screencopyFrames, f);
+        f->unlink();
         f->srv->alloc->release(f);
     }
 
@@ -9812,7 +9822,7 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
 
     Surface* target = pickPointerTarget();
 
-    for (TabletDev* dev : srv->tablets) {
+    for (TabletDev* dev : each<TabletDev>(srv->tablets)) {
         if (!dev->tool || !dev->tablet) {
             continue;
         }
@@ -11205,7 +11215,7 @@ void SeatState::surfaceGone(Surface* s) {
         buttonsDown = 0;
     }
 
-    for (TabletDev* dev : srv->tablets) {
+    for (TabletDev* dev : each<TabletDev>(srv->tablets)) {
         if (dev->focus == s) {
             if (dev->tool) {
                 if (dev->down) {
@@ -11967,7 +11977,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* obj = (CmOutput*)wl_resource_get_user_data(res);
 
         if (obj) {
-            removeOne(obj->srv->cmOutputResources, obj);
+            obj->unlink();
             obj->srv->alloc->release(obj);
         }
     }
@@ -12000,7 +12010,7 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
 
         if (obj) {
-            removeOne(obj->srv->cmFeedbackResources, obj);
+            obj->unlink();
             obj->srv->alloc->release(obj);
         }
     }
@@ -12022,7 +12032,6 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         CmOutput* obj = srv->alloc->make<CmOutput>();
 
-        *obj = {};
         obj->srv = srv;
         obj->res = out;
         wl_resource_set_implementation(out, &cmOutputImpl, obj, cmOutputResourceDestroyed);
@@ -12591,13 +12600,13 @@ void WaylandImpl::syncColorState() {
     cmDisplayColor = color;
     cmDisplayIdentity = ++cimgIdentity;
 
-    for (CmOutput* obj : cmOutputResources) {
+    for (CmOutput* obj : each<CmOutput>(cmOutputResources)) {
         if (output) {
             wp_color_management_output_v1_send_image_description_changed(obj->res);
         }
     }
 
-    for (CmFeedback* obj : cmFeedbackResources) {
+    for (CmFeedback* obj : each<CmFeedback>(cmFeedbackResources)) {
         if (!obj->surface) {
             continue;
         }
@@ -12726,13 +12735,13 @@ void WaylandImpl::onListen(void* arg) {
         }
     });
 
-    for (WlrCopyFrame* f : screencopyFrames) {
+    for (WlrCopyFrame* f : each<WlrCopyFrame>(screencopyFrames)) {
         if (f->armed) {
             fulfillWlrCopy(this, *f);
         }
     }
 
-    for (CaptureCursorSession* cc : cursorSessions) {
+    for (CaptureCursorSession* cc : each<CaptureCursorSession>(cursorSessions)) {
         int x = (int)seat.curX, y = (int)seat.curY;
 
         if (!cc->entered) {

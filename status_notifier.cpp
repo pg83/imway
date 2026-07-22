@@ -5,6 +5,7 @@
 #include "icon.h"
 #include "icon_pool.h"
 #include "icon_provider.h"
+#include "intr_list.h"
 #include "scene.h"
 #include "util.h"
 
@@ -57,16 +58,19 @@ namespace {
     // peer box is the first object of its own arena, its items are members
     // of that arena, and NameOwnerChanged (the owner leaving) is the
     // arena's death
-    struct Peer {
+    // the node links it into StatusNotifierImpl::peers
+    struct Peer: IntrusiveNode {
         ObjPool* pool = nullptr;
         StringBuilder name; // the unique bus name
+        // arena members enumerated for the dock; items only die with the
+        // peer, so this is a plain collection, not a registry
         Vector<ItemBox*> items;
     };
 
     struct StatusNotifierImpl: public StatusNotifier, public IconProvider {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
-        Vector<Peer*> peers;
+        IntrusiveList peers;
         // pixmap symbol -> its item, both keys of every live item
         IntMap<ItemBox*> pixmaps;
         bool ownsWatcher = false;
@@ -453,9 +457,10 @@ Icon* StatusNotifierImpl::findIcon(u64 sym, StringView) {
 }
 
 StatusNotifierImpl::~StatusNotifierImpl() noexcept {
-    for (Peer* peer : peers) {
-        delete peer->pool;
-    }
+    forEach<Peer>(peers, [](Peer& peer) {
+        peer.unlink();
+        delete peer.pool;
+    });
 }
 
 ItemBox::~ItemBox() noexcept {
@@ -494,7 +499,7 @@ void StatusNotifierImpl::itemsImpl(VisitorFace&& vis) {
         return;
     }
 
-    for (Peer* peer : peers) {
+    for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {
             vis.visit(item);
         }
@@ -502,7 +507,7 @@ void StatusNotifierImpl::itemsImpl(VisitorFace&& vis) {
 }
 
 Peer* StatusNotifierImpl::peerFor(StringView name) {
-    for (Peer* peer : peers) {
+    for (Peer* peer : each<Peer>(peers)) {
         if (sv(peer->name) == name) {
             return peer;
         }
@@ -532,7 +537,7 @@ ItemBox* StatusNotifierImpl::find(Peer& peer, StringView service, StringView pat
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
     StringView path(dbus_message_get_path(msg) ? dbus_message_get_path(msg) : "");
 
-    for (Peer* peer : peers) {
+    for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {
             if ((text(item->path) == path || text(item->menuPath) == path) &&
                 (sv(peer->name) == sender || text(item->service) == sender)) {
@@ -716,15 +721,12 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
 }
 
 void StatusNotifierImpl::unregisterOwner(StringView owner) {
-    for (size_t i = 0; i < peers.length(); i++) {
-        if (sv(peers[i]->name) != owner) {
+    for (Peer* peer : each<Peer>(peers)) {
+        if (sv(peer->name) != owner) {
             continue;
         }
 
-        Peer* peer = peers[i];
-
-        peers.mut(i) = peers.back();
-        peers.popBack();
+        peer->unlink();
 
         for (ItemBox* item : peer->items) {
             emitItem("StatusNotifierItemUnregistered", *item);
@@ -827,7 +829,7 @@ void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
         dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "as", &var);
         dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
 
-        for (Peer* peer : peers) {
+        for (Peer* peer : each<Peer>(peers)) {
             for (ItemBox* item : peer->items) {
                 StringBuilder value;
 
@@ -866,7 +868,7 @@ void StatusNotifierImpl::watcherGetAll(DBusMessage* msg) {
     dbus_message_iter_open_container(&entry, DBUS_TYPE_VARIANT, "as", &var);
     dbus_message_iter_open_container(&var, DBUS_TYPE_ARRAY, "s", &arr);
 
-    for (Peer* peer : peers) {
+    for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {
             StringBuilder value;
 
