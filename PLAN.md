@@ -48,6 +48,7 @@
 - [x] ~~xdg-toplevel-tag~~ done (tag + description stored on the toplevel, surfaced in the dump)
 - [x] ~~xdg-foreign v2~~ done (exporter/importer, handle → transient parent; native set_parent now honored too; revoke + toplevel death detach children)
 - [x] ~~ext-foreign-toplevel-list + toplevel image-capture-source~~ done (readonly window list with stable identifiers; per-window capture crops the window's on-screen rect at its own size, resends constraints on resize, stops on window death; both globals sandbox-privileged)
+- [x] ~~xdg-toplevel-drag v1~~ done (a toplevel attached to a data-source drag floats out of docking and tracks the cursor at attach-offset; transparent to drop-target picking; detaches on unmap; the tab-tear gesture)
 - [x] ~~drm-lease v1~~ done — **hardware-unverified** (Device API enumerates non-desktop connectors + drmModeCreateLease/revoke; global gated on a real KMS drm fd, absent in headless; no reg test possible without VR hardware, like tearing async-flip)
 
 ### Этап G — полнота цвета

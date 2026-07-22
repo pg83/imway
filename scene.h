@@ -325,6 +325,12 @@ struct Scene {
 
     Surface* dragIcon = nullptr;
 
+    // xdg-toplevel-drag: the toplevel torn off during a data-source drag
+    // follows the cursor at (renderer posX/posY - drag offset); nullptr when
+    // no window is attached. The renderer floats it out of docking while set.
+    Toplevel* dragToplevel = nullptr;
+    int dragToplevelOffX = 0, dragToplevelOffY = 0;
+
     // input-method popup: the IME's candidate surface, positioned at the
     // active text input's cursor rectangle (screen coords, top-left)
     Surface* imePopup = nullptr;

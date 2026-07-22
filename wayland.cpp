@@ -50,6 +50,7 @@
 #include <xdg-foreign-unstable-v2-server-protocol.h>
 #include <ext-foreign-toplevel-list-v1-server-protocol.h>
 #include <drm-lease-v1-server-protocol.h>
+#include <xdg-toplevel-drag-v1-server-protocol.h>
 
 #include <sys/socket.h>
 #include <xdg-dialog-v1-server-protocol.h>
@@ -748,6 +749,19 @@ namespace {
         bool actionsSet = false;
         bool usedForDrag = false;
         bool usedForSelection = false;
+        // xdg-toplevel-drag object bound to this source, if any
+        struct ToplevelDragBox* toplevelDrag = nullptr;
+    };
+
+    // xdg-toplevel-drag: a data-source drag that also moves a toplevel. The
+    // attached window follows the cursor and is transparent to drop-target
+    // picking until the drag ends.
+    struct ToplevelDragBox {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        DataSource* source = nullptr;
+        ToplevelImpl* attached = nullptr;
+        int offX = 0, offY = 0;
     };
 
     // the node links it into its DataSource's offer list
@@ -844,6 +858,7 @@ namespace {
         void sendSelections(wl_client* client);
         void sourceGone(DataSource* src);
         void startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon);
+        void syncToplevelDrag();
         void dragMotion();
         void endDrag();
 
@@ -4404,6 +4419,108 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &dataManagerImpl, data, nullptr);
+    }
+
+    // ---- xdg-toplevel-drag-v1 ----
+    void toplevelDragDestroy(wl_client*, wl_resource* res) {
+        auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
+
+        // destroy is only legal after the underlying drag ended
+        if (box->source && box->srv->seat.dragSource == box->source) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_ONGOING_DRAG,
+                                   "the drag has not ended");
+
+            return;
+        }
+
+        wl_resource_destroy(res);
+    }
+
+    void toplevelDragAttach(wl_client*, wl_resource* res, wl_resource* toplevelRes, i32 xOff, i32 yOff) {
+        auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
+
+        if (box->attached && box->attached != t && box->attached->mapped) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_TOPLEVEL_ATTACHED,
+                                   "a valid toplevel is already attached");
+
+            return;
+        }
+
+        box->attached = t;
+        box->offX = xOff;
+        box->offY = yOff;
+
+        // if the drag is already live, start tracking now
+        if (box->source && box->srv->seat.dragSource == box->source) {
+            box->srv->seat.syncToplevelDrag();
+        }
+    }
+
+    const struct xdg_toplevel_drag_v1_interface toplevelDragImpl = {
+        .destroy = toplevelDragDestroy,
+        .attach = toplevelDragAttach,
+    };
+
+    void toplevelDragResourceDestroyed(wl_resource* res) {
+        auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
+
+        if (box->source) {
+            box->source->toplevelDrag = nullptr;
+        }
+
+        if (box->srv->scene->dragToplevel == box->attached) {
+            box->srv->scene->dragToplevel = nullptr;
+        }
+
+        box->srv->alloc->release(box);
+    }
+
+    void toplevelDragManagerGetDrag(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        DataSource* src = sourceFrom(sourceRes);
+
+        // the source must be fresh: already used for a drag/selection, or
+        // already carrying a drag object, is invalid
+        if (!src || src->usedForDrag || src->usedForSelection || src->toplevelDrag) {
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE,
+                                   "the data source is already in use");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &xdg_toplevel_drag_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ToplevelDragBox* box = srv->alloc->make<ToplevelDragBox>();
+
+        box->srv = srv;
+        box->res = r;
+        box->source = src;
+        src->toplevelDrag = box;
+        wl_resource_set_implementation(r, &toplevelDragImpl, box, toplevelDragResourceDestroyed);
+    }
+
+    const struct xdg_toplevel_drag_manager_v1_interface toplevelDragManagerImpl = {
+        .destroy = resDestroy,
+        .get_xdg_toplevel_drag = toplevelDragManagerGetDrag,
+    };
+
+    void toplevelDragManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_toplevel_drag_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &toplevelDragManagerImpl, data, nullptr);
     }
 
     void primarySourceOffer(wl_client*, wl_resource* res, const char* mime) {
@@ -9459,6 +9576,12 @@ Surface* SeatState::pickPointerTarget() {
             continue;
         }
 
+        // the window being dragged follows the cursor; it must not be its
+        // own drop target (xdg_toplevel_drag: "does not participate")
+        if (t == srv->scene->dragToplevel) {
+            continue;
+        }
+
         if (Surface* s = pickInTree(*t->surface)) {
             return s;
         }
@@ -10594,6 +10717,20 @@ void SeatState::sourceGone(DataSource* src) {
     }
 }
 
+void SeatState::syncToplevelDrag() {
+    ToplevelDragBox* box = dragSource ? dragSource->toplevelDrag : nullptr;
+
+    if (box && box->attached && box->attached->mapped) {
+        srv->scene->dragToplevel = box->attached;
+        srv->scene->dragToplevelOffX = box->offX;
+        srv->scene->dragToplevelOffY = box->offY;
+    } else {
+        srv->scene->dragToplevel = nullptr;
+    }
+
+    srv->scene->needsFrame = true;
+}
+
 void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon) {
     if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin) {
         // cancelled exists since v1; see deviceStartDrag
@@ -10610,6 +10747,7 @@ void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surfac
     srv->scene->dragIcon = icon;
     srv->scene->needsFrame = true;
     pointerSetFocus(nullptr, 0, 0);
+    syncToplevelDrag();
     dragMotion();
 }
 
@@ -10664,6 +10802,7 @@ void SeatState::dragMotion() {
 void SeatState::endDrag() {
     DataSource* src = dragSource;
 
+    srv->scene->dragToplevel = nullptr;
     dragSource = nullptr;
     dragClient = nullptr;
     srv->scene->dragIcon = nullptr;
@@ -10941,6 +11080,11 @@ void SeatState::focusToplevel(Toplevel* t) {
 // unmap (null-buffer commit) hides the window but keeps it alive: without a
 // focus handoff the keyboard and pointer keep feeding an invisible surface
 void SeatState::toplevelUnmapped(Toplevel* t) {
+    if (dragSource && dragSource->toplevelDrag && dragSource->toplevelDrag->attached == t) {
+        dragSource->toplevelDrag->attached = nullptr;
+        syncToplevelDrag();
+    }
+
     if (ptrFocus && ptrFocus->rootToplevel() == t) {
         pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
@@ -12343,6 +12487,7 @@ void WaylandImpl::createGlobals() {
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
+    global(display, &xdg_toplevel_drag_manager_v1_interface, 1, this, toplevelDragManagerBind);
     global(display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
     global(display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
     global(display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);

@@ -77,6 +77,7 @@ server_protocol_paths = [
     "staging/xdg-toplevel-tag/xdg-toplevel-tag-v1",
     "unstable/xdg-foreign/xdg-foreign-unstable-v2",
     "staging/drm-lease/drm-lease-v1",
+    "staging/xdg-toplevel-drag/xdg-toplevel-drag-v1",
 ]
 
 
@@ -205,6 +206,7 @@ client_protocol_paths = [
     "stable/tablet/tablet-v2",
     "staging/xdg-toplevel-tag/xdg-toplevel-tag-v1",
     "unstable/xdg-foreign/xdg-foreign-unstable-v2",
+    "staging/xdg-toplevel-drag/xdg-toplevel-drag-v1",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [

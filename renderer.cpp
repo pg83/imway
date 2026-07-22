@@ -3423,7 +3423,19 @@ void RendererImpl::buildUi(Scene& scene) {
             ImGui::SetNextWindowPos(ImVec2(t->restoreX, t->restoreY), ImGuiCond_Always);
         }
 
-        if (!t->docked && !t->fullscreen && !t->maximized) {
+        // xdg-toplevel-drag: a torn-off window follows the cursor. Pin it to
+        // (cursor - attach offset) and float it out of any dock node — this
+        // is exactly the tab-tear gesture. Overrides the size-driven pos below
+        bool dragTracking = (Toplevel*)t == scene.dragToplevel;
+
+        if (dragTracking) {
+            ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2((float)posX - scene.dragToplevelOffX,
+                                           (float)posY - scene.dragToplevelOffY), ImGuiCond_Always);
+            t->docked = false;
+        }
+
+        if (!dragTracking && !t->docked && !t->fullscreen && !t->maximized) {
             // when the size steps to a client-committed buffer during a left/top
             // drag, move the top-left by the same delta so the opposite edge
             // stays put and the window grows toward the hand
