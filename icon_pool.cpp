@@ -1,5 +1,6 @@
 #include "icon.h"
 #include "icon_pool.h"
+#include "pooled.h"
 
 #include <std/mem/obj_pool.h>
 
@@ -13,9 +14,20 @@ namespace {
 
         IconPoolImpl(ObjPool* p);
 
+        Icon* acquire(ObjPool& owner) override;
         Icon* acquire() override;
         void release(Icon* icon) override;
     };
+}
+
+Icon* IconPoolImpl::acquire(ObjPool& owner) {
+    Icon* ic = acquire();
+
+    pooledGuard(owner, [this, ic] {
+        release(ic);
+    });
+
+    return ic;
 }
 
 IconPoolImpl::IconPoolImpl(ObjPool* p)

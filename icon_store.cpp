@@ -1,7 +1,6 @@
 #include "icon.h"
 #include "composer.h"
 #include "icon_store.h"
-#include "small_obj_allocator.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "pooled_ev.h"
@@ -47,6 +46,11 @@ namespace {
         struct ev_loop* loop = nullptr;
         IconPool* icons = nullptr;
 
+        // the store generation: index entries, cache entries and the icon
+        // leases of everything resolved since the last reload; a reload
+        // builds the next generation and drops this one whole
+        ObjPool* gen = nullptr;
+
         // pool-backed: stl::Vector wants trivial elements, the strings live
         // in the objects and recycle with them
         Vector<DesktopIcon*> index;
@@ -64,7 +68,6 @@ namespace {
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
 
-        void clearCaches();
 
         void buildIndex();
         void addDesktop(StringBuilder& file, StringView fileId);
@@ -91,6 +94,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     , loop(comp.loop)
     , icons(comp.iconPool)
 {
+    gen = ObjPool::fromMemoryRaw();
     buildIndex();
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
@@ -123,34 +127,13 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
 }
 
 // the caches walk the impl's own members, so their teardown lives in the
-// destructor — pool-registered cleanups run after the impl is gone
+// destructor — the generation arena releases the icon leases into a pool
+// that outlives this impl (IconPool is created before the store)
 IconStoreImpl::~IconStoreImpl() noexcept {
-    clearCaches();
-}
-
-void IconStoreImpl::clearCaches() {
-    for (CachedIcon* cached : cache) {
-        if (cached->icon) {
-            icons->release(cached->icon);
-        }
-
-        c->alloc->release(cached);
-    }
-
-    cache.clear();
-
-    for (DesktopIcon* desktop : index) {
-        c->alloc->release(desktop);
-    }
-
-    index.clear();
+    delete gen;
 }
 
 void IconStoreImpl::buildIndex() {
-    for (DesktopIcon* di : index) {
-        c->alloc->release(di);
-    }
-
     index.clear();
 
     forEachXdgDataDir([this](StringView base) {
@@ -183,7 +166,7 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
 
     bool inSection = false;
     StringView rest = sv(data);
-    DesktopIcon* di = c->alloc->make<DesktopIcon>();
+    DesktopIcon* di = gen->make<DesktopIcon>();
 
     di->fileId << fileId;
 
@@ -219,8 +202,6 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
 
     if (!di->icon.empty()) {
         index.pushBack(di);
-    } else {
-        c->alloc->release(di);
     }
 }
 
@@ -237,18 +218,11 @@ void IconStoreImpl::drainInotify() {
 void IconStoreImpl::reload() {
     ev_timer_stop(loop, reloadTimer);
 
-    // the old icons go back to the pool only after the subscriber
-    // has re-resolved everything onto fresh ones
-    Vector<Icon*> old;
+    // the old generation dies only after the subscribers re-resolved onto
+    // the fresh one: its icon leases return to the pool at the delete
+    ObjPool* old = gen;
 
-    for (CachedIcon* c : cache) {
-        if (c->icon) {
-            old.pushBack(c->icon);
-        }
-
-        this->c->alloc->release(c);
-    }
-
+    gen = ObjPool::fromMemoryRaw();
     cache.clear();
     buildIndex();
 
@@ -256,10 +230,7 @@ void IconStoreImpl::reload() {
         listener.onListen();
     });
 
-    for (Icon* ic : old) {
-        icons->release(ic);
-    }
-
+    delete old;
     sysO << "imway: icon store reloaded, "_sv << (u64)index.length() << " entries"_sv << endL;
 }
 
@@ -277,7 +248,7 @@ Icon* IconStoreImpl::loadSvgFile(StringBuilder& path) {
     }
 
     // lunasvg bitmaps are premultiplied ARGB32, same as Icon wants
-    Icon* ic = icons->acquire();
+    Icon* ic = icons->acquire(*gen);
 
     ic->width = kIconPx;
     ic->height = kIconPx;
@@ -294,7 +265,7 @@ Icon* IconStoreImpl::cached(StringView key, auto&& load) {
         }
     }
 
-    CachedIcon* c = this->c->alloc->make<CachedIcon>();
+    CachedIcon* c = gen->make<CachedIcon>();
 
     c->key << key;
     c->icon = load();
