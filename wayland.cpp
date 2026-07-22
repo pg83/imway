@@ -10127,9 +10127,66 @@ WaylandImpl::~WaylandImpl() noexcept {
         p->tfSet = true;
     }
 
-    void cmParamsSetTfPower(wl_client*, wl_resource* res, u32) {
-        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "power transfer functions were not advertised");
+    void cmParamsSetTfPower(wl_client*, wl_resource* res, u32 eexp) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        if (p->tfSet) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
+                                   "the transfer function is already set");
+
+            return;
+        }
+
+        // wire units are 1/10000 of the exponent; 1.0..10.0 is the valid range
+        double g = (double)eexp / 10000.0;
+
+        if (g < 1.0 || g > 10.0) {
+            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
+                                   "power exponent out of range");
+
+            return;
+        }
+
+        p->tfSet = true;
+        p->d.color.transfer = ColorTransfer::iccGamma;
+        p->d.color.gamma[0] = p->d.color.gamma[1] = p->d.color.gamma[2] = g;
+    }
+
+    // wp_color_manager_v1 named primaries -> chromaticities in 1/1000000
+    // units (D65 white unless noted). false = not a primaries name we map
+    bool namedPrimaries(u32 prim, Chromaticities& out) {
+        switch (prim) {
+            case WP_COLOR_MANAGER_V1_PRIMARIES_SRGB:
+                out = Chromaticities::sRgb();
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_BT2020:
+                out = Chromaticities::bt2020();
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3:
+                out = Chromaticities::displayP3();
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M:
+                out = {670000, 330000, 210000, 710000, 140000, 80000, 310000, 316000};
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_PAL:
+                out = {640000, 330000, 290000, 600000, 150000, 60000, 313000, 329000};
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_NTSC:
+                out = {630000, 340000, 310000, 595000, 155000, 70000, 312727, 329024};
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM:
+                out = {681000, 319000, 243000, 692000, 145000, 49000, 310000, 316000};
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3:
+                // DCI white, not D65
+                out = {680000, 320000, 265000, 690000, 150000, 60000, 314000, 351000};
+                return true;
+            case WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB:
+                out = {640000, 330000, 210000, 710000, 150000, 60000, 313000, 329000};
+                return true;
+            default:
+                return false;
+        }
     }
 
     void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
@@ -10142,9 +10199,9 @@ WaylandImpl::~WaylandImpl() noexcept {
             return;
         }
 
-        if (prim != WP_COLOR_MANAGER_V1_PRIMARIES_SRGB &&
-            prim != WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 &&
-            prim != WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3) {
+        Chromaticities chroma;
+
+        if (!namedPrimaries(prim, chroma)) {
             wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_PRIMARIES_NAMED,
                                    "primaries were not advertised");
 
@@ -10154,12 +10211,11 @@ WaylandImpl::~WaylandImpl() noexcept {
         p->d.color.primaries = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 ?
             ColorPrimaries::bt2020 :
             prim == WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 ?
-            ColorPrimaries::displayP3 : ColorPrimaries::sRgb;
-        p->d.color.primary = p->d.color.primaries == ColorPrimaries::bt2020 ?
-            Chromaticities::bt2020() :
-            p->d.color.primaries == ColorPrimaries::displayP3 ?
-            Chromaticities::displayP3() : Chromaticities::sRgb();
-        p->d.color.target = p->d.color.primary;
+            ColorPrimaries::displayP3 :
+            prim == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB ?
+            ColorPrimaries::sRgb : ColorPrimaries::custom;
+        p->d.color.primary = chroma;
+        p->d.color.target = chroma;
         p->primSet = true;
     }
 
@@ -10215,14 +10271,22 @@ WaylandImpl::~WaylandImpl() noexcept {
         p->d.color.targetMaxNits = p->d.color.maxNits;
     }
 
-    void cmParamsSetMasteringPrim(wl_client*, wl_resource* res, i32, i32, i32, i32, i32, i32, i32, i32) {
-        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "mastering display primaries were not advertised");
+    void cmParamsSetMasteringPrim(wl_client*, wl_resource* res,
+                                  i32 rx, i32 ry, i32 gx, i32 gy,
+                                  i32 bx, i32 by, i32 wx, i32 wy) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        // the target volume the content was mastered against: our tone map
+        // reads it as the target chromaticities
+        p->d.color.target = {rx, ry, gx, gy, bx, by, wx, wy};
     }
 
-    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32, u32) {
-        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE,
-                               "mastering luminance was not advertised");
+    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum) {
+        auto* p = (CParams*)wl_resource_get_user_data(res);
+
+        // min in 1/10000 cd/m^2, max in cd/m^2
+        p->d.color.targetMinNits = (double)minLum / 10000.0;
+        p->d.color.targetMaxNits = (double)maxLum;
     }
 
     void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
@@ -10745,6 +10809,8 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_ICC_V2_V4);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_TF_POWER);
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
         wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
         if (version >= 3) {
             wp_color_manager_v1_send_supported_feature(
@@ -10765,6 +10831,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
         wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_NTSC);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3);
+        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB);
         wp_color_manager_v1_send_done(res);
     }
 

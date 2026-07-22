@@ -82,10 +82,18 @@ int main(int argc, char** argv) {
 
     struct wp_image_description_creator_params_v1* params = make_params();
 
-    if (!strcmp(argv[1], "unsupported-tf-power")) {
+    if (!strcmp(argv[1], "invalid-tf-power")) {
+        // exponent 0.5 is below the valid 1.0..10.0 range
+        wp_image_description_creator_params_v1_set_tf_power(params, 5000);
+        return expect_error(wp_image_description_creator_params_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF);
+    }
+
+    if (!strcmp(argv[1], "duplicate-tf-power")) {
+        wp_image_description_creator_params_v1_set_tf_power(params, 24000);
         wp_image_description_creator_params_v1_set_tf_power(params, 22000);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET);
     }
 
     if (!strcmp(argv[1], "duplicate-luminances")) {
@@ -101,19 +109,6 @@ int main(int argc, char** argv) {
         wp_image_description_creator_params_v1_set_luminances(params, 10000, 1, 80);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
-    }
-
-    if (!strcmp(argv[1], "unsupported-mastering-primaries")) {
-        wp_image_description_creator_params_v1_set_mastering_display_primaries(
-            params, 640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000);
-        return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
-    }
-
-    if (!strcmp(argv[1], "unsupported-mastering-luminance")) {
-        wp_image_description_creator_params_v1_set_mastering_luminance(params, 10000, 1);
-        return expect_error(wp_image_description_creator_params_v1_interface.name,
-                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_UNSUPPORTED_FEATURE);
     }
 
     if (!strcmp(argv[1], "invalid-max-cll") || !strcmp(argv[1], "invalid-max-fall")) {

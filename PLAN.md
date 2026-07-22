@@ -43,7 +43,7 @@
 - [ ] input-method popup
 
 ### Этап G — полнота цвета
-- [ ] mastering primaries/luminance, tf_power, named primaries, get_output по wl_output
+- [x] ~~mastering primaries/luminance, tf_power, named primaries~~ done (tf_power wired through the iccGamma path; mastering stored as target-volume metadata; 6 extra named primaries; get_output honest for the single output)
 
 ---
 

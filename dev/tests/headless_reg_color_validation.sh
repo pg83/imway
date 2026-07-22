@@ -4,9 +4,8 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-for mode in unsupported-tf-power \
-            duplicate-luminances invalid-luminances unsupported-mastering-primaries \
-            unsupported-mastering-luminance invalid-max-cll invalid-max-fall \
+for mode in invalid-tf-power duplicate-tf-power \
+            duplicate-luminances invalid-luminances invalid-max-cll invalid-max-fall \
             parametric-information; do
     "$IMWAY_CLIENT" "$mode" || { echo "wrong/no color protocol error for $mode"; exit 1; }
     expect_alive "compositor died on $mode"
