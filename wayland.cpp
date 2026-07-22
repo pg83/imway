@@ -33,6 +33,7 @@
 #include <alpha-modifier-v1-server-protocol.h>
 #include <content-type-v1-server-protocol.h>
 #include <tearing-control-v1-server-protocol.h>
+#include <fifo-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -162,9 +163,11 @@ namespace {
         ~DmabufUse() noexcept;
     };
 
+    struct CommitCache;
+
     struct CachedBufferDestroyListener {
         wl_listener listener{};
-        SubsurfaceImpl* sub = nullptr;
+        CommitCache* cache = nullptr;
     };
 
     struct ActivationTokenRequest: IntrusiveNode {
@@ -238,6 +241,9 @@ namespace {
             int scale = 0;
             int transform = -1;
             int attachX = 0, attachY = 0;
+            // wp-fifo requests are double-buffered like everything else
+            bool fifoSet = false;
+            bool fifoWait = false;
         } pending;
 
         Vector<wl_resource*> frameCbs;
@@ -279,6 +285,12 @@ namespace {
         bool pendContentChanged = false;
         u32 pendContentType = 0;
 
+        // wp-fifo: the surface's fifo object, the barrier condition and the
+        // queue of parked content updates awaiting a presentation
+        wl_resource* fifoRes = nullptr;
+        bool fifoBarrier = false;
+        stl::IntrusiveList fifoQueue;
+
         // wp-tearing-control surface state
         wl_resource* tearingRes = nullptr;
         bool pendTearingChanged = false;
@@ -289,6 +301,52 @@ namespace {
 
 
 
+    // one commit's worth of double-buffered state, parked instead of
+    // applied: the subsurface sync cache merges successive commits into
+    // one of these, a fifo queue entry snapshots exactly one
+    struct CommitCache {
+        bool valid = false;
+        bool hasContent = false;
+        int width = 0, height = 0;
+        Vector<u8> pixels;
+        Vector<wl_resource*> frames;
+        DmabufBuffer* dmabuf = nullptr;
+        wl_resource* dmabufRes = nullptr;
+        CachedBufferDestroyListener dmabufDestroy;
+        bool dmabufDestroyArmed = false;
+        TimelineBox* acq = nullptr;
+        TimelineBox* rel = nullptr;
+        u64 acquirePoint = 0, releasePoint = 0;
+        bool scaleSet = false, transformSet = false;
+        int scale = 1, transform = WL_OUTPUT_TRANSFORM_NORMAL;
+        int offsetX = 0, offsetY = 0;
+        bool vpSrcSet = false, vpDstSet = false;
+        bool vpHasSrc = false, vpHasDst = false;
+        double sx = 0, sy = 0, sw = 0, sh = 0;
+        int dw = 0, dh = 0;
+        bool inputChanged = false, inputSet = false;
+        Vector<RectI> inputRegion;
+        bool opaqueChanged = false, opaqueSet = false;
+        Vector<RectI> opaqueRegion;
+        bool colorChanged = false;
+        ColorDescription color;
+        bool representationChanged = false;
+        ColorRepresentation representation;
+        // release callback for a synced-subsurface cached buffer (v7)
+        wl_resource* releaseCb = nullptr;
+        bool alphaChanged = false;
+        float alphaMult = 1.f;
+    };
+
+    // one queued wp-fifo content update: born at a blocked commit, dies when
+    // the frame event admits it (or with its surface). The snapshot rides a
+    // CommitCache; the buffer inside is FrameResource-held
+    struct FifoEntry: IntrusiveNode {
+        CommitCache cache;
+        bool setBarrier = false;
+        bool waitBarrier = false;
+    };
+
     struct SubsurfaceImpl: public Subsurface {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
@@ -297,39 +355,7 @@ namespace {
         bool pendingPos = false;
         bool sync = true;
 
-        struct {
-            bool valid = false;
-            bool hasContent = false;
-            int width = 0, height = 0;
-            Vector<u8> pixels;
-            Vector<wl_resource*> frames;
-            DmabufBuffer* dmabuf = nullptr;
-            wl_resource* dmabufRes = nullptr;
-            CachedBufferDestroyListener dmabufDestroy;
-            bool dmabufDestroyArmed = false;
-            TimelineBox* acq = nullptr;
-            TimelineBox* rel = nullptr;
-            u64 acquirePoint = 0, releasePoint = 0;
-            bool scaleSet = false, transformSet = false;
-            int scale = 1, transform = WL_OUTPUT_TRANSFORM_NORMAL;
-            int offsetX = 0, offsetY = 0;
-            bool vpSrcSet = false, vpDstSet = false;
-            bool vpHasSrc = false, vpHasDst = false;
-            double sx = 0, sy = 0, sw = 0, sh = 0;
-            int dw = 0, dh = 0;
-            bool inputChanged = false, inputSet = false;
-            Vector<RectI> inputRegion;
-            bool opaqueChanged = false, opaqueSet = false;
-            Vector<RectI> opaqueRegion;
-            bool colorChanged = false;
-            ColorDescription color;
-            bool representationChanged = false;
-            ColorRepresentation representation;
-            // release callback for a synced-subsurface cached buffer (v7)
-            wl_resource* releaseCb = nullptr;
-            bool alphaChanged = false;
-            float alphaMult = 1.f;
-        } cache;
+        CommitCache cache;
 
         bool effectiveSync() const;
     };
@@ -923,6 +949,9 @@ namespace {
     }
 
     void unlinkFromParent(SubsurfaceImpl&);
+    void applyCache(SurfaceImpl&, CommitCache&);
+    void drainFifo(SurfaceImpl&, bool presented);
+    void fifoSurfaceGone(SurfaceImpl&);
     void applySubsurfaceCache(SubsurfaceImpl&);
     void xdgHandleCommit(SurfaceImpl&);
     void xdgPopupDismiss(PopupImpl&);
@@ -993,42 +1022,42 @@ namespace {
     }
 
     void cachedDmabufDestroyed(wl_listener* l, void*) {
-        SubsurfaceImpl* sub = ((CachedBufferDestroyListener*)l)->sub;
+        CommitCache* cache = ((CachedBufferDestroyListener*)l)->cache;
 
-        sub->cache.dmabufRes = nullptr;
-        sub->cache.dmabufDestroyArmed = false;
-        wl_list_remove(&sub->cache.dmabufDestroy.listener.link);
+        cache->dmabufRes = nullptr;
+        cache->dmabufDestroyArmed = false;
+        wl_list_remove(&cache->dmabufDestroy.listener.link);
     }
 
-    void releaseCachedDmabuf(SubsurfaceImpl& sub) {
-        if (!sub.cache.dmabuf) {
+    void releaseCachedDmabuf(WaylandImpl* srv, CommitCache& cache) {
+        if (!cache.dmabuf) {
             return;
         }
 
-        if (sub.cache.rel) {
-            drmSyncobjTimelineSignal(sub.srv->drmFd, &sub.cache.rel->handle, &sub.cache.releasePoint, 1);
+        if (cache.rel) {
+            drmSyncobjTimelineSignal(srv->drmFd, &cache.rel->handle, &cache.releasePoint, 1);
         }
 
-        tlUnref(sub.cache.acq);
-        tlUnref(sub.cache.rel);
+        tlUnref(cache.acq);
+        tlUnref(cache.rel);
 
-        if (sub.cache.dmabufRes) {
-            wl_buffer_send_release(sub.cache.dmabufRes);
+        if (cache.dmabufRes) {
+            wl_buffer_send_release(cache.dmabufRes);
         }
 
         // the cached buffer is dropped before being applied: its release
         // callback fires now
-        fireReleaseCb(sub.cache.releaseCb);
+        fireReleaseCb(cache.releaseCb);
 
-        if (sub.cache.dmabufDestroyArmed) {
-            wl_list_remove(&sub.cache.dmabufDestroy.listener.link);
+        if (cache.dmabufDestroyArmed) {
+            wl_list_remove(&cache.dmabufDestroy.listener.link);
         }
 
-        dmabufUnref(sub.cache.dmabuf);
-        sub.cache.dmabuf = nullptr;
-        sub.cache.dmabufRes = nullptr;
-        sub.cache.dmabufDestroyArmed = false;
-        sub.cache.acq = sub.cache.rel = nullptr;
+        dmabufUnref(cache.dmabuf);
+        cache.dmabuf = nullptr;
+        cache.dmabufRes = nullptr;
+        cache.dmabufDestroyArmed = false;
+        cache.acq = cache.rel = nullptr;
     }
 
     void dmabufUseBufferDestroyed(wl_listener* l, void*) {
@@ -1143,6 +1172,14 @@ namespace {
 
         removeOne(s->pending.frames, cb);
         removeOne(s->frameCbs, cb);
+
+        if (s->sub) {
+            removeOne(((SubsurfaceImpl*)s->sub)->cache.frames, cb);
+        }
+
+        forEach<FifoEntry>(s->fifoQueue, [cb](FifoEntry& e) {
+            removeOne(e.cache.frames, cb);
+        });
     }
 
     void surfaceFrame(wl_client* client, wl_resource* res, u32 id) {
@@ -1294,97 +1331,96 @@ namespace {
         s.color = color;
     }
 
-    void applySubsurfaceCache(SubsurfaceImpl& sub) {
-        SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
+    void applyCache(SurfaceImpl& s, CommitCache& cache) {
 
-        if (sub.cache.scaleSet) {
-            s.bufferScale = sub.cache.scale;
-            sub.cache.scaleSet = false;
+        if (cache.scaleSet) {
+            s.bufferScale = cache.scale;
+            cache.scaleSet = false;
             s.damageAll = true;
         }
 
-        if (sub.cache.transformSet) {
-            s.bufferTransform = sub.cache.transform;
-            sub.cache.transformSet = false;
+        if (cache.transformSet) {
+            s.bufferTransform = cache.transform;
+            cache.transformSet = false;
             s.damageAll = true;
         }
 
-        if (sub.cache.colorChanged) {
-            applyColorState(s, sub.cache.color);
-            sub.cache.colorChanged = false;
+        if (cache.colorChanged) {
+            applyColorState(s, cache.color);
+            cache.colorChanged = false;
         }
 
-        if (sub.cache.representationChanged) {
-            s.representation = sub.cache.representation;
-            sub.cache.representationChanged = false;
+        if (cache.representationChanged) {
+            s.representation = cache.representation;
+            cache.representationChanged = false;
         }
 
-        s.bufferOffsetX = satAddI32(s.bufferOffsetX, sub.cache.offsetX);
-        s.bufferOffsetY = satAddI32(s.bufferOffsetY, sub.cache.offsetY);
-        sub.cache.offsetX = sub.cache.offsetY = 0;
+        s.bufferOffsetX = satAddI32(s.bufferOffsetX, cache.offsetX);
+        s.bufferOffsetY = satAddI32(s.bufferOffsetY, cache.offsetY);
+        cache.offsetX = cache.offsetY = 0;
 
-        if (sub.cache.vpSrcSet) {
-            s.vp.hasSrc = sub.cache.vpHasSrc;
-            s.vp.sx = sub.cache.sx;
-            s.vp.sy = sub.cache.sy;
-            s.vp.sw = sub.cache.sw;
-            s.vp.sh = sub.cache.sh;
-            sub.cache.vpSrcSet = false;
+        if (cache.vpSrcSet) {
+            s.vp.hasSrc = cache.vpHasSrc;
+            s.vp.sx = cache.sx;
+            s.vp.sy = cache.sy;
+            s.vp.sw = cache.sw;
+            s.vp.sh = cache.sh;
+            cache.vpSrcSet = false;
         }
 
-        if (sub.cache.vpDstSet) {
-            s.vp.hasDst = sub.cache.vpHasDst;
-            s.vp.dw = sub.cache.dw;
-            s.vp.dh = sub.cache.dh;
-            sub.cache.vpDstSet = false;
+        if (cache.vpDstSet) {
+            s.vp.hasDst = cache.vpHasDst;
+            s.vp.dw = cache.dw;
+            s.vp.dh = cache.dh;
+            cache.vpDstSet = false;
         }
 
-        if (sub.cache.valid) {
+        if (cache.valid) {
             releaseHeldDmabuf(s);
-            s.hasContent = sub.cache.hasContent;
-            s.width = sub.cache.width;
-            s.height = sub.cache.height;
+            s.hasContent = cache.hasContent;
+            s.width = cache.width;
+            s.height = cache.height;
 
-            if (sub.cache.dmabuf) {
-                if (sub.cache.dmabufDestroyArmed) {
-                    wl_list_remove(&sub.cache.dmabufDestroy.listener.link);
-                    sub.cache.dmabufDestroyArmed = false;
+            if (cache.dmabuf) {
+                if (cache.dmabufDestroyArmed) {
+                    wl_list_remove(&cache.dmabufDestroy.listener.link);
+                    cache.dmabufDestroyArmed = false;
                 }
 
-                DmabufUse* use = holdDmabuf(s, sub.cache.dmabufRes, sub.cache.dmabuf, false);
+                DmabufUse* use = holdDmabuf(s, cache.dmabufRes, cache.dmabuf, false);
 
                 // the cached release callback follows the buffer into the
                 // applied use
-                use->releaseCb = sub.cache.releaseCb;
-                sub.cache.releaseCb = nullptr;
-                use->acq = sub.cache.acq;
-                use->rel = sub.cache.rel;
-                use->relPoint = sub.cache.releasePoint;
+                use->releaseCb = cache.releaseCb;
+                cache.releaseCb = nullptr;
+                use->acq = cache.acq;
+                use->rel = cache.rel;
+                use->relPoint = cache.releasePoint;
                 s.syncAcquireHandle = use->acq ? use->acq->handle : 0;
-                s.syncAcquirePoint = sub.cache.acquirePoint;
+                s.syncAcquirePoint = cache.acquirePoint;
                 s.syncAcquireWait = use->acq != nullptr;
                 s.explicitSync = use->acq != nullptr;
                 s.pixels.clear();
                 s.dirty = true;
 
-                sub.cache.dmabuf = nullptr;
-                sub.cache.dmabufRes = nullptr;
-                sub.cache.acq = sub.cache.rel = nullptr;
-            } else if (sub.cache.hasContent && !sub.cache.pixels.empty()) {
-                s.pixels.xchg(sub.cache.pixels);
+                cache.dmabuf = nullptr;
+                cache.dmabufRes = nullptr;
+                cache.acq = cache.rel = nullptr;
+            } else if (cache.hasContent && !cache.pixels.empty()) {
+                s.pixels.xchg(cache.pixels);
                 s.dirty = true;
                 s.damageAll = true;
             }
 
-            sub.cache.pixels.clear();
-            sub.cache.valid = false;
+            cache.pixels.clear();
+            cache.valid = false;
         }
 
-        if (sub.cache.inputChanged) {
-            s.inputRegionSet = sub.cache.inputSet;
+        if (cache.inputChanged) {
+            s.inputRegionSet = cache.inputSet;
             s.inputRegion.clear();
 
-            for (const RectI& cachedRect : sub.cache.inputRegion) {
+            for (const RectI& cachedRect : cache.inputRegion) {
                 RectI r = cachedRect;
 
                 clipRect(r, s.viewW(), s.viewH());
@@ -1394,30 +1430,36 @@ namespace {
                 }
             }
 
-            sub.cache.inputRegion.clear();
-            sub.cache.inputChanged = false;
+            cache.inputRegion.clear();
+            cache.inputChanged = false;
         }
 
-        if (sub.cache.opaqueChanged) {
-            s.opaqueRegionSet = sub.cache.opaqueSet;
+        if (cache.opaqueChanged) {
+            s.opaqueRegionSet = cache.opaqueSet;
             s.opaqueRegion.clear();
-            s.opaqueRegion.append(sub.cache.opaqueRegion.begin(), sub.cache.opaqueRegion.length());
-            sub.cache.opaqueRegion.clear();
-            sub.cache.opaqueChanged = false;
+            s.opaqueRegion.append(cache.opaqueRegion.begin(), cache.opaqueRegion.length());
+            cache.opaqueRegion.clear();
+            cache.opaqueChanged = false;
         }
 
-        if (sub.cache.alphaChanged) {
-            s.alphaMult = sub.cache.alphaMult;
-            sub.cache.alphaChanged = false;
+        if (cache.alphaChanged) {
+            s.alphaMult = cache.alphaMult;
+            cache.alphaChanged = false;
         }
 
         constraintApplyPending(s);
 
-        for (wl_resource* cb : sub.cache.frames) {
+        for (wl_resource* cb : cache.frames) {
             s.frameCbs.pushBack(cb);
         }
 
-        sub.cache.frames.clear();
+        cache.frames.clear();
+    }
+
+    void applySubsurfaceCache(SubsurfaceImpl& sub) {
+        SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
+
+        applyCache(s, sub.cache);
 
         if (sub.pendingPos) {
             sub.x = sub.pendingX;
@@ -1436,6 +1478,38 @@ namespace {
                 applySubsurfaceCache(impl(&c));
             }
         });
+    }
+
+    void drainFifo(SurfaceImpl& s, bool presented) {
+        if (presented) {
+            // this surface's content was just shown: its barrier is satisfied
+            s.fifoBarrier = false;
+        }
+
+        while (!s.fifoQueue.empty()) {
+            FifoEntry* e = (FifoEntry*)s.fifoQueue.mutFront();
+
+            // an invisible surface cannot hold a barrier (the spec's escape
+            // hatch against stalled clients): ignore barriers entirely
+            if (presented && e->waitBarrier && s.fifoBarrier) {
+                break;
+            }
+
+            e->unlink();
+            applyCache(s, e->cache);
+            applyChildrenCaches(s);
+
+            if (s.xdg) {
+                xdgHandleCommit(s);
+            }
+
+            if (e->setBarrier) {
+                s.fifoBarrier = true;
+            }
+
+            s.srv->alloc->release(e);
+            s.srv->scene->needsFrame = true;
+        }
     }
 
     bool syncCommitOk(SurfaceImpl& s) {
@@ -1514,17 +1588,41 @@ namespace {
 
         SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
         bool toCache = sub && sub->effectiveSync();
+        CommitCache* cache = toCache ? &sub->cache : nullptr;
+
+        // wp-fifo: while older updates sit queued (ordering) or this update
+        // waits on a raised barrier, the commit parks in a queue entry
+        // instead of applying; the frame event admits one entry per
+        // presentation. The entry joins the queue immediately, so an error
+        // return mid-commit leaves it owned by the surface
+        bool fifoSet = s.pending.fifoSet;
+        bool fifoWait = s.pending.fifoWait;
+
+        s.pending.fifoSet = false;
+        s.pending.fifoWait = false;
+
+        if (!cache && (!s.fifoQueue.empty() || (fifoWait && s.fifoBarrier))) {
+            FifoEntry* entry = s.srv->alloc->make<FifoEntry>();
+
+            entry->setBarrier = fifoSet;
+            entry->waitBarrier = fifoWait;
+            s.fifoQueue.pushBack(entry);
+            cache = &entry->cache;
+        } else if (fifoSet) {
+            // applied in this commit: the barrier goes up with the content
+            s.fifoBarrier = true;
+        }
 
         if (s.syncRes && !syncCommitOk(s)) {
             return;
         }
 
-        bool cachedContent = toCache && sub->cache.valid ? sub->cache.hasContent : s.hasContent;
+        bool cachedContent = cache && cache->valid ? cache->hasContent : s.hasContent;
         bool validateCurrentSize = !s.pending.newlyAttached && cachedContent && (s.pending.scale > 0 || s.pending.transform >= 0);
 
         if ((s.pending.newlyAttached && s.pending.buffer) || validateCurrentSize) {
-            int bw = validateCurrentSize ? (toCache && sub->cache.valid ? sub->cache.width : s.width) : 0;
-            int bh = validateCurrentSize ? (toCache && sub->cache.valid ? sub->cache.height : s.height) : 0;
+            int bw = validateCurrentSize ? (cache && cache->valid ? cache->width : s.width) : 0;
+            int bh = validateCurrentSize ? (cache && cache->valid ? cache->height : s.height) : 0;
 
             if (!validateCurrentSize) {
                 if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
@@ -1539,8 +1637,8 @@ namespace {
                 }
             }
 
-            int scale = s.pending.scale > 0 ? s.pending.scale : toCache && sub->cache.scaleSet ? sub->cache.scale : s.bufferScale;
-            int transform = s.pending.transform >= 0 ? s.pending.transform : toCache && sub->cache.transformSet ? sub->cache.transform : s.bufferTransform;
+            int scale = s.pending.scale > 0 ? s.pending.scale : cache && cache->scaleSet ? cache->scale : s.bufferScale;
+            int transform = s.pending.transform >= 0 ? s.pending.transform : cache && cache->transformSet ? cache->transform : s.bufferTransform;
             bool swapped = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270 ||
                            transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
             int tw = swapped ? bh : bw, th = swapped ? bw : bh;
@@ -1554,17 +1652,17 @@ namespace {
 
         if (s.pending.newlyAttached) {
             if (s.pending.buffer) {
-                if (toCache) {
-                    sub->cache.offsetX = satAddI32(sub->cache.offsetX, s.pending.attachX);
-                    sub->cache.offsetY = satAddI32(sub->cache.offsetY, s.pending.attachY);
+                if (cache) {
+                    cache->offsetX = satAddI32(cache->offsetX, s.pending.attachX);
+                    cache->offsetY = satAddI32(cache->offsetY, s.pending.attachY);
                 } else {
                     s.bufferOffsetX = satAddI32(s.bufferOffsetX, s.pending.attachX);
                     s.bufferOffsetY = satAddI32(s.bufferOffsetY, s.pending.attachY);
                 }
             }
 
-            if (toCache) {
-                releaseCachedDmabuf(*sub);
+            if (cache) {
+                releaseCachedDmabuf(s.srv, *cache);
             }
 
             if (!s.pending.buffer) {
@@ -1572,11 +1670,11 @@ namespace {
                 // nothing to wait on
                 fireReleaseCb(s.pending.releaseCb);
 
-                if (toCache) {
-                    sub->cache.valid = true;
-                    sub->cache.hasContent = false;
-                    sub->cache.width = sub->cache.height = 0;
-                    sub->cache.pixels.clear();
+                if (cache) {
+                    cache->valid = true;
+                    cache->hasContent = false;
+                    cache->width = cache->height = 0;
+                    cache->pixels.clear();
                 } else {
                     s.hasContent = false;
                     s.width = s.height = 0;
@@ -1587,10 +1685,10 @@ namespace {
 
                 clipRect(dmg, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm));
 
-                if (toCache) {
-                    copyShmBufferTo(*shm, sub->cache.width, sub->cache.height, sub->cache.pixels, nullptr);
-                    sub->cache.hasContent = sub->cache.width > 0;
-                    sub->cache.valid = true;
+                if (cache) {
+                    copyShmBufferTo(*shm, cache->width, cache->height, cache->pixels, nullptr);
+                    cache->hasContent = cache->width > 0;
+                    cache->valid = true;
                 } else {
                     copyShmBuffer(s, shm, all ? nullptr : &dmg);
 
@@ -1605,16 +1703,16 @@ namespace {
                 // shm is copied out at commit, so its release is immediate
                 fireReleaseCb(s.pending.releaseCb);
 
-                if (!toCache) {
+                if (!cache) {
                     releaseHeldDmabuf(s);
                 }
             } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
-                if (toCache) {
-                    sub->cache.width = sub->cache.height = 1;
-                    sub->cache.pixels.clear();
-                    sub->cache.pixels.append((const u8*)&spb->argb, 4);
-                    sub->cache.hasContent = true;
-                    sub->cache.valid = true;
+                if (cache) {
+                    cache->width = cache->height = 1;
+                    cache->pixels.clear();
+                    cache->pixels.append((const u8*)&spb->argb, 4);
+                    cache->hasContent = true;
+                    cache->valid = true;
                 } else {
                     s.width = s.height = 1;
                     s.pixels.clear();
@@ -1627,34 +1725,34 @@ namespace {
                 wl_buffer_send_release(s.pending.buffer);
                 fireReleaseCb(s.pending.releaseCb);
 
-                if (!toCache) {
+                if (!cache) {
                     releaseHeldDmabuf(s);
                 }
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
-                if (toCache) {
+                if (cache) {
                     // the cached buffer is released later; the release
                     // callback rides with it
-                    dropReleaseCb(sub->cache.releaseCb);
-                    sub->cache.releaseCb = s.pending.releaseCb;
+                    dropReleaseCb(cache->releaseCb);
+                    cache->releaseCb = s.pending.releaseCb;
                     s.pending.releaseCb = nullptr;
                     dmabufRef(db);
-                    sub->cache.dmabuf = db;
-                    sub->cache.dmabufRes = s.pending.buffer;
-                    sub->cache.dmabufDestroy.listener.notify = cachedDmabufDestroyed;
-                    sub->cache.dmabufDestroy.sub = sub;
-                    wl_resource_add_destroy_listener(s.pending.buffer, &sub->cache.dmabufDestroy.listener);
-                    sub->cache.dmabufDestroyArmed = true;
-                    sub->cache.width = db->width;
-                    sub->cache.height = db->height;
-                    sub->cache.hasContent = true;
-                    sub->cache.valid = true;
-                    sub->cache.pixels.clear();
+                    cache->dmabuf = db;
+                    cache->dmabufRes = s.pending.buffer;
+                    cache->dmabufDestroy.listener.notify = cachedDmabufDestroyed;
+                    cache->dmabufDestroy.cache = cache;
+                    wl_resource_add_destroy_listener(s.pending.buffer, &cache->dmabufDestroy.listener);
+                    cache->dmabufDestroyArmed = true;
+                    cache->width = db->width;
+                    cache->height = db->height;
+                    cache->hasContent = true;
+                    cache->valid = true;
+                    cache->pixels.clear();
 
                     if (s.pendAcqTl && s.pendRelTl) {
-                        sub->cache.acq = s.pendAcqTl;
-                        sub->cache.rel = s.pendRelTl;
-                        sub->cache.acquirePoint = s.pendAcqPt;
-                        sub->cache.releasePoint = s.pendRelPt;
+                        cache->acq = s.pendAcqTl;
+                        cache->rel = s.pendRelTl;
+                        cache->acquirePoint = s.pendAcqPt;
+                        cache->releasePoint = s.pendRelPt;
                         s.pendAcqTl = s.pendRelTl = nullptr;
                     }
                 } else {
@@ -1689,9 +1787,9 @@ namespace {
         s.pending.damageAll = false;
 
         if (s.pending.scale > 0) {
-            if (toCache) {
-                sub->cache.scale = s.pending.scale;
-                sub->cache.scaleSet = true;
+            if (cache) {
+                cache->scale = s.pending.scale;
+                cache->scaleSet = true;
             } else if (s.pending.scale != s.bufferScale) {
                 s.bufferScale = s.pending.scale;
                 s.damageAll = true;
@@ -1701,9 +1799,9 @@ namespace {
         s.pending.scale = 0;
 
         if (s.pending.transform >= 0) {
-            if (toCache) {
-                sub->cache.transform = s.pending.transform;
-                sub->cache.transformSet = true;
+            if (cache) {
+                cache->transform = s.pending.transform;
+                cache->transformSet = true;
             } else if (s.pending.transform != s.bufferTransform) {
                 s.bufferTransform = s.pending.transform;
                 s.damageAll = true;
@@ -1712,45 +1810,45 @@ namespace {
 
         s.pending.transform = -1;
 
-        if (!toCache) {
+        if (!cache) {
             constraintApplyPending(s);
         }
 
-        if (toCache) {
+        if (cache) {
             if (s.pendSrcSet) {
-                sub->cache.vpSrcSet = true;
-                sub->cache.vpHasSrc = s.pendSw > 0;
-                sub->cache.sx = s.pendSx;
-                sub->cache.sy = s.pendSy;
-                sub->cache.sw = s.pendSw;
-                sub->cache.sh = s.pendSh;
+                cache->vpSrcSet = true;
+                cache->vpHasSrc = s.pendSw > 0;
+                cache->sx = s.pendSx;
+                cache->sy = s.pendSy;
+                cache->sw = s.pendSw;
+                cache->sh = s.pendSh;
                 s.pendSrcSet = false;
             }
 
             if (s.pendDstSet) {
-                sub->cache.vpDstSet = true;
-                sub->cache.vpHasDst = s.pendDw > 0;
-                sub->cache.dw = s.pendDw;
-                sub->cache.dh = s.pendDh;
+                cache->vpDstSet = true;
+                cache->vpHasDst = s.pendDw > 0;
+                cache->dw = s.pendDw;
+                cache->dh = s.pendDh;
                 s.pendDstSet = false;
             }
         } else {
             viewportApplyPending(s);
         }
 
-        bool targetHasSrc = toCache && sub->cache.vpSrcSet ? sub->cache.vpHasSrc : s.vp.hasSrc;
-        bool targetHasDst = toCache && sub->cache.vpDstSet ? sub->cache.vpHasDst : s.vp.hasDst;
-        bool targetHasContent = toCache && sub->cache.valid ? sub->cache.hasContent : s.hasContent;
+        bool targetHasSrc = cache && cache->vpSrcSet ? cache->vpHasSrc : s.vp.hasSrc;
+        bool targetHasDst = cache && cache->vpDstSet ? cache->vpHasDst : s.vp.hasDst;
+        bool targetHasContent = cache && cache->valid ? cache->hasContent : s.hasContent;
 
         ColorRepresentation targetRepresentation =
-            toCache && sub->cache.representationChanged ?
-            sub->cache.representation : s.representation;
+            cache && cache->representationChanged ?
+            cache->representation : s.representation;
         if (s.pendRepresentationChanged) {
             targetRepresentation = s.pendRepresentation;
         }
 
         DmabufBuffer* targetDmabuf =
-            toCache && sub->cache.valid ? sub->cache.dmabuf : s.dmabuf;
+            cache && cache->valid ? cache->dmabuf : s.dmabuf;
         bool targetYuv = targetDmabuf &&
             (targetDmabuf->format == kFourccNv12 ||
              targetDmabuf->format == kFourccP010);
@@ -1774,14 +1872,14 @@ namespace {
         }
 
         if (targetHasSrc && targetHasContent) {
-            int targetTransform = toCache && sub->cache.transformSet ? sub->cache.transform : s.bufferTransform;
-            int targetScale = toCache && sub->cache.scaleSet ? sub->cache.scale : s.bufferScale;
-            int targetW = toCache && sub->cache.valid ? sub->cache.width : s.width;
-            int targetH = toCache && sub->cache.valid ? sub->cache.height : s.height;
-            double sx = toCache && sub->cache.vpSrcSet ? sub->cache.sx : s.vp.sx;
-            double sy = toCache && sub->cache.vpSrcSet ? sub->cache.sy : s.vp.sy;
-            double sw = toCache && sub->cache.vpSrcSet ? sub->cache.sw : s.vp.sw;
-            double sh = toCache && sub->cache.vpSrcSet ? sub->cache.sh : s.vp.sh;
+            int targetTransform = cache && cache->transformSet ? cache->transform : s.bufferTransform;
+            int targetScale = cache && cache->scaleSet ? cache->scale : s.bufferScale;
+            int targetW = cache && cache->valid ? cache->width : s.width;
+            int targetH = cache && cache->valid ? cache->height : s.height;
+            double sx = cache && cache->vpSrcSet ? cache->sx : s.vp.sx;
+            double sy = cache && cache->vpSrcSet ? cache->sy : s.vp.sy;
+            double sw = cache && cache->vpSrcSet ? cache->sw : s.vp.sw;
+            double sh = cache && cache->vpSrcSet ? cache->sh : s.vp.sh;
             bool swapped = targetTransform == WL_OUTPUT_TRANSFORM_90 || targetTransform == WL_OUTPUT_TRANSFORM_270 ||
                            targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
             double contentW = (double)(swapped ? targetH : targetW) / targetScale;
@@ -1805,9 +1903,9 @@ namespace {
         }
 
         if (s.pendColorChanged) {
-            if (toCache) {
-                sub->cache.colorChanged = true;
-                sub->cache.color = *s.pendColor;
+            if (cache) {
+                cache->colorChanged = true;
+                cache->color = *s.pendColor;
             } else {
                 applyColorState(s, *s.pendColor);
             }
@@ -1816,9 +1914,9 @@ namespace {
         }
 
         if (s.pendRepresentationChanged) {
-            if (toCache) {
-                sub->cache.representationChanged = true;
-                sub->cache.representation = s.pendRepresentation;
+            if (cache) {
+                cache->representationChanged = true;
+                cache->representation = s.pendRepresentation;
             } else {
                 s.representation = s.pendRepresentation;
             }
@@ -1826,9 +1924,9 @@ namespace {
         }
 
         if (s.pendAlphaChanged) {
-            if (toCache) {
-                sub->cache.alphaChanged = true;
-                sub->cache.alphaMult = s.pendAlphaMult;
+            if (cache) {
+                cache->alphaChanged = true;
+                cache->alphaMult = s.pendAlphaMult;
             } else {
                 s.alphaMult = s.pendAlphaMult;
             }
@@ -1847,11 +1945,11 @@ namespace {
         }
 
         if (s.pending.inputRegionChanged) {
-            if (toCache) {
-                sub->cache.inputChanged = true;
-                sub->cache.inputSet = s.pending.inputRegionSet;
-                sub->cache.inputRegion.clear();
-                sub->cache.inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
+            if (cache) {
+                cache->inputChanged = true;
+                cache->inputSet = s.pending.inputRegionSet;
+                cache->inputRegion.clear();
+                cache->inputRegion.append(s.pending.inputRegion.begin(), s.pending.inputRegion.length());
             } else {
                 s.inputRegionSet = s.pending.inputRegionSet;
                 s.inputRegion.clear();
@@ -1872,11 +1970,11 @@ namespace {
         }
 
         if (s.pending.opaqueRegionChanged) {
-            if (toCache) {
-                sub->cache.opaqueChanged = true;
-                sub->cache.opaqueSet = s.pending.opaqueRegionSet;
-                sub->cache.opaqueRegion.clear();
-                sub->cache.opaqueRegion.append(s.pending.opaqueRegion.begin(), s.pending.opaqueRegion.length());
+            if (cache) {
+                cache->opaqueChanged = true;
+                cache->opaqueSet = s.pending.opaqueRegionSet;
+                cache->opaqueRegion.clear();
+                cache->opaqueRegion.append(s.pending.opaqueRegion.begin(), s.pending.opaqueRegion.length());
             } else {
                 s.opaqueRegionSet = s.pending.opaqueRegionSet;
                 s.opaqueRegion.clear();
@@ -1887,9 +1985,9 @@ namespace {
             s.pending.opaqueRegion.clear();
         }
 
-        if (toCache) {
+        if (cache) {
             for (wl_resource* cb : s.pending.frames) {
-                sub->cache.frames.pushBack(cb);
+                cache->frames.pushBack(cb);
             }
 
             s.pending.frames.clear();
@@ -2074,6 +2172,7 @@ namespace {
         alphaModSurfaceGone(*s);
         contentTypeSurfaceGone(*s);
         tearingSurfaceGone(*s);
+        fifoSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
         kbInhibitSurfaceGone(*s);
@@ -2372,7 +2471,7 @@ namespace {
             wl_resource_destroy(cb);
         }
 
-        releaseCachedDmabuf(*sub);
+        releaseCachedDmabuf(sub->srv, sub->cache);
 
         if (sub->surface) {
             sub->surface->sub = nullptr;
@@ -4487,6 +4586,102 @@ namespace {
     void tearingSurfaceGone(SurfaceImpl& s) {
         if (s.tearingRes) {
             wl_resource_set_user_data(s.tearingRes, nullptr);
+        }
+    }
+
+    // ---- wp-fifo ----
+    void fifoSetBarrier(wl_client*, wl_resource* res) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_FIFO_V1_ERROR_SURFACE_DESTROYED, "the wl_surface is gone");
+
+            return;
+        }
+
+        s->pending.fifoSet = true;
+    }
+
+    void fifoWaitBarrier(wl_client*, wl_resource* res) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_FIFO_V1_ERROR_SURFACE_DESTROYED, "the wl_surface is gone");
+
+            return;
+        }
+
+        s->pending.fifoWait = true;
+    }
+
+    void fifoResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->fifoRes = nullptr;
+        }
+    }
+
+    const struct wp_fifo_v1_interface fifoImpl = {
+        .set_barrier = fifoSetBarrier,
+        .wait_barrier = fifoWaitBarrier,
+        .destroy = resDestroy,
+    };
+
+    void fifoManagerGetFifo(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->fifoRes) {
+            wl_resource_post_error(res, WP_FIFO_MANAGER_V1_ERROR_ALREADY_EXISTS, "surface already has a fifo object");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_fifo_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        s->fifoRes = r;
+        wl_resource_set_implementation(r, &fifoImpl, s, fifoResourceDestroyed);
+    }
+
+    const struct wp_fifo_manager_v1_interface fifoManagerImpl = {
+        .destroy = resDestroy,
+        .get_fifo = fifoManagerGetFifo,
+    };
+
+    void fifoManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_fifo_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &fifoManagerImpl, data, nullptr);
+    }
+
+    void fifoSurfaceGone(SurfaceImpl& s) {
+        if (s.fifoRes) {
+            wl_resource_set_user_data(s.fifoRes, nullptr);
+            s.fifoRes = nullptr;
+        }
+
+        while (!s.fifoQueue.empty()) {
+            FifoEntry* e = (FifoEntry*)s.fifoQueue.popFront();
+            Vector<wl_resource*> cbs;
+
+            cbs.xchg(e->cache.frames);
+
+            for (wl_resource* cb : cbs) {
+                wl_resource_destroy(cb);
+            }
+
+            releaseCachedDmabuf(s.srv, e->cache);
+            s.srv->alloc->release(e);
         }
     }
 
@@ -9199,6 +9394,7 @@ void WaylandImpl::createGlobals() {
     global(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
     global(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
     global(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
+    global(display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
@@ -9367,6 +9563,31 @@ void WaylandImpl::onListen(void* arg) {
     if (scene->cursorSurface) {
         fireFrameCallbacks(*(SurfaceImpl*)scene->cursorSurface, msec);
     }
+
+    // wp-fifo: a presented surface clears its barrier and admits queued
+    // updates; an invisible one cannot hold a barrier at all
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+        auto& s = (SurfaceImpl&)surface;
+
+        if (s.fifoQueue.empty() && !s.fifoBarrier) {
+            return;
+        }
+
+        Surface* root = surface.rootSurface();
+        bool shown = root == scene->dragIcon || root == scene->cursorSurface;
+
+        if (!shown && root->toplevel) {
+            shown = root->toplevel->mapped && !root->toplevel->minimized;
+        } else if (!shown) {
+            auto* rootImpl = (SurfaceImpl*)root;
+
+            if (rootImpl->xdg && rootImpl->xdg->popup) {
+                shown = rootImpl->xdg->popup->mapped;
+            }
+        }
+
+        drainFifo(s, shown);
+    });
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& value) {
         auto* ti = (ToplevelImpl*)&value;
