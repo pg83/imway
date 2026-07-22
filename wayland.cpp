@@ -34,6 +34,7 @@
 #include <content-type-v1-server-protocol.h>
 #include <tearing-control-v1-server-protocol.h>
 #include <fifo-v1-server-protocol.h>
+#include <commit-timing-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -76,6 +77,8 @@ namespace {
     struct SurfaceImpl;
     struct SubsurfaceImpl;
     struct WaylandImpl;
+
+    struct FifoState;
 
     struct SurfaceDestroyListener {
         wl_listener listener{};
@@ -244,6 +247,9 @@ namespace {
             // wp-fifo requests are double-buffered like everything else
             bool fifoSet = false;
             bool fifoWait = false;
+            // wp-commit-timing target for this commit
+            bool timeSet = false;
+            u64 timeNs = 0;
         } pending;
 
         Vector<wl_resource*> frameCbs;
@@ -285,11 +291,10 @@ namespace {
         bool pendContentChanged = false;
         u32 pendContentType = 0;
 
-        // wp-fifo: the surface's fifo object, the barrier condition and the
-        // queue of parked content updates awaiting a presentation
-        wl_resource* fifoRes = nullptr;
-        bool fifoBarrier = false;
-        stl::IntrusiveList fifoQueue;
+        // wp-fifo / wp-commit-timing state, boxed lazily: most surfaces
+        // never touch either, and inline it pushed SurfaceImpl over the
+        // small-object cap
+        FifoState* fifo = nullptr;
 
         // wp-tearing-control surface state
         wl_resource* tearingRes = nullptr;
@@ -298,6 +303,7 @@ namespace {
 
         XdgSurface* xdg = nullptr;
     };
+
 
 
 
@@ -341,10 +347,22 @@ namespace {
     // one queued wp-fifo content update: born at a blocked commit, dies when
     // the frame event admits it (or with its surface). The snapshot rides a
     // CommitCache; the buffer inside is FrameResource-held
+    // the fifo object, the commit timer, the barrier condition and the
+    // queue of parked updates: one box per surface that uses either protocol
+    struct FifoState {
+        wl_resource* fifoRes = nullptr;
+        wl_resource* commitTimerRes = nullptr;
+        bool barrier = false;
+        stl::IntrusiveList queue;
+    };
+
     struct FifoEntry: IntrusiveNode {
         CommitCache cache;
         bool setBarrier = false;
         bool waitBarrier = false;
+        // wp-commit-timing: do not admit before this CLOCK_MONOTONIC instant
+        bool hasTime = false;
+        u64 timeNs = 0;
     };
 
     struct SubsurfaceImpl: public Subsurface {
@@ -1177,9 +1195,11 @@ namespace {
             removeOne(((SubsurfaceImpl*)s->sub)->cache.frames, cb);
         }
 
-        forEach<FifoEntry>(s->fifoQueue, [cb](FifoEntry& e) {
-            removeOne(e.cache.frames, cb);
-        });
+        if (s->fifo) {
+            forEach<FifoEntry>(s->fifo->queue, [cb](FifoEntry& e) {
+                removeOne(e.cache.frames, cb);
+            });
+        }
     }
 
     void surfaceFrame(wl_client* client, wl_resource* res, u32 id) {
@@ -1480,18 +1500,30 @@ namespace {
         });
     }
 
+    u64 nowNs() {
+        timespec ts{};
+
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+
+        return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
+    }
+
     void drainFifo(SurfaceImpl& s, bool presented) {
         if (presented) {
             // this surface's content was just shown: its barrier is satisfied
-            s.fifoBarrier = false;
+            s.fifo->barrier = false;
         }
 
-        while (!s.fifoQueue.empty()) {
-            FifoEntry* e = (FifoEntry*)s.fifoQueue.mutFront();
+        u64 now = nowNs();
+
+        while (!s.fifo->queue.empty()) {
+            FifoEntry* e = (FifoEntry*)s.fifo->queue.mutFront();
 
             // an invisible surface cannot hold a barrier (the spec's escape
-            // hatch against stalled clients): ignore barriers entirely
-            if (presented && e->waitBarrier && s.fifoBarrier) {
+            // hatch against stalled clients): ignore barriers entirely. A
+            // commit-timing target holds either way: it expires by itself
+            if ((presented && e->waitBarrier && s.fifo->barrier) ||
+                (e->hasTime && e->timeNs > now)) {
                 break;
             }
 
@@ -1504,7 +1536,7 @@ namespace {
             }
 
             if (e->setBarrier) {
-                s.fifoBarrier = true;
+                s.fifo->barrier = true;
             }
 
             s.srv->alloc->release(e);
@@ -1597,20 +1629,27 @@ namespace {
         // return mid-commit leaves it owned by the surface
         bool fifoSet = s.pending.fifoSet;
         bool fifoWait = s.pending.fifoWait;
+        bool timeSet = s.pending.timeSet;
+        u64 timeNs = s.pending.timeNs;
 
         s.pending.fifoSet = false;
         s.pending.fifoWait = false;
+        s.pending.timeSet = false;
+        s.pending.timeNs = 0;
 
-        if (!cache && (!s.fifoQueue.empty() || (fifoWait && s.fifoBarrier))) {
+        if (!cache && s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) ||
+                       (timeSet && timeNs > nowNs()))) {
             FifoEntry* entry = s.srv->alloc->make<FifoEntry>();
 
             entry->setBarrier = fifoSet;
             entry->waitBarrier = fifoWait;
-            s.fifoQueue.pushBack(entry);
+            entry->hasTime = timeSet;
+            entry->timeNs = timeNs;
+            s.fifo->queue.pushBack(entry);
             cache = &entry->cache;
-        } else if (fifoSet) {
+        } else if (fifoSet && s.fifo) {
             // applied in this commit: the barrier goes up with the content
-            s.fifoBarrier = true;
+            s.fifo->barrier = true;
         }
 
         if (s.syncRes && !syncCommitOk(s)) {
@@ -4616,7 +4655,7 @@ namespace {
 
     void fifoResourceDestroyed(wl_resource* res) {
         if (SurfaceImpl* s = surfaceFrom(res)) {
-            s->fifoRes = nullptr;
+            s->fifo->fifoRes = nullptr;
         }
     }
 
@@ -4629,7 +4668,7 @@ namespace {
     void fifoManagerGetFifo(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
-        if (s->fifoRes) {
+        if (s->fifo && s->fifo->fifoRes) {
             wl_resource_post_error(res, WP_FIFO_MANAGER_V1_ERROR_ALREADY_EXISTS, "surface already has a fifo object");
 
             return;
@@ -4643,7 +4682,11 @@ namespace {
             return;
         }
 
-        s->fifoRes = r;
+        if (!s->fifo) {
+            s->fifo = s->srv->alloc->make<FifoState>();
+        }
+
+        s->fifo->fifoRes = r;
         wl_resource_set_implementation(r, &fifoImpl, s, fifoResourceDestroyed);
     }
 
@@ -4665,13 +4708,20 @@ namespace {
     }
 
     void fifoSurfaceGone(SurfaceImpl& s) {
-        if (s.fifoRes) {
-            wl_resource_set_user_data(s.fifoRes, nullptr);
-            s.fifoRes = nullptr;
+        if (!s.fifo) {
+            return;
         }
 
-        while (!s.fifoQueue.empty()) {
-            FifoEntry* e = (FifoEntry*)s.fifoQueue.popFront();
+        if (s.fifo->fifoRes) {
+            wl_resource_set_user_data(s.fifo->fifoRes, nullptr);
+        }
+
+        if (s.fifo->commitTimerRes) {
+            wl_resource_set_user_data(s.fifo->commitTimerRes, nullptr);
+        }
+
+        while (!s.fifo->queue.empty()) {
+            FifoEntry* e = (FifoEntry*)s.fifo->queue.popFront();
             Vector<wl_resource*> cbs;
 
             cbs.xchg(e->cache.frames);
@@ -4683,6 +4733,92 @@ namespace {
             releaseCachedDmabuf(s.srv, e->cache);
             s.srv->alloc->release(e);
         }
+
+        s.srv->alloc->release(s.fifo);
+        s.fifo = nullptr;
+    }
+
+    // ---- wp-commit-timing ----
+    void commitTimerSetTimestamp(wl_client*, wl_resource* res, u32 hi, u32 lo, u32 nsec) {
+        SurfaceImpl* s = surfaceFrom(res);
+
+        if (!s) {
+            wl_resource_post_error(res, WP_COMMIT_TIMER_V1_ERROR_SURFACE_DESTROYED, "the wl_surface is gone");
+
+            return;
+        }
+
+        if (nsec >= 1000000000u) {
+            wl_resource_post_error(res, WP_COMMIT_TIMER_V1_ERROR_INVALID_TIMESTAMP, "tv_nsec out of range");
+
+            return;
+        }
+
+        if (s->pending.timeSet) {
+            wl_resource_post_error(res, WP_COMMIT_TIMER_V1_ERROR_TIMESTAMP_EXISTS, "this commit already has a timestamp");
+
+            return;
+        }
+
+        u64 sec = ((u64)hi << 32) | lo;
+        // saturate instead of overflowing: half a millennium out is "never"
+        u64 ns = sec > 18446744073u ? ~0ull : sec * 1000000000ull + nsec;
+
+        s->pending.timeSet = true;
+        s->pending.timeNs = ns;
+    }
+
+    void commitTimerResourceDestroyed(wl_resource* res) {
+        if (SurfaceImpl* s = surfaceFrom(res)) {
+            s->fifo->commitTimerRes = nullptr;
+        }
+    }
+
+    const struct wp_commit_timer_v1_interface commitTimerImpl = {
+        .set_timestamp = commitTimerSetTimestamp,
+        .destroy = resDestroy,
+    };
+
+    void commitTimingGetTimer(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+
+        if (s->fifo && s->fifo->commitTimerRes) {
+            wl_resource_post_error(res, WP_COMMIT_TIMING_MANAGER_V1_ERROR_COMMIT_TIMER_EXISTS, "surface already has a commit timer");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_commit_timer_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        if (!s->fifo) {
+            s->fifo = s->srv->alloc->make<FifoState>();
+        }
+
+        s->fifo->commitTimerRes = r;
+        wl_resource_set_implementation(r, &commitTimerImpl, s, commitTimerResourceDestroyed);
+    }
+
+    const struct wp_commit_timing_manager_v1_interface commitTimingManagerImpl = {
+        .destroy = resDestroy,
+        .get_timer = commitTimingGetTimer,
+    };
+
+    void commitTimingManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_commit_timing_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &commitTimingManagerImpl, data, nullptr);
     }
 
     // ---- wp-content-type ----
@@ -9395,6 +9531,7 @@ void WaylandImpl::createGlobals() {
     global(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
     global(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
     global(display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
+    global(display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
@@ -9569,7 +9706,7 @@ void WaylandImpl::onListen(void* arg) {
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
         auto& s = (SurfaceImpl&)surface;
 
-        if (s.fifoQueue.empty() && !s.fifoBarrier) {
+        if (!s.fifo || (s.fifo->queue.empty() && !s.fifo->barrier)) {
             return;
         }
 
@@ -9587,6 +9724,11 @@ void WaylandImpl::onListen(void* arg) {
         }
 
         drainFifo(s, shown);
+
+        if (!s.fifo->queue.empty()) {
+            // a held entry needs future presentations to expire against
+            scene->needsFrame = true;
+        }
     });
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& value) {

@@ -28,7 +28,7 @@
 ### Этап C — frame pacing
 - [x] ~~wp-tearing-control v1~~ done (async page flip wired via DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP; hardware-unverified here)
 - [x] ~~wp-fifo v1~~ done (per-surface queue of CommitCache snapshots, one admitted per presentation; barriers cleared for invisible surfaces)
-- [ ] wp-commit-timing v1
+- [x] ~~wp-commit-timing v1~~ done (target time rides the fifo queue entries; held entries keep the frame clock alive)
 
 ### Этап D — захват экрана
 - [ ] ext-image-capture-source + ext-image-copy-capture v1
