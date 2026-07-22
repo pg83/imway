@@ -9,6 +9,7 @@
 #include "device_headless.h"
 #include "device_kms.h"
 #include "icon_pool.h"
+#include "icon_provider.h"
 #include "icon_store.h"
 #include "input.h"
 #include "keyboard.h"
@@ -263,7 +264,7 @@ int mainComposer(int argc, char** argv) {
         wcfg.explicitSync = device->explicitSyncSupported();
 
         c.iconPool = IconPool::create(pool.mutPtr());
-        c.icons = IconStore::create(c);
+        c.iconProviders.pushBack(IconStore::create(c));
 
         // the notifier store always exists (internal senders like wifi
         // post to it regardless of a bus); the dbus service is layered on

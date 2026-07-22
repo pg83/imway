@@ -2,7 +2,6 @@
 
 #include "composer.h"
 #include "icon.h"
-#include "icon_store.h"
 #include "intr_list.h"
 #include "scene.h"
 #include "status_notifier.h"
@@ -112,23 +111,23 @@ namespace {
     Icon* trayIcon(Composer& c, StatusNotifierItem& item, bool attention) {
         if (attention) {
             if (!item.attentionIconName.empty()) {
-                if (Icon* icon = c.icons->byName(sv(item.attentionIconName))) {
+                if (Icon* icon = c.findIcon(sv(item.attentionIconName))) {
                     return icon;
                 }
             }
 
-            if (item.attentionIconPixmap) {
-                return item.attentionIconPixmap;
-            }
-        }
-
-        if (!item.iconName.empty()) {
-            if (Icon* icon = c.icons->byName(sv(item.iconName))) {
+            if (Icon* icon = c.findIcon(item.attentionIconSym)) {
                 return icon;
             }
         }
 
-        return item.iconPixmap;
+        if (!item.iconName.empty()) {
+            if (Icon* icon = c.findIcon(sv(item.iconName))) {
+                return icon;
+            }
+        }
+
+        return c.findIcon(item.iconSym);
     }
 
     void drawTrayMenu(StatusNotifier& notifier, Vector<StatusMenuItem*>& entries, int x, int y) {
@@ -225,7 +224,7 @@ void drawDock(Composer& c, DockResult& result) {
             }
 
             if (!group) {
-                groups.pushBack({sv(t.appId), &t, nullptr, t.icon, 0});
+                groups.pushBack({sv(t.appId), &t, nullptr, t.icon(c), 0});
                 group = &groups.mutBack();
             }
 
@@ -237,8 +236,8 @@ void drawDock(Composer& c, DockResult& result) {
                 group->active = &t;
             }
 
-            if (!group->icon && t.icon) {
-                group->icon = t.icon;
+            if (!group->icon) {
+                group->icon = t.icon(c);
             }
         });
 

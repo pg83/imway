@@ -1,23 +1,14 @@
 #pragma once
 
-#include <std/str/view.h>
-
 struct Composer;
-struct Icon;
+struct IconProvider;
 
-// desktop icon manager: the app_id -> .desktop -> Icon= index is built up
-// front, icons are rasterized into the pool and cached on first hit, and
-// inotify watches on the xdg dirs rebuild the index (and re-resolve every
-// window's icon) the moment something is installed or removed; the icons
-// returned here are owned by the store, nullptr means "no icon"
+// the xdg icon provider: an app_id -> .desktop -> Icon= index plus icon
+// names resolved against hicolor scalable and absolute .svg paths, all
+// served through the Composer::findIcon registry. Icons are rasterized
+// lazily into the pool and cached per store generation; inotify watches on
+// the xdg dirs rebuild the index the moment something is installed or
+// removed — the next lookup simply resolves against the fresh generation
 struct IconStore {
-    virtual Icon* forAppId(stl::StringView appId) = 0;
-
-    // a bare icon name, resolved against hicolor scalable
-    virtual Icon* byName(stl::StringView name) = 0;
-
-    // an Icon= value: absolute path or bare name
-    virtual Icon* forIconValue(stl::StringView v) = 0;
-
-    static IconStore* create(Composer& c);
+    static IconProvider* create(Composer& c);
 };

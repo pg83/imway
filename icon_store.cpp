@@ -1,11 +1,11 @@
 #include "icon.h"
 #include "composer.h"
+#include "icon_provider.h"
 #include "icon_store.h"
-#include "intr_list.h"
-#include "listener.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
 #include "icon_pool.h"
+#include "scene.h"
 #include "util.h"
 #include "xdg_utils.h"
 
@@ -20,6 +20,7 @@
 #include <std/ios/fs_utils.h>
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
+#include <std/sym/i_map.h>
 #include <std/sys/fs.h>
 #include <std/mem/obj_pool.h>
 
@@ -28,56 +29,46 @@ using namespace stl;
 namespace {
     constexpr int kIconPx = 48;
 
-    struct DesktopIcon {
-        StringBuilder fileId; // .desktop basename == app_id per spec
-        StringBuilder icon;   // raw Icon= value
-    };
-
-    struct CachedIcon {
-        StringBuilder key;
-        Icon* icon = nullptr; // misses are cached as nullptr
-    };
-
     void inoCb(struct ev_loop*, ev_io* w, int);
     void reloadCb(struct ev_loop*, ev_timer* w, int);
 
-    struct IconStoreImpl: public IconStore {
+    struct IconStoreImpl: public IconProvider {
         Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
         IconPool* icons = nullptr;
 
-        // the store generation: index entries, cache entries and the icon
+        // the store generation: both indexes, the lookup cache and the icon
         // leases of everything resolved since the last reload; a reload
         // builds the next generation and drops this one whole
         ObjPool* gen = nullptr;
 
-        // pool-backed: stl::Vector wants trivial elements, the strings live
-        // in the objects and recycle with them
-        Vector<DesktopIcon*> index;
-        Vector<CachedIcon*> cache;
+        // eager indexes, so a cold precomputed-symbol lookup can still
+        // materialize: hash(lower(fileId)) -> the .desktop Icon= value, and
+        // hash(svg basename) -> its full path. Rasterization stays lazy.
+        IntMap<StringBuilder*>* desktop = nullptr;
+        IntMap<StringBuilder*>* names = nullptr;
+
+        // query symbol -> resolved icon, misses cached as nullptr
+        IntMap<Icon*>* cache = nullptr;
 
         int inoFd = -1;
         ev_timer* reloadTimer = nullptr;
 
-        // scratch for case-folding an app_id and each candidate file id in
-        // forAppId; a client can set an arbitrarily long app_id, so these must
-        // grow rather than overflow a fixed stack buffer
-        Buffer appIdLower;
-        Buffer fileIdLower;
+        // scratch for case-folding; a client can set an arbitrarily long
+        // app_id, so this must grow rather than overflow a stack buffer
+        Buffer lowerScratch;
 
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
-
 
         void buildIndex();
         void addDesktop(StringBuilder& file, StringView fileId);
         void drainInotify();
         void reload();
-        Icon* loadSvgFile(StringBuilder& path);
-        Icon* cached(StringView key, auto&& load);
-        Icon* byName(StringView name) override;
-        Icon* forIconValue(StringView v) override;
-        Icon* forAppId(StringView appId) override;
+        Icon* loadSvgFile(StringView path);
+        Icon* valueIcon(StringView v);
+        Icon* resolveSym(u64 sym);
+        Icon* findIcon(u64 sym, StringView id) override;
     };
 
     void inoCb(struct ev_loop*, ev_io* w, int) {
@@ -95,6 +86,9 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     , icons(comp.iconPool)
 {
     gen = ObjPool::fromMemoryRaw();
+    desktop = gen->make<IntMap<StringBuilder*>>(gen);
+    names = gen->make<IntMap<StringBuilder*>>(gen);
+    cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
@@ -126,16 +120,13 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     reloadTimer->data = this;
 }
 
-// the caches walk the impl's own members, so their teardown lives in the
-// destructor — the generation arena releases the icon leases into a pool
-// that outlives this impl (IconPool is created before the store)
+// the generation arena releases the icon leases into a pool that outlives
+// this impl (IconPool is created before the store)
 IconStoreImpl::~IconStoreImpl() noexcept {
     delete gen;
 }
 
 void IconStoreImpl::buildIndex() {
-    index.clear();
-
     forEachXdgDataDir([this](StringView base) {
         StringBuilder dir;
 
@@ -156,6 +147,28 @@ void IconStoreImpl::buildIndex() {
             });
         } catch (...) {
         }
+
+        dir.reset();
+        dir << base << "/icons/hicolor/scalable/apps"_sv;
+
+        try {
+            listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+                if (e.isDir || !e.item.endsWith(".svg"_sv)) {
+                    return;
+                }
+
+                u64 sym = e.item.prefix(e.item.length() - 4).hash64();
+
+                // first hit wins: XDG_DATA_HOME precedes XDG_DATA_DIRS
+                if (!names->find(sym)) {
+                    StringBuilder* p = gen->make<StringBuilder>();
+
+                    *p << sv(dir) << "/"_sv << e.item;
+                    names->insert(sym, p);
+                }
+            });
+        } catch (...) {
+        }
     });
 }
 
@@ -166,9 +179,7 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
 
     bool inSection = false;
     StringView rest = sv(data);
-    DesktopIcon* di = gen->make<DesktopIcon>();
-
-    di->fileId << fileId;
+    StringView value;
 
     while (!rest.empty()) {
         StringView line, tail;
@@ -194,14 +205,24 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
         StringView key, val;
 
         if (line.split('=', key, val) && key == "Icon"_sv) {
-            di->icon << val;
+            value = val;
 
             break;
         }
     }
 
-    if (!di->icon.empty()) {
-        index.pushBack(di);
+    if (value.empty()) {
+        return;
+    }
+
+    u64 sym = fileId.lower(lowerScratch).hash64();
+
+    // first hit wins, matching the name index
+    if (!desktop->find(sym)) {
+        StringBuilder* v = gen->make<StringBuilder>();
+
+        *v << value;
+        desktop->insert(sym, v);
     }
 }
 
@@ -218,24 +239,24 @@ void IconStoreImpl::drainInotify() {
 void IconStoreImpl::reload() {
     ev_timer_stop(loop, reloadTimer);
 
-    // the old generation dies only after the subscribers re-resolved onto
-    // the fresh one: its icon leases return to the pool at the delete
+    // nobody holds an Icon* across the loop iteration, so the old generation
+    // simply dies: its icon leases return to the pool, and the next lookup
+    // resolves against the fresh indexes into the fresh cache
     ObjPool* old = gen;
 
     gen = ObjPool::fromMemoryRaw();
-    cache.clear();
+    desktop = gen->make<IntMap<StringBuilder*>>(gen);
+    names = gen->make<IntMap<StringBuilder*>>(gen);
+    cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
-
-    forEach<Listener>(c->iconListeners, [](Listener& listener) {
-        listener.onListen();
-    });
-
     delete old;
-    sysO << "imway: icon store reloaded, "_sv << (u64)index.length() << " entries"_sv << endL;
+
+    c->scene->needsFrame = true;
+    sysO << "imway: icon store reloaded, "_sv << (u64)desktop->size() << " entries"_sv << endL;
 }
 
-Icon* IconStoreImpl::loadSvgFile(StringBuilder& path) {
-    auto doc = lunasvg::Document::loadFromFile(path.cStr());
+Icon* IconStoreImpl::loadSvgFile(StringView path) {
+    auto doc = lunasvg::Document::loadFromFile(Buffer(path).cStr());
 
     if (!doc) {
         return nullptr;
@@ -257,87 +278,70 @@ Icon* IconStoreImpl::loadSvgFile(StringBuilder& path) {
     return ic;
 }
 
-// abbreviated function template: must precede the definitions that call it
-Icon* IconStoreImpl::cached(StringView key, auto&& load) {
-    for (const CachedIcon* c : cache) {
-        if (sv(c->key) == key) {
-            return c->icon;
+// a name-or-path Icon= value, cached under its own symbol so an app_id
+// lookup and a direct name lookup landing on the same value share one icon
+Icon* IconStoreImpl::valueIcon(StringView v) {
+    u64 sym = v.hash64();
+
+    if (Icon** hit = cache->find(sym)) {
+        return *hit;
+    }
+
+    Icon* icon = nullptr;
+
+    if (!v.empty() && v[0] == '/') {
+        if (v.endsWith(".svg"_sv)) {
+            icon = loadSvgFile(v);
         }
+    } else if (StringBuilder** path = names->find(sym)) {
+        icon = loadSvgFile(sv(**path));
     }
 
-    CachedIcon* c = gen->make<CachedIcon>();
+    cache->insert(sym, icon);
 
-    c->key << key;
-    c->icon = load();
-    cache.pushBack(c);
-
-    return c->icon;
+    return icon;
 }
 
-Icon* IconStoreImpl::byName(StringView name) {
-    if (name.empty()) {
-        return nullptr;
+// the indexed namespaces: a case-folded app_id symbol or an icon name
+// symbol. The .desktop mapping wins when a string is both.
+Icon* IconStoreImpl::resolveSym(u64 sym) {
+    if (StringBuilder** value = desktop->find(sym)) {
+        return valueIcon(sv(**value));
     }
 
-    return cached(name, [this, name]() -> Icon* {
-        Icon* found = nullptr;
-
-        forEachXdgDataDir([this, name, &found](StringView base) {
-            if (found) {
-                return;
-            }
-
-            auto& p = sb();
-
-            p << base << "/icons/hicolor/scalable/apps/"_sv << name << ".svg"_sv;
-
-            if (access(p.cStr(), R_OK) == 0) {
-                found = loadSvgFile(p);
-            }
-        });
-
-        return found;
-    });
-}
-
-Icon* IconStoreImpl::forIconValue(StringView v) {
-    if (v.empty()) {
-        return nullptr;
-    }
-
-    if (v[0] != '/') {
-        return byName(v);
-    }
-
-    if (!v.endsWith(".svg"_sv)) {
-        return nullptr;
-    }
-
-    return cached(v, [this, v]() -> Icon* {
-        auto& p = sb();
-
-        p << v;
-
-        return loadSvgFile(p);
-    });
-}
-
-Icon* IconStoreImpl::forAppId(StringView appId) {
-    if (appId.empty()) {
-        return nullptr;
-    }
-
-    StringView al = appId.lower(appIdLower);
-
-    for (const DesktopIcon* di : index) {
-        if (sv(di->fileId).lower(fileIdLower) == al) {
-            return forIconValue(sv(di->icon));
-        }
+    if (StringBuilder** path = names->find(sym)) {
+        return loadSvgFile(sv(**path));
     }
 
     return nullptr;
 }
 
-IconStore* IconStore::create(Composer& c) {
+Icon* IconStoreImpl::findIcon(u64 sym, StringView id) {
+    if (Icon** hit = cache->find(sym)) {
+        return *hit;
+    }
+
+    Icon* icon = resolveSym(sym);
+
+    if (!icon && !id.empty()) {
+        // string-form extras the indexes cannot serve: a not-yet-folded
+        // app_id and an absolute path
+        u64 lsym = id.lower(lowerScratch).hash64();
+
+        if (lsym != sym) {
+            icon = resolveSym(lsym);
+        }
+
+        if (!icon && id[0] == '/' && id.endsWith(".svg"_sv)) {
+            icon = loadSvgFile(id);
+        }
+    }
+
+    cache->insert(sym, icon);
+
+    return icon;
+}
+
+IconProvider* IconStore::create(Composer& c) {
     return c.pool->make<IconStoreImpl>(c);
 }

@@ -22,7 +22,6 @@ namespace {
 
 void Dialog::draw(Composer& c, bool& open) {
     Notifier& notifier = *c.notifier;
-    IconStore& icons = *c.icons;
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
     int screenH = c.scene->outH;
@@ -58,7 +57,7 @@ void Dialog::draw(Composer& c, bool& open) {
 
             float iconSz = ImGui::GetFontSize() * 1.6f;
 
-            if (u64 tex = texes.iconTexture(icons.forIconValue(sv(t.icon)))) {
+            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon)))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(iconSz, iconSz));
                 ImGui::SameLine();
             }

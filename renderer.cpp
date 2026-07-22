@@ -12,7 +12,6 @@
 #include "keyboard.h"
 #include "icon.h"
 #include "icon_pool.h"
-#include "icon_store.h"
 #include "inspector.h"
 #include "launcher.h"
 #include "listener.h"
@@ -389,7 +388,6 @@ namespace {
         DialogState* launcherState = nullptr;
         bool launcherToggle = false;
         float launcherX = -1.f, launcherY = -1.f;
-        IconStore* icons = nullptr;
 
         // hardware cursor plane state
         bool hwCursorReady = false;
@@ -602,8 +600,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , pool(comp.pool)
     , scene(comp.scene)
     , output(comp.output)
-    , icons(comp.icons)
-    , notifier(comp.notifier)
+        , notifier(comp.notifier)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
@@ -3226,7 +3223,7 @@ void RendererImpl::buildUi(Scene& scene) {
     }
 
     if (notifier) {
-        drawToasts(*notifier, *icons, *this, width, uiScale);
+        drawToasts(*comp, *notifier, *this, width, uiScale);
     }
 
     if (settings.sdrNits < 0.f) {
@@ -3791,7 +3788,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
                 }
 
-                if (u64 tabIcon = iconTexture(t->icon)) {
+                if (u64 tabIcon = iconTexture(t->icon(*comp))) {
                     float isz = 20.f * uiScale;
 
                     dl->AddImage((ImTextureID)tabIcon, ImVec2(x + 3.f, y + 3.f), ImVec2(x + 3.f + isz, y + 3.f + isz));

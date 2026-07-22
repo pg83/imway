@@ -37,8 +37,9 @@ struct StatusMenuItem {
     bool checked = false;
 };
 
-// Read-only from the dock's point of view.  Named icons belong to IconStore;
-// pixmaps belong to StatusNotifier and both remain valid until the next frame.
+// Read-only from the dock's point of view.  Named icons resolve through the
+// provider registry; pixmaps stay owned by StatusNotifier, served under the
+// precomputed symbols below (0 = the item never had a pixmap key).
 struct StatusNotifierItem {
     stl::StringBuilder id;
     stl::StringBuilder title;
@@ -47,8 +48,8 @@ struct StatusNotifierItem {
     stl::StringBuilder iconName;
     stl::StringBuilder attentionIconName;
 
-    Icon* iconPixmap = nullptr;
-    Icon* attentionIconPixmap = nullptr;
+    u64 iconSym = 0;
+    u64 attentionIconSym = 0;
 
     StatusAction primary;
     StatusAction context;

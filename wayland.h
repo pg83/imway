@@ -15,7 +15,6 @@ struct Output;
 struct Keyboard;
 struct DmabufFormat;
 struct IconPool;
-struct IconStore;
 
 struct Composer;
 

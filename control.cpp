@@ -311,6 +311,7 @@ void ControlImpl::dumpState(StringView outPath) {
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
         Surface* s = t.surface.get();
+        Icon* icon = t.icon(*comp);
 
         out << "toplevel id="_sv << t.id
             << " mapped="_sv << (int)t.mapped
@@ -337,7 +338,7 @@ void ControlImpl::dumpState(StringView outPath) {
         }
 
         out << " parent="_sv << (t.parent ? t.parent->id : 0)
-            << " icon_gen="_sv << (t.icon ? t.icon->gen : 0)
+            << " icon_gen="_sv << (icon ? icon->gen : 0)
             << " tag="_sv << sv(t.tag)
             << " app_id="_sv << sv(t.appId)
             << " title="_sv << sv(t.title)

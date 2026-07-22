@@ -5,7 +5,7 @@
 #include "device_vk.h"
 #include "icon.h"
 #include "icon_pool.h"
-#include "icon_store.h"
+#include "icon_provider.h"
 #include "icc.h"
 
 #include "input_sink.h"
@@ -83,6 +83,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include <std/dbg/verify.h>
+#include <std/sym/i_map.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 #include <std/str/builder.h>
@@ -638,19 +639,12 @@ namespace {
         wl_resource* decoRes = nullptr;
         wl_resource* dialogRes = nullptr;
 
-        // pool icon built from client pixels (xdg-toplevel-icon); wayland
-        // owns it: released on replace and on destroy
-        Icon* ownIcon = nullptr;
+        // xdg-toplevel-icon double buffering: pixels staged as a pool icon
+        // owned here until the commit swaps it into the srv window-icon map,
+        // a chosen name staged as its symbol
         Icon* pendingOwnIcon = nullptr;
-        Icon* pendingIcon = nullptr;
-        bool pendingIconFromClient = false;
+        u64 pendingIconNameSym = 0;
         bool pendingIconSet = false;
-
-        // xdg-toplevel-icon by name: the resolved Icon lives in the store's
-        // current generation, so the chosen name is kept and re-resolved on
-        // every store reload (iconFromClient only shields client pixels)
-        StringBuilder iconName;
-        StringBuilder pendingIconName;
     };
 
     struct Positioner {
@@ -977,13 +971,6 @@ namespace {
         void toplevelGone(Toplevel* t);
     };
 
-    struct CallIconsReloaded: Listener {
-        WaylandImpl* parent;
-
-        CallIconsReloaded(WaylandImpl* p);
-        void onListen(void*) override;
-    };
-
     struct CallWaylandSessionEnabled: Listener {
         WaylandImpl* parent;
 
@@ -998,7 +985,7 @@ namespace {
         void onListen(void*) override;
     };
 
-    struct WaylandImpl: public Wayland, public InputSink, public Listener {
+    struct WaylandImpl: public Wayland, public InputSink, public Listener, public IconProvider {
         Composer* composer = nullptr;
         ObjPool* pool = nullptr;
         SmallObjAllocator* alloc = nullptr;
@@ -1038,7 +1025,9 @@ namespace {
         IntrusiveList activationTokenRequests;
         Vector<ActivationGrant> activationGrants;
         IconPool* iconPool = nullptr;
-        IconStore* icons = nullptr;
+        // client-pixel window icons, keyed by Toplevel::iconSym; the values
+        // are pool icons owned here, released on replace and window death
+        IntMap<Icon*> windowIcons;
 
         // color-management-v1 objects
         Vector<CmOutput*> cmOutputResources;
@@ -1084,7 +1073,7 @@ namespace {
 
         void run() override;
 
-        void iconsReloaded();
+        Icon* findIcon(u64 sym, StringView id) override;
         void syncKeyboardCapture();
         void sessionEnabled();
         void sessionDisabled();
@@ -1108,15 +1097,6 @@ namespace {
         bool formatSupported(u32 fourcc, u64 modifier) const;
         void createGlobals();
     };
-
-    CallIconsReloaded::CallIconsReloaded(WaylandImpl* p)
-        : parent(p)
-    {
-    }
-
-    void CallIconsReloaded::onListen(void*) {
-        parent->iconsReloaded();
-    }
 
     CallWaylandSessionEnabled::CallWaylandSessionEnabled(WaylandImpl* p)
         : parent(p)
@@ -2942,12 +2922,10 @@ namespace {
         t->appId.reset();
         t->appId << appId;
 
-        // resolve right here: a client icon set via xdg-toplevel-icon wins,
-        // whether it came as pixels or as a chosen name
-        if (!t->iconFromClient && t->iconName.empty() && t->srv->icons) {
-            t->icon = t->srv->icons->forAppId(sv(t->appId));
-            t->srv->scene->needsFrame = true;
-        }
+        Buffer low;
+
+        t->appIdSym = sv(t->appId).lower(low).hash64();
+        t->srv->scene->needsFrame = true;
 
         // a foreign-toplevel-list client tracks app_id changes like titles
         if (t->mapped) {
@@ -3125,9 +3103,9 @@ namespace {
             t->dialogRes = nullptr;
         }
 
-        if (t->ownIcon && srv->iconPool) {
-            srv->iconPool->release(t->ownIcon);
-            t->ownIcon = nullptr;
+        if (Icon** own = srv->windowIcons.find(t->iconSym)) {
+            srv->iconPool->release(*own);
+            srv->windowIcons.erase(t->iconSym);
         }
 
         if (t->pendingOwnIcon && srv->iconPool) {
@@ -3207,6 +3185,8 @@ namespace {
         t->xdg.bind(xs->weak);
         t->surface.bind(xs->surface);
         t->id = srv->nextToplevelId++;
+        t->iconSym = StringView((const u8*)&t->id, sizeof(t->id)).hash64();
+        t->appIdSym = StringView().hash64();
         t->title << "(untitled)"_sv;
         xs->toplevel.bind(t->weak);
         xs->surf()->role = SurfaceRole::xdgToplevel;
@@ -3751,22 +3731,23 @@ namespace {
 
         if (xs->toplevel && xs->tl()->pendingIconSet) {
             ToplevelImpl& toplevel = *xs->tl();
+            WaylandImpl* tsrv = toplevel.srv;
 
-            if (toplevel.ownIcon && toplevel.srv->iconPool) {
-                toplevel.srv->iconPool->release(toplevel.ownIcon);
+            // retire the previous client-pixel icon, then latch the staged one
+            if (Icon** own = tsrv->windowIcons.find(toplevel.iconSym)) {
+                tsrv->iconPool->release(*own);
+                tsrv->windowIcons.erase(toplevel.iconSym);
             }
 
-            toplevel.ownIcon = toplevel.pendingOwnIcon;
-            toplevel.icon = toplevel.pendingIcon;
-            toplevel.iconFromClient = toplevel.pendingIconFromClient;
-            toplevel.iconName.reset();
-            toplevel.iconName << sv(toplevel.pendingIconName);
+            if (toplevel.pendingOwnIcon) {
+                tsrv->windowIcons.insert(toplevel.iconSym, toplevel.pendingOwnIcon);
+            }
+
+            toplevel.iconNameSym = toplevel.pendingIconNameSym;
             toplevel.pendingOwnIcon = nullptr;
-            toplevel.pendingIcon = nullptr;
-            toplevel.pendingIconFromClient = false;
+            toplevel.pendingIconNameSym = 0;
             toplevel.pendingIconSet = false;
-            toplevel.pendingIconName.reset();
-            toplevel.srv->scene->needsFrame = true;
+            tsrv->scene->needsFrame = true;
         }
 
         if (xs->popup && !xs->initialConfigureSent) {
@@ -8500,10 +8481,8 @@ namespace {
         }
 
         t->pendingOwnIcon = nullptr;
-        t->pendingIcon = nullptr;
-        t->pendingIconFromClient = false;
+        t->pendingIconNameSym = 0;
         t->pendingIconSet = true;
-        t->pendingIconName.reset();
 
         if (iconRes) {
             auto* box = (IconBox*)wl_resource_get_user_data(iconRes);
@@ -8517,20 +8496,13 @@ namespace {
                 ic->height = box->h;
                 ic->argb.append(box->pixels.data(), box->pixels.length());
                 t->pendingOwnIcon = ic;
-                t->pendingIcon = ic;
-                t->pendingIconFromClient = true;
-            } else if (!box->name.empty() && srv->icons) {
-                // store-owned resolution: keep the name, a store reload
-                // re-resolves it (the Icon dies with the store generation)
-                t->pendingIconName << sv(box->name);
-                t->pendingIcon = srv->icons->byName(sv(box->name));
+            } else if (!box->name.empty()) {
+                t->pendingIconNameSym = sv(box->name).hash64();
             }
         }
 
-        if (!t->pendingIcon && srv->icons) {
-            // back to the .desktop match
-            t->pendingIcon = srv->icons->forAppId(sv(t->appId));
-        }
+        // no resolution here: Toplevel::icon walks pixels, name, then the
+        // .desktop match through the provider registry at draw time
     }
 
     const struct xdg_toplevel_icon_manager_v1_interface iconManagerImpl = {
@@ -11303,6 +11275,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , socketName(cfg.socketName)
     , keyboard(comp.kb)
     , mainDevice(cfg.mainDevice)
+    , windowIcons(comp.pool)
     , seat(*this)
 {
     formats.append(cfg.formats, cfg.formatCount);
@@ -11329,8 +11302,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     cmDisplayIdentity = ++cimgIdentity;
     dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
-    icons = comp.icons;
-    comp.iconListeners.pushBack(comp.pool->make<CallIconsReloaded>(this));
+    comp.iconProviders.pushBack((IconProvider*)this);
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
     comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
     comp.frameListeners.pushBack((Listener*)this);
@@ -12830,32 +12802,10 @@ void WaylandImpl::run() {
 
 // icon store reload: re-resolve every window still on a .desktop
 // match; client-set icons are not ours to touch
-void WaylandImpl::iconsReloaded() {
-    // every store-owned resolution points into the generation the reload is
-    // about to delete: the committed icon, and a pending one caught between
-    // set_icon and the applying commit. Client pixel icons (ownIcon) are the
-    // only ones that survive as-is.
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
-        auto& t = (ToplevelImpl&)tl;
+Icon* WaylandImpl::findIcon(u64 sym, StringView) {
+    Icon** hit = windowIcons.find(sym);
 
-        if (!tl.iconFromClient) {
-            tl.icon = t.iconName.empty() ? nullptr : icons->byName(sv(t.iconName));
-
-            if (!tl.icon) {
-                tl.icon = icons->forAppId(sv(tl.appId));
-            }
-        }
-
-        if (t.pendingIconSet && !t.pendingIconFromClient) {
-            t.pendingIcon = t.pendingIconName.empty() ? nullptr : icons->byName(sv(t.pendingIconName));
-
-            if (!t.pendingIcon) {
-                t.pendingIcon = icons->forAppId(sv(tl.appId));
-            }
-        }
-    });
-
-    scene->needsFrame = true;
+    return hit ? *hit : nullptr;
 }
 
 void WaylandImpl::sessionEnabled() {

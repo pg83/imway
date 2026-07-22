@@ -229,7 +229,6 @@ void Dialog::refilter() {
 
 bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
                   bool& terminal, float anchorX, float anchorY) {
-    IconStore& icons = *c.icons;
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
     int screenH = c.scene->outH;
@@ -316,7 +315,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
 
             ImGui::SameLine(ImGui::GetStyle().FramePadding.x);
 
-            if (u64 tex = texes.iconTexture(icons.forIconValue(view(r.icon, r.iconLen)))) {
+            if (u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(rowH, rowH));
             } else {
                 ImGui::Dummy(ImVec2(rowH, rowH));

@@ -4,6 +4,7 @@
 #include "dbus_conn.h"
 #include "icon.h"
 #include "icon_pool.h"
+#include "icon_provider.h"
 #include "scene.h"
 #include "util.h"
 
@@ -11,6 +12,7 @@
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+#include <std/sym/i_map.h>
 
 using namespace stl;
 
@@ -42,6 +44,10 @@ namespace {
         Vector<DBusPendingCall*> pending;
         bool itemIsMenu = false;
 
+        // the pixmaps behind iconSym/attentionIconSym, owned here
+        Icon* pixmap = nullptr;
+        Icon* attentionPixmap = nullptr;
+
         ~ItemBox() noexcept;
 
         void dropPending(DBusPendingCall* pc);
@@ -57,15 +63,18 @@ namespace {
         Vector<ItemBox*> items;
     };
 
-    struct StatusNotifierImpl: public StatusNotifier {
+    struct StatusNotifierImpl: public StatusNotifier, public IconProvider {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
         Vector<Peer*> peers;
+        // pixmap symbol -> its item, both keys of every live item
+        IntMap<ItemBox*> pixmaps;
         bool ownsWatcher = false;
 
         StatusNotifierImpl(Composer& comp);
         ~StatusNotifierImpl() noexcept;
 
+        Icon* findIcon(u64 sym, StringView id) override;
         void itemsImpl(VisitorFace&& vis) override;
         void activate(const StatusAction& action, int x, int y) override;
 
@@ -302,9 +311,9 @@ namespace {
         } else if (key == "ItemIsMenu"_sv) {
             item.itemIsMenu = iterBool(value);
         } else if (key == "IconPixmap"_sv) {
-            readPixmap(impl, item.iconPixmap, value);
+            readPixmap(impl, item.pixmap, value);
         } else if (key == "AttentionIconPixmap"_sv) {
-            readPixmap(impl, item.attentionIconPixmap, value);
+            readPixmap(impl, item.attentionPixmap, value);
         }
     }
 
@@ -404,7 +413,10 @@ namespace {
 StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     : c(&comp)
     , conn(comp.bus->raw())
+    , pixmaps(comp.pool)
 {
+    comp.iconProviders.pushBack((IconProvider*)this);
+
     DBusError err;
 
     dbus_error_init(&err);
@@ -430,6 +442,16 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     sysO << "imway: StatusNotifierWatcher on the session bus"_sv << endL;
 }
 
+Icon* StatusNotifierImpl::findIcon(u64 sym, StringView) {
+    ItemBox** entry = pixmaps.find(sym);
+
+    if (!entry) {
+        return nullptr;
+    }
+
+    return sym == (*entry)->iconSym ? (*entry)->pixmap : (*entry)->attentionPixmap;
+}
+
 StatusNotifierImpl::~StatusNotifierImpl() noexcept {
     for (Peer* peer : peers) {
         delete peer->pool;
@@ -442,12 +464,15 @@ ItemBox::~ItemBox() noexcept {
         dbus_pending_call_unref(pc);
     }
 
-    if (iconPixmap) {
-        impl->c->iconPool->release(iconPixmap);
+    impl->pixmaps.erase(iconSym);
+    impl->pixmaps.erase(attentionIconSym);
+
+    if (pixmap) {
+        impl->c->iconPool->release(pixmap);
     }
 
-    if (attentionIconPixmap) {
-        impl->c->iconPool->release(attentionIconPixmap);
+    if (attentionPixmap) {
+        impl->c->iconPool->release(attentionPixmap);
     }
 
     delete menuPool;
@@ -660,6 +685,18 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
         item->impl = this;
         assign(item->service, service);
         assign(item->path, path);
+
+        // the synthetic pixmap keys: service+path is the item's identity
+        StringBuilder key;
+
+        key << service << path << "#icon"_sv;
+        item->iconSym = sv(key).hash64();
+        key.reset();
+        key << service << path << "#attention"_sv;
+        item->attentionIconSym = sv(key).hash64();
+        pixmaps.insert(item->iconSym, item);
+        pixmaps.insert(item->attentionIconSym, item);
+
         item->primary = {item, StatusActionKind::primary, 0};
         item->context = {item, StatusActionKind::context, 0};
         peer->items.pushBack(item);

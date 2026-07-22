@@ -3,6 +3,8 @@
 #include "theme.h"
 
 #include <std/lib/list.h>
+#include <std/str/view.h>
+#include <std/sys/types.h>
 
 namespace stl {
     class ObjPool;
@@ -12,12 +14,12 @@ namespace stl {
 struct ev_loop;
 
 struct DBusConn;
+struct Icon;
 struct IconPool;
 struct IconResolver;
 struct Filter;
 struct FrameCapture;
 struct Wifi;
-struct IconStore;
 struct Keyboard;
 struct Mixer;
 struct Notifications;
@@ -43,6 +45,12 @@ struct InputSink;
 struct Composer {
     Composer(stl::ObjPool* pool);
 
+    // walk iconProviders, first non-null answer wins; the string form hashes
+    // once for the whole registry walk, the symbol form is for callers with
+    // a precomputed key (see IconProvider in icon.h for the contract)
+    Icon* findIcon(stl::StringView id);
+    Icon* findIcon(u64 sym, stl::StringView id = {});
+
     Theme theme;
     stl::ObjPool* pool = nullptr;
     SmallObjAllocator* alloc = nullptr;
@@ -56,7 +64,6 @@ struct Composer {
     Output* output = nullptr;
     Keyboard* kb = nullptr;
     IconPool* iconPool = nullptr;
-    IconStore* icons = nullptr;
     IconResolver* iconResolver = nullptr;
     DBusConn* bus = nullptr;
     Notifier* notifier = nullptr;
@@ -73,7 +80,8 @@ struct Composer {
 
     // listener slots solve the creation order: subscribers link themselves
     // whenever they come up, producers walk the intrusive lists at event time
-    stl::IntrusiveList iconListeners;
+    // IconProvider registry, walked by findIcon in registration order
+    stl::IntrusiveList iconProviders;
     stl::IntrusiveList mixerListeners;
     stl::IntrusiveList wifiListeners;
     stl::IntrusiveList notifierListeners;

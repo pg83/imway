@@ -10,6 +10,7 @@
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
+struct Composer;
 struct Icon;
 struct Popup;
 struct Surface;
@@ -213,11 +214,18 @@ struct Toplevel: stl::IntrusiveNode {
     // xdg-decoration; csd windows draw their own bar, we draw none
     bool csd = true;
 
-    // window icon, resolved eagerly by wayland (on set_app_id and
-    // xdg-toplevel-icon set_icon); store-owned unless iconFromClient, which
-    // also shields it from app_id changes and icon store reloads
-    Icon* icon = nullptr;
-    bool iconFromClient = false;
+    // window icon inputs: nothing stores an Icon* — icon() resolves through
+    // the provider registry at use time, by precomputed symbols only.
+    // iconSym is the synthetic per-window key (the raw id bytes, hashed once
+    // at creation) under which wayland serves client-pixel icons;
+    // iconNameSym is the name a client chose via xdg-toplevel-icon (0 =
+    // none); appIdSym is hash(lower(appId)), maintained by set_app_id
+    u64 iconSym = 0;
+    u64 iconNameSym = 0;
+    u64 appIdSym = 0;
+
+    // client pixels, then the chosen name, then the app_id .desktop match
+    Icon* icon(Composer& c) const;
 
     int desiredW = 0, desiredH = 0;
     // the geometry snapshot desiredW/H was derived from. On KMS the frame
