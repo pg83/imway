@@ -61,7 +61,7 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
 
     void* ptr = fl->allocate();
 
-#ifdef IMWAY_FILL_GARBAGE
+#ifdef IMWAY_FOR_TESTS
     // hand out poison so a field the constructor forgets to set reads as an
     // obvious sentinel (0xAB...), not a plausible zero
     memset(ptr, 0xAB, kMinSize << classFor(len));
@@ -73,7 +73,7 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
 void SmallObjAllocatorImpl::deallocate(void* ptr, size_t len) {
     live--;
 
-#ifdef IMWAY_FILL_GARBAGE
+#ifdef IMWAY_FOR_TESTS
     // poison the freed slot before it re-enters the free list, so a
     // use-after-free read returns 0xDE... instead of stale-but-valid data.
     // FreeList::release rewrites the first bytes with its next pointer; the

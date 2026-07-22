@@ -164,6 +164,10 @@ imgui = library(
 
 imway_sources = build.glob("$(S)/*.cpp")
 
+# the control FIFO harness is test tooling: the production binary does not
+# even link it
+prod_sources = [s for s in imway_sources if not s.endswith("/control.cpp")]
+
 imway_deps = [
     imgui, protocols,
     wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
@@ -172,19 +176,20 @@ imway_deps = [
 
 imway = program(
     name="imway",
-    srcs=imway_sources,
+    srcs=prod_sources,
     deps=imway_deps,
 )
 
-# same compositor, rebuilt with the small-object allocator poisoning memory
-# on alloc/free (IMWAY_FILL_GARBAGE) and frame pointers kept so the crash
-# handler can walk the stack. The integration tests run against this binary
-# so a use-after-free or use-before-init surfaces as a crash with a stack
+# same compositor, rebuilt for the tests (IMWAY_FOR_TESTS): the small-object
+# allocator poisons memory on alloc/free, the test-only env knobs compile in,
+# and frame pointers are kept so the crash handler can walk the stack. The
+# integration tests run against this binary so a use-after-free or
+# use-before-init surfaces as a crash with a stack
 imway_test = program(
     name="imway_test",
     output="$(B)/imway_test",
     srcs=imway_sources,
-    cppflags=["-DIMWAY_FILL_GARBAGE=1"],
+    cppflags=["-DIMWAY_FOR_TESTS=1"],
     cflags=["-fno-omit-frame-pointer"],
     deps=imway_deps,
 )

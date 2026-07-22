@@ -12775,7 +12775,11 @@ void WaylandImpl::onListen(void* arg) {
         bool differsView = ti->desiredW != ti->viewGeomW || ti->desiredH != ti->viewGeomH;
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
 
+#ifdef IMWAY_FOR_TESTS
         static const bool cfgTrace = getenv("IMWAY_CFG_TRACE") != nullptr;
+#else
+        constexpr bool cfgTrace = false;
+#endif
 
         if (cfgTrace && (differsView || differsSent)) {
             sysO << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH

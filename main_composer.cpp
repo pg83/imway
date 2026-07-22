@@ -229,7 +229,12 @@ int mainComposer(int argc, char** argv) {
         scene->workW = scene->outW;
         scene->workH = scene->outH;
         scene->hz = output->refresh();
-        scene->drawCursor = kms || getenv("IMWAY_FORCE_CURSOR");
+        scene->drawCursor = kms;
+
+#ifdef IMWAY_FOR_TESTS
+        // headless scenarios assert on the software cursor in screenshots
+        scene->drawCursor = scene->drawCursor || getenv("IMWAY_FORCE_CURSOR");
+#endif
         scene->socketName = cfg.socketName;
 
         STD_VERIFY(output->start());
@@ -306,7 +311,11 @@ int mainComposer(int argc, char** argv) {
         }
 
         if (!cfg.controlPath.empty()) {
+#ifdef IMWAY_FOR_TESTS
             Control::create(c, cfg.controlPath);
+#else
+            sysE << "imway: --control is a test-build feature, ignored"_sv << endL;
+#endif
         }
 
         if (cfg.cmdArgv) {

@@ -141,9 +141,13 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
     metadata = hdrOutputMetadata(color, content);
 
+#ifdef IMWAY_FOR_TESTS
+    // headless has no cursor plane; scenarios opt into a fake one to test
+    // the hardware-cursor path
     if (getenv("IMWAY_FAKE_CURSOR_PLANE")) {
         curCap = 64;
     }
+#endif
 }
 
 int HeadlessOutput::width() const {
@@ -173,6 +177,7 @@ int HeadlessOutput::cursorCapH() const {
 }
 
 void HeadlessOutput::setCursorImage(const u32* argb) {
+#ifdef IMWAY_FOR_TESTS
     if (getenv("IMWAY_DEBUG_CURSOR") && curCap) {
         size_t visible = 0;
         u32 rgbOr = 0;
@@ -186,6 +191,9 @@ void HeadlessOutput::setCursorImage(const u32* argb) {
 
         sysE << "cursor image: visible "_sv << visible << ", rgb "_sv << rgbOr << ", alpha "_sv << alphaOr << endL;
     }
+#else
+    (void)argb;
+#endif
 }
 
 void HeadlessOutput::setCursorPos(int, int, bool) {

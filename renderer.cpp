@@ -68,6 +68,7 @@
 #include <imgui_impl_vulkan.h>
 
 #include <std/dbg/verify.h>
+#include <std/rng/split_mix_64.h>
 #include <std/ios/fs_utils.h>
 #include <std/ios/out_fd.h>
 #include <std/ios/sys.h>
@@ -2127,12 +2128,18 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     push.row[6][1] = mapping.hdr ? 0.f : 203.f;
     push.row[6][2] = (float)((1u << ditherBits) - 1);
     // temporal dither: shift the noise pattern every frame so quantization
-    // structure does not freeze in screen space — on a live display only;
-    // headless output is screenshots, which must be frame-independent (the
-    // env override lets the feature's own regression test see the motion)
-    static const bool forceTemporal = getenv("IMWAY_TEMPORAL_DITHER") != nullptr;
+    // structure does not freeze in screen space. splitMix64 of the frame
+    // index: a pure function of it, decorrelated between frames (a linear
+    // walk repeats every cycle along one diagonal). Live displays only — a
+    // headless screenshot must not depend on which frame it caught
+    bool temporal = output->vsynced();
 
-    push.row[6][3] = output->vsynced() || forceTemporal ? (float)(scene->framesDone % 64) : 0.f;
+#ifdef IMWAY_FOR_TESTS
+    // the dither-motion regression test forces the live behavior on headless
+    temporal = temporal || getenv("IMWAY_TEMPORAL_DITHER");
+#endif
+
+    push.row[6][3] = (float)(splitMix64(temporal ? (u64)scene->framesDone : 0) % 4096);
     // the roll-off knee reshapes in-range content, so it only runs when
     // something visible can actually exceed the output peak
     push.row[7][0] = sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
@@ -3928,9 +3935,11 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
     if (!hwCursor) {
         hwVisible = false;
 
+#ifdef IMWAY_FOR_TESTS
         if (getenv("IMWAY_DEBUG_CURSOR") && scene.framesDone % 120 == 0) {
             sysE << "cursor dbg: kind "_sv << kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
         }
+#endif
 
         if (kind != ImGuiMouseCursor_None) {
             drawMouseCursor(ImGui::GetForegroundDrawList(), mp, uiScale, kind);
