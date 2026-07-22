@@ -25,12 +25,15 @@ namespace {
     struct SmallObjAllocatorImpl: public SmallObjAllocator {
         ObjPool* pool = nullptr;
         FreeList* classes[kClasses] = {};
+#ifdef IMWAY_FOR_TESTS
         i64 live = 0;
+#endif
 
         SmallObjAllocatorImpl(ObjPool* p);
         // the allocator is the composer's first component, so this runs
         // after every subsystem destructor: a nonzero balance is an object
-        // someone forgot to release, and that is a bug in any build
+        // someone forgot to release. The bookkeeping lives in the test
+        // binary only; production skips the counter and the abort
         ~SmallObjAllocatorImpl() noexcept;
 
         void* allocate(size_t len) override;
@@ -39,10 +42,12 @@ namespace {
 }
 
 SmallObjAllocatorImpl::~SmallObjAllocatorImpl() noexcept {
+#ifdef IMWAY_FOR_TESTS
     if (live != 0) {
         sysE << "imway: small-object allocator torn down with "_sv << live << " live objects"_sv << endL;
         abort();
     }
+#endif
 }
 
 SmallObjAllocatorImpl::SmallObjAllocatorImpl(ObjPool* p)
@@ -57,11 +62,11 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
         fl = FreeList::create(pool, kMinSize << classFor(len));
     }
 
-    live++;
-
     void* ptr = fl->allocate();
 
 #ifdef IMWAY_FOR_TESTS
+    live++;
+
     // hand out poison so a field the constructor forgets to set reads as an
     // obvious sentinel (0xAB...), not a plausible zero
     memset(ptr, 0xAB, kMinSize << classFor(len));
@@ -71,9 +76,9 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
 }
 
 void SmallObjAllocatorImpl::deallocate(void* ptr, size_t len) {
+#ifdef IMWAY_FOR_TESTS
     live--;
 
-#ifdef IMWAY_FOR_TESTS
     // poison the freed slot before it re-enters the free list, so a
     // use-after-free read returns 0xDE... instead of stale-but-valid data.
     // FreeList::release rewrites the first bytes with its next pointer; the
