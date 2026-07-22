@@ -193,6 +193,14 @@ struct Toplevel: stl::IntrusiveNode {
     bool iconFromClient = false;
 
     int desiredW = 0, desiredH = 0;
+    // the geometry snapshot desiredW/H was derived from. On KMS the frame
+    // event — and with it the configure decision — fires on the page flip,
+    // an ev iteration after the render, so client commits can land in
+    // between; judging desired against live geometry there manufactures a
+    // mismatch the renderer never saw and rings an endless configure/commit
+    // oscillation with echo clients (zutty answers every configure with an
+    // exact-size buffer)
+    int viewGeomW = 0, viewGeomH = 0;
     int minW = 0, minH = 0;
     int maxW = 0, maxH = 0;
 

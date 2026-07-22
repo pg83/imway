@@ -3581,6 +3581,8 @@ void RendererImpl::buildUi(Scene& scene) {
                 }
             }
 
+            t->viewGeomW = root->geomW();
+            t->viewGeomH = root->geomH();
             t->dragW = 0.f;
             t->dragH = 0.f;
 

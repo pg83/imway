@@ -9375,8 +9375,23 @@ void WaylandImpl::onListen(void* arg) {
             return;
         }
 
-        bool differsView = ti->desiredW != ti->surface->geomW() || ti->desiredH != ti->surface->geomH();
+        // judge desired against the geometry the renderer derived it from,
+        // not live geometry: a commit racing the page flip must not read as
+        // a fresh mismatch (see Toplevel::viewGeomW)
+        bool differsView = ti->desiredW != ti->viewGeomW || ti->desiredH != ti->viewGeomH;
         bool differsSent = ti->desiredW != ti->cfgW || ti->desiredH != ti->cfgH;
+
+        static const bool cfgTrace = getenv("IMWAY_CFG_TRACE") != nullptr;
+
+        if (cfgTrace && (differsView || differsSent)) {
+            sysO << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH
+                 << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH
+                 << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH()
+                 << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH
+                 << " ack="_sv << (int)(ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0)
+                 << " docked="_sv << (int)ti->docked << (int)ti->cfgDocked
+                 << " max="_sv << (int)ti->maximized << (int)ti->cfgMaximized << endL;
+        }
 
         // one configure in flight: during an interactive resize the desired
         // size streams in every frame, but the next request waits until the
