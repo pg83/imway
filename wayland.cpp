@@ -774,7 +774,9 @@ namespace {
     // the node links it into its DataSource's offer list
     struct Offer: IntrusiveNode {
         WaylandImpl* srv = nullptr;
-        DataSource* source = nullptr;
+        // weak ring into the source: all its offers null themselves when it
+        // dies, in one invalidate() rather than a hand-written sweep
+        Weak<DataSource> source;
         wl_resource* res = nullptr;
         // the offer resource speaks ext-data-control
         bool dc = false;
@@ -4052,17 +4054,13 @@ namespace {
             return;
         }
 
-        forEach<Offer>(src->offers, [](Offer& offer) {
-            offer.source = nullptr;
-        });
-
-        // an xdg-toplevel-drag object may outlive its data source if the
-        // client destroys them out of order; the weak ring nulls the drag's
-        // back-reference to us so its teardown cannot write through a freed
-        // source
+        // the weak ring nulls every back-reference into this source at once:
+        // its live offers and an xdg-toplevel-drag object that may outlive it
+        // if the client destroys them out of order, so none can write through
+        // the freed source during their own teardown
         src->weak.invalidate();
 
-        // the orphans keep a valid ring among themselves for their unlinks
+        // the orphaned offers keep a valid list among themselves for their unlinks
         src->offers.clear();
         src->srv->seat.sourceGone(src);
         src->srv->alloc->release(src);
@@ -4086,7 +4084,7 @@ namespace {
 
     void offerAccept(wl_client*, wl_resource* res, u32, const char* mime) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source : nullptr;
+        DataSource* src = offer ? offer->source.get() : nullptr;
 
         if (offer && offer->finished) {
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
@@ -4106,7 +4104,7 @@ namespace {
 
     void offerReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source : nullptr;
+        DataSource* src = offer ? offer->source.get() : nullptr;
 
         if (offer && offer->finished) {
             close(fd);
@@ -4131,7 +4129,7 @@ namespace {
 
     void offerFinish(wl_client*, wl_resource* res) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source : nullptr;
+        DataSource* src = offer ? offer->source.get() : nullptr;
 
         if (!offer || !offer->dnd || offer->finished || !src || !src->dropPerformed ||
             !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
@@ -4150,7 +4148,7 @@ namespace {
 
     void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32 preferred) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source : nullptr;
+        DataSource* src = offer ? offer->source.get() : nullptr;
         constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY |
                               WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE |
                               WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
@@ -4234,7 +4232,7 @@ namespace {
         Offer* offer = src->srv->alloc->make<Offer>();
 
         offer->srv = src->srv;
-        offer->source = src;
+        offer->source.bind(src->weak);
         offer->dnd = dnd;
         src->offers.pushFront(offer);
 
@@ -5569,7 +5567,7 @@ namespace {
     // and the loopback share the DataSource/Offer machinery via the dc flag
     void dcOfferReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
         Offer* offer = (Offer*)wl_resource_get_user_data(res);
-        DataSource* src = offer ? offer->source : nullptr;
+        DataSource* src = offer ? offer->source.get() : nullptr;
 
         if (src && src->dc) {
             ext_data_control_source_v1_send_send(src->res, mime, fd);
@@ -5595,7 +5593,7 @@ namespace {
         Offer* offer = src->srv->alloc->make<Offer>();
 
         offer->srv = src->srv;
-        offer->source = src;
+        offer->source.bind(src->weak);
         offer->dc = true;
         src->offers.pushFront(offer);
         offer->res = resource;
