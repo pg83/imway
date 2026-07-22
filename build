@@ -49,6 +49,40 @@ class BuildError(RuntimeError):
     pass
 
 
+class Flags(types.ModuleType):
+    """`-D` build flags, exposed to build.py as `build.flags`.
+
+    An unset flag reads as the empty string, so `if f.A:` is a plain
+    truthiness test with no string comparison. `-DA=B` sets A to "B",
+    a bare `-DA` sets it to "yes".
+    """
+
+    def __init__(self, values: dict[str, str]):
+        super().__init__("build.flags")
+        object.__setattr__(self, "_values", dict(values))
+
+    def __getattr__(self, name: str) -> str:
+        if name.startswith("__"):
+            raise AttributeError(name)
+        return object.__getattribute__(self, "_values").get(name, "")
+
+    def __getitem__(self, name: str) -> str:
+        return self._values.get(name, "")
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._values
+
+
+def parse_defines(items: Iterable[str]) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for item in items:
+        key, sep, value = item.partition("=")
+        if not key:
+            raise BuildError(f"malformed -D flag: {item!r}")
+        values[key] = value if sep else "yes"
+    return values
+
+
 def _items(value: Any) -> list[Any]:
     if value is None:
         return []
@@ -152,9 +186,10 @@ class Target:
 
 
 class BuildContext:
-    def __init__(self, source_root: Path, build_root: Path):
+    def __init__(self, source_root: Path, build_root: Path, flags: Flags | None = None):
         self.source_root = source_root.resolve()
         self.build_root = build_root.resolve()
+        self.flags = flags if flags is not None else Flags({})
         self.targets: list[Target] = []
         self.installed: list[Target] = []
         self.nodes: list[Node] = []
@@ -310,6 +345,7 @@ class BuildContext:
         build_module = types.ModuleType("build")
         build_module.includes = []
         build_module.glob = self.glob
+        build_module.flags = self.flags
         for name in ("cflags", "cxxflags", "cppflags", "ldflags"):
             setattr(build_module, name, getattr(self, name).copy())
         module.__dict__.update({
@@ -325,7 +361,10 @@ class BuildContext:
         sys.modules[spec.name] = module
         missing = object()
         previous_build = sys.modules.get("build", missing)
+        previous_flags = sys.modules.get("build.flags", missing)
         sys.modules["build"] = build_module
+        # so `import build.flags as f` resolves straight from sys.modules
+        sys.modules["build.flags"] = self.flags
         try:
             spec.loader.exec_module(module)
         finally:
@@ -333,6 +372,10 @@ class BuildContext:
                 del sys.modules["build"]
             else:
                 sys.modules["build"] = previous_build
+            if previous_flags is missing:
+                del sys.modules["build.flags"]
+            else:
+                sys.modules["build.flags"] = previous_flags
         self.includes = [_include_path(path) for path in _items(build_module.includes)]
         for name in ("cflags", "cxxflags", "cppflags", "ldflags"):
             setattr(self, name, [str(flag) for flag in _items(getattr(build_module, name))])
@@ -1336,6 +1379,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("targets", nargs="*")
     parser.add_argument("-B", "--build-dir", default=os.environ.get("B", ".build"))
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
+    parser.add_argument(
+        "-D", "--define", action="append", default=[], metavar="KEY[=VALUE]",
+        help="build flag readable in build.py as build.flags.KEY "
+             "(bare -DKEY sets it to 'yes')",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     parser.add_argument("-k", "--keep-going", action="store_true")
     parser.add_argument(
@@ -1354,7 +1402,8 @@ def main(argv: list[str] | None = None) -> int:
     build_file = (Path(args.build_file).resolve() if args.build_file
                   else Path(__file__).resolve().with_name("build.py"))
     source_root = build_file.parent
-    context = BuildContext(source_root, source_root / args.build_dir)
+    flags = Flags(parse_defines(args.define))
+    context = BuildContext(source_root, source_root / args.build_dir, flags)
     try:
         context.load(build_file)
         context.build_graph()
