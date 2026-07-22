@@ -43,6 +43,9 @@
 #include <text-input-unstable-v3-server-protocol.h>
 #include <input-method-unstable-v2-server-protocol.h>
 #include <virtual-keyboard-unstable-v1-server-protocol.h>
+#include <security-context-v1-server-protocol.h>
+
+#include <sys/socket.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -470,6 +473,34 @@ namespace {
         u32 deleteBefore = 0, deleteAfter = 0;
     };
 
+    // security-context-v1: a sandbox (flatpak) proxies its clients through a
+    // listen fd; every client accepted on it is tagged, and the display's
+    // global filter hides privileged protocols from tagged clients
+    struct SandboxTag {
+        wl_listener destroy{};
+        WaylandImpl* srv = nullptr;
+        wl_client* client = nullptr;
+        StringBuilder engine;
+        StringBuilder appId;
+        StringBuilder instanceId;
+    };
+
+    struct SecurityContext {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        int listenFd = -1;
+        int closeFd = -1;
+        wl_event_source* listenSrc = nullptr;
+        wl_event_source* closeSrc = nullptr;
+        bool committed = false;
+        StringBuilder engine;
+        StringBuilder appId;
+        StringBuilder instanceId;
+        bool appIdSet = false;
+        bool instanceIdSet = false;
+        bool engineSet = false;
+    };
+
     struct CaptureCursorSession {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
@@ -892,6 +923,7 @@ namespace {
         IntrusiveList idleInhibitors;
         IntrusiveList captureSessions;
         Vector<CaptureCursorSession*> cursorSessions;
+        Vector<SandboxTag*> sandboxed;
         Vector<WlrCopyFrame*> screencopyFrames;
         ::Output* output = nullptr;
         double dpmsSec = 0;
@@ -5528,6 +5560,237 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &vkManagerImpl, data, nullptr);
+    }
+
+    // ---- security-context-v1 ----
+    static bool privilegedGlobal(const char* name) {
+        // protocols a sandbox must not reach: clipboard/screen capture and
+        // synthetic input
+        return !strcmp(name, ext_data_control_manager_v1_interface.name) ||
+               !strcmp(name, ext_image_copy_capture_manager_v1_interface.name) ||
+               !strcmp(name, ext_output_image_capture_source_manager_v1_interface.name) ||
+               !strcmp(name, zwlr_screencopy_manager_v1_interface.name) ||
+               !strcmp(name, zwp_virtual_keyboard_manager_v1_interface.name) ||
+               !strcmp(name, zwp_input_method_manager_v2_interface.name);
+    }
+
+    bool clientSandboxed(WaylandImpl* srv, const wl_client* client) {
+        for (SandboxTag* t : srv->sandboxed) {
+            if (t->client == client) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void sandboxTagDestroyed(wl_listener* l, void*) {
+        auto* tag = (SandboxTag*)((char*)l - offsetof(SandboxTag, destroy));
+
+        removeOne(tag->srv->sandboxed, tag);
+        tag->srv->alloc->release(tag);
+    }
+
+    static int securityListenReadable(int fd, u32, void* data) {
+        auto* ctx = (SecurityContext*)data;
+        int conn = accept4(fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+
+        if (conn < 0) {
+            return 0;
+        }
+
+        wl_client* client = wl_client_create(ctx->srv->display, conn);
+
+        if (!client) {
+            close(conn);
+
+            return 0;
+        }
+
+        SandboxTag* tag = ctx->srv->alloc->make<SandboxTag>();
+
+        tag->srv = ctx->srv;
+        tag->client = client;
+        tag->engine << sv(ctx->engine);
+        tag->appId << sv(ctx->appId);
+        tag->instanceId << sv(ctx->instanceId);
+        tag->destroy.notify = sandboxTagDestroyed;
+        wl_client_add_destroy_listener(client, &tag->destroy);
+        ctx->srv->sandboxed.pushBack(tag);
+
+        return 0;
+    }
+
+    static int securityCloseReadable(int, u32, void* data) {
+        auto* ctx = (SecurityContext*)data;
+
+        // the sandbox went away: stop accepting, existing clients stay
+        if (ctx->listenSrc) {
+            wl_event_source_remove(ctx->listenSrc);
+            ctx->listenSrc = nullptr;
+        }
+
+        if (ctx->closeSrc) {
+            wl_event_source_remove(ctx->closeSrc);
+            ctx->closeSrc = nullptr;
+        }
+
+        return 0;
+    }
+
+    void securityContextResourceDestroyed(wl_resource* res) {
+        auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
+
+        // the listen socket keeps running past the manager object per the
+        // spec, so only tear it down if it never committed
+        if (!ctx->committed) {
+            if (ctx->listenSrc) {
+                wl_event_source_remove(ctx->listenSrc);
+            }
+
+            if (ctx->closeSrc) {
+                wl_event_source_remove(ctx->closeSrc);
+            }
+
+            if (ctx->listenFd >= 0) {
+                close(ctx->listenFd);
+            }
+
+            if (ctx->closeFd >= 0) {
+                close(ctx->closeFd);
+            }
+        }
+
+        ctx->srv->alloc->release(ctx);
+    }
+
+    void securitySetEngine(wl_client*, wl_resource* res, const char* name) {
+        auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
+
+        if (ctx->committed || ctx->engineSet) {
+            wl_resource_post_error(res, ctx->committed ?
+                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
+                "sandbox engine already set");
+
+            return;
+        }
+
+        ctx->engineSet = true;
+        ctx->engine << StringView(name);
+    }
+
+    void securitySetAppId(wl_client*, wl_resource* res, const char* appId) {
+        auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
+
+        if (ctx->committed || ctx->appIdSet) {
+            wl_resource_post_error(res, ctx->committed ?
+                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
+                "app id already set");
+
+            return;
+        }
+
+        ctx->appIdSet = true;
+        ctx->appId << StringView(appId);
+    }
+
+    void securitySetInstanceId(wl_client*, wl_resource* res, const char* instanceId) {
+        auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
+
+        if (ctx->committed || ctx->instanceIdSet) {
+            wl_resource_post_error(res, ctx->committed ?
+                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
+                "instance id already set");
+
+            return;
+        }
+
+        ctx->instanceIdSet = true;
+        ctx->instanceId << StringView(instanceId);
+    }
+
+    void securityCommit(wl_client*, wl_resource* res) {
+        auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
+
+        if (ctx->committed) {
+            wl_resource_post_error(res, WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED, "already committed");
+
+            return;
+        }
+
+        if (!ctx->engineSet || !ctx->appIdSet || !ctx->instanceIdSet) {
+            wl_resource_post_error(res, WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA,
+                                   "sandbox engine, app id and instance id are all required");
+
+            return;
+        }
+
+        ctx->committed = true;
+
+        wl_event_loop* loop = wl_display_get_event_loop(ctx->srv->display);
+
+        ctx->listenSrc = wl_event_loop_add_fd(loop, ctx->listenFd, WL_EVENT_READABLE, securityListenReadable, ctx);
+        ctx->closeSrc = wl_event_loop_add_fd(loop, ctx->closeFd, WL_EVENT_READABLE, securityCloseReadable, ctx);
+    }
+
+    const struct wp_security_context_v1_interface securityContextImpl = {
+        .destroy = resDestroy,
+        .set_sandbox_engine = securitySetEngine,
+        .set_app_id = securitySetAppId,
+        .set_instance_id = securitySetInstanceId,
+        .commit = securityCommit,
+    };
+
+    void securityManagerCreateListener(wl_client* client, wl_resource* res, u32 id, i32 listenFd, i32 closeFd) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        // the listen fd must be a listening socket
+        int type = 0;
+        socklen_t len = sizeof(type);
+
+        if (getsockopt(listenFd, SOL_SOCKET, SO_ACCEPTCONN, &type, &len) < 0 || !type) {
+            wl_resource_post_error(res, WP_SECURITY_CONTEXT_MANAGER_V1_ERROR_INVALID_LISTEN_FD,
+                                   "the listen fd is not a listening socket");
+            close(listenFd);
+            close(closeFd);
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_security_context_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+            close(listenFd);
+            close(closeFd);
+
+            return;
+        }
+
+        SecurityContext* ctx = srv->alloc->make<SecurityContext>();
+
+        ctx->srv = srv;
+        ctx->res = r;
+        ctx->listenFd = listenFd;
+        ctx->closeFd = closeFd;
+        wl_resource_set_implementation(r, &securityContextImpl, ctx, securityContextResourceDestroyed);
+    }
+
+    const struct wp_security_context_manager_v1_interface securityManagerImpl = {
+        .destroy = resDestroy,
+        .create_listener = securityManagerCreateListener,
+    };
+
+    void securityManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &wp_security_context_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &securityManagerImpl, data, nullptr);
     }
 
     // ---- ext-image-capture-source + ext-image-copy-capture ----
@@ -11084,6 +11347,17 @@ namespace {
 }
 
 void WaylandImpl::createGlobals() {
+    // hide privileged protocols from sandboxed clients (security-context)
+    wl_display_set_global_filter(display, [](const wl_client* client, const wl_global* global, void* data) -> bool {
+        auto* srv = (WaylandImpl*)data;
+
+        if (!privilegedGlobal(wl_global_get_interface(global)->name)) {
+            return true;
+        }
+
+        return !clientSandboxed(srv, client);
+    }, this);
+
     global(display, &wl_compositor_interface, 7, this, compositorBind);
     global(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
     global(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
@@ -11112,6 +11386,7 @@ void WaylandImpl::createGlobals() {
     global(display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
     global(display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
     global(display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
+    global(display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
