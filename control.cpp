@@ -338,6 +338,9 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
     out << "cursor shape="_sv << (int)scene->cursorShape
         << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
+    out << "ime popup="_sv << (int)(scene->imePopup != nullptr)
+        << " x="_sv << (int)scene->imePopupX
+        << " y="_sv << (int)scene->imePopupY << "\n"_sv;
 
     const HdrOutputMetadata& metadata = comp->output->hdrMetadata();
 

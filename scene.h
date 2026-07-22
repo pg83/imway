@@ -317,6 +317,11 @@ struct Scene {
 
     Surface* dragIcon = nullptr;
 
+    // input-method popup: the IME's candidate surface, positioned at the
+    // active text input's cursor rectangle (screen coords, top-left)
+    Surface* imePopup = nullptr;
+    float imePopupX = 0, imePopupY = 0;
+
     CursorKind cursorShape = CursorKind::unset;
     Surface* cursorSurface = nullptr;
     int cursorHotX = 0, cursorHotY = 0;

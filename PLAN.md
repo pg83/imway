@@ -40,7 +40,7 @@
 ### Этап F — текст/IME
 - [x] ~~text-input-v3~~ done (per-seat, enter/leave on kb focus, full state relay to the IME)
 - [x] ~~input-method-v2 + virtual-keyboard-v1~~ done (single IM per seat, commit/preedit/delete bridge, keyboard grab, vkbd injection)
-- [ ] input-method popup
+- [x] ~~input-method popup~~ done (popup surface as a scene role at the cursor rectangle, screen-positioned relative to the app window)
 
 ### Этап G — полнота цвета
 - [x] ~~mastering primaries/luminance, tf_power, named primaries~~ done (tf_power wired through the iccGamma path; mastering stored as target-volume metadata; 6 extra named primaries; get_output honest for the single output)

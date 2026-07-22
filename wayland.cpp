@@ -457,6 +457,11 @@ namespace {
         wl_resource* grab = nullptr;
         bool active = false;
 
+        // the input popup surface and its rectangle object (v2)
+        SurfaceImpl* popupSurface = nullptr;
+        wl_resource* popupRes = nullptr;
+        RectI lastRect{-1, -1, -1, -1};
+
         bool commitSet = false;
         StringBuilder commitStr;
         bool preeditSet = false;
@@ -783,6 +788,8 @@ namespace {
         void imUpdateActivation();
         void imFlushToTextInput();
         bool imGrabActive() const;
+        void imUpdatePopup();
+        Surface* kbFocusSurface();
         void kbSendLeave(wl_resource* target);
         void kbSendEnter(wl_resource* target);
         void updateModifiers();
@@ -2337,6 +2344,15 @@ namespace {
         alphaModSurfaceGone(*s);
         contentTypeSurfaceGone(*s);
         tearingSurfaceGone(*s);
+
+        if (srv->scene->imePopup == (Surface*)s) {
+            srv->scene->imePopup = nullptr;
+        }
+
+        if (srv->seat.inputMethod && srv->seat.inputMethod->popupSurface == s) {
+            srv->seat.inputMethod->popupSurface = nullptr;
+        }
+
         fifoSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
@@ -5289,12 +5305,23 @@ namespace {
         .release = imKeyboardGrabRelease,
     };
 
-    void imInertPopupDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
+    void imPopupResourceDestroyed(wl_resource* res) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        if (!im) {
+            return;
+        }
+
+        if (im->srv->scene->imePopup == (Surface*)im->popupSurface) {
+            im->srv->scene->imePopup = nullptr;
+        }
+
+        im->popupSurface = nullptr;
+        im->popupRes = nullptr;
     }
 
     const struct zwp_input_popup_surface_v2_interface imPopupImpl = {
-        .destroy = imInertPopupDestroy,
+        .destroy = resDestroy,
     };
 
     void imCommitString(wl_client*, wl_resource* res, const char* text) {
@@ -5336,17 +5363,13 @@ namespace {
             return;
         }
 
-        // the popup surface object exists; scene placement at the cursor
-        // rectangle is a later ring. Report a zero rectangle so the client
-        // has an initial position
-        (void)surfaceRes;
-        wl_resource_set_implementation(r, &imPopupImpl, im, nullptr);
+        im->popupSurface = surfaceRes ? surfaceFrom(surfaceRes) : nullptr;
+        im->popupRes = r;
+        im->lastRect = {-1, -1, -1, -1};
+        wl_resource_set_implementation(r, &imPopupImpl, im, imPopupResourceDestroyed);
 
-        if (TextInput* ti = im->srv->seat.activeTextInput()) {
-            if (ti->rectSet) {
-                zwp_input_popup_surface_v2_send_text_input_rectangle(r, ti->rect.x, ti->rect.y, ti->rect.w, ti->rect.h);
-            }
-        }
+        // the rectangle and scene placement are pushed from the frame event
+        im->srv->seat.imUpdatePopup();
     }
 
     void imGrabKeyboard(wl_client* client, wl_resource* res, u32 id) {
@@ -8941,6 +8964,14 @@ void SeatState::handleScroll(const ScrollEvent& ev) {
     }
 }
 
+Surface* SeatState::kbFocusSurface() {
+    if (kbOverride) {
+        return kbOverride;
+    }
+
+    return kbFocus ? kbFocus->surface : nullptr;
+}
+
 wl_resource* SeatState::kbTargetRes() {
     if (kbOverride) {
         return resOf(kbOverride);
@@ -9553,6 +9584,8 @@ void SeatState::imUpdateActivation() {
         zwp_input_method_v2_send_deactivate(im->res);
         zwp_input_method_v2_send_done(im->res);
     }
+
+    imUpdatePopup();
 }
 
 // the input method committed: push its staged string/preedit/delete into the
@@ -9593,6 +9626,49 @@ void SeatState::imFlushToTextInput() {
     im->preeditStr.reset();
     im->preeditBegin = im->preeditEnd = 0;
     im->deleteBefore = im->deleteAfter = 0;
+}
+
+// wp input popup: send the text-input rectangle to the popup surface and
+// place it in the scene at the active text input's cursor, screen-relative
+void SeatState::imUpdatePopup() {
+    InputMethod* im = inputMethod;
+
+    if (!im || !im->popupRes) {
+        return;
+    }
+
+    TextInput* ti = activeTextInput();
+
+    if (!ti || !im->active) {
+        if (srv->scene->imePopup == (Surface*)im->popupSurface) {
+            srv->scene->imePopup = nullptr;
+        }
+
+        return;
+    }
+
+    // the rectangle event is in the popup surface's coordinates: the anchor
+    // is the text-input cursor rect's bottom-left, so the rect origin is
+    // negative by the cursor rect offset
+    RectI r = ti->rectSet ? ti->rect : RectI{0, 0, 0, 0};
+    RectI popupRect{-r.x, -r.y, r.w, r.h};
+
+    if (popupRect.x != im->lastRect.x || popupRect.y != im->lastRect.y ||
+        popupRect.w != im->lastRect.w || popupRect.h != im->lastRect.h) {
+        im->lastRect = popupRect;
+        zwp_input_popup_surface_v2_send_text_input_rectangle(im->popupRes, popupRect.x, popupRect.y, r.w, r.h);
+    }
+
+    // place the popup below the cursor rectangle, in screen coordinates
+    if (im->popupSurface && im->popupSurface->texture) {
+        Surface* anchor = kbFocusSurface();
+
+        if (anchor) {
+            srv->scene->imePopup = (Surface*)im->popupSurface;
+            srv->scene->imePopupX = anchor->imgX + (float)anchor->geomX() + (float)r.x;
+            srv->scene->imePopupY = anchor->imgY + (float)anchor->geomY() + (float)r.y + (float)r.h;
+        }
+    }
 }
 
 void SeatState::focusToplevel(Toplevel* t) {
@@ -11234,6 +11310,8 @@ void WaylandImpl::onListen(void* arg) {
             scene->needsFrame = true;
         }
     });
+
+    seat.imUpdatePopup();
 
     forEach<CaptureSession>(captureSessions, [&](CaptureSession& cs) {
         if (cs.frame && cs.frame->armed) {

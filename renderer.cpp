@@ -3628,6 +3628,10 @@ void RendererImpl::buildUi(Scene& scene) {
         drawSurfaceTreeOverlay(*scene.dragIcon, mp.x + 4, mp.y + 4);
     }
 
+    if (scene.imePopup && scene.imePopup->texture) {
+        drawSurfaceTreeOverlay(*scene.imePopup, scene.imePopupX, scene.imePopupY);
+    }
+
     bool overClient = false;
 
     forEach<Surface, SceneNode>(scene.surfaces, [&](Surface& s) {
