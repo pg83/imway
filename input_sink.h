@@ -1,5 +1,7 @@
 #pragma once
 
+#include "weak_ptr.h"
+
 #include <std/lib/node.h>
 #include <std/sys/types.h>
 
@@ -76,6 +78,12 @@ struct TabletToolEvent {
 };
 
 struct InputSink: stl::IntrusiveNode {
+    // self-seated weak-ring anchor, invalidated by the destructor: gesture
+    // owners in the router null themselves when a sink dies mid-gesture
+    Weak<InputSink> weak;
+
+    InputSink() noexcept;
+
     virtual bool pointerMotion(PointerMotionEvent& ev) = 0;
     virtual bool button(u32 evdevBtn, bool pressed) = 0;
     virtual bool key(u32 evdevCode, bool pressed) = 0;
