@@ -213,6 +213,8 @@ int mainComposer(int argc, char** argv) {
 
         Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(c);
 
+        c.device = device;
+
         ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.outputColor);
 
         c.output = output;

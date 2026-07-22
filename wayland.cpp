@@ -1,5 +1,6 @@
 
 #include "composer.h"
+#include "device.h"
 #include "wayland.h"
 #include "device_vk.h"
 #include "icon.h"
@@ -45,6 +46,10 @@
 #include <virtual-keyboard-unstable-v1-server-protocol.h>
 #include <security-context-v1-server-protocol.h>
 #include <tablet-v2-server-protocol.h>
+#include <xdg-toplevel-tag-v1-server-protocol.h>
+#include <xdg-foreign-unstable-v2-server-protocol.h>
+#include <ext-foreign-toplevel-list-v1-server-protocol.h>
+#include <drm-lease-v1-server-protocol.h>
 
 #include <sys/socket.h>
 #include <xdg-dialog-v1-server-protocol.h>
@@ -388,6 +393,11 @@ namespace {
         CaptureFrame* frame = nullptr;
         // a cursor-source session captures the cursor surface instead
         bool cursor = false;
+        // nonzero: capture one toplevel's on-screen rect instead of the output
+        u64 toplevelId = 0;
+        bool stopped = false;
+        // the constraints the client last saw; a resize resends them
+        u32 sentW = 0, sentH = 0;
     };
 
     struct CaptureBufferDestroyListener {
@@ -512,6 +522,60 @@ namespace {
         wl_resource* tool = nullptr;
         Surface* focus = nullptr;
         bool down = false;
+    };
+
+    // xdg-foreign: an exported toplevel handle and its importers. The
+    // export owns the token; every import references the export and is
+    // notified (and detached) when the export or its toplevel dies
+    struct ForeignExport {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        ToplevelImpl* toplevel = nullptr;
+        StringBuilder handle;
+    };
+
+    struct ForeignImport {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        ForeignExport* source = nullptr;
+    };
+
+    // ext-foreign-toplevel-list: one binding of the list global and one
+    // handle per (binding, toplevel); the toplevel pointer nulls when the
+    // window dies (the handle then only answers destroy)
+    struct ForeignList {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        bool stopped = false;
+    };
+
+    struct ForeignTLHandle {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        ToplevelImpl* toplevel = nullptr;
+    };
+
+    // a capture source names what it captures: the output (toplevelId 0)
+    // or one toplevel by scene id — ids survive the window, a dead id just
+    // stops the session
+    struct CaptureSourceBox {
+        WaylandImpl* srv = nullptr;
+        u64 toplevelId = 0;
+    };
+
+    // wp-drm-lease: a lease request accumulates connector ids until submit;
+    // a granted lease holds the lessee id so it can be revoked
+    struct LeaseRequestBox {
+        WaylandImpl* srv = nullptr;
+        Vector<u32> connectors;
+        bool invalid = false;
+    };
+
+    struct LeaseBox {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        u32 lesseeId = 0;
+        bool finished = false;
     };
 
     struct CaptureCursorSession {
@@ -939,6 +1003,10 @@ namespace {
         Vector<CaptureCursorSession*> cursorSessions;
         Vector<SandboxTag*> sandboxed;
         Vector<TabletDev*> tablets;
+        Vector<ForeignExport*> foreignExports;
+        Vector<ForeignImport*> foreignImports;
+        Vector<ForeignList*> foreignLists;
+        Vector<ForeignTLHandle*> foreignTLHandles;
         Vector<WlrCopyFrame*> screencopyFrames;
         ::Output* output = nullptr;
         double dpmsSec = 0;
@@ -1164,6 +1232,10 @@ namespace {
     void constraintSurfaceGone(SurfaceImpl&);
     void constraintApplyPending(SurfaceImpl&);
     void kbInhibitSurfaceGone(SurfaceImpl&);
+    void foreignToplevelGone(WaylandImpl* srv, ToplevelImpl* t);
+    void foreignListToplevelMapped(WaylandImpl* srv, ToplevelImpl* t);
+    void foreignListToplevelUpdated(WaylandImpl* srv, ToplevelImpl* t);
+    void foreignListToplevelGone(WaylandImpl* srv, ToplevelImpl* t);
     void syncSurfaceGone(SurfaceImpl&);
     DmabufBuffer* dmabufFromRes(wl_resource*);
     struct SpbBox;
@@ -2805,7 +2877,13 @@ namespace {
         wl_resource_destroy(res);
     }
 
-    void toplevelSetParent(wl_client*, wl_resource*, wl_resource*) {
+    void toplevelSetParent(wl_client*, wl_resource* res, wl_resource* parentRes) {
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
+        auto* p = parentRes ? (ToplevelImpl*)wl_resource_get_user_data(parentRes) : nullptr;
+
+        if (t) {
+            t->parent = p;
+        }
     }
 
     void toplevelSetTitle(wl_client*, wl_resource* res, const char* title) {
@@ -2814,6 +2892,10 @@ namespace {
         t->title.reset();
         t->title << title;
         t->srv->scene->needsFrame = true;
+
+        if (t->mapped) {
+            foreignListToplevelUpdated(t->srv, t);
+        }
     }
 
     void toplevelSetAppId(wl_client*, wl_resource* res, const char* appId) {
@@ -3016,6 +3098,8 @@ namespace {
             t->pendingOwnIcon = nullptr;
         }
 
+        foreignToplevelGone(srv, t);
+        foreignListToplevelGone(srv, t);
         t->unlink();
         sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
@@ -3709,6 +3793,7 @@ namespace {
             xs->toplevel->mapped = true;
             s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
+            foreignListToplevelMapped(s.srv, (ToplevelImpl*)xs->toplevel);
 
             s.srv->seat.focusToplevel(xs->toplevel);
         }
@@ -4706,6 +4791,333 @@ namespace {
         wl_resource_set_implementation(res, &xdgWmDialogImpl, data, nullptr);
     }
 
+    // ---- xdg-toplevel-tag ----
+    void toplevelTagSetTag(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* tag) {
+        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
+            t->tag.reset();
+            t->tag << tag;
+        }
+    }
+
+    void toplevelTagSetDescription(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* descr) {
+        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
+            t->tagDescription.reset();
+            t->tagDescription << descr;
+        }
+    }
+
+    const struct xdg_toplevel_tag_manager_v1_interface toplevelTagManagerImpl = {
+        .destroy = resDestroy,
+        .set_toplevel_tag = toplevelTagSetTag,
+        .set_toplevel_description = toplevelTagSetDescription,
+    };
+
+    void toplevelTagManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &xdg_toplevel_tag_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &toplevelTagManagerImpl, data, nullptr);
+    }
+
+    // ---- xdg-foreign-v2 ----
+    void foreignDetachImports(ForeignExport* ex) {
+        for (ForeignImport* im : ex->srv->foreignImports) {
+            if (im->source == ex) {
+                im->source = nullptr;
+                zxdg_imported_v2_send_destroyed(im->res);
+            }
+        }
+
+        // the relationship ends with the export: detach every child that
+        // was parented through this handle
+        forEach<Toplevel>(ex->srv->scene->toplevels, [&](Toplevel& t) {
+            if (t.parent == ex->toplevel) {
+                t.parent = nullptr;
+            }
+        });
+    }
+
+    void foreignExportDestroyed(wl_resource* res) {
+        auto* ex = (ForeignExport*)wl_resource_get_user_data(res);
+
+        foreignDetachImports(ex);
+        removeOne(ex->srv->foreignExports, ex);
+        ex->srv->alloc->release(ex);
+    }
+
+    // the exported toplevel died: same cascade, the export resource stays
+    // inert until the client destroys it
+    void foreignToplevelGone(WaylandImpl* srv, ToplevelImpl* t) {
+        for (ForeignExport* ex : srv->foreignExports) {
+            if (ex->toplevel == t) {
+                foreignDetachImports(ex);
+                ex->toplevel = nullptr;
+            }
+        }
+
+        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& other) {
+            if (other.parent == t) {
+                other.parent = nullptr;
+            }
+        });
+    }
+
+    const struct zxdg_exported_v2_interface foreignExportedImpl = {
+        .destroy = resDestroy,
+    };
+
+    void foreignExportToplevel(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+        ToplevelImpl* t = s && s->toplevel ? (ToplevelImpl*)s->toplevel : nullptr;
+
+        if (!t) {
+            wl_resource_post_error(res, ZXDG_EXPORTER_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &zxdg_exported_v2_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ForeignExport* ex = srv->alloc->make<ForeignExport>();
+
+        ex->srv = srv;
+        ex->res = r;
+        ex->toplevel = t;
+
+        u64 random = 0;
+
+        STD_VERIFY(getrandom(&random, sizeof(random), 0) == sizeof(random));
+        ex->handle << "imway-"_sv << random << "-"_sv << t->id;
+        srv->foreignExports.pushBack(ex);
+        wl_resource_set_implementation(r, &foreignExportedImpl, ex, foreignExportDestroyed);
+        zxdg_exported_v2_send_handle(r, Buffer(sv(ex->handle)).cStr());
+    }
+
+    const struct zxdg_exporter_v2_interface foreignExporterImpl = {
+        .destroy = resDestroy,
+        .export_toplevel = foreignExportToplevel,
+    };
+
+    void foreignExporterBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zxdg_exporter_v2_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &foreignExporterImpl, data, nullptr);
+    }
+
+    void foreignImportDestroyed(wl_resource* res) {
+        auto* im = (ForeignImport*)wl_resource_get_user_data(res);
+
+        // the parent relationship survives the handle object per the spec
+        removeOne(im->srv->foreignImports, im);
+        im->srv->alloc->release(im);
+    }
+
+    void foreignImportedSetParentOf(wl_client*, wl_resource* res, wl_resource* surfaceRes) {
+        auto* im = (ForeignImport*)wl_resource_get_user_data(res);
+        SurfaceImpl* s = surfaceFrom(surfaceRes);
+        ToplevelImpl* t = s && s->toplevel ? (ToplevelImpl*)s->toplevel : nullptr;
+
+        if (!t) {
+            wl_resource_post_error(res, ZXDG_IMPORTED_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
+
+            return;
+        }
+
+        t->parent = im->source && im->source->toplevel ? im->source->toplevel : nullptr;
+    }
+
+    const struct zxdg_imported_v2_interface foreignImportedImpl = {
+        .destroy = resDestroy,
+        .set_parent_of = foreignImportedSetParentOf,
+    };
+
+    void foreignImportToplevel(wl_client* client, wl_resource* res, u32 id, const char* handle) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zxdg_imported_v2_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ForeignImport* im = srv->alloc->make<ForeignImport>();
+
+        im->srv = srv;
+        im->res = r;
+
+        for (ForeignExport* ex : srv->foreignExports) {
+            if (ex->toplevel && sv(ex->handle) == StringView(handle)) {
+                im->source = ex;
+
+                break;
+            }
+        }
+
+        srv->foreignImports.pushBack(im);
+        wl_resource_set_implementation(r, &foreignImportedImpl, im, foreignImportDestroyed);
+
+        // an unknown handle yields a dead import right away
+        if (!im->source) {
+            zxdg_imported_v2_send_destroyed(r);
+        }
+    }
+
+    const struct zxdg_importer_v2_interface foreignImporterImpl = {
+        .destroy = resDestroy,
+        .import_toplevel = foreignImportToplevel,
+    };
+
+    void foreignImporterBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zxdg_importer_v2_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &foreignImporterImpl, data, nullptr);
+    }
+
+    // ---- ext-foreign-toplevel-list ----
+    void foreignTLHandleDestroyed(wl_resource* res) {
+        auto* h = (ForeignTLHandle*)wl_resource_get_user_data(res);
+
+        removeOne(h->srv->foreignTLHandles, h);
+        h->srv->alloc->release(h);
+    }
+
+    const struct ext_foreign_toplevel_handle_v1_interface foreignTLHandleImpl = {
+        .destroy = resDestroy,
+    };
+
+    void foreignTLSendState(ForeignTLHandle* h) {
+        ToplevelImpl* t = h->toplevel;
+        auto& ident = sb();
+
+        ident << "imway-"_sv << t->id;
+        ext_foreign_toplevel_handle_v1_send_identifier(h->res, ident.cStr());
+        ext_foreign_toplevel_handle_v1_send_app_id(h->res, Buffer(sv(t->appId)).cStr());
+        ext_foreign_toplevel_handle_v1_send_title(h->res, Buffer(sv(t->title)).cStr());
+        ext_foreign_toplevel_handle_v1_send_done(h->res);
+    }
+
+    void foreignListAnnounce(ForeignList* list, ToplevelImpl* t) {
+        wl_client* client = wl_resource_get_client(list->res);
+        wl_resource* r = wl_resource_create(client, &ext_foreign_toplevel_handle_v1_interface,
+                                            wl_resource_get_version(list->res), 0);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ForeignTLHandle* h = list->srv->alloc->make<ForeignTLHandle>();
+
+        h->srv = list->srv;
+        h->res = r;
+        h->toplevel = t;
+        list->srv->foreignTLHandles.pushBack(h);
+        wl_resource_set_implementation(r, &foreignTLHandleImpl, h, foreignTLHandleDestroyed);
+        ext_foreign_toplevel_list_v1_send_toplevel(list->res, r);
+        foreignTLSendState(h);
+    }
+
+    void foreignListToplevelMapped(WaylandImpl* srv, ToplevelImpl* t) {
+        for (ForeignList* list : srv->foreignLists) {
+            if (!list->stopped) {
+                foreignListAnnounce(list, t);
+            }
+        }
+    }
+
+    void foreignListToplevelUpdated(WaylandImpl* srv, ToplevelImpl* t) {
+        for (ForeignTLHandle* h : srv->foreignTLHandles) {
+            if (h->toplevel == t) {
+                foreignTLSendState(h);
+            }
+        }
+    }
+
+    void foreignListToplevelGone(WaylandImpl* srv, ToplevelImpl* t) {
+        for (ForeignTLHandle* h : srv->foreignTLHandles) {
+            if (h->toplevel == t) {
+                h->toplevel = nullptr;
+                ext_foreign_toplevel_handle_v1_send_closed(h->res);
+            }
+        }
+
+        forEach<CaptureSession>(srv->captureSessions, [&](CaptureSession& cs) {
+            if (cs.toplevelId == t->id && !cs.stopped) {
+                cs.stopped = true;
+                ext_image_copy_capture_session_v1_send_stopped(cs.res);
+            }
+        });
+    }
+
+    void foreignListResourceDestroyed(wl_resource* res) {
+        auto* list = (ForeignList*)wl_resource_get_user_data(res);
+
+        removeOne(list->srv->foreignLists, list);
+        list->srv->alloc->release(list);
+    }
+
+    void foreignListStop(wl_client*, wl_resource* res) {
+        auto* list = (ForeignList*)wl_resource_get_user_data(res);
+
+        list->stopped = true;
+        ext_foreign_toplevel_list_v1_send_finished(res);
+    }
+
+    const struct ext_foreign_toplevel_list_v1_interface foreignListImpl = {
+        .stop = foreignListStop,
+        .destroy = resDestroy,
+    };
+
+    void foreignListBind(wl_client* client, void* data, u32 version, u32 id) {
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = wl_resource_create(client, &ext_foreign_toplevel_list_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        ForeignList* list = srv->alloc->make<ForeignList>();
+
+        list->srv = srv;
+        list->res = res;
+        srv->foreignLists.pushBack(list);
+        wl_resource_set_implementation(res, &foreignListImpl, list, foreignListResourceDestroyed);
+
+        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+            if (t.mapped) {
+                foreignListAnnounce(list, (ToplevelImpl*)&t);
+            }
+        });
+    }
+
     // ---- wp-pointer-warp ----
     void pointerWarp(wl_client* client, wl_resource* res, wl_resource* surfaceRes,
                      wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
@@ -5700,6 +6112,8 @@ namespace {
         return !strcmp(name, ext_data_control_manager_v1_interface.name) ||
                !strcmp(name, ext_image_copy_capture_manager_v1_interface.name) ||
                !strcmp(name, ext_output_image_capture_source_manager_v1_interface.name) ||
+               !strcmp(name, ext_foreign_toplevel_list_v1_interface.name) ||
+               !strcmp(name, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) ||
                !strcmp(name, zwlr_screencopy_manager_v1_interface.name) ||
                !strcmp(name, zwp_virtual_keyboard_manager_v1_interface.name) ||
                !strcmp(name, zwp_input_method_manager_v2_interface.name);
@@ -5929,19 +6343,32 @@ namespace {
         .destroy = resDestroy,
     };
 
-    void captureSourceManagerCreateSource(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+    void captureSourceResourceDestroyed(wl_resource* res) {
+        auto* box = (CaptureSourceBox*)wl_resource_get_user_data(res);
+
+        box->srv->alloc->release(box);
+    }
+
+    wl_resource* makeCaptureSource(WaylandImpl* srv, wl_client* client, u32 id, u64 toplevelId) {
         wl_resource* r = wl_resource_create(client, &ext_image_capture_source_v1_interface, 1, id);
 
         if (!r) {
             wl_client_post_no_memory(client);
 
-            return;
+            return nullptr;
         }
 
-        // one output: the source object only proves the client went through
-        // the manager; srv rides along for the session constructors
-        wl_resource_set_implementation(r, &captureSourceImpl, srv, nullptr);
+        CaptureSourceBox* box = srv->alloc->make<CaptureSourceBox>();
+
+        box->srv = srv;
+        box->toplevelId = toplevelId;
+        wl_resource_set_implementation(r, &captureSourceImpl, box, captureSourceResourceDestroyed);
+
+        return r;
+    }
+
+    void captureSourceManagerCreateSource(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        makeCaptureSource((WaylandImpl*)wl_resource_get_user_data(res), client, id, 0);
     }
 
     const struct ext_output_image_capture_source_manager_v1_interface captureSourceManagerImpl = {
@@ -5961,14 +6388,243 @@ namespace {
         wl_resource_set_implementation(res, &captureSourceManagerImpl, data, nullptr);
     }
 
-    void sendCaptureConstraints(WaylandImpl* srv, wl_resource* res, bool cursor) {
+    void tlCaptureSourceManagerCreateSource(wl_client* client, wl_resource* res, u32 id, wl_resource* handleRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        auto* h = (ForeignTLHandle*)wl_resource_get_user_data(handleRes);
+
+        // a handle whose window already died still yields a source; every
+        // session on it stops immediately
+        makeCaptureSource(srv, client, id, h && h->toplevel ? h->toplevel->id : 0);
+    }
+
+    const struct ext_foreign_toplevel_image_capture_source_manager_v1_interface tlCaptureSourceManagerImpl = {
+        .create_source = tlCaptureSourceManagerCreateSource,
+        .destroy = resDestroy,
+    };
+
+    void tlCaptureSourceManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &tlCaptureSourceManagerImpl, data, nullptr);
+    }
+
+    // ---- wp-drm-lease-v1 ----
+    void leaseConnectorDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    const struct wp_drm_lease_connector_v1_interface leaseConnectorImpl = {
+        .destroy = leaseConnectorDestroy,
+    };
+
+    void leaseResourceFinished(LeaseBox* lease) {
+        if (lease->finished) {
+            return;
+        }
+
+        lease->finished = true;
+
+        if (lease->lesseeId && lease->srv->composer->device) {
+            lease->srv->composer->device->revokeLease(lease->lesseeId);
+            lease->lesseeId = 0;
+        }
+
+        wp_drm_lease_v1_send_finished(lease->res);
+    }
+
+    void leaseResourceDestroyed(wl_resource* res) {
+        auto* lease = (LeaseBox*)wl_resource_get_user_data(res);
+
+        // destroying the object drops the lease; the fd the client holds
+        // keeps the kernel lease alive until it closes it
+        if (lease->lesseeId && lease->srv->composer->device) {
+            lease->srv->composer->device->revokeLease(lease->lesseeId);
+        }
+
+        lease->srv->alloc->release(lease);
+    }
+
+    const struct wp_drm_lease_v1_interface leaseImpl = {
+        .destroy = resDestroy,
+    };
+
+    void leaseRequestRequestConnector(wl_client*, wl_resource* res, wl_resource* connectorRes) {
+        auto* req = (LeaseRequestBox*)wl_resource_get_user_data(res);
+        u32 id = (u32)(uintptr_t)wl_resource_get_user_data(connectorRes);
+
+        for (u32 existing : req->connectors) {
+            if (existing == id) {
+                wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_DUPLICATE_CONNECTOR,
+                                       "connector already requested");
+
+                return;
+            }
+        }
+
+        req->connectors.pushBack(id);
+    }
+
+    void leaseRequestSubmit(wl_client* client, wl_resource* res, u32 id) {
+        auto* req = (LeaseRequestBox*)wl_resource_get_user_data(res);
+        WaylandImpl* srv = req->srv;
+
+        if (req->connectors.empty()) {
+            wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_EMPTY_LEASE,
+                                   "lease request has no connectors");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &wp_drm_lease_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        LeaseBox* lease = srv->alloc->make<LeaseBox>();
+
+        lease->srv = srv;
+        lease->res = r;
+        wl_resource_set_implementation(r, &leaseImpl, lease, leaseResourceDestroyed);
+
+        // submit destroys the request object
+        wl_resource_destroy(res);
+
+        u32 lesseeId = 0;
+        int leaseFd = srv->composer->device
+            ? srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId)
+            : -1;
+
+        if (leaseFd < 0) {
+            // a lease can always fail; the client re-requests
+            leaseResourceFinished(lease);
+
+            return;
+        }
+
+        lease->lesseeId = lesseeId;
+        wp_drm_lease_v1_send_lease_fd(r, leaseFd);
+        close(leaseFd);
+    }
+
+    void leaseRequestResourceDestroyed(wl_resource* res) {
+        auto* req = (LeaseRequestBox*)wl_resource_get_user_data(res);
+
+        req->srv->alloc->release(req);
+    }
+
+    const struct wp_drm_lease_request_v1_interface leaseRequestImpl = {
+        .request_connector = leaseRequestRequestConnector,
+        .submit = leaseRequestSubmit,
+    };
+
+    void leaseDeviceCreateRequest(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &wp_drm_lease_request_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        LeaseRequestBox* req = srv->alloc->make<LeaseRequestBox>();
+
+        req->srv = srv;
+        wl_resource_set_implementation(r, &leaseRequestImpl, req, leaseRequestResourceDestroyed);
+    }
+
+    void leaseDeviceRelease(wl_client*, wl_resource* res) {
+        wp_drm_lease_device_v1_send_released(res);
+        wl_resource_destroy(res);
+    }
+
+    const struct wp_drm_lease_device_v1_interface leaseDeviceImpl = {
+        .create_lease_request = leaseDeviceCreateRequest,
+        .release = leaseDeviceRelease,
+    };
+
+    void leaseDeviceBind(wl_client* client, void* data, u32 version, u32 id) {
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = wl_resource_create(client, &wp_drm_lease_device_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &leaseDeviceImpl, srv, nullptr);
+
+        // the client dups this to talk to the same drm node
+        wp_drm_lease_device_v1_send_drm_fd(res, srv->drmFd);
+
+        srv->composer->device->leaseConnectors([&](const LeaseConnector& lc) {
+            wl_resource* cr = wl_resource_create(client, &wp_drm_lease_connector_v1_interface, version, 0);
+
+            if (!cr) {
+                return;
+            }
+
+            wl_resource_set_implementation(cr, &leaseConnectorImpl, (void*)(uintptr_t)lc.connectorId, nullptr);
+            wp_drm_lease_device_v1_send_connector(res, cr);
+            wp_drm_lease_connector_v1_send_name(cr, Buffer(lc.name).cStr());
+            wp_drm_lease_connector_v1_send_description(cr, Buffer(lc.description).cStr());
+            wp_drm_lease_connector_v1_send_connector_id(cr, lc.connectorId);
+            wp_drm_lease_connector_v1_send_done(cr);
+        });
+
+        wp_drm_lease_device_v1_send_done(res);
+    }
+
+    ToplevelImpl* captureToplevel(WaylandImpl* srv, u64 id) {
+        ToplevelImpl* found = nullptr;
+
+        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+            if (t.id == id && t.mapped && t.surface) {
+                found = (ToplevelImpl*)&t;
+            }
+        });
+
+        return found;
+    }
+
+    void sendCaptureConstraints(WaylandImpl* srv, CaptureSession* cs, wl_resource* res, bool cursor, u64 toplevelId) {
         int w = srv->scene->outW, h = srv->scene->outH;
 
         if (cursor) {
-            Surface* cs = srv->scene->cursorSurface;
+            Surface* cur = srv->scene->cursorSurface;
 
-            w = cs && cs->viewW() > 0 ? cs->viewW() : 1;
-            h = cs && cs->viewH() > 0 ? cs->viewH() : 1;
+            w = cur && cur->viewW() > 0 ? cur->viewW() : 1;
+            h = cur && cur->viewH() > 0 ? cur->viewH() : 1;
+        } else if (toplevelId) {
+            ToplevelImpl* t = captureToplevel(srv, toplevelId);
+
+            if (!t) {
+                if (cs) {
+                    cs->stopped = true;
+                }
+
+                ext_image_copy_capture_session_v1_send_stopped(res);
+
+                return;
+            }
+
+            w = t->surface->geomW() > 0 ? t->surface->geomW() : 1;
+            h = t->surface->geomH() > 0 ? t->surface->geomH() : 1;
+        }
+
+        if (cs) {
+            cs->sentW = (u32)w;
+            cs->sentH = (u32)h;
         }
 
         ext_image_copy_capture_session_v1_send_buffer_size(res, (u32)w, (u32)h);
@@ -6110,7 +6766,7 @@ namespace {
         .destroy = resDestroy,
     };
 
-    CaptureSession* makeCaptureSession(WaylandImpl* srv, wl_client* client, u32 id, bool cursor) {
+    CaptureSession* makeCaptureSession(WaylandImpl* srv, wl_client* client, u32 id, bool cursor, u64 toplevelId) {
         wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_session_v1_interface, 1, id);
 
         if (!r) {
@@ -6124,15 +6780,16 @@ namespace {
         cs->srv = srv;
         cs->res = r;
         cs->cursor = cursor;
+        cs->toplevelId = toplevelId;
         srv->captureSessions.pushBack(cs);
         wl_resource_set_implementation(r, &captureSessionImpl, cs, captureSessionResourceDestroyed);
-        sendCaptureConstraints(srv, r, cursor);
+        sendCaptureConstraints(srv, cs, r, cursor, toplevelId);
 
         return cs;
     }
 
     void captureManagerCreateSession(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes, u32 options) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(sourceRes);
+        auto* box = (CaptureSourceBox*)wl_resource_get_user_data(sourceRes);
 
         if (options & ~(u32)EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS) {
             wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_ERROR_INVALID_OPTION, "unknown option flags");
@@ -6142,7 +6799,7 @@ namespace {
 
         // cursors are composited into the scene; paint_cursors is the truth
         // either way
-        makeCaptureSession(srv, client, id, false);
+        makeCaptureSession(box->srv, client, id, false, box->toplevelId);
     }
 
     void captureCursorSessionResourceDestroyed(wl_resource* res) {
@@ -6162,7 +6819,7 @@ namespace {
         }
 
         cc->haveSession = true;
-        makeCaptureSession(cc->srv, client, id, true);
+        makeCaptureSession(cc->srv, client, id, true, 0);
     }
 
     const struct ext_image_copy_capture_cursor_session_v1_interface captureCursorSessionImpl = {
@@ -6171,7 +6828,7 @@ namespace {
     };
 
     void captureManagerCreateCursorSession(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes, wl_resource*) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(sourceRes);
+        auto* srv = ((CaptureSourceBox*)wl_resource_get_user_data(sourceRes))->srv;
         wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_cursor_session_v1_interface, 1, id);
 
         if (!r) {
@@ -6236,10 +6893,55 @@ namespace {
         u32 wantW = cs.cursor ? 0 : (u32)srv->scene->outW;
         u32 wantH = cs.cursor ? 0 : (u32)srv->scene->outH;
         Surface* cur = srv->scene->cursorSurface;
+        int regionX = 0, regionY = 0;
 
         if (cs.cursor) {
             wantW = cur && cur->viewW() > 0 ? (u32)cur->viewW() : 1;
             wantH = cur && cur->viewH() > 0 ? (u32)cur->viewH() : 1;
+        } else if (cs.toplevelId) {
+            ToplevelImpl* t = captureToplevel(srv, cs.toplevelId);
+
+            if (!t) {
+                if (!cs.stopped) {
+                    cs.stopped = true;
+                    ext_image_copy_capture_session_v1_send_stopped(cs.res);
+                }
+
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_STOPPED);
+
+                return;
+            }
+
+            wantW = t->surface->geomW() > 0 ? (u32)t->surface->geomW() : 1;
+            wantH = t->surface->geomH() > 0 ? (u32)t->surface->geomH() : 1;
+
+            // the window changed size since the client sized its buffer:
+            // push fresh constraints and bounce this frame
+            if (wantW != cs.sentW || wantH != cs.sentH) {
+                sendCaptureConstraints(srv, &cs, cs.res, false, cs.toplevelId);
+                ext_image_copy_capture_session_v1_send_done(cs.res);
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS);
+
+                return;
+            }
+
+            regionX = (int)t->surface->imgX;
+            regionY = (int)t->surface->imgY;
+
+            if (regionX < 0) {
+                regionX = 0;
+            }
+
+            if (regionY < 0) {
+                regionY = 0;
+            }
+
+            if (regionX + (int)wantW > srv->scene->outW || regionY + (int)wantH > srv->scene->outH) {
+                // partially offscreen: nothing sane to deliver
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+                return;
+            }
         }
 
         if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 ||
@@ -6288,7 +6990,7 @@ namespace {
         wl_shm_buffer_begin_access(shm);
 
         bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride,
-                                    0, 0, (int)wantW, (int)wantH);
+                                    regionX, regionY, (int)wantW, (int)wantH);
 
         wl_shm_buffer_end_access(shm);
 
@@ -11640,6 +12342,11 @@ void WaylandImpl::createGlobals() {
     global(display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
+    global(display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
+    global(display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
+    global(display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
+    global(display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);
+    global(display, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1, this, tlCaptureSourceManagerBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
     global(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
     global(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
@@ -11658,6 +12365,12 @@ void WaylandImpl::createGlobals() {
 
     if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
         global(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
+    }
+
+    // wp-drm-lease: only with a real drm node behind it; the device offers
+    // the non-desktop connectors (none in headless / VM without VR hardware)
+    if (drmFd >= 0 && composer->device) {
+        global(display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
     }
 
     if (!formats.empty()) {

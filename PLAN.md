@@ -45,6 +45,10 @@
 ### Сверх плана
 - [x] ~~security-context-v1~~ done (sandbox tagging + privileged-global filter)
 - [x] ~~tablet-v2~~ done (virtual pen: manager/seat/tool, proximity/down/motion/axes frames to the surface under the tool; the pen drives the shared cursor; libinput tablet-tool events wired; `tablet` control command + reg test)
+- [x] ~~xdg-toplevel-tag~~ done (tag + description stored on the toplevel, surfaced in the dump)
+- [x] ~~xdg-foreign v2~~ done (exporter/importer, handle → transient parent; native set_parent now honored too; revoke + toplevel death detach children)
+- [x] ~~ext-foreign-toplevel-list + toplevel image-capture-source~~ done (readonly window list with stable identifiers; per-window capture crops the window's on-screen rect at its own size, resends constraints on resize, stops on window death; both globals sandbox-privileged)
+- [x] ~~drm-lease v1~~ done — **hardware-unverified** (Device API enumerates non-desktop connectors + drmModeCreateLease/revoke; global gated on a real KMS drm fd, absent in headless; no reg test possible without VR hardware, like tearing async-flip)
 
 ### Этап G — полнота цвета
 - [x] ~~mastering primaries/luminance, tf_power, named primaries~~ done (tf_power wired through the iccGamma path; mastering stored as target-volume metadata; 6 extra named primaries; get_output honest for the single output)

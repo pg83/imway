@@ -23,6 +23,7 @@ struct Mixer;
 struct Notifications;
 struct Notifier;
 struct Output;
+struct Device;
 struct Renderer;
 struct Scene;
 struct Session;
@@ -51,6 +52,7 @@ struct Composer {
 
     Session* session = nullptr;
     Supervisor* supervisor = nullptr;
+    Device* device = nullptr;
     Output* output = nullptr;
     Keyboard* kb = nullptr;
     IconPool* iconPool = nullptr;

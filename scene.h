@@ -177,6 +177,14 @@ struct Toplevel: stl::IntrusiveNode {
     u64 id = 0;
     stl::StringBuilder title;
     stl::StringBuilder appId;
+    // xdg-toplevel-tag: a stable machine token for WM rules and the
+    // translated description that goes with it
+    stl::StringBuilder tag;
+    stl::StringBuilder tagDescription;
+
+    // transient parent: xdg_toplevel.set_parent or an xdg-foreign import;
+    // cleared when either side dies or the export is revoked
+    Toplevel* parent = nullptr;
     bool mapped = false;
 
     // per-window keyboard layout, restored on focus

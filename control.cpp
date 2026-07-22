@@ -335,7 +335,9 @@ void ControlImpl::dumpState(StringView outPath) {
                 << " tearing="_sv << (int)s->tearingAsync;
         }
 
-        out << " app_id="_sv << sv(t.appId)
+        out << " parent="_sv << (t.parent ? t.parent->id : 0)
+            << " tag="_sv << sv(t.tag)
+            << " app_id="_sv << sv(t.appId)
             << " title="_sv << sv(t.title)
             << "\n"_sv;
     });

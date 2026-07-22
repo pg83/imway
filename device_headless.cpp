@@ -119,6 +119,9 @@ namespace {
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
+        void leaseConnectorsImpl(VisitorFace&&) override {}
+        int createLease(const u32*, int, u32&) override { return -ENODEV; }
+        void revokeLease(u32) override {}
         ::Output* createOutput(StringView, StringView modeStr,
                                const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;

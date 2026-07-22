@@ -797,12 +797,19 @@ namespace {
         udev_monitor* mon = nullptr;
         KmsOutput* output = nullptr;
 
+        // wp-drm-lease: the connector id the desktop output drives, so it is
+        // never offered for lease
+        u32 outputConnectorId = 0;
+
         KmsDevice(Composer& comp, StringView devPath);
 
         int drmFd() const override;
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
+        void leaseConnectorsImpl(VisitorFace&& vis) override;
+        int createLease(const u32* connectorIds, int count, u32& lesseeId) override;
+        void revokeLease(u32 lesseeId) override;
         ::Output* createOutput(StringView connector, StringView modeStr,
                                const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
@@ -922,9 +929,208 @@ void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     }
 }
 
+namespace {
+    // read the "non-desktop" connector property (VR headsets, dedicated
+    // panels set it to 1); such connectors are never driven as outputs and
+    // are the only ones offered for lease
+    bool connectorNonDesktop(int fd, u32 connectorId) {
+        drmModeObjectProperties* props =
+            drmModeObjectGetProperties(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR);
+
+        if (!props) {
+            return false;
+        }
+
+        bool nonDesktop = false;
+
+        for (u32 i = 0; i < props->count_props; i++) {
+            drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
+
+            if (!p) {
+                continue;
+            }
+
+            if (StringView(p->name) == "non-desktop"_sv && props->prop_values[i]) {
+                nonDesktop = true;
+            }
+
+            drmModeFreeProperty(p);
+        }
+
+        drmModeFreeObjectProperties(props);
+
+        return nonDesktop;
+    }
+}
+
+void KmsDevice::leaseConnectorsImpl(VisitorFace&& vis) {
+    drmModeRes* res = drmModeGetResources(fd);
+
+    if (!res) {
+        return;
+    }
+
+    for (int i = 0; i < res->count_connectors; i++) {
+        u32 id = res->connectors[i];
+
+        if (id == outputConnectorId || !connectorNonDesktop(fd, id)) {
+            continue;
+        }
+
+        drmModeConnector* conn = drmModeGetConnector(fd, id);
+
+        if (!conn) {
+            continue;
+        }
+
+        // the name lives in the shared scratch: vis.visit is synchronous, the
+        // wayland bind copies it into the connector events right here
+        auto& name = sb();
+
+        connectorName(conn, name);
+
+        LeaseConnector lc;
+
+        lc.connectorId = id;
+        lc.name = sv(name);
+        lc.description = sv(name);
+        vis.visit((void*)&lc);
+        drmModeFreeConnector(conn);
+    }
+
+    drmModeFreeResources(res);
+}
+
+int KmsDevice::createLease(const u32* connectorIds, int count, u32& lesseeId) {
+    if (count <= 0) {
+        return -EINVAL;
+    }
+
+    // each leased connector needs a crtc and its planes; pick free ones,
+    // avoiding the crtc the desktop output drives
+    Vector<u32> objects;
+
+    drmModeRes* res = drmModeGetResources(fd);
+
+    if (!res) {
+        return -ENODEV;
+    }
+
+    u32 usedCrtc = output ? output->crtcId : 0;
+    Vector<u32> takenCrtcs;
+
+    if (usedCrtc) {
+        takenCrtcs.pushBack(usedCrtc);
+    }
+
+    bool ok = true;
+
+    for (int i = 0; i < count && ok; i++) {
+        objects.pushBack(connectorIds[i]);
+
+        drmModeConnector* conn = drmModeGetConnector(fd, connectorIds[i]);
+
+        if (!conn) {
+            ok = false;
+            break;
+        }
+
+        u32 crtc = 0;
+
+        for (int e = 0; e < conn->count_encoders && !crtc; e++) {
+            drmModeEncoder* enc = drmModeGetEncoder(fd, conn->encoders[e]);
+
+            if (!enc) {
+                continue;
+            }
+
+            for (int c = 0; c < res->count_crtcs; c++) {
+                u32 cand = res->crtcs[c];
+
+                if (!(enc->possible_crtcs & (1u << c))) {
+                    continue;
+                }
+
+                bool taken = false;
+
+                for (u32 t : takenCrtcs) {
+                    taken = taken || t == cand;
+                }
+
+                if (!taken) {
+                    crtc = cand;
+                    break;
+                }
+            }
+
+            drmModeFreeEncoder(enc);
+        }
+
+        drmModeFreeConnector(conn);
+
+        if (!crtc) {
+            ok = false;
+            break;
+        }
+
+        takenCrtcs.pushBack(crtc);
+        objects.pushBack(crtc);
+
+        drmModePlaneRes* planes = drmModeGetPlaneResources(fd);
+
+        if (planes) {
+            for (u32 p = 0; p < planes->count_planes; p++) {
+                drmModePlane* pl = drmModeGetPlane(fd, planes->planes[p]);
+
+                u32 crtcIdx = 0;
+
+                for (int ci = 0; ci < res->count_crtcs; ci++) {
+                    if (res->crtcs[ci] == crtc) {
+                        crtcIdx = (u32)ci;
+                    }
+                }
+
+                if (pl && (pl->possible_crtcs & (1u << crtcIdx))) {
+                    objects.pushBack(planes->planes[p]);
+                }
+
+                if (pl) {
+                    drmModeFreePlane(pl);
+                }
+            }
+
+            drmModeFreePlaneResources(planes);
+        }
+    }
+
+    drmModeFreeResources(res);
+
+    if (!ok) {
+        return -EINVAL;
+    }
+
+    u32 lessee = 0;
+    int leaseFd = drmModeCreateLease(fd, objects.data(), (int)objects.length(), O_CLOEXEC, &lessee);
+
+    if (leaseFd < 0) {
+        return leaseFd;
+    }
+
+    lesseeId = lessee;
+
+    return leaseFd;
+}
+
+void KmsDevice::revokeLease(u32 lesseeId) {
+    if (lesseeId) {
+        drmModeRevokeLease(fd, lesseeId);
+    }
+}
+
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr,
                                   const OutputConfiguration& config) {
     output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, config);
+    outputConnectorId = output->connectorId;
 
     return output;
 }

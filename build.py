@@ -69,13 +69,14 @@ server_protocol_paths = [
     "staging/commit-timing/commit-timing-v1",
     "staging/ext-image-capture-source/ext-image-capture-source-v1",
     "staging/ext-image-copy-capture/ext-image-copy-capture-v1",
-    # only for the interface symbol the capture-source XML references;
-    # the foreign-toplevel globals themselves are deliberately not created
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
     "staging/ext-data-control/ext-data-control-v1",
     "unstable/text-input/text-input-unstable-v3",
     "staging/security-context/security-context-v1",
     "stable/tablet/tablet-v2",
+    "staging/xdg-toplevel-tag/xdg-toplevel-tag-v1",
+    "unstable/xdg-foreign/xdg-foreign-unstable-v2",
+    "staging/drm-lease/drm-lease-v1",
 ]
 
 
@@ -202,6 +203,8 @@ client_protocol_paths = [
     "unstable/text-input/text-input-unstable-v3",
     "staging/security-context/security-context-v1",
     "stable/tablet/tablet-v2",
+    "staging/xdg-toplevel-tag/xdg-toplevel-tag-v1",
+    "unstable/xdg-foreign/xdg-foreign-unstable-v2",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [
