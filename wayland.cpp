@@ -2924,6 +2924,11 @@ namespace {
             t->icon = t->srv->icons->forAppId(sv(t->appId));
             t->srv->scene->needsFrame = true;
         }
+
+        // a foreign-toplevel-list client tracks app_id changes like titles
+        if (t->mapped) {
+            foreignListToplevelUpdated(t->srv, t);
+        }
     }
 
     bool validToplevelGrab(ToplevelImpl& toplevel, wl_client* client, wl_resource* seatRes, u32 serial) {
@@ -4043,6 +4048,13 @@ namespace {
         forEach<Offer>(src->offers, [](Offer& offer) {
             offer.source = nullptr;
         });
+
+        // an xdg-toplevel-drag object outlives its data source if the client
+        // destroys them out of order; drop the back-reference so its own
+        // teardown does not write through a freed source
+        if (src->toplevelDrag) {
+            src->toplevelDrag->source = nullptr;
+        }
 
         // the orphans keep a valid ring among themselves for their unlinks
         src->offers.clear();
@@ -6612,13 +6624,16 @@ namespace {
         lease->res = r;
         wl_resource_set_implementation(r, &leaseImpl, lease, leaseResourceDestroyed);
 
-        // submit destroys the request object
-        wl_resource_destroy(res);
-
+        // create the lease before destroying the request: wl_resource_destroy
+        // runs leaseRequestResourceDestroyed, which frees req, so reading
+        // req->connectors afterwards would be a use-after-free
         u32 lesseeId = 0;
         int leaseFd = srv->composer->device
             ? srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId)
             : -1;
+
+        // submit is a destructor request
+        wl_resource_destroy(res);
 
         if (leaseFd < 0) {
             // a lease can always fail; the client re-requests
@@ -11206,6 +11221,18 @@ void SeatState::surfaceGone(Surface* s) {
 }
 
 void SeatState::toplevelGone(Toplevel* t) {
+    // a destroy without a preceding unmap must still detach an active
+    // toplevel drag, else scene->dragToplevel and the drag box's attached
+    // pointer dangle onto the freed toplevel
+    if (dragSource && dragSource->toplevelDrag && dragSource->toplevelDrag->attached == t) {
+        dragSource->toplevelDrag->attached = nullptr;
+        syncToplevelDrag();
+    }
+
+    if (srv->scene->dragToplevel == t) {
+        srv->scene->dragToplevel = nullptr;
+    }
+
     if (ptrFocus && ptrFocus->rootToplevel() == t) {
         ptrFocus = nullptr;
         buttonsDown = 0;
