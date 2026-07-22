@@ -31,6 +31,7 @@ def parse_header(path: str) -> dict:
     xfail = None
     args: list[str] = []
     extra_env: dict[str, str] = {}
+    pre: list[str] = []
     expect_exit = False
     private_bus = False
     with open(path) as f:
@@ -41,6 +42,12 @@ def parse_header(path: str) -> dict:
             m = re.match(r"\s*#\s*imway-args:\s*(.*)", line)
             if m:
                 args = shlex.split(m.group(1))
+            # raw shell run in the scratch dir before the compositor starts:
+            # scenarios that need files in place at init time (xdg data dirs
+            # for the icon store) stage them here
+            m = re.match(r"\s*#\s*imway-pre:\s*(.*)", line)
+            if m and m.group(1).strip():
+                pre.append(m.group(1).strip())
             m = re.match(r"\s*#\s*imway-env:\s*(.*)", line)
             if m:
                 for item in shlex.split(m.group(1)):
@@ -52,7 +59,7 @@ def parse_header(path: str) -> dict:
                 expect_exit = True
             if re.match(r"\s*#\s*private-session-bus\s*$", line):
                 private_bus = True
-    return dict(xfail=xfail, args=args, env=extra_env,
+    return dict(xfail=xfail, args=args, env=extra_env, pre=pre,
                 expect_exit=expect_exit, private_bus=private_bus)
 
 
@@ -190,6 +197,13 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         arts = collect(rt, "")
         shutil.rmtree(rt, ignore_errors=True)
         return dict(status=FAIL, seconds=time.monotonic() - started, detail=detail, artifacts=arts)
+
+    for cmd in meta["pre"]:
+        cp = subprocess.run(["/bin/sh", "-c", cmd], cwd=rt, env=env, timeout=30,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if cp.returncode != 0:
+            stop_bus()
+            return fail(f"imway-pre failed (rc={cp.returncode}): {cmd}\n{cp.stdout}")
 
     logf = open(log, "w")
     proc = subprocess.Popen(

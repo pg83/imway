@@ -645,6 +645,12 @@ namespace {
         Icon* pendingIcon = nullptr;
         bool pendingIconFromClient = false;
         bool pendingIconSet = false;
+
+        // xdg-toplevel-icon by name: the resolved Icon lives in the store's
+        // current generation, so the chosen name is kept and re-resolved on
+        // every store reload (iconFromClient only shields client pixels)
+        StringBuilder iconName;
+        StringBuilder pendingIconName;
     };
 
     struct Positioner {
@@ -2936,8 +2942,9 @@ namespace {
         t->appId.reset();
         t->appId << appId;
 
-        // resolve right here: a client icon set via xdg-toplevel-icon wins
-        if (!t->iconFromClient && t->srv->icons) {
+        // resolve right here: a client icon set via xdg-toplevel-icon wins,
+        // whether it came as pixels or as a chosen name
+        if (!t->iconFromClient && t->iconName.empty() && t->srv->icons) {
             t->icon = t->srv->icons->forAppId(sv(t->appId));
             t->srv->scene->needsFrame = true;
         }
@@ -3752,10 +3759,13 @@ namespace {
             toplevel.ownIcon = toplevel.pendingOwnIcon;
             toplevel.icon = toplevel.pendingIcon;
             toplevel.iconFromClient = toplevel.pendingIconFromClient;
+            toplevel.iconName.reset();
+            toplevel.iconName << sv(toplevel.pendingIconName);
             toplevel.pendingOwnIcon = nullptr;
             toplevel.pendingIcon = nullptr;
             toplevel.pendingIconFromClient = false;
             toplevel.pendingIconSet = false;
+            toplevel.pendingIconName.reset();
             toplevel.srv->scene->needsFrame = true;
         }
 
@@ -8493,6 +8503,7 @@ namespace {
         t->pendingIcon = nullptr;
         t->pendingIconFromClient = false;
         t->pendingIconSet = true;
+        t->pendingIconName.reset();
 
         if (iconRes) {
             auto* box = (IconBox*)wl_resource_get_user_data(iconRes);
@@ -8509,12 +8520,14 @@ namespace {
                 t->pendingIcon = ic;
                 t->pendingIconFromClient = true;
             } else if (!box->name.empty() && srv->icons) {
+                // store-owned resolution: keep the name, a store reload
+                // re-resolves it (the Icon dies with the store generation)
+                t->pendingIconName << sv(box->name);
                 t->pendingIcon = srv->icons->byName(sv(box->name));
-                t->pendingIconFromClient = t->pendingIcon != nullptr;
             }
         }
 
-        if (!t->pendingIconFromClient && srv->icons) {
+        if (!t->pendingIcon && srv->icons) {
             // back to the .desktop match
             t->pendingIcon = srv->icons->forAppId(sv(t->appId));
         }
@@ -12818,9 +12831,27 @@ void WaylandImpl::run() {
 // icon store reload: re-resolve every window still on a .desktop
 // match; client-set icons are not ours to touch
 void WaylandImpl::iconsReloaded() {
+    // every store-owned resolution points into the generation the reload is
+    // about to delete: the committed icon, and a pending one caught between
+    // set_icon and the applying commit. Client pixel icons (ownIcon) are the
+    // only ones that survive as-is.
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
+        auto& t = (ToplevelImpl&)tl;
+
         if (!tl.iconFromClient) {
-            tl.icon = icons->forAppId(sv(tl.appId));
+            tl.icon = t.iconName.empty() ? nullptr : icons->byName(sv(t.iconName));
+
+            if (!tl.icon) {
+                tl.icon = icons->forAppId(sv(tl.appId));
+            }
+        }
+
+        if (t.pendingIconSet && !t.pendingIconFromClient) {
+            t.pendingIcon = t.pendingIconName.empty() ? nullptr : icons->byName(sv(t.pendingIconName));
+
+            if (!t.pendingIcon) {
+                t.pendingIcon = icons->forAppId(sv(tl.appId));
+            }
         }
     });
 

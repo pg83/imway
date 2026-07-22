@@ -1,5 +1,6 @@
 #include "composer.h"
 #include "control.h"
+#include "icon.h"
 #include "input_sink.h"
 #include "pooled.h"
 #include "pooled_ev.h"
@@ -336,6 +337,7 @@ void ControlImpl::dumpState(StringView outPath) {
         }
 
         out << " parent="_sv << (t.parent ? t.parent->id : 0)
+            << " icon_gen="_sv << (t.icon ? t.icon->gen : 0)
             << " tag="_sv << sv(t.tag)
             << " app_id="_sv << sv(t.appId)
             << " title="_sv << sv(t.title)
