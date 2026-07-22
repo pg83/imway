@@ -213,9 +213,18 @@ namespace {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         wl_resource* wmBaseRes = nullptr;
-        SurfaceImpl* surface = nullptr;
-        ToplevelImpl* toplevel = nullptr;
-        PopupImpl* popup = nullptr;
+        // anchor for the weak ring (the surface's and the roles' xdg
+        // back-pointers) plus weak references at the surface and roles: any
+        // side dying nulls the others through the rings
+        Weak<XdgSurface> weak;
+        Weak<Surface> surface;
+        Weak<Toplevel> toplevel;
+        Weak<Popup> popup;
+
+        // impl-typed reads of the weak refs (impl derives at offset zero)
+        SurfaceImpl* surf() const;
+        ToplevelImpl* tl() const;
+        PopupImpl* pop() const;
         bool initialConfigureSent = false;
         bool acked = false;
 
@@ -322,7 +331,8 @@ namespace {
         bool pendTearingChanged = false;
         bool pendTearingAsync = false;
 
-        XdgSurface* xdg = nullptr;
+        // weak ring into the xdg surface: nulls itself when it dies
+        Weak<XdgSurface> xdg;
     };
 
 
@@ -476,6 +486,8 @@ namespace {
     // input on the method's own commit
     struct InputMethod {
         WaylandImpl* srv = nullptr;
+        // anchor for the weak ring (the seat's back-pointer)
+        Weak<InputMethod> weak;
         wl_resource* res = nullptr;
         wl_resource* grab = nullptr;
         bool active = false;
@@ -613,7 +625,8 @@ namespace {
     struct ToplevelImpl: public Toplevel {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        XdgSurface* xdg = nullptr;
+        // weak ring into the xdg surface: nulls itself when it dies
+        Weak<XdgSurface> xdg;
         int cfgW = 0, cfgH = 0;
         u32 cfgSerial = 0;
         int prevW = 0, prevH = 0;
@@ -654,7 +667,8 @@ namespace {
     struct PopupImpl: public Popup {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        XdgSurface* xdg = nullptr;
+        // weak ring into the xdg surface: nulls itself when it dies
+        Weak<XdgSurface> xdg;
         int w = 0, h = 0;
         Positioner positioner;
         int pendingX = 0, pendingY = 0, pendingW = 0, pendingH = 0;
@@ -808,7 +822,8 @@ namespace {
         Vector<wl_resource*> primaryDevices;
         Vector<wl_resource*> dcDevices;
         stl::IntrusiveList textInputs;
-        InputMethod* inputMethod = nullptr;
+        // weak ring into the IM: nulls itself when the input method dies
+        Weak<InputMethod> inputMethod;
         Vector<wl_resource*> relPointers;
         Vector<wl_resource*> swipes;
         Vector<wl_resource*> pinches;
@@ -846,7 +861,9 @@ namespace {
         u64 focusGeneration = 1;
         u32 pointerGrabSerial = 0;
         wl_client* pointerGrabClient = nullptr;
-        Surface* pointerGrabOrigin = nullptr;
+        // weak: the grab dies with its surface (validators compare the
+        // origin, so the stale serial/client rot harmlessly)
+        Weak<Surface> pointerGrabOrigin;
 
         struct PointerEnter {
             wl_resource* pointer = nullptr;
@@ -1117,6 +1134,18 @@ namespace {
         return ((SurfaceImpl*)s)->res;
     }
 
+    SurfaceImpl* XdgSurface::surf() const {
+        return (SurfaceImpl*)surface.get();
+    }
+
+    ToplevelImpl* XdgSurface::tl() const {
+        return (ToplevelImpl*)toplevel.get();
+    }
+
+    PopupImpl* XdgSurface::pop() const {
+        return (PopupImpl*)popup.get();
+    }
+
     SubsurfaceImpl& impl(Subsurface* sub) {
         return *(SubsurfaceImpl*)sub;
     }
@@ -1240,13 +1269,13 @@ namespace {
 
         forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
             if (c.surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c.surface, t);
+                fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
             }
         });
 
         forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
             if (c.surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c.surface, t);
+                fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
             }
         });
     }
@@ -1385,7 +1414,7 @@ namespace {
 
         FrameResource* frame = s.frame;
 
-        s.texture = nullptr;
+        s.texture.reset();
         s.dmabuf = nullptr;
         s.frame = nullptr;
         s.dmabufUse = nullptr;
@@ -1485,7 +1514,7 @@ namespace {
         removeOne(s->frameCbs, cb);
 
         if (s->sub) {
-            removeOne(((SubsurfaceImpl*)s->sub)->cache.frames, cb);
+            removeOne(((SubsurfaceImpl*)s->sub.get())->cache.frames, cb);
         }
 
         if (s->fifo) {
@@ -1770,7 +1799,7 @@ namespace {
     }
 
     void applySubsurfaceCache(SubsurfaceImpl& sub) {
-        SurfaceImpl& s = *(SurfaceImpl*)sub.surface;
+        SurfaceImpl& s = *(SurfaceImpl*)sub.surface.get();
 
         applyCache(s, sub.cache);
 
@@ -1911,7 +1940,7 @@ namespace {
             return;
         }
 
-        SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub;
+        SubsurfaceImpl* sub = (SubsurfaceImpl*)s.sub.get();
         bool toCache = sub && sub->effectiveSync();
         CommitCache* cache = toCache ? &sub->cache : nullptr;
 
@@ -2405,9 +2434,11 @@ namespace {
         SurfaceImpl* s = surfaceFrom(res);
         WaylandImpl* srv = s->srv;
 
-        // the weak ring nulls every observer in one sweep: scene dragIcon /
-        // imePopup, the seat drag target, idle inhibitors, activation token
-        // requests, the IM popup back-pointer, cm feedbacks, constraints
+        // the weak ring nulls every observer in one sweep: the xdg surface
+        // and role back-pointers, subsurface links (own and children's),
+        // scene dragIcon / imePopup, the seat drag target and grab origin,
+        // idle inhibitors, activation token requests, the IM popup
+        // back-pointer, cm feedbacks, constraints
         s->weak.invalidate();
 
         if (srv->scene->cursorSurface == s) {
@@ -2431,7 +2462,7 @@ namespace {
         // they too point at this SurfaceImpl and outlive it until the
         // wl_subsurface dies
         if (s->sub) {
-            for (wl_resource* cb : impl(s->sub).cache.frames) {
+            for (wl_resource* cb : impl(s->sub.get()).cache.frames) {
                 wl_resource_set_user_data(cb, nullptr);
             }
         }
@@ -2441,30 +2472,11 @@ namespace {
             wp_presentation_feedback_send_discarded(fb);
         }
 
-        if (s->xdg) {
-            s->xdg->surface = nullptr;
-
-            if (s->xdg->toplevel) {
-                s->xdg->toplevel->surface = nullptr;
-            }
-
-            if (s->xdg->popup) {
-                s->xdg->popup->surface = nullptr;
-            }
-        }
-
+        // the rings already nulled the xdg/role/subsurface back-pointers and
+        // every child's parent; only the physical unlink work remains
         if (s->sub) {
-            unlinkFromParent(impl(s->sub));
-            s->sub->surface = nullptr;
+            unlinkFromParent(impl(s->sub.get()));
         }
-
-        forEach<Subsurface>(s->stackBelow, [](Subsurface& c) {
-            c.parent = nullptr;
-        });
-
-        forEach<Subsurface>(s->stackAbove, [](Subsurface& c) {
-            c.parent = nullptr;
-        });
 
         // the list heads die with this surface: detach them so the orphaned
         // children keep a valid ring among themselves and their own later
@@ -2509,7 +2521,7 @@ namespace {
         if (s->frame) {
             FrameResource* frame = s->frame;
 
-            s->texture = nullptr;
+            s->texture.reset();
             s->frame = nullptr;
             frameUnref(frame);
         }
@@ -2671,7 +2683,7 @@ namespace {
         // unlink unconditionally: after the parent died the node still sits
         // in the orphan ring of its former siblings
         sub.unlink();
-        sub.parent = nullptr;
+        sub.parent.reset();
     }
 
     void subsurfaceDestroy(wl_client*, wl_resource* res) {
@@ -2691,7 +2703,7 @@ namespace {
     }
 
     bool subsurfaceRestack(SubsurfaceImpl& sub, Surface* refSurface, bool above) {
-        Surface* parent = sub.parent;
+        Surface* parent = sub.parent.get();
 
         if (!parent) {
             return false;
@@ -2711,9 +2723,9 @@ namespace {
             return true;
         }
 
-        Subsurface* ref = refSurface->sub;
+        Subsurface* ref = refSurface->sub.get();
 
-        if (!ref || ref->parent != parent || ref == &sub) {
+        if (!ref || ref->parent.get() != parent || ref == &sub) {
             return false;
         }
 
@@ -2791,10 +2803,8 @@ namespace {
 
         releaseCachedDmabuf(sub->srv, sub->cache);
 
-        if (sub->surface) {
-            sub->surface->sub = nullptr;
-        }
-
+        // the ring nulls the surface's sub back-pointer
+        sub->weak.invalidate();
         sub->srv->alloc->release(sub);
     }
 
@@ -2835,7 +2845,7 @@ namespace {
                 return;
             }
 
-            ancestor = ancestor->sub ? ancestor->sub->parent : nullptr;
+            ancestor = ancestor->sub ? ancestor->sub->parent.get() : nullptr;
         }
 
         if (ancestor) {
@@ -2855,11 +2865,12 @@ namespace {
         auto* sub = srv->alloc->make<SubsurfaceImpl>();
 
         sub->srv = srv;
-        sub->surface = surface;
-        sub->parent = parent;
+        sub->weak.anchor(sub);
+        sub->surface.bind(surface->weak);
+        sub->parent.bind(parent->weak);
         sub->res = sres;
         surface->role = SurfaceRole::subsurface;
-        surface->sub = sub;
+        surface->sub.bind(sub->weak);
         parent->stackAbove.pushBack(sub);
         wl_resource_set_implementation(sres, &subsurfaceImpl, sub, subsurfaceResourceDestroyed);
     }
@@ -3091,17 +3102,11 @@ namespace {
         // the weak ring nulls every observer in one sweep: transient-parent
         // children, the scene focus/drag pointers, the drag box attachment,
         // the renderer's alt-tab selection
+        // the weak ring also nulls the xdg surface's role pointer and the
+        // wl_surface's toplevel pointer
         t->weak.invalidate();
 
         srv->seat.toplevelGone(t);
-
-        if (t->xdg) {
-            t->xdg->toplevel = nullptr;
-        }
-
-        if (t->surface) {
-            t->surface->toplevel = nullptr;
-        }
 
         if (t->decoRes) {
             wl_resource_set_user_data(t->decoRes, nullptr);
@@ -3156,11 +3161,11 @@ namespace {
             wl_array states;
 
             wl_array_init(&states);
-            sendConfigureBounds(*xs.toplevel);
-            xdg_toplevel_send_configure(xs.toplevel->res, 0, 0, &states);
+            sendConfigureBounds(*xs.tl());
+            xdg_toplevel_send_configure(xs.tl()->res, 0, 0, &states);
             wl_array_release(&states);
         } else if (xs.popup) {
-            PopupImpl& p = *xs.popup;
+            PopupImpl& p = *xs.pop();
 
             xdg_popup_send_configure(p.res, p.x, p.y, p.w, p.h);
         }
@@ -3172,7 +3177,7 @@ namespace {
     void xdgSurfaceGetToplevel(wl_client* client, wl_resource* res, u32 id) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
-        if (xs->toplevel || xs->popup || !xs->surface || xs->surface->role != SurfaceRole::none) {
+        if (xs->toplevel || xs->popup || !xs->surface || xs->surf()->role != SurfaceRole::none) {
             wl_resource_post_error(res, XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED, "xdg_surface already has a role object");
 
             return;
@@ -3192,17 +3197,13 @@ namespace {
         t->srv = srv;
         t->res = tres;
         t->weak.anchor(t);
-        t->xdg = xs;
-        t->surface = xs->surface;
+        t->xdg.bind(xs->weak);
+        t->surface.bind(xs->surface);
         t->id = srv->nextToplevelId++;
         t->title << "(untitled)"_sv;
-        xs->toplevel = t;
-        xs->surface->role = SurfaceRole::xdgToplevel;
-
-        if (xs->surface) {
-            xs->surface->toplevel = t;
-        }
-
+        xs->toplevel.bind(t->weak);
+        xs->surf()->role = SurfaceRole::xdgToplevel;
+        xs->surface->toplevel.bind(t->weak);
         srv->scene->toplevels.pushBack(t);
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
 
@@ -3279,21 +3280,22 @@ namespace {
     void xdgSurfaceResourceDestroyed(wl_resource* res) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
-        if (xs->surface) {
-            xs->surface->xdg = nullptr;
-            xs->surface->toplevel = nullptr;
+        // the surface<->role cross-links die with the binding; both ends
+        // are still alive, so these are semantic unlinks, not ring work
+        if (Surface* s = xs->surface.get()) {
+            s->toplevel.reset();
         }
 
-        if (xs->toplevel) {
-            xs->toplevel->xdg = nullptr;
-            xs->toplevel->surface = nullptr;
+        if (Toplevel* t = xs->toplevel.get()) {
+            t->surface.reset();
         }
 
-        if (xs->popup) {
-            xs->popup->xdg = nullptr;
-            xs->popup->surface = nullptr;
+        if (Popup* p = xs->popup.get()) {
+            p->surface.reset();
         }
 
+        // the ring nulls the surface's and the roles' xdg back-pointers
+        xs->weak.invalidate();
         xs->srv->alloc->release(xs);
     }
 
@@ -3452,7 +3454,7 @@ namespace {
         auto* popup = (PopupImpl*)wl_resource_get_user_data(res);
 
         for (Popup* child : each<Popup>(popup->srv->scene->popups)) {
-            if (child->parent == popup->surface) {
+            if (child->parent == popup->surface.get()) {
                 wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
                                        "popup has a live child popup");
 
@@ -3468,7 +3470,7 @@ namespace {
         auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
 
         auto* parentSurface = (SurfaceImpl*)p->parent;
-        PopupImpl* parentPopup = parentSurface && parentSurface->xdg ? parentSurface->xdg->popup : nullptr;
+        PopupImpl* parentPopup = parentSurface && parentSurface->xdg ? parentSurface->xdg->pop() : nullptr;
 
         if (p->mapped || !seat || seat != &p->srv->seat || (parentPopup && !parentPopup->grab)) {
             wl_resource_post_error(res, XDG_POPUP_ERROR_INVALID_GRAB, "popup grab serial is not an active implicit grab");
@@ -3476,7 +3478,10 @@ namespace {
             return;
         }
 
-        bool pointerOk = seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
+        // the origin going away invalidates the implicit grab: the weak ref
+        // nulls it, the stale serial/client alone must not authorize
+        bool pointerOk = seat->pointerGrabOrigin && seat->pointerGrabClient == client &&
+                         seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
         bool keyOk = seat->keyGrabClient == client &&
                      seat->keyGrabSerial == serial &&
                      seat->keyGrabGeneration == seat->focusGeneration;
@@ -3519,10 +3524,8 @@ namespace {
 
         srv->seat.popupGone(p);
 
-        if (p->xdg) {
-            p->xdg->popup = nullptr;
-        }
-
+        // the ring nulls the xdg surface's popup back-pointer
+        p->weak.invalidate();
         p->unlink();
         srv->scene->needsFrame = true;
         srv->alloc->release(p);
@@ -3532,7 +3535,7 @@ namespace {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
         Positioner* pos = positionerFrom(positionerRes);
 
-        if (xs->toplevel || xs->popup || !xs->surface || xs->surface->role != SurfaceRole::none) {
+        if (xs->toplevel || xs->popup || !xs->surface || xs->surf()->role != SurfaceRole::none) {
             wl_resource_post_error(res, XDG_SURFACE_ERROR_ALREADY_CONSTRUCTED, "xdg_surface already has a role object");
 
             return;
@@ -3565,14 +3568,15 @@ namespace {
 
         p->srv = srv;
         p->res = pres;
-        p->xdg = xs;
-        p->surface = xs->surface;
-        p->parent = parentXs ? parentXs->surface : nullptr;
+        p->weak.anchor(p);
+        p->xdg.bind(xs->weak);
+        p->surface.bind(xs->surface);
+        p->parent = parentXs ? parentXs->surface.get() : nullptr;
 
         p->positioner = *pos;
         placePopup(*p, *pos, p->x, p->y, p->w, p->h);
-        xs->popup = p;
-        xs->surface->role = SurfaceRole::xdgPopup;
+        xs->popup.bind(p->weak);
+        xs->surf()->role = SurfaceRole::xdgPopup;
         srv->scene->popups.pushBack(p);
         wl_resource_set_implementation(pres, &popupImpl, p, popupResourceDestroyed);
     }
@@ -3638,8 +3642,9 @@ namespace {
         xs->srv = srv;
         xs->res = xres;
         xs->wmBaseRes = res;
-        xs->surface = surface;
-        surface->xdg = xs;
+        xs->weak.anchor(xs);
+        xs->surface.bind(surface->weak);
+        surface->xdg.bind(xs->weak);
         wl_resource_set_implementation(xres, &xdgSurfaceImpl, xs, xdgSurfaceResourceDestroyed);
     }
 
@@ -3729,7 +3734,7 @@ namespace {
     }
 
     void xdgHandleCommit(SurfaceImpl& s) {
-        XdgSurface* xs = s.xdg;
+        XdgSurface* xs = s.xdg.get();
 
         if (!xs) {
             return;
@@ -3737,8 +3742,8 @@ namespace {
 
         xs->committedAckSerial = xs->ackedSerial;
 
-        if (xs->toplevel && xs->toplevel->pendingIconSet) {
-            ToplevelImpl& toplevel = *xs->toplevel;
+        if (xs->toplevel && xs->tl()->pendingIconSet) {
+            ToplevelImpl& toplevel = *xs->tl();
 
             if (toplevel.ownIcon && toplevel.srv->iconPool) {
                 toplevel.srv->iconPool->release(toplevel.ownIcon);
@@ -3768,9 +3773,9 @@ namespace {
             }
         }
 
-        if (xs->popup && xs->popup->positionPending &&
-            (i32)(xs->committedAckSerial - xs->popup->positionSerial) >= 0) {
-            PopupImpl& popup = *xs->popup;
+        if (xs->popup && xs->pop()->positionPending &&
+            (i32)(xs->committedAckSerial - xs->pop()->positionSerial) >= 0) {
+            PopupImpl& popup = *xs->pop();
 
             popup.x = popup.pendingX;
             popup.y = popup.pendingY;
@@ -3780,8 +3785,8 @@ namespace {
             s.srv->scene->needsFrame = true;
         }
 
-        if (xs->toplevel && (xs->toplevel->pendingMinSet || xs->toplevel->pendingMaxSet)) {
-            ToplevelImpl& toplevel = *xs->toplevel;
+        if (xs->toplevel && (xs->tl()->pendingMinSet || xs->tl()->pendingMaxSet)) {
+            ToplevelImpl& toplevel = *xs->tl();
             int minW = toplevel.pendingMinSet ? toplevel.pendingMinW : toplevel.minW;
             int minH = toplevel.pendingMinSet ? toplevel.pendingMinH : toplevel.minH;
             int maxW = toplevel.pendingMaxSet ? toplevel.pendingMaxW : toplevel.maxW;
@@ -3819,9 +3824,9 @@ namespace {
             xs->toplevel->mapped = true;
             s.srv->scene->needsFrame = true;
             sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
-            foreignListToplevelMapped(s.srv, (ToplevelImpl*)xs->toplevel);
+            foreignListToplevelMapped(s.srv, xs->tl());
 
-            s.srv->seat.focusToplevel(xs->toplevel);
+            s.srv->seat.focusToplevel(xs->toplevel.get());
         }
 
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
@@ -3835,7 +3840,7 @@ namespace {
                 }
             });
 
-            s.srv->seat.toplevelUnmapped(xs->toplevel);
+            s.srv->seat.toplevelUnmapped(xs->toplevel.get());
 
             // unmap returns the xdg_surface to its pre-initial-commit state:
             // the next commit is an initial commit again and must be answered
@@ -3851,7 +3856,7 @@ namespace {
             sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
 
             if (xs->popup->grab) {
-                s.srv->seat.popupGrabStart(xs->popup);
+                s.srv->seat.popupGrabStart(xs->popup.get());
             }
         }
 
@@ -3882,7 +3887,7 @@ namespace {
 
     void dismissPopupTree(PopupImpl& popup) {
         forEachRev<Popup>(popup.srv->scene->popups, [&](Popup& child) {
-            if (&child != &popup && child.parent == popup.surface) {
+            if (&child != &popup && child.parent == popup.surface.get()) {
                 dismissPopupTree((PopupImpl&)child);
             }
         });
@@ -4289,7 +4294,7 @@ namespace {
         SurfaceImpl* origin = surfaceFrom(originRes);
 
         if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial ||
-            client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin) {
+            client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin.get()) {
             // cancelled is a v1 event (v3 only added dnd_drop_performed and
             // friends); gating it left old clients waiting forever
             if (src) {
@@ -5002,7 +5007,7 @@ namespace {
     void foreignExportToplevel(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
-        ToplevelImpl* t = s && s->toplevel ? (ToplevelImpl*)s->toplevel : nullptr;
+        ToplevelImpl* t = s ? (ToplevelImpl*)s->toplevel.get() : nullptr;
 
         if (!t) {
             wl_resource_post_error(res, ZXDG_EXPORTER_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
@@ -5061,7 +5066,7 @@ namespace {
     void foreignImportedSetParentOf(wl_client*, wl_resource* res, wl_resource* surfaceRes) {
         auto* im = (ForeignImport*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
-        ToplevelImpl* t = s && s->toplevel ? (ToplevelImpl*)s->toplevel : nullptr;
+        ToplevelImpl* t = s ? (ToplevelImpl*)s->toplevel.get() : nullptr;
 
         if (!t) {
             wl_resource_post_error(res, ZXDG_IMPORTED_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
@@ -6016,10 +6021,8 @@ namespace {
             wl_resource_set_user_data(im->popupRes, nullptr);
         }
 
-        if (srv->seat.inputMethod == im) {
-            srv->seat.inputMethod = nullptr;
-        }
-
+        // the ring nulls the seat's back-pointer
+        im->weak.invalidate();
         srv->alloc->release(im);
     }
 
@@ -6048,6 +6051,7 @@ namespace {
             InputMethod* tmp = srv->alloc->make<InputMethod>();
 
             tmp->srv = srv;
+            tmp->weak.anchor(tmp);
             tmp->res = r;
             wl_resource_set_implementation(r, &inputMethodImpl, tmp, imResourceDestroyed);
             zwp_input_method_v2_send_unavailable(r);
@@ -6058,8 +6062,9 @@ namespace {
         InputMethod* im = srv->alloc->make<InputMethod>();
 
         im->srv = srv;
+        im->weak.anchor(im);
         im->res = r;
-        srv->seat.inputMethod = im;
+        srv->seat.inputMethod.bind(im->weak);
         wl_resource_set_implementation(r, &inputMethodImpl, im, imResourceDestroyed);
 
         // activate straight away if a text input is already focused+enabled
@@ -9309,7 +9314,7 @@ namespace {
 
         SeatState& s = *seat;
 
-        if (s.kbFocus && s.kbFocus->surface && wl_resource_get_client(resOf(s.kbFocus->surface)) == client) {
+        if (s.kbFocus && s.kbFocus->surface && wl_resource_get_client(resOf(s.kbFocus->surface.get())) == client) {
             wl_array keys;
 
             wl_array_init(&keys);
@@ -9320,8 +9325,8 @@ namespace {
 
             u32 serial = wl_display_next_serial(s.srv->display);
 
-            s.rememberSerial(serial, client, s.kbFocus->surface);
-            wl_keyboard_send_enter(k, serial, resOf(s.kbFocus->surface), &keys);
+            s.rememberSerial(serial, client, s.kbFocus->surface.get());
+            wl_keyboard_send_enter(k, serial, resOf(s.kbFocus->surface.get()), &keys);
             wl_array_release(&keys);
             wl_keyboard_send_modifiers(k, wl_display_next_serial(s.srv->display), s.modsDepressed, s.modsLatched, s.modsLocked, s.modsGroup);
         }
@@ -9360,7 +9365,7 @@ namespace {
     }}
 
 bool SubsurfaceImpl::effectiveSync() const {
-    for (const SubsurfaceImpl* s = this; s; s = s->parent ? (const SubsurfaceImpl*)s->parent->sub : nullptr) {
+    for (const SubsurfaceImpl* s = this; s; s = s->parent ? (const SubsurfaceImpl*)s->parent->sub.get() : nullptr) {
         if (s->sync) {
             return true;
         }
@@ -9565,7 +9570,7 @@ bool SeatState::sameClientS(wl_resource* res, Surface* s) {
 }
 
 bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
-    return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(resOf(t->surface));
+    return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(resOf(t->surface.get()));
 }
 
 Surface* SeatState::pickInTree(Surface& s) {
@@ -10082,7 +10087,7 @@ bool WaylandImpl::idleBlocked() {
         }
 
         for (Popup* popup : each<Popup>(scene->popups)) {
-            if (popup->surface == root && popup->mapped) {
+            if (popup->surface.get() == root && popup->mapped) {
                 return true;
             }
         }
@@ -10166,7 +10171,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
         if (!pressed && buttonsDown <= 0) {
             pointerGrabSerial = 0;
             pointerGrabClient = nullptr;
-            pointerGrabOrigin = nullptr;
+            pointerGrabOrigin.reset();
             endDrag();
         }
 
@@ -10187,7 +10192,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
                 continue;
             }
 
-            Surface* proot = p->surface;
+            Surface* proot = p->surface.get();
 
             if (ptrFocus && proot && ptrFocus->rootSurface() == proot) {
                 break;
@@ -10226,7 +10231,12 @@ void SeatState::handleButton(u32 button, bool pressed) {
             if (pressed && buttonsDown == 0) {
                 pointerGrabSerial = serial;
                 pointerGrabClient = client;
-                pointerGrabOrigin = ptrFocus;
+
+                if (ptrFocus) {
+                    pointerGrabOrigin.bind(ptrFocus->weak);
+                } else {
+                    pointerGrabOrigin.reset();
+                }
             }
         }
     }
@@ -10240,7 +10250,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
     if (buttonsDown == 0) {
         pointerGrabSerial = 0;
         pointerGrabClient = nullptr;
-        pointerGrabOrigin = nullptr;
+        pointerGrabOrigin.reset();
     }
 }
 
@@ -10325,7 +10335,7 @@ Surface* SeatState::kbFocusSurface() {
         return kbOverride;
     }
 
-    return kbFocus ? kbFocus->surface : nullptr;
+    return kbFocus ? kbFocus->surface.get() : nullptr;
 }
 
 wl_resource* SeatState::kbTargetRes() {
@@ -10334,7 +10344,7 @@ wl_resource* SeatState::kbTargetRes() {
     }
 
     if (kbFocus && kbFocus->surface) {
-        return resOf(kbFocus->surface);
+        return resOf(kbFocus->surface.get());
     }
 
     return nullptr;
@@ -10527,7 +10537,7 @@ void SeatState::handleKey(u32 code, bool pressed) {
 }
 
 void SeatState::updateShortcutInhibit() {
-    Surface* target = kbOverride ? kbOverride : kbFocus ? kbFocus->surface : nullptr;
+    Surface* target = kbOverride ? kbOverride : kbFocus ? kbFocus->surface.get() : nullptr;
     Surface* root = target ? target->rootSurface() : nullptr;
     bool inhibited = false;
 
@@ -10766,7 +10776,7 @@ void SeatState::syncToplevelDrag() {
 }
 
 void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon) {
-    if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin) {
+    if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin.get()) {
         // cancelled exists since v1; see deviceStartDrag
         if (src) {
             wl_data_source_send_cancelled(src->res);
@@ -10922,7 +10932,7 @@ bool SeatState::imGrabActive() const {
 
 // drive the input method's activation from the current focus + enable state
 void SeatState::imUpdateActivation() {
-    InputMethod* im = inputMethod;
+    InputMethod* im = inputMethod.get();
 
     if (!im) {
         return;
@@ -10973,7 +10983,7 @@ void SeatState::imUpdateActivation() {
 // the input method committed: push its staged string/preedit/delete into the
 // active text input and bump its serial
 void SeatState::imFlushToTextInput() {
-    InputMethod* im = inputMethod;
+    InputMethod* im = inputMethod.get();
     TextInput* ti = activeTextInput();
 
     if (!im || !ti) {
@@ -11013,7 +11023,7 @@ void SeatState::imFlushToTextInput() {
 // wp input popup: send the text-input rectangle to the popup surface and
 // place it in the scene at the active text input's cursor, screen-relative
 void SeatState::imUpdatePopup() {
-    InputMethod* im = inputMethod;
+    InputMethod* im = inputMethod.get();
 
     if (!im || !im->popupRes) {
         return;
@@ -11093,7 +11103,7 @@ void SeatState::focusToplevel(Toplevel* t) {
 
         for (wl_resource* k : keyboards) {
             if (sameClient(k, kbFocus)) {
-                wl_keyboard_send_leave(k, serial, resOf(kbFocus->surface));
+                wl_keyboard_send_leave(k, serial, resOf(kbFocus->surface.get()));
             }
         }
     }
@@ -11114,7 +11124,7 @@ void SeatState::focusToplevel(Toplevel* t) {
     }
 
     if (t && t->surface && !kbOverride) {
-        kbSendEnter(resOf(t->surface));
+        kbSendEnter(resOf(t->surface.get()));
         sysO << "imway: focus -> "_sv << sv(t->title) << endL;
     }
 
@@ -11158,8 +11168,8 @@ void SeatState::popupGrabStart(Popup* p) {
 
     kbSendLeave(kbTargetRes());
     focusGeneration++;
-    grabStack.pushBack((GrabNode*)p->surface);
-    kbOverride = p->surface;
+    grabStack.pushBack((GrabNode*)p->surface.get());
+    kbOverride = p->surface.get();
     kbSendEnter(resOf(kbOverride));
     updateShortcutInhibit();
 }
@@ -11189,14 +11199,14 @@ void SeatState::grabGone(Surface* s, bool sendLeave) {
 }
 
 void SeatState::popupGone(Popup* p) {
-    Surface* s = p->surface;
+    Surface* s = p->surface.get();
 
     if (s && ptrFocus && ptrFocus->rootSurface() == s) {
         pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
         pointerGrabSerial = 0;
         pointerGrabClient = nullptr;
-        pointerGrabOrigin = nullptr;
+        pointerGrabOrigin.reset();
     }
 
     if (s) {
@@ -11242,11 +11252,6 @@ void SeatState::surfaceGone(Surface* s) {
         inputSerials.popBack();
     }
 
-    if (pointerGrabOrigin == s) {
-        pointerGrabSerial = 0;
-        pointerGrabClient = nullptr;
-        pointerGrabOrigin = nullptr;
-    }
 }
 
 void SeatState::toplevelGone(Toplevel* t) {
@@ -12680,13 +12685,13 @@ void WaylandImpl::onListen(void* arg) {
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
         if (tl.mapped && !tl.minimized && tl.surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)tl.surface, msec);
+            fireFrameCallbacks(*(SurfaceImpl*)tl.surface.get(), msec);
         }
     });
 
     forEach<Popup>(scene->popups, [&](Popup& p) {
         if (p.mapped && p.surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)p.surface, msec);
+            fireFrameCallbacks(*(SurfaceImpl*)p.surface.get(), msec);
         }
     });
 

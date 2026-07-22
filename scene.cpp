@@ -85,7 +85,7 @@ Surface* Surface::rootSurface() {
     Surface* s = this;
 
     while (s->sub && s->sub->parent) {
-        s = s->sub->parent;
+        s = s->sub->parent.get();
     }
 
     return s;
@@ -98,7 +98,7 @@ Toplevel* Surface::rootToplevel() {
         return nullptr;
     }
 
-    return s->toplevel;
+    return s->toplevel.get();
 }
 
 bool Surface::contentMappedThroughAncestors() const {
@@ -113,7 +113,7 @@ bool Surface::contentMappedThroughAncestors() const {
             return true;
         }
 
-        surface = surface->sub->parent;
+        surface = surface->sub->parent.get();
     }
 
     return false;

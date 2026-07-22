@@ -84,6 +84,10 @@ struct TextureLease;
 
 // the node links it into the renderer's texture registry
 struct SurfaceTexture: stl::IntrusiveNode {
+    // weak-ring anchor: destroyTexture invalidates it, nulling every
+    // Surface::texture and lease back-pointer aimed here
+    Weak<SurfaceTexture> weak;
+
     int w = 0, h = 0;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
@@ -103,13 +107,13 @@ struct SurfaceTexture: stl::IntrusiveNode {
     bool firstUse = true;
     bool external = false;
     bool arenaOwned = false;
-    TextureLease* lease = nullptr;
-
 };
 
+// arena-death hook: destroys its texture unless destroyTexture already ran
+// (the weak ring nulls the pointer then)
 struct TextureLease {
     void* owner = nullptr;
-    SurfaceTexture* texture = nullptr;
+    Weak<SurfaceTexture> texture;
     void (*destroy)(void*, SurfaceTexture*) = nullptr;
 
     TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*));
@@ -558,14 +562,14 @@ namespace {
 
 TextureLease::TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*))
     : owner(o)
-    , texture(t)
     , destroy(d)
 {
+    texture.bind(t->weak);
 }
 
 TextureLease::~TextureLease() noexcept {
-    if (texture) {
-        destroy(owner, texture);
+    if (SurfaceTexture* t = texture.get()) {
+        destroy(owner, t);
     }
 }
 
@@ -863,6 +867,7 @@ u64 RendererImpl::iconTexture(const Icon* icon) {
 SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
     SurfaceTexture* tex = alloc->make<SurfaceTexture>();
 
+    tex->weak.anchor(tex);
     tex->w = w;
     tex->h = h;
 
@@ -908,7 +913,7 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
     }
 
     for (Popup* popup : each<Popup>(scene->popups)) {
-        if (popup->mapped && popup->surface == root) {
+        if (popup->mapped && popup->surface.get() == root) {
             return true;
         }
     }
@@ -1655,7 +1660,7 @@ void RendererImpl::uploadSurface(Surface& s) {
         return;
     }
 
-    SurfaceTexture* tex = s.texture;
+    SurfaceTexture* tex = s.texture.get();
 
     if (tex && tex->external) {
         releaseSurfaceTexture(s);
@@ -1673,6 +1678,7 @@ void RendererImpl::uploadSurface(Surface& s) {
         FrameResource* frame = frameCreate();
 
         tex = frame->make<SurfaceTexture>();
+        tex->weak.anchor(tex);
         tex->arenaOwned = true;
         tex->w = s.width;
         tex->h = s.height;
@@ -1708,11 +1714,11 @@ void RendererImpl::uploadSurface(Surface& s) {
             return;
         }
 
-        tex->lease = frame->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
+        frame->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
             ((RendererImpl*)owner)->destroyTexture(texture);
         });
         textures.pushBack(tex);
-        s.texture = tex;
+        s.texture.bind(tex->weak);
     }
 
     RectI r{0, 0, tex->w, tex->h};
@@ -1759,10 +1765,10 @@ bool RendererImpl::cacheContainsTex(const SurfaceTexture* tex) const {
 }
 
 void RendererImpl::releaseSurfaceTexture(Surface& s) {
-    SurfaceTexture* tex = s.texture;
+    SurfaceTexture* tex = s.texture.get();
     FrameResource* frame = s.frame;
 
-    s.texture = nullptr;
+    s.texture.reset();
 
     if (!tex) {
         return;
@@ -1836,7 +1842,7 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr;
     }
 
-    Surface* s = fs->surface;
+    Surface* s = fs->surface.get();
 
     if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 ||
         s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst ||
@@ -1888,10 +1894,8 @@ void RendererImpl::destroyTexture(SurfaceTexture* tex) {
         }
     }
 
-    if (tex->lease) {
-        tex->lease->texture = nullptr;
-        tex->lease = nullptr;
-    }
+    // nulls the lease's back-pointer and every Surface::texture aimed here
+    tex->weak.invalidate();
 
     if (tex->ds) {
         texPool->free(tex->ds, tex->dsPool);
@@ -2190,17 +2194,19 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     SurfaceTexture* cached = cacheFind(b);
 
-    if (s.texture && s.texture != cached) {
+    if (s.texture && s.texture.get() != cached) {
         releaseSurfaceTexture(s);
     }
 
     if (cached) {
-        s.texture = cached;
+        s.texture.bind(cached->weak);
 
         return true;
     }
 
     auto* tex = b->lifetime->make<SurfaceTexture>();
+
+    tex->weak.anchor(tex);
     bool yuv = b->format == kFourccNv12 || b->format == kFourccP010;
     bool p010 = b->format == kFourccP010;
     VkFormat vkFormat = b->format == kFourccNv12 ?
@@ -2463,12 +2469,12 @@ bool RendererImpl::importDmabuf(Surface& s) {
         return false;
     }
 
-    tex->lease = b->lifetime->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
+    b->lifetime->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
         ((RendererImpl*)owner)->destroyTexture(texture);
     });
     textures.pushBack(tex);
     dmabufCache.pushBack({b, tex});
-    s.texture = tex;
+    s.texture.bind(tex->weak);
 
     return true;
 }
@@ -3371,7 +3377,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     forEach<Toplevel>(scene.toplevels, [&](Toplevel& value) {
         Toplevel* t = &value;
-        Surface* root = t->surface;
+        Surface* root = t->surface.get();
 
         if (!t->mapped || t->minimized || !root || !root->texture) {
             if (root) {
@@ -3645,7 +3651,7 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui::PopStyleVar();
 
     forEach<Popup>(scene.popups, [&](Popup& p) {
-        Surface* ps = p.surface;
+        Surface* ps = p.surface.get();
 
         if (!p.mapped || !ps || !ps->texture || !p.parent) {
             if (ps) {
@@ -3777,7 +3783,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 ImVec2 tuv0((float)t->surface->geomX() / texW, (float)t->surface->geomY() / texH);
                 ImVec2 tuv1(((float)t->surface->geomX() + sw) / texW, ((float)t->surface->geomY() + sh) / texH);
 
-                dl->AddCallback(surfaceColorCallback, t->surface);
+                dl->AddCallback(surfaceColorCallback, t->surface.get());
                 dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th), tuv0, tuv1);
                 dl->AddCallback(surfaceColorCallback, nullptr);
 

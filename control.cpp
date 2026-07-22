@@ -309,7 +309,7 @@ void ControlImpl::dumpState(StringView outPath) {
     StringBuilder out;
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
-        Surface* s = t.surface;
+        Surface* s = t.surface.get();
 
         out << "toplevel id="_sv << t.id
             << " mapped="_sv << (int)t.mapped
@@ -343,7 +343,7 @@ void ControlImpl::dumpState(StringView outPath) {
     });
 
     forEach<Popup>(scene->popups, [&](Popup& p) {
-        Surface* s = p.surface;
+        Surface* s = p.surface.get();
 
         out << "popup mapped="_sv << (int)p.mapped
             << " grab="_sv << (int)p.grab

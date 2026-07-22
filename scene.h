@@ -96,7 +96,9 @@ struct Surface: SceneNode, GrabNode {
     DmabufBuffer* dmabuf = nullptr;
     FrameResource* frame = nullptr;
 
-    SurfaceTexture* texture = nullptr;
+    // weak: the renderer invalidates the texture's anchor on destruction,
+    // so a surface can never sample a freed texture
+    Weak<SurfaceTexture> texture;
 
     // explicit sync (linux-drm-syncobj): the renderer must wait this timeline
     // point before touching the current buffer
@@ -154,7 +156,8 @@ struct Surface: SceneNode, GrabNode {
     ColorDescription color;
     ColorRepresentation representation;
 
-    Subsurface* sub = nullptr;
+    // weak ring into the role object: nulls itself when the subsurface dies
+    Weak<Subsurface> sub;
 
     // z-piles of intrusively linked children (front = deepest); a child in
     // either list is reachable via its Subsurface node. The dying parent
@@ -162,7 +165,9 @@ struct Surface: SceneNode, GrabNode {
     stl::IntrusiveList stackBelow;
     stl::IntrusiveList stackAbove;
 
-    Toplevel* toplevel = nullptr;
+    // weak ring: the toplevel role, nulled when the toplevel (or the xdg
+    // surface binding them) goes
+    Weak<Toplevel> toplevel;
 
     Surface* rootSurface();
     Toplevel* rootToplevel();
@@ -171,8 +176,12 @@ struct Surface: SceneNode, GrabNode {
 
 // the node links it into the parent's stackBelow/stackAbove pile
 struct Subsurface: stl::IntrusiveNode {
-    Surface* surface = nullptr;
-    Surface* parent = nullptr;
+    // weak-ring anchor, same contract as Surface::weak
+    Weak<Subsurface> weak;
+
+    // both weak: either surface dying nulls the pointer through the ring
+    Weak<Surface> surface;
+    Weak<Surface> parent;
     int x = 0, y = 0;
 };
 
@@ -181,7 +190,9 @@ struct Toplevel: stl::IntrusiveNode {
     // weak-ring anchor, same contract as Surface::weak
     Weak<Toplevel> weak;
 
-    Surface* surface = nullptr;
+    // weak ring into the wl_surface: nulled when the surface (or the xdg
+    // surface binding them) goes
+    Weak<Surface> surface;
     u64 id = 0;
     stl::StringBuilder title;
     stl::StringBuilder appId;
@@ -268,7 +279,12 @@ struct Toplevel: stl::IntrusiveNode {
 
 // the node links it into Scene::popups (insertion order = z-order)
 struct Popup: stl::IntrusiveNode {
-    Surface* surface = nullptr;
+    // weak-ring anchor, same contract as Surface::weak
+    Weak<Popup> weak;
+
+    // weak ring into the popup's own surface. parent stays raw: the parent
+    // death sweep must still see the link to dismiss the popup tree
+    Weak<Surface> surface;
     Surface* parent = nullptr;
     int x = 0, y = 0;
     bool mapped = false;

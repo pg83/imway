@@ -48,7 +48,7 @@ void Dialog::draw(Composer& c, const InspectorInfo& info, bool& open) {
             l << (title.length() > 200 ? title.prefix(200) : title) << "###insp"_sv << (u64)t.id;
 
             if (ImGui::TreeNode(l.cStr())) {
-                Surface* s = t.surface;
+                Surface* s = t.surface.get();
 
                 l.reset();
                 l << "app_id "_sv << (!t.appId.empty() ? sv(t.appId) : "-"_sv) << (t.mapped ? ", mapped"_sv : ""_sv) << (t.csd ? ", csd"_sv : ", ssd"_sv) << (t.fullscreen ? ", fullscreen"_sv : ""_sv);
