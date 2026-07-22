@@ -533,6 +533,11 @@ namespace {
         bool sessionActive = true;
         const DeviceVk* vk = nullptr;
 
+        // the link-configuration arena: guards on the scanout slots (and
+        // the screenshot replacement slot) registered when the swapchain
+        // comes up; slot contents churn during screenshot handoffs, so the
+        // guards destroy whatever the slot holds when the link dies
+        ObjPool* link = nullptr;
         ScanBuf scan[2];
         int scanCount = 0;
         int scanNext = 0;
@@ -1193,16 +1198,30 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         for (;;) {
             u64 mods[64];
             u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
+            ObjPool* trial = ObjPool::fromMemoryRaw();
 
             for (auto& sb : scan) {
                 if (createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
                     scanCount++;
+
+                    ScanBuf* slot = &sb;
+
+                    pooledGuard(*trial, [this, slot] {
+                        destroyScanBuf(*vk, fd, *slot);
+                    });
                 } else {
                     break;
                 }
             }
 
             if (scanCount >= 2) {
+                // registered last, runs first: the spare dies before the
+                // scanout slots, matching the old teardown order
+                pooledGuard(*trial, [this] {
+                    destroyScanBuf(*vk, fd, screenshotReplacement);
+                });
+                link = trial;
+
                 if (scanFourcc == DRM_FORMAT_XRGB2101010) {
                     sysO << "imway: 10-bit scanout"_sv << endL;
                 }
@@ -1210,10 +1229,8 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
                 break;
             }
 
-            for (auto& sb : scan) {
-                destroyScanBuf(*vk, fd, sb);
-            }
-
+            // the failed attempt's guards roll its buffers back
+            delete trial;
             scanCount = 0;
 
             if (scanFourcc == DRM_FORMAT_XRGB8888) {
@@ -1277,7 +1294,6 @@ KmsOutput::~KmsOutput() noexcept {
         ev_io_stop(loop, screenshotIo);
     }
 
-    destroyScanBuf(*vk, fd, screenshotReplacement);
     releaseDirectUse(queuedDirect, queuedDirectFrame);
     releaseDirectUse(currentDirect, currentDirectFrame);
 
@@ -1317,9 +1333,8 @@ KmsOutput::~KmsOutput() noexcept {
 
     restoreVt();
 
-    for (auto& sb : scan) {
-        destroyScanBuf(*vk, fd, sb);
-    }
+    // the link arena unwinds the scanout slots and the screenshot spare
+    delete link;
 
     auto freeDumb = [&](DumbBuffer& b) {
         if (b.map && b.map != MAP_FAILED) {
