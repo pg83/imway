@@ -38,8 +38,8 @@
 - [x] ~~ext-data-control v1~~ done (dc flag on the shared DataSource/Offer; focus-free set_selection, loopback offer, primary too)
 
 ### Этап F — текст/IME
-- [ ] text-input-v3
-- [ ] input-method-v2 + virtual-keyboard-v1
+- [x] ~~text-input-v3~~ done (per-seat, enter/leave on kb focus, full state relay to the IME)
+- [x] ~~input-method-v2 + virtual-keyboard-v1~~ done (single IM per seat, commit/preedit/delete bridge, keyboard grab, vkbd injection)
 - [ ] input-method popup
 
 ### Этап G — полнота цвета

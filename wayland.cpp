@@ -40,6 +40,9 @@
 #include <ext-image-copy-capture-v1-server-protocol.h>
 #include <wlr-screencopy-unstable-v1-server-protocol.h>
 #include <ext-data-control-v1-server-protocol.h>
+#include <text-input-unstable-v3-server-protocol.h>
+#include <input-method-unstable-v2-server-protocol.h>
+#include <virtual-keyboard-unstable-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -421,6 +424,47 @@ namespace {
         int attempts = 0;
     };
 
+    // text-input-v3: the application side, one object per seat per client.
+    // The double-buffered relay state is flushed to the input method on
+    // commit; enter/leave follow keyboard focus
+    struct TextInput: IntrusiveNode {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        wl_client* client = nullptr;
+        bool enabled = false;
+        bool pendingEnabled = false;
+        u32 serial = 0; // count of done events, echoed by the client's commit
+
+        bool surroundingSet = false, pendingSurroundingSet = false;
+        StringBuilder surrounding, pendingSurrounding;
+        i32 cursor = 0, anchor = 0, pendingCursor = 0, pendingAnchor = 0;
+
+        bool contentSet = false, pendingContentSet = false;
+        u32 hint = 0, purpose = 0, pendingHint = 0, pendingPurpose = 0;
+
+        bool rectSet = false, pendingRectSet = false;
+        RectI rect, pendingRect;
+
+        u32 changeCause = 0, pendingChangeCause = 0;
+    };
+
+    // input-method-v2: the IME side, at most one per seat. commit_string /
+    // preedit / delete_surrounding stage here and flush to the active text
+    // input on the method's own commit
+    struct InputMethod {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        wl_resource* grab = nullptr;
+        bool active = false;
+
+        bool commitSet = false;
+        StringBuilder commitStr;
+        bool preeditSet = false;
+        StringBuilder preeditStr;
+        i32 preeditBegin = 0, preeditEnd = 0;
+        u32 deleteBefore = 0, deleteAfter = 0;
+    };
+
     struct CaptureCursorSession {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
@@ -614,6 +658,8 @@ namespace {
         Vector<wl_resource*> dataDevices;
         Vector<wl_resource*> primaryDevices;
         Vector<wl_resource*> dcDevices;
+        stl::IntrusiveList textInputs;
+        InputMethod* inputMethod = nullptr;
         Vector<wl_resource*> relPointers;
         Vector<wl_resource*> swipes;
         Vector<wl_resource*> pinches;
@@ -733,6 +779,10 @@ namespace {
         bool updateConfineRegion();
 
         wl_resource* kbTargetRes();
+        TextInput* activeTextInput();
+        void imUpdateActivation();
+        void imFlushToTextInput();
+        bool imGrabActive() const;
         void kbSendLeave(wl_resource* target);
         void kbSendEnter(wl_resource* target);
         void updateModifiers();
@@ -5066,6 +5116,397 @@ namespace {
         wl_resource_set_implementation(res, &dcManagerImpl, data, nullptr);
     }
 
+    // ---- text-input-v3 / input-method-v2 / virtual-keyboard-v1 ----
+    static void copyText(StringBuilder& out, const char* s) {
+        out.reset();
+
+        if (s) {
+            out << StringView(s);
+        }
+    }
+
+    void textInputResourceDestroyed(wl_resource* res) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+        bool wasActive = ti->srv->seat.activeTextInput() == ti;
+
+        ti->unlink();
+
+        if (wasActive) {
+            ti->srv->seat.imUpdateActivation();
+        }
+
+        ti->srv->alloc->release(ti);
+    }
+
+    void textInputEnable(wl_client*, wl_resource* res) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingEnabled = true;
+        ti->pendingSurroundingSet = false;
+        ti->pendingContentSet = false;
+        ti->pendingRectSet = false;
+        ti->pendingChangeCause = 0;
+    }
+
+    void textInputDisable(wl_client*, wl_resource* res) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingEnabled = false;
+    }
+
+    void textInputSetSurrounding(wl_client*, wl_resource* res, const char* text, i32 cursor, i32 anchor) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingSurroundingSet = true;
+        copyText(ti->pendingSurrounding, text);
+        ti->pendingCursor = cursor;
+        ti->pendingAnchor = anchor;
+    }
+
+    void textInputSetChangeCause(wl_client*, wl_resource* res, u32 cause) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingChangeCause = cause;
+    }
+
+    void textInputSetContentType(wl_client*, wl_resource* res, u32 hint, u32 purpose) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingContentSet = true;
+        ti->pendingHint = hint;
+        ti->pendingPurpose = purpose;
+    }
+
+    void textInputSetCursorRectangle(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+
+        ti->pendingRectSet = true;
+        ti->pendingRect = {x, y, w, h};
+    }
+
+    void textInputCommit(wl_client*, wl_resource* res) {
+        auto* ti = (TextInput*)wl_resource_get_user_data(res);
+        bool wasEnabled = ti->enabled;
+
+        ti->enabled = ti->pendingEnabled;
+
+        if (ti->pendingSurroundingSet) {
+            ti->surroundingSet = true;
+            copyText(ti->surrounding, Buffer(sv(ti->pendingSurrounding)).cStr());
+            ti->cursor = ti->pendingCursor;
+            ti->anchor = ti->pendingAnchor;
+        }
+
+        if (ti->pendingContentSet) {
+            ti->contentSet = true;
+            ti->hint = ti->pendingHint;
+            ti->purpose = ti->pendingPurpose;
+        }
+
+        if (ti->pendingRectSet) {
+            ti->rectSet = true;
+            ti->rect = ti->pendingRect;
+        }
+
+        ti->changeCause = ti->pendingChangeCause;
+
+        if (!ti->enabled) {
+            ti->surroundingSet = ti->contentSet = ti->rectSet = false;
+        }
+
+        (void)wasEnabled;
+        ti->srv->seat.imUpdateActivation();
+    }
+
+    const struct zwp_text_input_v3_interface textInputImpl = {
+        .destroy = resDestroy,
+        .enable = textInputEnable,
+        .disable = textInputDisable,
+        .set_surrounding_text = textInputSetSurrounding,
+        .set_text_change_cause = textInputSetChangeCause,
+        .set_content_type = textInputSetContentType,
+        .set_cursor_rectangle = textInputSetCursorRectangle,
+        .commit = textInputCommit,
+    };
+
+    void textInputManagerGetTextInput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_text_input_v3_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        TextInput* ti = srv->alloc->make<TextInput>();
+
+        ti->srv = srv;
+        ti->res = r;
+        ti->client = client;
+        srv->seat.textInputs.pushBack(ti);
+        wl_resource_set_implementation(r, &textInputImpl, ti, textInputResourceDestroyed);
+
+        // if this client already holds keyboard focus, it enters immediately
+        if (wl_resource* target = srv->seat.kbTargetRes()) {
+            if (wl_resource_get_client(target) == client) {
+                zwp_text_input_v3_send_enter(r, target);
+            }
+        }
+    }
+
+    const struct zwp_text_input_manager_v3_interface textInputManagerImpl = {
+        .destroy = resDestroy,
+        .get_text_input = textInputManagerGetTextInput,
+    };
+
+    void textInputManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_text_input_manager_v3_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &textInputManagerImpl, data, nullptr);
+    }
+
+    // -- input-method-v2 --
+    void imKeyboardGrabRelease(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void imKeyboardGrabResourceDestroyed(wl_resource* res) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        if (im) {
+            im->grab = nullptr;
+        }
+    }
+
+    const struct zwp_input_method_keyboard_grab_v2_interface imKeyboardGrabImpl = {
+        .release = imKeyboardGrabRelease,
+    };
+
+    void imInertPopupDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    const struct zwp_input_popup_surface_v2_interface imPopupImpl = {
+        .destroy = imInertPopupDestroy,
+    };
+
+    void imCommitString(wl_client*, wl_resource* res, const char* text) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        im->commitSet = true;
+        copyText(im->commitStr, text);
+    }
+
+    void imSetPreedit(wl_client*, wl_resource* res, const char* text, i32 begin, i32 end) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        im->preeditSet = true;
+        copyText(im->preeditStr, text);
+        im->preeditBegin = begin;
+        im->preeditEnd = end;
+    }
+
+    void imDeleteSurrounding(wl_client*, wl_resource* res, u32 before, u32 after) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        im->deleteBefore = before;
+        im->deleteAfter = after;
+    }
+
+    void imCommit(wl_client*, wl_resource* res, u32) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+
+        im->srv->seat.imFlushToTextInput();
+    }
+
+    void imGetPopupSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_input_popup_surface_v2_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        // the popup surface object exists; scene placement at the cursor
+        // rectangle is a later ring. Report a zero rectangle so the client
+        // has an initial position
+        (void)surfaceRes;
+        wl_resource_set_implementation(r, &imPopupImpl, im, nullptr);
+
+        if (TextInput* ti = im->srv->seat.activeTextInput()) {
+            if (ti->rectSet) {
+                zwp_input_popup_surface_v2_send_text_input_rectangle(r, ti->rect.x, ti->rect.y, ti->rect.w, ti->rect.h);
+            }
+        }
+    }
+
+    void imGrabKeyboard(wl_client* client, wl_resource* res, u32 id) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_input_method_keyboard_grab_v2_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        im->grab = r;
+        wl_resource_set_implementation(r, &imKeyboardGrabImpl, im, imKeyboardGrabResourceDestroyed);
+
+        SeatState& seat = im->srv->seat;
+
+        zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
+            seat.kb->keymapFd(), seat.kb->keymapSize());
+        zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display),
+            seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
+        zwp_input_method_keyboard_grab_v2_send_repeat_info(r, 25, 600);
+    }
+
+    void imDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void imResourceDestroyed(wl_resource* res) {
+        auto* im = (InputMethod*)wl_resource_get_user_data(res);
+        WaylandImpl* srv = im->srv;
+
+        // the grab may outlive us on a disconnect: sever its back-pointer so
+        // its own destroy handler sees a dead input method
+        if (im->grab) {
+            wl_resource_set_user_data(im->grab, nullptr);
+        }
+
+        if (srv->seat.inputMethod == im) {
+            srv->seat.inputMethod = nullptr;
+        }
+
+        srv->alloc->release(im);
+    }
+
+    const struct zwp_input_method_v2_interface inputMethodImpl = {
+        .commit_string = imCommitString,
+        .set_preedit_string = imSetPreedit,
+        .delete_surrounding_text = imDeleteSurrounding,
+        .commit = imCommit,
+        .get_input_popup_surface = imGetPopupSurface,
+        .grab_keyboard = imGrabKeyboard,
+        .destroy = imDestroy,
+    };
+
+    void imManagerGetInputMethod(wl_client* client, wl_resource* res, wl_resource*, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_input_method_v2_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        if (srv->seat.inputMethod) {
+            // one input method per seat: the second is inert
+            InputMethod* tmp = srv->alloc->make<InputMethod>();
+
+            tmp->srv = srv;
+            tmp->res = r;
+            wl_resource_set_implementation(r, &inputMethodImpl, tmp, imResourceDestroyed);
+            zwp_input_method_v2_send_unavailable(r);
+
+            return;
+        }
+
+        InputMethod* im = srv->alloc->make<InputMethod>();
+
+        im->srv = srv;
+        im->res = r;
+        srv->seat.inputMethod = im;
+        wl_resource_set_implementation(r, &inputMethodImpl, im, imResourceDestroyed);
+
+        // activate straight away if a text input is already focused+enabled
+        srv->seat.imUpdateActivation();
+    }
+
+    const struct zwp_input_method_manager_v2_interface imManagerImpl = {
+        .get_input_method = imManagerGetInputMethod,
+        .destroy = resDestroy,
+    };
+
+    void imManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_input_method_manager_v2_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &imManagerImpl, data, nullptr);
+    }
+
+    // -- virtual-keyboard-v1 --
+    // the IME (or an a11y client) synthesizes key events; they flow into the
+    // focused application through the normal seat path
+    void vkKeymap(wl_client*, wl_resource*, u32, i32 fd, u32) {
+        // we deliver through our own seat keymap; close the client's fd
+        close(fd);
+    }
+
+    void vkKey(wl_client*, wl_resource* res, u32, u32 key, u32 state) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        srv->seat.handleKey(key, state == WL_KEYBOARD_KEY_STATE_PRESSED);
+    }
+
+    void vkModifiers(wl_client*, wl_resource*, u32, u32, u32, u32) {
+        // the shared xkb state mirrors physical keys; a virtual keyboard's
+        // explicit modifier latch is not merged in this ring
+    }
+
+    const struct zwp_virtual_keyboard_v1_interface virtualKeyboardImpl = {
+        .keymap = vkKeymap,
+        .key = vkKey,
+        .modifiers = vkModifiers,
+        .destroy = resDestroy,
+    };
+
+    void vkManagerCreate(wl_client* client, wl_resource* res, wl_resource*, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &zwp_virtual_keyboard_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(r, &virtualKeyboardImpl, srv, nullptr);
+    }
+
+    const struct zwp_virtual_keyboard_manager_v1_interface vkManagerImpl = {
+        .create_virtual_keyboard = vkManagerCreate,
+    };
+
+    void vkManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_virtual_keyboard_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &vkManagerImpl, data, nullptr);
+    }
+
     // ---- ext-image-capture-source + ext-image-copy-capture ----
     const struct ext_image_capture_source_v1_interface captureSourceImpl = {
         .destroy = resDestroy,
@@ -8524,12 +8965,38 @@ void SeatState::kbSendLeave(wl_resource* target) {
             wl_keyboard_send_leave(k, serial, target);
         }
     }
+
+    // text-input focus follows keyboard focus
+    wl_client* client = wl_resource_get_client(target);
+
+    forEach<TextInput>(textInputs, [&](TextInput& ti) {
+        if (ti.client == client) {
+            // a leaving surface's text input goes inert: drop enabled so the
+            // input method deactivates
+            bool wasEnabled = ti.enabled;
+
+            ti.enabled = false;
+            zwp_text_input_v3_send_leave(ti.res, target);
+
+            if (wasEnabled) {
+                imUpdateActivation();
+            }
+        }
+    });
 }
 
 void SeatState::kbSendEnter(wl_resource* target) {
     if (!target) {
         return;
     }
+
+    wl_client* enterClient = wl_resource_get_client(target);
+
+    forEach<TextInput>(textInputs, [&](TextInput& ti) {
+        if (ti.client == enterClient) {
+            zwp_text_input_v3_send_enter(ti.res, target);
+        }
+    });
 
     u32 serial = wl_display_next_serial(srv->display);
     wl_array keys;
@@ -8623,6 +9090,18 @@ void SeatState::releaseAllKeys() {
 
 void SeatState::handleKey(u32 code, bool pressed) {
     srv->scene->needsFrame = true;
+
+    // an input method grab intercepts physical keys: they go to the IME's
+    // keyboard-grab object, not the focused application
+    if (imGrabActive()) {
+        u32 t = nowMsec();
+        u32 serial = wl_display_next_serial(srv->display);
+
+        zwp_input_method_keyboard_grab_v2_send_key(inputMethod->grab, serial, t, code,
+            pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+
+        return;
+    }
 
     // never send a release for a press the client did not see
     if (!pressed && !contains(pressedKeys, code)) {
@@ -9003,6 +9482,117 @@ void SeatState::endDrag() {
     }
 
     dragTarget = nullptr;
+}
+
+TextInput* SeatState::activeTextInput() {
+    wl_resource* target = kbTargetRes();
+
+    if (!target) {
+        return nullptr;
+    }
+
+    wl_client* client = wl_resource_get_client(target);
+    TextInput* found = nullptr;
+
+    forEach<TextInput>(textInputs, [&](TextInput& ti) {
+        if (!found && ti.enabled && ti.client == client) {
+            found = &ti;
+        }
+    });
+
+    return found;
+}
+
+bool SeatState::imGrabActive() const {
+    return inputMethod && inputMethod->grab;
+}
+
+// drive the input method's activation from the current focus + enable state
+void SeatState::imUpdateActivation() {
+    InputMethod* im = inputMethod;
+
+    if (!im) {
+        return;
+    }
+
+    TextInput* ti = activeTextInput();
+
+    if (ti && !im->active) {
+        im->active = true;
+        zwp_input_method_v2_send_activate(im->res);
+
+        if (ti->surroundingSet) {
+            Buffer b(sv(ti->surrounding));
+            zwp_input_method_v2_send_surrounding_text(im->res, b.cStr(), (u32)ti->cursor, (u32)ti->anchor);
+        }
+
+        if (ti->contentSet) {
+            zwp_input_method_v2_send_content_type(im->res, ti->hint, ti->purpose);
+        }
+
+        zwp_input_method_v2_send_done(im->res);
+    } else if (ti && im->active) {
+        bool any = false;
+
+        if (ti->surroundingSet) {
+            Buffer b(sv(ti->surrounding));
+            zwp_input_method_v2_send_surrounding_text(im->res, b.cStr(), (u32)ti->cursor, (u32)ti->anchor);
+            any = true;
+        }
+
+        if (ti->contentSet) {
+            zwp_input_method_v2_send_content_type(im->res, ti->hint, ti->purpose);
+            any = true;
+        }
+
+        if (any) {
+            zwp_input_method_v2_send_done(im->res);
+        }
+    } else if (!ti && im->active) {
+        im->active = false;
+        zwp_input_method_v2_send_deactivate(im->res);
+        zwp_input_method_v2_send_done(im->res);
+    }
+}
+
+// the input method committed: push its staged string/preedit/delete into the
+// active text input and bump its serial
+void SeatState::imFlushToTextInput() {
+    InputMethod* im = inputMethod;
+    TextInput* ti = activeTextInput();
+
+    if (!im || !ti) {
+        if (im) {
+            im->commitSet = im->preeditSet = false;
+            im->deleteBefore = im->deleteAfter = 0;
+        }
+
+        return;
+    }
+
+    if (im->deleteBefore || im->deleteAfter) {
+        zwp_text_input_v3_send_delete_surrounding_text(ti->res, im->deleteBefore, im->deleteAfter);
+    }
+
+    if (im->preeditSet) {
+        Buffer b(sv(im->preeditStr));
+        zwp_text_input_v3_send_preedit_string(ti->res, im->preeditStr.empty() ? nullptr : b.cStr(), im->preeditBegin, im->preeditEnd);
+    } else {
+        zwp_text_input_v3_send_preedit_string(ti->res, nullptr, 0, 0);
+    }
+
+    if (im->commitSet) {
+        Buffer b(sv(im->commitStr));
+        zwp_text_input_v3_send_commit_string(ti->res, im->commitStr.empty() ? nullptr : b.cStr());
+    }
+
+    zwp_text_input_v3_send_done(ti->res, ++ti->serial);
+
+    im->commitSet = im->preeditSet = false;
+    im->commitStr.reset();
+    im->preeditStr.reset();
+    im->preeditBegin = im->preeditEnd = 0;
+    im->deleteBefore = im->deleteAfter = 0;
 }
 
 void SeatState::focusToplevel(Toplevel* t) {
@@ -10371,6 +10961,9 @@ void WaylandImpl::createGlobals() {
     global(display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
     global(display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
     global(display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
+    global(display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
+    global(display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
+    global(display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);

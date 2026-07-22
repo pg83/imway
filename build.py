@@ -73,6 +73,7 @@ server_protocol_paths = [
     # the foreign-toplevel globals themselves are deliberately not created
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
     "staging/ext-data-control/ext-data-control-v1",
+    "unstable/text-input/text-input-unstable-v3",
 ]
 
 
@@ -98,6 +99,8 @@ def protocol_rule(path, kind, out_dir, root=None):
 # vendored under dev/protocols
 local_protocol_paths = [
     "wlr-screencopy-unstable-v1",
+    "input-method-unstable-v2",
+    "virtual-keyboard-unstable-v1",
 ]
 
 server_rules = [protocol_rule(path, "server", "protocols") for path in server_protocol_paths] + [
@@ -194,6 +197,7 @@ client_protocol_paths = [
     "staging/ext-image-copy-capture/ext-image-copy-capture-v1",
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
     "staging/ext-data-control/ext-data-control-v1",
+    "unstable/text-input/text-input-unstable-v3",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [
