@@ -372,9 +372,11 @@ namespace {
         bool kbCapturePrev = false;
         bool chordDown[256] = {};
 
-        // alt-tab overlay: selection commits on Alt release
+        // alt-tab overlay: selection commits on Alt release; weak so a
+        // window dying under the overlay drops out of the selection instead
+        // of aliasing a recycled allocation
         bool altTabActive = false;
-        Toplevel* altTabSel = nullptr;
+        Weak<Toplevel> altTabSel;
 
         // lockscreen's self-owned arena also gates the input sink
         DialogState* lockState = nullptr;
@@ -392,7 +394,9 @@ namespace {
         bool hwVisible = false;
         int hwKind = -2;               // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
         int pendingShape = -1;         // shape waiting for end-of-frame rasterization
-        Surface* hwSurf = nullptr;
+        // weak: identity of the uploaded cursor surface; a recycled
+        // allocation must not read as "already uploaded"
+        Weak<Surface> hwSurf;
         bool hwSurfStale = false;
         Vector<u32> hwShapeCache[ImGuiMouseCursor_COUNT];
         Vector<u32> hwScratch;
@@ -909,7 +913,7 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
         }
     }
 
-    return root == scene->cursorSurface || root == scene->dragIcon;
+    return root == scene->cursorSurface || root == scene->dragIcon.get();
 }
 
 bool RendererImpl::finishGpuFrame(bool wait) {
@@ -1068,14 +1072,14 @@ bool RendererImpl::key(u32 code, bool pressed) {
 
     if (!locked && altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
         altTabActive = false;
-        altTabSel = nullptr;
+        altTabSel.reset();
         scene->needsFrame = true;
     }
 
     if (!locked && !consumed && !scene->shortcutsInhibited && keyboard && code < 256) {
         if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
             altTabActive = false;
-            altTabSel = nullptr;
+            altTabSel.reset();
             scene->needsFrame = true;
             chordDown[code] = true;
             consumed = true;
@@ -1195,7 +1199,7 @@ void RendererImpl::altTabStep(long dir) {
         return;
     }
 
-    Toplevel* base = altTabActive && intrListContains<Toplevel>(tls, altTabSel) ? altTabSel : scene->focusedToplevel;
+    Toplevel* base = altTabActive && altTabSel.get() ? altTabSel.get() : scene->focusedToplevel.get();
     // a circular walk over the ring; the base (or the head sentinel when
     // there is no base) both starts and bounds it, and gets re-tested last
     // so a lone mapped window still selects itself
@@ -1213,7 +1217,7 @@ void RendererImpl::altTabStep(long dir) {
 
         if (n != tls.mutEnd() && t->mapped) {
             altTabActive = true;
-            altTabSel = t;
+            altTabSel.bind(t->weak);
             scene->needsFrame = true;
 
             return;
@@ -1222,7 +1226,7 @@ void RendererImpl::altTabStep(long dir) {
 }
 
 void RendererImpl::altTabCommit() {
-    if (intrListContains<Toplevel>(scene->toplevels, altTabSel) && altTabSel->mapped) {
+    if (altTabSel.get() && altTabSel->mapped) {
         altTabSel->raiseRequested = true;
     }
 
@@ -3124,7 +3128,7 @@ static StringView wifiGlyph(WifiState s) {
 
 void RendererImpl::buildUi(Scene& scene) {
     if (scene.focusedToplevel && (scene.focusedToplevel->minimized || !scene.focusedToplevel->mapped)) {
-        scene.focusedToplevel = nullptr;
+        scene.focusedToplevel.reset();
     }
 
     ImGuiIO& io = ImGui::GetIO();
@@ -3180,7 +3184,7 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
-    scene.focusedToplevel = nullptr;
+    scene.focusedToplevel.reset();
 
     sampleStats();
 
@@ -3426,7 +3430,7 @@ void RendererImpl::buildUi(Scene& scene) {
         // xdg-toplevel-drag: a torn-off window follows the cursor. Pin it to
         // (cursor - attach offset) and float it out of any dock node — this
         // is exactly the tab-tear gesture. Overrides the size-driven pos below
-        bool dragTracking = (Toplevel*)t == scene.dragToplevel;
+        bool dragTracking = (Toplevel*)t == scene.dragToplevel.get();
 
         if (dragTracking) {
             ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
@@ -3506,7 +3510,7 @@ void RendererImpl::buildUi(Scene& scene) {
             t->curY = wp.y;
 
             if (ImGui::IsWindowFocused()) {
-                scene.focusedToplevel = t;
+                scene.focusedToplevel.bind(t->weak);
             }
 
             if (t->raiseRequested) {
@@ -3655,11 +3659,11 @@ void RendererImpl::buildUi(Scene& scene) {
     if (scene.dragIcon && scene.dragIcon->texture) {
         ImVec2 mp = ImGui::GetMousePos();
 
-        drawSurfaceTreeOverlay(*scene.dragIcon, mp.x + 4, mp.y + 4);
+        drawSurfaceTreeOverlay(*scene.dragIcon.get(), mp.x + 4, mp.y + 4);
     }
 
     if (scene.imePopup && scene.imePopup->texture) {
-        drawSurfaceTreeOverlay(*scene.imePopup, scene.imePopupX, scene.imePopupY);
+        drawSurfaceTreeOverlay(*scene.imePopup.get(), scene.imePopupX, scene.imePopupY);
     }
 
     bool overClient = false;
@@ -3669,15 +3673,14 @@ void RendererImpl::buildUi(Scene& scene) {
         // their hover flags go stale the moment they stop being drawn and
         // would pin this true forever; contentless surfaces likewise keep
         // the flag from their last drawn frame
-        if (&s != scene.cursorSurface && &s != scene.dragIcon && s.hovered && s.hasContent) {
+        if (&s != scene.cursorSurface && &s != scene.dragIcon.get() && s.hovered && s.hasContent) {
             overClient = true;
         }
     });
 
-    if (altTabActive && !intrListContains<Toplevel>(scene.toplevels, altTabSel)) {
+    if (altTabActive && !altTabSel.get()) {
         // the selected window died under the overlay
         altTabActive = false;
-        altTabSel = nullptr;
     }
 
     if (launcherState || launcherToggle) {
@@ -3778,7 +3781,7 @@ void RendererImpl::buildUi(Scene& scene) {
                 dl->AddImage((ImTextureID)(uintptr_t)t->surface->texture->ds, ImVec2(x, y), ImVec2(x + tw, y + th), tuv0, tuv1);
                 dl->AddCallback(surfaceColorCallback, nullptr);
 
-                if (t == altTabSel) {
+                if (t == altTabSel.get()) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
                 }
 
@@ -3886,7 +3889,7 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
         bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
 
         if (hwOk) {
-            if (hwSurf != cs || hwSurfStale) {
+            if (hwSurf.get() != cs || hwSurfStale) {
                 hwScratch.zero((size_t)hwCapW * hwCapH);
 
                 for (int y = 0; y < cs->height; y++) {
@@ -3894,7 +3897,7 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
                 }
 
                 output->setCursorImage(hwScratch.data());
-                hwSurf = cs;
+                hwSurf.bind(cs->weak);
                 hwKind = -3;
                 hwSurfStale = false;
             }
@@ -3952,7 +3955,7 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
         } else {
             output->setCursorImage(img.data());
             hwKind = kind;
-            hwSurf = nullptr;
+            hwSurf.reset();
         }
     }
 
@@ -4410,7 +4413,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
             output->setCursorImage(img.data());
             hwKind = kind;
-            hwSurf = nullptr;
+            hwSurf.reset();
             scene->needsFrame = true;
         }
     }

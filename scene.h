@@ -2,6 +2,7 @@
 
 #include "color.h"
 #include "frame_resource.h"
+#include "weak_ptr.h"
 
 #include <std/lib/list.h>
 #include <std/lib/vector.h>
@@ -79,6 +80,10 @@ struct GrabNode: stl::IntrusiveNode {
 // SceneNode links it into Scene::surfaces, GrabNode into the seat's popup
 // grab stack (self-linked while not grabbed)
 struct Surface: SceneNode, GrabNode {
+    // weak-ring anchor: wayland seats it at creation and invalidate()s it in
+    // the destroy handler; every Weak<Surface> observer nulls itself then
+    Weak<Surface> weak;
+
     int width = 0, height = 0;
     int bufferScale = 1;
     int bufferTransform = 0;
@@ -173,6 +178,9 @@ struct Subsurface: stl::IntrusiveNode {
 
 // the node links it into Scene::toplevels
 struct Toplevel: stl::IntrusiveNode {
+    // weak-ring anchor, same contract as Surface::weak
+    Weak<Toplevel> weak;
+
     Surface* surface = nullptr;
     u64 id = 0;
     stl::StringBuilder title;
@@ -183,8 +191,8 @@ struct Toplevel: stl::IntrusiveNode {
     stl::StringBuilder tagDescription;
 
     // transient parent: xdg_toplevel.set_parent or an xdg-foreign import;
-    // cleared when either side dies or the export is revoked
-    Toplevel* parent = nullptr;
+    // the ring clears it when the parent dies, an export revoke resets it
+    Weak<Toplevel> parent;
     bool mapped = false;
 
     // per-window keyboard layout, restored on focus
@@ -309,8 +317,10 @@ struct Scene {
 
     stl::StringView socketName;
 
-    // written by the renderer (imgui truth of the last frame), read by wayland
-    Toplevel* focusedToplevel = nullptr;
+    // written by the renderer (imgui truth of the last frame), read by
+    // wayland; weak because the client can destroy the toplevel between
+    // buildUi and the frame event (KMS: render -> page flip)
+    Weak<Toplevel> focusedToplevel;
     // toplevel id of the current direct scanout candidate (0 = none),
     // written by the renderer each frame; surfaced through the state dump
     u64 scanoutCandidateId = 0;
@@ -323,17 +333,17 @@ struct Scene {
     bool pointerConfined = false;
     stl::Vector<RectI> confineRegion;
 
-    Surface* dragIcon = nullptr;
+    Weak<Surface> dragIcon;
 
     // xdg-toplevel-drag: the toplevel torn off during a data-source drag
-    // follows the cursor at (renderer posX/posY - drag offset); nullptr when
+    // follows the cursor at (renderer posX/posY - drag offset); null when
     // no window is attached. The renderer floats it out of docking while set.
-    Toplevel* dragToplevel = nullptr;
+    Weak<Toplevel> dragToplevel;
     int dragToplevelOffX = 0, dragToplevelOffY = 0;
 
     // input-method popup: the IME's candidate surface, positioned at the
     // active text input's cursor rectangle (screen coords, top-left)
-    Surface* imePopup = nullptr;
+    Weak<Surface> imePopup;
     float imePopupX = 0, imePopupY = 0;
 
     CursorKind cursorShape = CursorKind::unset;

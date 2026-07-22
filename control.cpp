@@ -320,7 +320,7 @@ void ControlImpl::dumpState(StringView outPath) {
             << " activated="_sv << (int)t.activated
             << " docked="_sv << (int)t.docked
             << " modal="_sv << (int)t.modal
-            << " focused="_sv << (int)(scene->focusedToplevel == &t)
+            << " focused="_sv << (int)(scene->focusedToplevel.get() == &t)
             << " x="_sv << (int)t.curX
             << " y="_sv << (int)t.curY
             << " w="_sv << (int)t.applyW
@@ -367,7 +367,7 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
     out << "cursor shape="_sv << (int)scene->cursorShape
         << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
-    out << "ime popup="_sv << (int)(scene->imePopup != nullptr)
+    out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr)
         << " x="_sv << (int)scene->imePopupX
         << " y="_sv << (int)scene->imePopupY << "\n"_sv;
 

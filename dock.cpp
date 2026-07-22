@@ -337,8 +337,8 @@ void drawDock(Composer& c, DockResult& result) {
                     if (ImGui::MenuItem("minimize", nullptr, false, !t->minimized)) {
                         t->minimized = true;
 
-                        if (scene.focusedToplevel == t) {
-                            scene.focusedToplevel = nullptr;
+                        if (scene.focusedToplevel.get() == t) {
+                            scene.focusedToplevel.reset();
                         }
 
                         scene.needsFrame = true;

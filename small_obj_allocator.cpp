@@ -13,7 +13,7 @@ using namespace stl;
 
 namespace {
     constexpr size_t kMinSize = 16;
-    constexpr size_t kClasses = 7; // 16 << 6 == kSmallObjMaxSize
+    constexpr size_t kClasses = 8; // 16 << 7 == kSmallObjMaxSize
 
     static_assert(kMinSize << (kClasses - 1) == kSmallObjMaxSize);
 

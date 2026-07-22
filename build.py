@@ -267,7 +267,8 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         test_deps.append(display_info)
 
     if name == "client_reg_scanout_opaque_policy":
-        test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp"]
+        # scene.h pulls the weak ring in since Surface grew its anchor
+        test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp", "$(S)/weak_ptr.cpp"]
         test_deps.append(display_info)
 
     tests.append(program(

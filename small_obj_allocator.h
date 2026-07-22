@@ -11,7 +11,7 @@ namespace stl {
 
 // objects above this size do not belong here: they get their own lifetime
 // story (a pool, a FrameResource), not a recycled small-object slot
-inline constexpr size_t kSmallObjMaxSize = 1024;
+inline constexpr size_t kSmallObjMaxSize = 2048;
 
 // the composer's one small-object allocator: every dynamic-lifetime
 // protocol/desktop object allocates here. Exponential size classes

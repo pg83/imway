@@ -144,8 +144,8 @@ namespace {
     struct CmFeedback {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        SurfaceImpl* surface = nullptr;
-        wl_listener surfaceDestroy{};
+        // weak ring into the surface: nulls itself when the surface dies
+        Weak<Surface> surface;
     };
 
     // refcounted drm syncobj: the resource holds one ref, every commit
@@ -195,7 +195,8 @@ namespace {
     struct ActivationTokenRequest: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_client* client = nullptr;
-        SurfaceImpl* surface = nullptr;
+        // weak ring into the surface: nulls itself when the surface dies
+        Weak<Surface> surface;
         StringBuilder appId;
         u32 serial = 0;
         bool serialSet = false;
@@ -283,7 +284,8 @@ namespace {
         bool pendSrcSet = false, pendDstSet = false;
 
         wl_resource* fracRes = nullptr;
-        ConstraintBox* constraint = nullptr;
+        // weak ring into the constraint box: nulls itself when the box dies
+        Weak<ConstraintBox> constraint;
         wl_resource* kbInhibitRes = nullptr;
         bool kbInhibitActive = false;
 
@@ -392,7 +394,10 @@ namespace {
     struct CaptureSession: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        CaptureFrame* frame = nullptr;
+        // anchor for the weak ring plus a weak back-and-forth with the frame:
+        // either side dying nulls the other's pointer on its own
+        Weak<CaptureSession> weak;
+        Weak<CaptureFrame> frame;
         // a cursor-source session captures the cursor surface instead
         bool cursor = false;
         // nonzero: capture one toplevel's on-screen rect instead of the output
@@ -409,7 +414,9 @@ namespace {
 
     struct CaptureFrame {
         WaylandImpl* srv = nullptr;
-        CaptureSession* session = nullptr;
+        // anchor + weak back-pointer, mirroring CaptureSession
+        Weak<CaptureFrame> weak;
+        Weak<CaptureSession> session;
         wl_resource* res = nullptr;
         wl_resource* buffer = nullptr;
         CaptureBufferDestroyListener bufferDestroy;
@@ -473,8 +480,9 @@ namespace {
         wl_resource* grab = nullptr;
         bool active = false;
 
-        // the input popup surface and its rectangle object (v2)
-        SurfaceImpl* popupSurface = nullptr;
+        // the input popup surface and its rectangle object (v2); the ring
+        // nulls the surface pointer when the surface dies
+        Weak<Surface> popupSurface;
         wl_resource* popupRes = nullptr;
         RectI lastRect{-1, -1, -1, -1};
 
@@ -695,7 +703,10 @@ namespace {
 
     struct ConstraintBox {
         WaylandImpl* srv = nullptr;
-        SurfaceImpl* surface = nullptr;
+        // anchor for the weak ring (the surface's and seat's back-pointers)
+        // plus a weak reference back at the constrained surface
+        Weak<ConstraintBox> weak;
+        Weak<Surface> surface;
         wl_resource* res = nullptr;
         bool isLock = false;
         bool oneshot = false;
@@ -709,7 +720,8 @@ namespace {
 
     struct IdleInhibitor: IntrusiveNode {
         WaylandImpl* srv = nullptr;
-        SurfaceImpl* surface = nullptr;
+        // weak ring into the surface: nulls itself when the surface dies
+        Weak<Surface> surface;
         wl_resource* res = nullptr;
     };
 
@@ -767,7 +779,8 @@ namespace {
         // itself when we die
         Weak<ToplevelDragBox> weak;
         Weak<DataSource> source;
-        ToplevelImpl* attached = nullptr;
+        // the ring detaches the toplevel when it dies; unmap detaches by hand
+        Weak<Toplevel> attached;
         int offX = 0, offY = 0;
     };
 
@@ -804,14 +817,17 @@ namespace {
         Vector<wl_resource*> activePinches;
         Vector<wl_resource*> activeHolds;
 
-        ConstraintBox* activeConstraint = nullptr;
+        // weak ring into the box: nulls itself when the box dies (the scene
+        // lock/confine flags are still reset by the box's own destroy paths)
+        Weak<ConstraintBox> activeConstraint;
 
         DataSource* clipboard = nullptr;
         DataSource* primarySel = nullptr;
 
         DataSource* dragSource = nullptr;
         wl_client* dragClient = nullptr;
-        Surface* dragTarget = nullptr;
+        // weak ring into the surface under the drag: nulls itself on death
+        Weak<Surface> dragTarget;
         u32 lastPressedButton = 0;
         Vector<u32> pressedButtons;
 
@@ -2389,13 +2405,10 @@ namespace {
         SurfaceImpl* s = surfaceFrom(res);
         WaylandImpl* srv = s->srv;
 
-        if (srv->scene->dragIcon == s) {
-            srv->scene->dragIcon = nullptr;
-        }
-
-        if (srv->seat.dragTarget == s) {
-            srv->seat.dragTarget = nullptr;
-        }
+        // the weak ring nulls every observer in one sweep: scene dragIcon /
+        // imePopup, the seat drag target, idle inhibitors, activation token
+        // requests, the IM popup back-pointer, cm feedbacks, constraints
+        s->weak.invalidate();
 
         if (srv->scene->cursorSurface == s) {
             srv->scene->cursorSurface = nullptr;
@@ -2469,18 +2482,6 @@ namespace {
             }
         });
 
-        forEach<IdleInhibitor>(srv->idleInhibitors, [&](IdleInhibitor& inhibitor) {
-            if (inhibitor.surface == s) {
-                inhibitor.surface = nullptr;
-            }
-        });
-
-        forEach<ActivationTokenRequest>(srv->activationTokenRequests, [&](ActivationTokenRequest& request) {
-            if (request.surface == s) {
-                request.surface = nullptr;
-            }
-        });
-
         srv->seat.surfaceGone(s);
 
         releaseHeldDmabuf(*s);
@@ -2488,15 +2489,6 @@ namespace {
         alphaModSurfaceGone(*s);
         contentTypeSurfaceGone(*s);
         tearingSurfaceGone(*s);
-
-        if (srv->scene->imePopup == (Surface*)s) {
-            srv->scene->imePopup = nullptr;
-        }
-
-        if (srv->seat.inputMethod && srv->seat.inputMethod->popupSurface == s) {
-            srv->seat.inputMethod->popupSurface = nullptr;
-        }
-
         fifoSurfaceGone(*s);
         fracSurfaceGone(*s);
         constraintSurfaceGone(*s);
@@ -2626,6 +2618,7 @@ namespace {
 
         s->srv = srv;
         s->res = sres;
+        s->weak.anchor(s);
         srv->scene->surfaces.pushBack((SceneNode*)s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
 
@@ -2906,7 +2899,11 @@ namespace {
         auto* p = parentRes ? (ToplevelImpl*)wl_resource_get_user_data(parentRes) : nullptr;
 
         if (t) {
-            t->parent = p;
+            if (p) {
+                t->parent.bind(p->weak);
+            } else {
+                t->parent.reset();
+            }
         }
     }
 
@@ -3062,8 +3059,8 @@ namespace {
         if (ti) {
             ti->minimized = true;
 
-            if (ti->srv->scene->focusedToplevel == ti) {
-                ti->srv->scene->focusedToplevel = nullptr;
+            if (ti->srv->scene->focusedToplevel.get() == ti) {
+                ti->srv->scene->focusedToplevel.reset();
             }
 
             ti->srv->scene->needsFrame = true;
@@ -3091,13 +3088,12 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
         WaylandImpl* srv = t->srv;
 
-        srv->seat.toplevelGone(t);
+        // the weak ring nulls every observer in one sweep: transient-parent
+        // children, the scene focus/drag pointers, the drag box attachment,
+        // the renderer's alt-tab selection
+        t->weak.invalidate();
 
-        // the renderer stashes this between buildUi and the frame event; the client
-        // can destroy the toplevel in that window (KMS: render -> page flip)
-        if (srv->scene->focusedToplevel == t) {
-            srv->scene->focusedToplevel = nullptr;
-        }
+        srv->seat.toplevelGone(t);
 
         if (t->xdg) {
             t->xdg->toplevel = nullptr;
@@ -3195,6 +3191,7 @@ namespace {
 
         t->srv = srv;
         t->res = tres;
+        t->weak.anchor(t);
         t->xdg = xs;
         t->surface = xs->surface;
         t->id = srv->nextToplevelId++;
@@ -3925,7 +3922,7 @@ namespace {
         }
 
         return surface.srv->scene->cursorSurface == root ||
-               surface.srv->scene->dragIcon == root;
+               surface.srv->scene->dragIcon.get() == root;
     }
 
     void syncSurfaceOutputs(SurfaceImpl& surface) {
@@ -4457,14 +4454,14 @@ namespace {
         auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
 
-        if (box->attached && box->attached != t && box->attached->mapped) {
+        if (box->attached.get() && box->attached.get() != t && box->attached->mapped) {
             wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_TOPLEVEL_ATTACHED,
                                    "a valid toplevel is already attached");
 
             return;
         }
 
-        box->attached = t;
+        box->attached.bind(t->weak);
         box->offX = xOff;
         box->offY = yOff;
 
@@ -4485,8 +4482,8 @@ namespace {
         // the weak ring nulls the source's back-pointer to us
         box->weak.invalidate();
 
-        if (box->srv->scene->dragToplevel == box->attached) {
-            box->srv->scene->dragToplevel = nullptr;
+        if (box->attached.get() && box->srv->scene->dragToplevel.get() == box->attached.get()) {
+            box->srv->scene->dragToplevel.reset();
         }
 
         box->srv->alloc->release(box);
@@ -4971,8 +4968,8 @@ namespace {
         // the relationship ends with the export: detach every child that
         // was parented through this handle
         forEach<Toplevel>(ex->srv->scene->toplevels, [&](Toplevel& t) {
-            if (t.parent == ex->toplevel) {
-                t.parent = nullptr;
+            if (t.parent.get() == ex->toplevel) {
+                t.parent.reset();
             }
         });
     }
@@ -4988,18 +4985,14 @@ namespace {
     // the exported toplevel died: same cascade, the export resource stays
     // inert until the client destroys it
     void foreignToplevelGone(WaylandImpl* srv, ToplevelImpl* t) {
+        // native transient children detach through the weak ring; only the
+        // export bookkeeping (with its imported_v2.destroyed events) is ours
         for (ForeignExport* ex : srv->foreignExports) {
             if (ex->toplevel == t) {
                 foreignDetachImports(ex);
                 ex->toplevel = nullptr;
             }
         }
-
-        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& other) {
-            if (other.parent == t) {
-                other.parent = nullptr;
-            }
-        });
     }
 
     const struct zxdg_exported_v2_interface foreignExportedImpl = {
@@ -5076,7 +5069,11 @@ namespace {
             return;
         }
 
-        t->parent = im->source && im->source->toplevel ? im->source->toplevel : nullptr;
+        if (ToplevelImpl* p = im->source && im->source->toplevel ? im->source->toplevel : nullptr) {
+            t->parent.bind(p->weak);
+        } else {
+            t->parent.reset();
+        }
     }
 
     const struct zxdg_imported_v2_interface foreignImportedImpl = {
@@ -5908,11 +5905,11 @@ namespace {
             return;
         }
 
-        if (im->srv->scene->imePopup == (Surface*)im->popupSurface) {
-            im->srv->scene->imePopup = nullptr;
+        if (im->popupSurface.get() && im->srv->scene->imePopup.get() == im->popupSurface.get()) {
+            im->srv->scene->imePopup.reset();
         }
 
-        im->popupSurface = nullptr;
+        im->popupSurface.reset();
         im->popupRes = nullptr;
     }
 
@@ -5959,7 +5956,12 @@ namespace {
             return;
         }
 
-        im->popupSurface = surfaceRes ? surfaceFrom(surfaceRes) : nullptr;
+        if (surfaceRes) {
+            im->popupSurface.bind(surfaceFrom(surfaceRes)->weak);
+        } else {
+            im->popupSurface.reset();
+        }
+
         im->popupRes = r;
         im->lastRect = {-1, -1, -1, -1};
         wl_resource_set_implementation(r, &imPopupImpl, im, imPopupResourceDestroyed);
@@ -6007,8 +6009,8 @@ namespace {
         if (im->popupRes) {
             // the popup destroy handler would otherwise clear the scene
             // placement; do it here since we sever its link to us
-            if (srv->scene->imePopup == (Surface*)im->popupSurface) {
-                srv->scene->imePopup = nullptr;
+            if (im->popupSurface.get() && srv->scene->imePopup.get() == im->popupSurface.get()) {
+                srv->scene->imePopup.reset();
             }
 
             wl_resource_set_user_data(im->popupRes, nullptr);
@@ -6793,10 +6795,8 @@ namespace {
     void captureFrameResourceDestroyed(wl_resource* res) {
         auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
 
-        if (f->session) {
-            f->session->frame = nullptr;
-        }
-
+        // the weak ring nulls the session's frame pointer
+        f->weak.invalidate();
         captureFrameDrop(f);
         f->srv->alloc->release(f);
     }
@@ -6875,11 +6875,12 @@ namespace {
     void captureSessionResourceDestroyed(wl_resource* res) {
         auto* cs = (CaptureSession*)wl_resource_get_user_data(res);
 
-        if (cs->frame) {
-            cs->frame->session = nullptr;
-            cs->frame->armed = false;
+        if (CaptureFrame* f = cs->frame.get()) {
+            f->armed = false;
         }
 
+        // the weak ring nulls the frame's session pointer
+        cs->weak.invalidate();
         cs->unlink();
         cs->srv->alloc->release(cs);
     }
@@ -6904,9 +6905,10 @@ namespace {
         CaptureFrame* f = cs->srv->alloc->make<CaptureFrame>();
 
         f->srv = cs->srv;
-        f->session = cs;
+        f->weak.anchor(f);
+        f->session.bind(cs->weak);
         f->res = r;
-        cs->frame = f;
+        cs->frame.bind(f->weak);
         wl_resource_set_implementation(r, &captureFrameImpl, f, captureFrameResourceDestroyed);
     }
 
@@ -6927,6 +6929,7 @@ namespace {
         CaptureSession* cs = srv->alloc->make<CaptureSession>();
 
         cs->srv = srv;
+        cs->weak.anchor(cs);
         cs->res = r;
         cs->cursor = cursor;
         cs->toplevelId = toplevelId;
@@ -7762,17 +7765,14 @@ namespace {
 
         SeatState& seat = c->srv->seat;
 
-        if (seat.activeConstraint == c) {
-            seat.activeConstraint = nullptr;
+        if (seat.activeConstraint.get() == c) {
             c->srv->scene->pointerLocked = false;
             c->srv->scene->pointerConfined = false;
             c->srv->scene->confineRegion.clear();
         }
 
-        if (c->surface) {
-            c->surface->constraint = nullptr;
-        }
-
+        // the ring nulls the surface's and the seat's back-pointers
+        c->weak.invalidate();
         c->srv->alloc->release(c);
     }
 
@@ -7830,7 +7830,8 @@ namespace {
         ConstraintBox* c = srv->alloc->make<ConstraintBox>();
 
         c->srv = srv;
-        c->surface = s;
+        c->weak.anchor(c);
+        c->surface.bind(s->weak);
         c->res = r;
         c->isLock = isLock;
         c->oneshot = lifetime == ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_ONESHOT;
@@ -7840,7 +7841,7 @@ namespace {
             regionSnapshot(regionRes, c->region);
         }
 
-        s->constraint = c;
+        s->constraint.bind(c->weak);
 
         if (isLock) {
             wl_resource_set_implementation(r, &lockedPointerImpl, c, constraintResourceDestroyed);
@@ -7879,24 +7880,25 @@ namespace {
         wl_resource_set_implementation(res, &pointerConstraintsImpl, data, nullptr);
     }
 
+    // the ring already severed c->surface (the surface anchor invalidated
+    // first); what remains is deactivating a live constraint on the seat
     void constraintSurfaceGone(SurfaceImpl& s) {
-        if (ConstraintBox* c = s.constraint) {
+        if (ConstraintBox* c = s.constraint.get()) {
             SeatState& seat = c->srv->seat;
 
-            if (seat.activeConstraint == c) {
-                seat.activeConstraint = nullptr;
+            if (seat.activeConstraint.get() == c) {
+                seat.activeConstraint.reset();
                 c->srv->scene->pointerLocked = false;
                 c->srv->scene->pointerConfined = false;
                 c->srv->scene->confineRegion.clear();
             }
 
-            c->surface = nullptr;
-            s.constraint = nullptr;
+            s.constraint.reset();
         }
     }
 
     void constraintApplyPending(SurfaceImpl& s) {
-        ConstraintBox* c = s.constraint;
+        ConstraintBox* c = s.constraint.get();
 
         if (!c) {
             return;
@@ -7911,7 +7913,7 @@ namespace {
 
         SeatState& seat = c->srv->seat;
 
-        if (seat.activeConstraint == c && !c->isLock && !seat.updateConfineRegion()) {
+        if (seat.activeConstraint.get() == c && !c->isLock && !seat.updateConfineRegion()) {
             seat.constraintDeactivate();
         }
     }
@@ -8007,7 +8009,7 @@ namespace {
         auto* inhibitor = srv->alloc->make<IdleInhibitor>();
 
         inhibitor->srv = srv;
-        inhibitor->surface = surfaceFrom(surfaceRes);
+        inhibitor->surface.bind(surfaceFrom(surfaceRes)->weak);
         inhibitor->res = r;
         srv->idleInhibitors.pushBack(inhibitor);
         wl_resource_set_implementation(r, &idleInhibitorImpl, inhibitor, idleInhibitorResourceDestroyed);
@@ -8606,7 +8608,7 @@ namespace {
         auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
         if (activationTokenMutable(res, request)) {
-            request->surface = surfaceFrom(surfaceRes);
+            request->surface.bind(surfaceFrom(surfaceRes)->weak);
             request->surfaceSet = true;
         }
     }
@@ -8629,7 +8631,7 @@ namespace {
         snprintf(grant.token, sizeof(grant.token), "imway-%016llx-%016llx",
                  (unsigned long long)++request->srv->tokenCounter, (unsigned long long)random);
         grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) &&
-                           (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface)) == request->client));
+                           (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface.get())) == request->client));
 
         if (request->srv->activationGrants.length() == 64) {
             for (size_t i = 1; i < request->srv->activationGrants.length(); i++) {
@@ -9610,7 +9612,7 @@ Surface* SeatState::pickPointerTarget() {
 
         // the window being dragged follows the cursor; it must not be its
         // own drop target (xdg_toplevel_drag: "does not participate")
-        if (t == srv->scene->dragToplevel) {
+        if (t == srv->scene->dragToplevel.get()) {
             continue;
         }
 
@@ -9674,19 +9676,19 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 }
 
 void SeatState::constraintActivate() {
-    activeConstraint = nullptr;
+    activeConstraint.reset();
 
     if (!ptrFocus) {
         return;
     }
 
-    ConstraintBox* c = ((SurfaceImpl*)ptrFocus)->constraint;
+    ConstraintBox* c = ((SurfaceImpl*)ptrFocus)->constraint.get();
 
     if (!c || c->dead) {
         return;
     }
 
-    activeConstraint = c;
+    activeConstraint.bind(c->weak);
 
     if (c->isLock) {
         srv->scene->pointerLocked = true;
@@ -9694,7 +9696,7 @@ void SeatState::constraintActivate() {
     } else {
         srv->scene->pointerConfined = true;
         if (!updateConfineRegion()) {
-            activeConstraint = nullptr;
+            activeConstraint.reset();
             srv->scene->pointerConfined = false;
 
             return;
@@ -9705,13 +9707,13 @@ void SeatState::constraintActivate() {
 }
 
 void SeatState::constraintDeactivate() {
-    ConstraintBox* c = activeConstraint;
+    ConstraintBox* c = activeConstraint.get();
 
     if (!c) {
         return;
     }
 
-    activeConstraint = nullptr;
+    activeConstraint.reset();
     srv->scene->pointerLocked = false;
     srv->scene->pointerConfined = false;
     srv->scene->confineRegion.clear();
@@ -9728,7 +9730,7 @@ void SeatState::constraintDeactivate() {
 }
 
 bool SeatState::updateConfineRegion() {
-    ConstraintBox* c = activeConstraint;
+    ConstraintBox* c = activeConstraint.get();
 
     if (!c || c->isLock || !ptrFocus) {
         return false;
@@ -10067,7 +10069,7 @@ DmabufUse::~DmabufUse() noexcept {
 
 bool WaylandImpl::idleBlocked() {
     for (IdleInhibitor* inhibitor : each<IdleInhibitor>(idleInhibitors)) {
-        Surface* surface = inhibitor->surface;
+        Surface* surface = inhibitor->surface.get();
 
         if (!surface || !surface->hasContent) {
             continue;
@@ -10727,7 +10729,7 @@ void SeatState::sourceGone(DataSource* src) {
         // highlighted waiting for a drop that never comes
         if (dragTarget) {
             for (wl_resource* d : dataDevices) {
-                if (sameClientS(d, dragTarget)) {
+                if (sameClientS(d, dragTarget.get())) {
                     wl_data_device_send_leave(d);
                 }
             }
@@ -10735,8 +10737,8 @@ void SeatState::sourceGone(DataSource* src) {
 
         dragSource = nullptr;
         dragClient = nullptr;
-        dragTarget = nullptr;
-        srv->scene->dragIcon = nullptr;
+        dragTarget.reset();
+        srv->scene->dragIcon.reset();
         srv->scene->needsFrame = true;
     }
 
@@ -10753,11 +10755,11 @@ void SeatState::syncToplevelDrag() {
     ToplevelDragBox* box = dragSource ? dragSource->toplevelDrag.get() : nullptr;
 
     if (box && box->attached && box->attached->mapped) {
-        srv->scene->dragToplevel = box->attached;
+        srv->scene->dragToplevel.bind(box->attached);
         srv->scene->dragToplevelOffX = box->offX;
         srv->scene->dragToplevelOffY = box->offY;
     } else {
-        srv->scene->dragToplevel = nullptr;
+        srv->scene->dragToplevel.reset();
     }
 
     srv->scene->needsFrame = true;
@@ -10775,8 +10777,14 @@ void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surfac
 
     dragSource = src;
     dragClient = client;
-    dragTarget = nullptr;
-    srv->scene->dragIcon = icon;
+    dragTarget.reset();
+
+    if (icon) {
+        srv->scene->dragIcon.bind(icon->weak);
+    } else {
+        srv->scene->dragIcon.reset();
+    }
+
     srv->scene->needsFrame = true;
     pointerSetFocus(nullptr, 0, 0);
     syncToplevelDrag();
@@ -10790,16 +10798,20 @@ void SeatState::dragMotion() {
         target = nullptr;
     }
 
-    if (target != dragTarget) {
+    if (target != dragTarget.get()) {
         if (dragTarget) {
             for (wl_resource* d : dataDevices) {
-                if (sameClientS(d, dragTarget)) {
+                if (sameClientS(d, dragTarget.get())) {
                     wl_data_device_send_leave(d);
                 }
             }
         }
 
-        dragTarget = target;
+        if (target) {
+            dragTarget.bind(target->weak);
+        } else {
+            dragTarget.reset();
+        }
 
         if (target) {
             u32 serial = wl_display_next_serial(srv->display);
@@ -10834,10 +10846,10 @@ void SeatState::dragMotion() {
 void SeatState::endDrag() {
     DataSource* src = dragSource;
 
-    srv->scene->dragToplevel = nullptr;
+    srv->scene->dragToplevel.reset();
     dragSource = nullptr;
     dragClient = nullptr;
-    srv->scene->dragIcon = nullptr;
+    srv->scene->dragIcon.reset();
     srv->scene->needsFrame = true;
 
     // a drop only lands on a target that accepted a mime type; otherwise
@@ -10856,7 +10868,7 @@ void SeatState::endDrag() {
 
     if (dragTarget && accepted) {
         for (wl_resource* d : dataDevices) {
-            if (sameClientS(d, dragTarget)) {
+            if (sameClientS(d, dragTarget.get())) {
                 wl_data_device_send_drop(d);
             }
         }
@@ -10871,7 +10883,7 @@ void SeatState::endDrag() {
     } else {
         if (dragTarget) {
             for (wl_resource* d : dataDevices) {
-                if (sameClientS(d, dragTarget)) {
+                if (sameClientS(d, dragTarget.get())) {
                     wl_data_device_send_leave(d);
                 }
             }
@@ -10882,7 +10894,7 @@ void SeatState::endDrag() {
         }
     }
 
-    dragTarget = nullptr;
+    dragTarget.reset();
 }
 
 TextInput* SeatState::activeTextInput() {
@@ -11010,8 +11022,8 @@ void SeatState::imUpdatePopup() {
     TextInput* ti = activeTextInput();
 
     if (!ti || !im->active) {
-        if (srv->scene->imePopup == (Surface*)im->popupSurface) {
-            srv->scene->imePopup = nullptr;
+        if (im->popupSurface.get() && srv->scene->imePopup.get() == im->popupSurface.get()) {
+            srv->scene->imePopup.reset();
         }
 
         return;
@@ -11034,7 +11046,7 @@ void SeatState::imUpdatePopup() {
         Surface* anchor = kbFocusSurface();
 
         if (anchor) {
-            srv->scene->imePopup = (Surface*)im->popupSurface;
+            srv->scene->imePopup.bind(im->popupSurface);
             srv->scene->imePopupX = anchor->imgX + (float)anchor->geomX() + (float)r.x;
             srv->scene->imePopupY = anchor->imgY + (float)anchor->geomY() + (float)r.y + (float)r.h;
         }
@@ -11112,8 +11124,8 @@ void SeatState::focusToplevel(Toplevel* t) {
 // unmap (null-buffer commit) hides the window but keeps it alive: without a
 // focus handoff the keyboard and pointer keep feeding an invisible surface
 void SeatState::toplevelUnmapped(Toplevel* t) {
-    if (dragSource && dragSource->toplevelDrag && dragSource->toplevelDrag->attached == t) {
-        dragSource->toplevelDrag->attached = nullptr;
+    if (dragSource && dragSource->toplevelDrag && dragSource->toplevelDrag->attached.get() == t) {
+        dragSource->toplevelDrag->attached.reset();
         syncToplevelDrag();
     }
 
@@ -11238,17 +11250,8 @@ void SeatState::surfaceGone(Surface* s) {
 }
 
 void SeatState::toplevelGone(Toplevel* t) {
-    // a destroy without a preceding unmap must still detach an active
-    // toplevel drag, else scene->dragToplevel and the drag box's attached
-    // pointer dangle onto the freed toplevel
-    if (dragSource && dragSource->toplevelDrag && dragSource->toplevelDrag->attached == t) {
-        dragSource->toplevelDrag->attached = nullptr;
-        syncToplevelDrag();
-    }
-
-    if (srv->scene->dragToplevel == t) {
-        srv->scene->dragToplevel = nullptr;
-    }
+    // the weak ring already detached the drag box's attached pointer and
+    // the scene's dragToplevel/focusedToplevel
 
     if (ptrFocus && ptrFocus->rootToplevel() == t) {
         ptrFocus = nullptr;
@@ -12003,21 +12006,10 @@ WaylandImpl::~WaylandImpl() noexcept {
         .get_preferred_parametric = cmFeedbackGetPreferred,
     };
 
-    void cmFeedbackSurfaceDestroyed(wl_listener* listener, void*) {
-        auto* obj = (CmFeedback*)((char*)listener - offsetof(CmFeedback, surfaceDestroy));
-
-        obj->surface = nullptr;
-        wl_list_remove(&listener->link);
-    }
-
     void cmFeedbackResourceDestroyed(wl_resource* res) {
         auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
 
         if (obj) {
-            if (obj->surface) {
-                wl_list_remove(&obj->surfaceDestroy.link);
-            }
-
             removeOne(obj->srv->cmFeedbackResources, obj);
             obj->srv->alloc->release(obj);
         }
@@ -12081,12 +12073,9 @@ WaylandImpl::~WaylandImpl() noexcept {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         CmFeedback* obj = srv->alloc->make<CmFeedback>();
 
-        *obj = {};
         obj->srv = srv;
         obj->res = fb;
-        obj->surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
-        obj->surfaceDestroy.notify = cmFeedbackSurfaceDestroyed;
-        wl_resource_add_destroy_listener(surfaceRes, &obj->surfaceDestroy);
+        obj->surface.bind(((SurfaceImpl*)wl_resource_get_user_data(surfaceRes))->weak);
         wl_resource_set_implementation(fb, &cmFeedbackImpl, obj, cmFeedbackResourceDestroyed);
         srv->cmFeedbackResources.pushBack(obj);
     }
@@ -12649,8 +12638,8 @@ void WaylandImpl::onListen(void* arg) {
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
         seat.focusToplevel(nullptr);
     } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized &&
-        scene->focusedToplevel->mapped && scene->focusedToplevel != seat.kbFocus) {
-        seat.focusToplevel(scene->focusedToplevel);
+        scene->focusedToplevel->mapped && scene->focusedToplevel.get() != seat.kbFocus) {
+        seat.focusToplevel(scene->focusedToplevel.get());
     }
 
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
@@ -12702,7 +12691,7 @@ void WaylandImpl::onListen(void* arg) {
     });
 
     if (scene->dragIcon) {
-        fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon, msec);
+        fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon.get(), msec);
     }
 
     if (scene->cursorSurface) {
@@ -12719,7 +12708,7 @@ void WaylandImpl::onListen(void* arg) {
         }
 
         Surface* root = surface.rootSurface();
-        bool shown = root == scene->dragIcon || root == scene->cursorSurface;
+        bool shown = root == scene->dragIcon.get() || root == scene->cursorSurface;
 
         if (!shown && root->toplevel) {
             shown = root->toplevel->mapped && !root->toplevel->minimized;
