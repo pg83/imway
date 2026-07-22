@@ -14,6 +14,7 @@
 #include "output.h"
 #include "intr_list.h"
 #include "scene.h"
+#include "frame_capture.h"
 #include "session.h"
 #include "small_obj_allocator.h"
 #include "util.h"
@@ -35,6 +36,8 @@
 #include <tearing-control-v1-server-protocol.h>
 #include <fifo-v1-server-protocol.h>
 #include <commit-timing-v1-server-protocol.h>
+#include <ext-image-capture-source-v1-server-protocol.h>
+#include <ext-image-copy-capture-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -363,6 +366,45 @@ namespace {
         // wp-commit-timing: do not admit before this CLOCK_MONOTONIC instant
         bool hasTime = false;
         u64 timeNs = 0;
+    };
+
+    // ext-image-copy-capture: every box is wire-owned. A session owns at
+    // most one live frame; the armed frame is fulfilled from the composed
+    // image right after a presentation
+    struct CaptureFrame;
+
+    struct CaptureSession: IntrusiveNode {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        CaptureFrame* frame = nullptr;
+        // a cursor-source session captures the cursor surface instead
+        bool cursor = false;
+    };
+
+    struct CaptureBufferDestroyListener {
+        wl_listener listener{};
+        CaptureFrame* frame = nullptr;
+    };
+
+    struct CaptureFrame {
+        WaylandImpl* srv = nullptr;
+        CaptureSession* session = nullptr;
+        wl_resource* res = nullptr;
+        wl_resource* buffer = nullptr;
+        CaptureBufferDestroyListener bufferDestroy;
+        bool bufferDestroyArmed = false;
+        bool captured = false;
+        bool armed = false;
+        int attempts = 0;
+    };
+
+    struct CaptureCursorSession {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        bool haveSession = false;
+        bool entered = false;
+        int lastX = -1000000, lastY = -1000000;
+        int lastHotX = -1000000, lastHotY = -1000000;
     };
 
     struct SubsurfaceImpl: public Subsurface {
@@ -760,6 +802,8 @@ namespace {
 
         IntrusiveList idleNotifs;
         IntrusiveList idleInhibitors;
+        IntrusiveList captureSessions;
+        Vector<CaptureCursorSession*> cursorSessions;
         ::Output* output = nullptr;
         double dpmsSec = 0;
         bool dpmsOff = false;
@@ -4819,6 +4863,385 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &commitTimingManagerImpl, data, nullptr);
+    }
+
+    // ---- ext-image-capture-source + ext-image-copy-capture ----
+    const struct ext_image_capture_source_v1_interface captureSourceImpl = {
+        .destroy = resDestroy,
+    };
+
+    void captureSourceManagerCreateSource(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &ext_image_capture_source_v1_interface, 1, id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        // one output: the source object only proves the client went through
+        // the manager; srv rides along for the session constructors
+        wl_resource_set_implementation(r, &captureSourceImpl, srv, nullptr);
+    }
+
+    const struct ext_output_image_capture_source_manager_v1_interface captureSourceManagerImpl = {
+        .create_source = captureSourceManagerCreateSource,
+        .destroy = resDestroy,
+    };
+
+    void captureSourceManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &ext_output_image_capture_source_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &captureSourceManagerImpl, data, nullptr);
+    }
+
+    void sendCaptureConstraints(WaylandImpl* srv, wl_resource* res, bool cursor) {
+        int w = srv->scene->outW, h = srv->scene->outH;
+
+        if (cursor) {
+            Surface* cs = srv->scene->cursorSurface;
+
+            w = cs && cs->viewW() > 0 ? cs->viewW() : 1;
+            h = cs && cs->viewH() > 0 ? cs->viewH() : 1;
+        }
+
+        ext_image_copy_capture_session_v1_send_buffer_size(res, (u32)w, (u32)h);
+        ext_image_copy_capture_session_v1_send_shm_format(res, WL_SHM_FORMAT_XRGB8888);
+        ext_image_copy_capture_session_v1_send_done(res);
+    }
+
+    void captureFrameDrop(CaptureFrame* f) {
+        if (f->bufferDestroyArmed) {
+            wl_list_remove(&f->bufferDestroy.listener.link);
+            f->bufferDestroyArmed = false;
+        }
+
+        f->buffer = nullptr;
+    }
+
+    void captureFrameResourceDestroyed(wl_resource* res) {
+        auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
+
+        if (f->session) {
+            f->session->frame = nullptr;
+        }
+
+        captureFrameDrop(f);
+        f->srv->alloc->release(f);
+    }
+
+    void captureBufferDestroyed(wl_listener* l, void*) {
+        CaptureFrame* f = ((CaptureBufferDestroyListener*)l)->frame;
+
+        f->buffer = nullptr;
+        f->bufferDestroyArmed = false;
+        wl_list_remove(&f->bufferDestroy.listener.link);
+    }
+
+    void captureFrameAttachBuffer(wl_client*, wl_resource* res, wl_resource* buffer) {
+        auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
+
+        if (f->captured) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED, "the frame was already captured");
+
+            return;
+        }
+
+        captureFrameDrop(f);
+        f->buffer = buffer;
+        f->bufferDestroy.listener.notify = captureBufferDestroyed;
+        f->bufferDestroy.frame = f;
+        wl_resource_add_destroy_listener(buffer, &f->bufferDestroy.listener);
+        f->bufferDestroyArmed = true;
+    }
+
+    void captureFrameDamageBuffer(wl_client*, wl_resource* res, i32 x, i32 y, i32 w, i32 h) {
+        auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
+
+        if (f->captured) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED, "the frame was already captured");
+
+            return;
+        }
+
+        if (x < 0 || y < 0 || w <= 0 || h <= 0) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_INVALID_BUFFER_DAMAGE, "invalid buffer damage");
+
+            return;
+        }
+
+        // we always deliver full frames; damage is accepted, not tracked
+    }
+
+    void captureFrameCapture(wl_client*, wl_resource* res) {
+        auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
+
+        if (f->captured) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED, "the frame was already captured");
+
+            return;
+        }
+
+        if (!f->buffer) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_NO_BUFFER, "capture without an attached buffer");
+
+            return;
+        }
+
+        f->captured = true;
+        f->armed = true;
+        f->attempts = 0;
+        f->srv->scene->needsFrame = true;
+    }
+
+    const struct ext_image_copy_capture_frame_v1_interface captureFrameImpl = {
+        .destroy = resDestroy,
+        .attach_buffer = captureFrameAttachBuffer,
+        .damage_buffer = captureFrameDamageBuffer,
+        .capture = captureFrameCapture,
+    };
+
+    void captureSessionResourceDestroyed(wl_resource* res) {
+        auto* cs = (CaptureSession*)wl_resource_get_user_data(res);
+
+        if (cs->frame) {
+            cs->frame->session = nullptr;
+            cs->frame->armed = false;
+        }
+
+        cs->unlink();
+        cs->srv->alloc->release(cs);
+    }
+
+    void captureSessionCreateFrame(wl_client* client, wl_resource* res, u32 id) {
+        auto* cs = (CaptureSession*)wl_resource_get_user_data(res);
+
+        if (cs->frame) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_SESSION_V1_ERROR_DUPLICATE_FRAME, "the session already has a frame");
+
+            return;
+        }
+
+        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_frame_v1_interface, 1, id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        CaptureFrame* f = cs->srv->alloc->make<CaptureFrame>();
+
+        f->srv = cs->srv;
+        f->session = cs;
+        f->res = r;
+        cs->frame = f;
+        wl_resource_set_implementation(r, &captureFrameImpl, f, captureFrameResourceDestroyed);
+    }
+
+    const struct ext_image_copy_capture_session_v1_interface captureSessionImpl = {
+        .create_frame = captureSessionCreateFrame,
+        .destroy = resDestroy,
+    };
+
+    CaptureSession* makeCaptureSession(WaylandImpl* srv, wl_client* client, u32 id, bool cursor) {
+        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_session_v1_interface, 1, id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return nullptr;
+        }
+
+        CaptureSession* cs = srv->alloc->make<CaptureSession>();
+
+        cs->srv = srv;
+        cs->res = r;
+        cs->cursor = cursor;
+        srv->captureSessions.pushBack(cs);
+        wl_resource_set_implementation(r, &captureSessionImpl, cs, captureSessionResourceDestroyed);
+        sendCaptureConstraints(srv, r, cursor);
+
+        return cs;
+    }
+
+    void captureManagerCreateSession(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes, u32 options) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(sourceRes);
+
+        if (options & ~(u32)EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_OPTIONS_PAINT_CURSORS) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_ERROR_INVALID_OPTION, "unknown option flags");
+
+            return;
+        }
+
+        // cursors are composited into the scene; paint_cursors is the truth
+        // either way
+        makeCaptureSession(srv, client, id, false);
+    }
+
+    void captureCursorSessionResourceDestroyed(wl_resource* res) {
+        auto* cc = (CaptureCursorSession*)wl_resource_get_user_data(res);
+
+        removeOne(cc->srv->cursorSessions, cc);
+        cc->srv->alloc->release(cc);
+    }
+
+    void captureCursorGetSession(wl_client* client, wl_resource* res, u32 id) {
+        auto* cc = (CaptureCursorSession*)wl_resource_get_user_data(res);
+
+        if (cc->haveSession) {
+            wl_resource_post_error(res, EXT_IMAGE_COPY_CAPTURE_CURSOR_SESSION_V1_ERROR_DUPLICATE_SESSION, "the cursor session was already created");
+
+            return;
+        }
+
+        cc->haveSession = true;
+        makeCaptureSession(cc->srv, client, id, true);
+    }
+
+    const struct ext_image_copy_capture_cursor_session_v1_interface captureCursorSessionImpl = {
+        .destroy = resDestroy,
+        .get_capture_session = captureCursorGetSession,
+    };
+
+    void captureManagerCreateCursorSession(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(sourceRes);
+        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_cursor_session_v1_interface, 1, id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        (void)res;
+
+        CaptureCursorSession* cc = srv->alloc->make<CaptureCursorSession>();
+
+        cc->srv = srv;
+        cc->res = r;
+        srv->cursorSessions.pushBack(cc);
+        wl_resource_set_implementation(r, &captureCursorSessionImpl, cc, captureCursorSessionResourceDestroyed);
+    }
+
+    const struct ext_image_copy_capture_manager_v1_interface captureManagerImpl = {
+        .create_session = captureManagerCreateSession,
+        .create_pointer_cursor_session = captureManagerCreateCursorSession,
+        .destroy = resDestroy,
+    };
+
+    void captureManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &ext_image_copy_capture_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &captureManagerImpl, data, nullptr);
+    }
+
+    void captureSendReady(CaptureFrame& f, u32 w, u32 h) {
+        u64 t = nowNs();
+        u64 sec = t / 1000000000ull;
+
+        ext_image_copy_capture_frame_v1_send_transform(f.res, WL_OUTPUT_TRANSFORM_NORMAL);
+        ext_image_copy_capture_frame_v1_send_damage(f.res, 0, 0, (i32)w, (i32)h);
+        ext_image_copy_capture_frame_v1_send_presentation_time(
+            f.res, (u32)(sec >> 32), (u32)sec, (u32)(t % 1000000000ull));
+        ext_image_copy_capture_frame_v1_send_ready(f.res);
+    }
+
+    void captureFail(CaptureFrame& f, u32 reason) {
+        f.armed = false;
+        ext_image_copy_capture_frame_v1_send_failed(f.res, reason);
+    }
+
+    void fulfillCapture(WaylandImpl* srv, CaptureSession& cs, CaptureFrame& f) {
+        if (!f.buffer) {
+            // the attached buffer died before the capture could happen
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+            return;
+        }
+
+        wl_shm_buffer* shm = wl_shm_buffer_get(f.buffer);
+        u32 wantW = cs.cursor ? 0 : (u32)srv->scene->outW;
+        u32 wantH = cs.cursor ? 0 : (u32)srv->scene->outH;
+        Surface* cur = srv->scene->cursorSurface;
+
+        if (cs.cursor) {
+            wantW = cur && cur->viewW() > 0 ? (u32)cur->viewW() : 1;
+            wantH = cur && cur->viewH() > 0 ? (u32)cur->viewH() : 1;
+        }
+
+        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 ||
+            (u32)wl_shm_buffer_get_width(shm) != wantW ||
+            (u32)wl_shm_buffer_get_height(shm) != wantH ||
+            (u32)wl_shm_buffer_get_stride(shm) < wantW * 4) {
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS);
+
+            return;
+        }
+
+        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+
+        if (cs.cursor) {
+            auto* cs2 = (SurfaceImpl*)cur;
+
+            if (!cs2 || cs2->pixels.length() < (size_t)wantW * wantH * 4) {
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+                return;
+            }
+
+            wl_shm_buffer_begin_access(shm);
+
+            auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+
+            for (u32 y = 0; y < wantH; y++) {
+                memcpy(dst + y * stride, cs2->pixels.data() + (size_t)y * wantW * 4, (size_t)wantW * 4);
+            }
+
+            wl_shm_buffer_end_access(shm);
+            f.armed = false;
+            captureSendReady(f, wantW, wantH);
+
+            return;
+        }
+
+        FrameCapture* cap = srv->composer->frameCapture;
+
+        if (!cap) {
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+            return;
+        }
+
+        wl_shm_buffer_begin_access(shm);
+
+        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride);
+
+        wl_shm_buffer_end_access(shm);
+
+        if (ok) {
+            f.armed = false;
+            captureSendReady(f, wantW, wantH);
+        } else if (++f.attempts >= 3) {
+            // stays armed once or twice while a direct-scanout frame forces
+            // composition; three misses means it is not coming
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+        } else {
+            srv->scene->needsFrame = true;
+        }
     }
 
     // ---- wp-content-type ----
@@ -9532,6 +9955,8 @@ void WaylandImpl::createGlobals() {
     global(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
     global(display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
     global(display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
+    global(display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
+    global(display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
@@ -9730,6 +10155,33 @@ void WaylandImpl::onListen(void* arg) {
             scene->needsFrame = true;
         }
     });
+
+    forEach<CaptureSession>(captureSessions, [&](CaptureSession& cs) {
+        if (cs.frame && cs.frame->armed) {
+            fulfillCapture(this, cs, *cs.frame);
+        }
+    });
+
+    for (CaptureCursorSession* cc : cursorSessions) {
+        int x = (int)seat.curX, y = (int)seat.curY;
+
+        if (!cc->entered) {
+            cc->entered = true;
+            ext_image_copy_capture_cursor_session_v1_send_enter(cc->res);
+        }
+
+        if (x != cc->lastX || y != cc->lastY) {
+            cc->lastX = x;
+            cc->lastY = y;
+            ext_image_copy_capture_cursor_session_v1_send_position(cc->res, x, y);
+        }
+
+        if (scene->cursorHotX != cc->lastHotX || scene->cursorHotY != cc->lastHotY) {
+            cc->lastHotX = scene->cursorHotX;
+            cc->lastHotY = scene->cursorHotY;
+            ext_image_copy_capture_cursor_session_v1_send_hotspot(cc->res, cc->lastHotX, cc->lastHotY);
+        }
+    }
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& value) {
         auto* ti = (ToplevelImpl*)&value;

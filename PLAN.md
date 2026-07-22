@@ -31,7 +31,7 @@
 - [x] ~~wp-commit-timing v1~~ done (target time rides the fifo queue entries; held entries keep the frame clock alive)
 
 ### Этап D — захват экрана
-- [ ] ext-image-capture-source + ext-image-copy-capture v1
+- [x] ~~ext-image-capture-source + ext-image-copy-capture v1~~ done (shm output sessions via the renderer readback; cursor sessions deliver the client cursor surface; dmabuf tranche later)
 - [ ] zwlr-screencopy v3 (compat)
 
 ### Этап E — клипборд

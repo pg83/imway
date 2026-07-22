@@ -24,6 +24,7 @@
 #include "osd.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
+#include "frame_capture.h"
 #include "render_filter.h"
 #include "settings.h"
 #include "small_obj_allocator.h"
@@ -219,7 +220,7 @@ namespace {
         void onListen(void*) override;
     };
 
-    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public Listener {
+    struct RendererImpl: public Renderer, public InputSink, public IconResolver, public Listener, public FrameCapture {
         struct ev_loop* loop = nullptr;
         stl::ObjPool* pool = nullptr;
         Scene* scene = nullptr;
@@ -496,6 +497,7 @@ namespace {
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
+        bool captureFrame(unsigned char* dst, size_t stride) override;
         u64 colorIntermediateBytes() override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
@@ -610,6 +612,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     drmFd = vk.drmFd;
     comp.iconResolver = this;
     comp.frameListeners.pushFront((Listener*)this);
+    comp.frameCapture = (FrameCapture*)this;
     comp.inputSinks.pushFront((InputSink*)this);
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
@@ -4484,6 +4487,55 @@ bool RendererImpl::screenshot(StringView path) {
 
 u64 RendererImpl::colorIntermediateBytes() {
     return 0;
+}
+
+// the copy-capture path: same readback as screenshot, but into caller
+// memory as XRGB8888 rows. A direct-scanout frame has no composed image to
+// read: arm composition for the next frame and report "not this one"
+bool RendererImpl::captureFrame(unsigned char* dst, size_t stride) {
+    if (lastFrameDirect) {
+        forceComposition = true;
+        scene->needsFrame = true;
+
+        return false;
+    }
+
+    if (!haveFrame) {
+        return false;
+    }
+
+    finishGpuFrame(true);
+
+    if (!readbackLastFrame()) {
+        return false;
+    }
+
+    // composition was only forced for this capture; give scanout back
+    // unless the interactive screenshot still needs it
+    if (!shotRequested) {
+        forceComposition = false;
+    }
+
+    auto* px = (const unsigned char*)readbackMap;
+
+    for (int y = 0; y < height; y++) {
+        const unsigned char* src = px + (size_t)y * width * 4;
+        unsigned char* out = dst + (size_t)y * stride;
+
+        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            const u32* p = (const u32*)src;
+            u32* o = (u32*)out;
+
+            for (int x = 0; x < width; x++) {
+                o[x] = ((((p[x] >> 22) & 0xffu)) << 16) | ((((p[x] >> 12) & 0xffu)) << 8) |
+                       ((p[x] >> 2) & 0xffu) | 0xff000000u;
+            }
+        } else {
+            memcpy(out, src, (size_t)width * 4);
+        }
+    }
+
+    return true;
 }
 
 // one-pixel eyedropper: reuse the screenshot readback of the last frame,

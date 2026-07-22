@@ -15,6 +15,7 @@ struct DBusConn;
 struct IconPool;
 struct IconResolver;
 struct Filter;
+struct FrameCapture;
 struct Wifi;
 struct IconStore;
 struct Keyboard;
@@ -61,6 +62,8 @@ struct Composer {
     StatusNotifier* statusNotifier = nullptr;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
+    // the renderer registers itself here; wayland's copy-capture reads it
+    FrameCapture* frameCapture = nullptr;
     Mixer* mixer = nullptr;
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;
