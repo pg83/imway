@@ -5991,10 +5991,20 @@ namespace {
         auto* im = (InputMethod*)wl_resource_get_user_data(res);
         WaylandImpl* srv = im->srv;
 
-        // the grab may outlive us on a disconnect: sever its back-pointer so
-        // its own destroy handler sees a dead input method
+        // the grab and popup may outlive us on a disconnect: sever their
+        // back-pointers so their own destroy handlers see a dead input method
         if (im->grab) {
             wl_resource_set_user_data(im->grab, nullptr);
+        }
+
+        if (im->popupRes) {
+            // the popup destroy handler would otherwise clear the scene
+            // placement; do it here since we sever its link to us
+            if (srv->scene->imePopup == (Surface*)im->popupSurface) {
+                srv->scene->imePopup = nullptr;
+            }
+
+            wl_resource_set_user_data(im->popupRes, nullptr);
         }
 
         if (srv->seat.inputMethod == im) {
