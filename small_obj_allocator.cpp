@@ -2,6 +2,7 @@
 #include "util.h"
 
 #include <stdlib.h>
+#include <string.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
@@ -58,11 +59,28 @@ void* SmallObjAllocatorImpl::allocate(size_t len) {
 
     live++;
 
-    return fl->allocate();
+    void* ptr = fl->allocate();
+
+#ifdef IMWAY_FILL_GARBAGE
+    // hand out poison so a field the constructor forgets to set reads as an
+    // obvious sentinel (0xAB...), not a plausible zero
+    memset(ptr, 0xAB, kMinSize << classFor(len));
+#endif
+
+    return ptr;
 }
 
 void SmallObjAllocatorImpl::deallocate(void* ptr, size_t len) {
     live--;
+
+#ifdef IMWAY_FILL_GARBAGE
+    // poison the freed slot before it re-enters the free list, so a
+    // use-after-free read returns 0xDE... instead of stale-but-valid data.
+    // FreeList::release rewrites the first bytes with its next pointer; the
+    // rest of the object stays poisoned
+    memset(ptr, 0xDE, kMinSize << classFor(len));
+#endif
+
     classes[classFor(len)]->release(ptr);
 }
 

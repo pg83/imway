@@ -1,5 +1,7 @@
 #include "main_composer.h"
 
+#include "crash_trace.h"
+
 #include "composer.h"
 #include "control.h"
 #include "dbus_conn.h"
@@ -64,6 +66,8 @@ namespace {
 }
 
 int mainComposer(int argc, char** argv) {
+    installCrashTracer();
+
     // stdin/stdout initially name the same full-duplex supervisor socket.
     // Protocol traffic stays on stdin; ordinary output belongs in the IX log.
     if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {

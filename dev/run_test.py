@@ -105,7 +105,7 @@ def collect(rt: str, shell_out: str) -> dict[str, str]:
     arts: dict[str, str] = {}
     if shell_out.strip():
         arts["scenario.out"] = shell_out[-4000:]
-    for fn, n in (("imway.log", 40), ("client.log", 20),
+    for fn, n in (("imway.log", 200), ("client.log", 20),
                   ("final-state.txt", 40), ("gdb-stacks.txt", 120)):
         text = tail(os.path.join(rt, fn), n)
         if text.strip():

@@ -164,14 +164,29 @@ imgui = library(
 
 imway_sources = build.glob("$(S)/*.cpp")
 
+imway_deps = [
+    imgui, protocols,
+    wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
+    png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse,
+]
+
 imway = program(
     name="imway",
     srcs=imway_sources,
-    deps=[
-        imgui, protocols,
-        wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
-        png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse,
-    ],
+    deps=imway_deps,
+)
+
+# same compositor, rebuilt with the small-object allocator poisoning memory
+# on alloc/free (IMWAY_FILL_GARBAGE) and frame pointers kept so the crash
+# handler can walk the stack. The integration tests run against this binary
+# so a use-after-free or use-before-init surfaces as a crash with a stack
+imway_test = program(
+    name="imway_test",
+    output="$(B)/imway_test",
+    srcs=imway_sources,
+    cppflags=["-DIMWAY_FILL_GARBAGE=1"],
+    cflags=["-fno-omit-frame-pointer"],
+    deps=imway_deps,
 )
 
 
@@ -292,18 +307,18 @@ for scenario in scenarios:
 
     client_name = name.replace("headless_", "client_", 1)
     client_target = client_by_name.get(client_name)
-    # every client binary is a dependency: the harness (lib.sh, *_case.sh,
-    # matrix_run.sh) resolves shared helpers — the input-health probe, client_ok,
-    # the render-matrix client — by path next to the scenario's own client, so
-    # the whole tests/ dir must be restored, not just this test's client
-    node_deps = [imway, *tests]
+    # tests run against imway_test (the garbage-filled build) and depend on
+    # every client binary, since lib.sh and the *_case.sh/matrix_run.sh helpers
+    # resolve shared clients (the input-health probe, client_ok, the
+    # render-matrix client) by path next to the scenario's own client
+    node_deps = [imway_test, *tests]
 
     for run_index in range(runs):
         out = f"$(B)/test-results/{name}.run{run_index}.json"
         cmd = [
             "python3", "$(S)/dev/run_test.py",
             "--scenario", scenario,
-            "--imway", "$(B)/imway",
+            "--imway", "$(B)/imway_test",
             "--out", out,
             "--run", str(run_index),
         ]
