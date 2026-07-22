@@ -3,7 +3,6 @@
 #include "listener.h"
 #include "wifi.h"
 #include "wifi_nm.h"
-#include "small_obj_allocator.h"
 #include "dbus_conn.h"
 #include "scene.h"
 #include "util.h"
@@ -75,9 +74,14 @@ namespace {
         Vector<WifiNetwork*> nets;      // committed, ui-facing
         Vector<Known*> known;           // committed
 
-        // contexts riding un-notified pending calls; the destructor is the
-        // only place they can still be reclaimed
-        Vector<Ctx*> inflight;
+        // refresh epochs: everything a sequence builds — networks, known
+        // connections, reply contexts, path scratch — lives in `building`;
+        // the commit swaps it into `committed`, whose objects back nets and
+        // known between refreshes, and the old generation dies whole. A
+        // teardown mid-flight just deletes both arenas: in-flight reply
+        // contexts die with their epoch, no tracking needed
+        ObjPool* building = nullptr;
+        ObjPool* committed = nullptr;
 
         bool wantPass = false;
         StringBuilder passAp;
@@ -112,7 +116,6 @@ namespace {
         void cancelPassphrase() override;
 
         WifiNetwork* byPath(StringView path);
-        void inflightDrop(Ctx* cx);
         Known* knownBuilt(StringView ssid);
         Known* knownForSsid(StringView ssid);
         void notify();
@@ -235,30 +238,8 @@ NmWifi::NmWifi(Composer& comp, DBusConnection* c)
 }
 
 NmWifi::~NmWifi() noexcept {
-    for (Ctx* cx : inflight) {
-        c->alloc->release(cx);
-    }
-
-    for (WifiNetwork* n : nets) {
-        c->alloc->release(n);
-    }
-
-    for (Known* k : known) {
-        c->alloc->release(k);
-    }
-
-    resetScratch();
-}
-
-void NmWifi::inflightDrop(Ctx* cx) {
-    for (size_t i = 0; i < inflight.length(); i++) {
-        if (inflight[i] == cx) {
-            inflight.mut(i) = inflight.back();
-            inflight.popBack();
-
-            return;
-        }
-    }
+    delete building;
+    delete committed;
 }
 
 WifiState NmWifi::state() {
@@ -358,17 +339,7 @@ void NmWifi::resetScratch() {
     curDevice.reset();
     curState = 0;
     curActive.reset();
-
-    for (WifiNetwork* n : netBuild) {
-        c->alloc->release(n);
-    }
-
     netBuild.clear();
-
-    for (Known* k : knownBuild) {
-        c->alloc->release(k);
-    }
-
     knownBuild.clear();
     devPending = 0;
     knownPending = 0;
@@ -383,6 +354,7 @@ void NmWifi::refresh() {
     }
 
     inFlight = true;
+    building = ObjPool::fromMemoryRaw();
     resetScratch();
 
     // step 1: the device list
@@ -403,7 +375,7 @@ void NmWifi::devicesReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = c->alloc->make<StringBuilder>();
+                StringBuilder* p = building->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 paths.pushBack(p);
@@ -421,21 +393,14 @@ void NmWifi::devicesReply(DBusMessage* reply) {
     devPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = c->alloc->make<Ctx>();
+        Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
 
-        if (getAll(sv(*p), kDev, deviceCb, cx)) {
-            inflight.pushBack(cx);
-        } else {
-            c->alloc->release(cx);
+        if (!getAll(sv(*p), kDev, deviceCb, cx)) {
             deviceItemDone();
         }
-    }
-
-    for (StringBuilder* p : paths) {
-        c->alloc->release(p);
     }
 }
 
@@ -469,11 +434,8 @@ void NmWifi::onDevicesDone() {
     if (curDevice.empty()) {
         st = WifiState::unavailable;
 
-        // commit an empty list
-        for (WifiNetwork* n : nets) {
-            c->alloc->release(n);
-        }
-
+        // no wifi device: drop the list; the objects idle in `committed`
+        // (known still lives there) until the next full commit
         nets.clear();
         notify();
         finishSeq();
@@ -507,7 +469,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = c->alloc->make<StringBuilder>();
+                StringBuilder* p = building->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 paths.pushBack(p);
@@ -525,7 +487,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
     knownPending = (int)paths.length();
 
     for (StringBuilder* p : paths) {
-        Ctx* cx = c->alloc->make<Ctx>();
+        Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
@@ -533,16 +495,9 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
         Buffer pb(sv(*p));
         DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
 
-        if (call(msg, connectionCb, cx)) {
-            inflight.pushBack(cx);
-        } else {
-            c->alloc->release(cx);
+        if (!call(msg, connectionCb, cx)) {
             knownItemDone();
         }
-    }
-
-    for (StringBuilder* p : paths) {
-        c->alloc->release(p);
     }
 }
 
@@ -583,15 +538,13 @@ void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
 
                         dbus_message_iter_recurse(&kv, &var);
 
-                        Known* k = c->alloc->make<Known>();
+                        Known* k = building->make<Known>();
 
                         readSsid(&var, k->ssid);
                         k->path.reset();
                         k->path << sv(cx->path);
 
-                        if (k->ssid.empty()) {
-                            c->alloc->release(k);
-                        } else {
+                        if (!k->ssid.empty()) {
                             knownBuild.pushBack(k);
                         }
                     }
@@ -633,7 +586,7 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
             dbus_message_iter_recurse(var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = c->alloc->make<StringBuilder>();
+                StringBuilder* p = building->make<StringBuilder>();
 
                 *p << iterStr(&arr);
                 aps.pushBack(p);
@@ -651,21 +604,14 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
     apPending = (int)aps.length();
 
     for (StringBuilder* p : aps) {
-        Ctx* cx = c->alloc->make<Ctx>();
+        Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
         cx->path << sv(*p);
 
-        if (getAll(sv(*p), kAp, apCb, cx)) {
-            inflight.pushBack(cx);
-        } else {
-            c->alloc->release(cx);
+        if (!getAll(sv(*p), kAp, apCb, cx)) {
             apItemDone();
         }
-    }
-
-    for (StringBuilder* p : aps) {
-        c->alloc->release(p);
     }
 }
 
@@ -686,7 +632,7 @@ void NmWifi::apReply(Ctx* cx, DBusMessage* reply) {
     });
 
     if (!ssid.empty()) {
-        WifiNetwork* n = c->alloc->make<WifiNetwork>();
+        WifiNetwork* n = building->make<WifiNetwork>();
 
         n->name.reset();
         n->name << sv(ssid);
@@ -710,11 +656,7 @@ void NmWifi::apItemDone() {
 }
 
 void NmWifi::onApsDone() {
-    // commit the freshly built lists, then notify
-    for (WifiNetwork* n : nets) {
-        c->alloc->release(n);
-    }
-
+    // commit: the freshly built generation replaces the previous one whole
     nets.clear();
 
     for (WifiNetwork* n : netBuild) {
@@ -722,11 +664,6 @@ void NmWifi::onApsDone() {
     }
 
     netBuild.clear();
-
-    for (Known* k : known) {
-        c->alloc->release(k);
-    }
-
     known.clear();
 
     for (Known* k : knownBuild) {
@@ -734,11 +671,17 @@ void NmWifi::onApsDone() {
     }
 
     knownBuild.clear();
+    delete committed;
+    committed = building;
+    building = nullptr;
     notify();
     finishSeq();
 }
 
 void NmWifi::finishSeq() {
+    // an aborted sequence still holds its epoch; a committed one left nullptr
+    delete building;
+    building = nullptr;
     inFlight = false;
 
     if (again) {
@@ -966,9 +909,6 @@ namespace {
         if (reply) {
             dbus_message_unref(reply);
         }
-
-        w->inflightDrop(cx);
-        w->c->alloc->release(cx);
     }
 
     void connectionsCb(DBusPendingCall* pc, void* data) {
@@ -992,9 +932,6 @@ namespace {
         if (reply) {
             dbus_message_unref(reply);
         }
-
-        w->inflightDrop(cx);
-        w->c->alloc->release(cx);
     }
 
     void wirelessCb(DBusPendingCall* pc, void* data) {
@@ -1018,9 +955,6 @@ namespace {
         if (reply) {
             dbus_message_unref(reply);
         }
-
-        w->inflightDrop(cx);
-        w->c->alloc->release(cx);
     }
 
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data) {

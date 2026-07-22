@@ -3,7 +3,6 @@
 #include "listener.h"
 #include "wifi.h"
 #include "wifi_iwd.h"
-#include "small_obj_allocator.h"
 #include "dbus_conn.h"
 #include "scene.h"
 #include "util.h"
@@ -44,8 +43,12 @@ namespace {
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
+        // two independent generations, each rebuilt wholesale by its reply:
+        // the arena swap is the commit, the old generation dies whole
+        ObjPool* infoGen = nullptr;
         Vector<NetInfo*> infos;   // rebuilt on every GetManagedObjects
 
+        ObjPool* netGen = nullptr;
         Vector<WifiNetwork*> nets; // the ordered, ui-facing list
 
         bool refreshInFlight = false;
@@ -125,13 +128,8 @@ IwdWifi::IwdWifi(Composer& comp, DBusConnection* c)
 }
 
 IwdWifi::~IwdWifi() noexcept {
-    for (NetInfo* n : infos) {
-        c->alloc->release(n);
-    }
-
-    for (WifiNetwork* n : nets) {
-        c->alloc->release(n);
-    }
+    delete infoGen;
+    delete netGen;
 }
 
 WifiState IwdWifi::state() {
@@ -198,11 +196,9 @@ void IwdWifi::refresh() {
 }
 
 void IwdWifi::managedReply(DBusMessage* reply) {
-    for (NetInfo* n : infos) {
-        this->c->alloc->release(n);
-    }
-
     infos.clear();
+    delete infoGen;
+    infoGen = ObjPool::fromMemoryRaw();
     stationPath.reset();
 
     WifiState newState = WifiState::unavailable;
@@ -251,7 +247,7 @@ void IwdWifi::managedReply(DBusMessage* reply) {
                 }
 
                 if (isNetwork) {
-                    net = this->c->alloc->make<NetInfo>();
+                    net = infoGen->make<NetInfo>();
                     net->path.reset();
                     net->path << StringView(path);
                     net->name.reset();
@@ -324,10 +320,8 @@ void IwdWifi::managedReply(DBusMessage* reply) {
     st = newState;
 
     if (stationPath.empty()) {
-        for (WifiNetwork* n : nets) {
-            c->alloc->release(n);
-        }
-
+        // no station: drop the list; the objects idle in netGen until the
+        // next ordered reply swaps the generation
         nets.clear();
         notify();
 
@@ -350,11 +344,9 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 }
 
 void IwdWifi::orderedReply(DBusMessage* reply) {
-    for (WifiNetwork* n : nets) {
-        c->alloc->release(n);
-    }
-
     nets.clear();
+    delete netGen;
+    netGen = ObjPool::fromMemoryRaw();
 
     DBusMessageIter it;
 
@@ -380,7 +372,7 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
             }
 
             if (NetInfo* info = infoByPath(StringView(path))) {
-                WifiNetwork* n = this->c->alloc->make<WifiNetwork>();
+                WifiNetwork* n = netGen->make<WifiNetwork>();
 
                 n->name.reset();
                 n->name << sv(info->name);
