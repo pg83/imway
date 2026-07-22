@@ -19,6 +19,7 @@
 #include "session.h"
 #include "small_obj_allocator.h"
 #include "util.h"
+#include "weak_ptr.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -749,8 +750,11 @@ namespace {
         bool actionsSet = false;
         bool usedForDrag = false;
         bool usedForSelection = false;
+        // anchor for the weak ring: back-pointers into this source (its
+        // toplevel-drag) null themselves when it dies
+        Weak<DataSource> weak;
         // xdg-toplevel-drag object bound to this source, if any
-        struct ToplevelDragBox* toplevelDrag = nullptr;
+        Weak<struct ToplevelDragBox> toplevelDrag;
     };
 
     // xdg-toplevel-drag: a data-source drag that also moves a toplevel. The
@@ -759,7 +763,10 @@ namespace {
     struct ToplevelDragBox {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        DataSource* source = nullptr;
+        // anchor for the weak ring: the source's back-pointer to us nulls
+        // itself when we die
+        Weak<ToplevelDragBox> weak;
+        Weak<DataSource> source;
         ToplevelImpl* attached = nullptr;
         int offX = 0, offY = 0;
     };
@@ -4049,12 +4056,11 @@ namespace {
             offer.source = nullptr;
         });
 
-        // an xdg-toplevel-drag object outlives its data source if the client
-        // destroys them out of order; drop the back-reference so its own
-        // teardown does not write through a freed source
-        if (src->toplevelDrag) {
-            src->toplevelDrag->source = nullptr;
-        }
+        // an xdg-toplevel-drag object may outlive its data source if the
+        // client destroys them out of order; the weak ring nulls the drag's
+        // back-reference to us so its teardown cannot write through a freed
+        // source
+        src->weak.invalidate();
 
         // the orphans keep a valid ring among themselves for their unlinks
         src->offers.clear();
@@ -4379,6 +4385,7 @@ namespace {
         DataSource* src = srv->alloc->make<DataSource>();
 
         src->srv = srv;
+        src->weak.anchor(src);
         src->res = s;
         src->primary = false;
         src->mimes.clear();
@@ -4438,7 +4445,7 @@ namespace {
         auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
 
         // destroy is only legal after the underlying drag ended
-        if (box->source && box->srv->seat.dragSource == box->source) {
+        if (box->source && box->srv->seat.dragSource == box->source.get()) {
             wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_ONGOING_DRAG,
                                    "the drag has not ended");
 
@@ -4464,7 +4471,7 @@ namespace {
         box->offY = yOff;
 
         // if the drag is already live, start tracking now
-        if (box->source && box->srv->seat.dragSource == box->source) {
+        if (box->source && box->srv->seat.dragSource == box->source.get()) {
             box->srv->seat.syncToplevelDrag();
         }
     }
@@ -4477,9 +4484,8 @@ namespace {
     void toplevelDragResourceDestroyed(wl_resource* res) {
         auto* box = (ToplevelDragBox*)wl_resource_get_user_data(res);
 
-        if (box->source) {
-            box->source->toplevelDrag = nullptr;
-        }
+        // the weak ring nulls the source's back-pointer to us
+        box->weak.invalidate();
 
         if (box->srv->scene->dragToplevel == box->attached) {
             box->srv->scene->dragToplevel = nullptr;
@@ -4513,8 +4519,9 @@ namespace {
 
         box->srv = srv;
         box->res = r;
-        box->source = src;
-        src->toplevelDrag = box;
+        box->weak.anchor(box);
+        box->source.bind(src->weak);
+        src->toplevelDrag.bind(box->weak);
         wl_resource_set_implementation(r, &toplevelDragImpl, box, toplevelDragResourceDestroyed);
     }
 
@@ -4574,6 +4581,7 @@ namespace {
         DataSource* src = srv->alloc->make<DataSource>();
 
         src->srv = srv;
+        src->weak.anchor(src);
         src->res = s;
         src->primary = true;
         src->mimes.clear();
@@ -5642,6 +5650,7 @@ namespace {
         DataSource* src = srv->alloc->make<DataSource>();
 
         src->srv = srv;
+        src->weak.anchor(src);
         src->res = r;
         src->dc = true;
         wl_resource_set_implementation(r, &dcSourceImpl, src, dcSourceResourceDestroyed);
@@ -10743,7 +10752,7 @@ void SeatState::sourceGone(DataSource* src) {
 }
 
 void SeatState::syncToplevelDrag() {
-    ToplevelDragBox* box = dragSource ? dragSource->toplevelDrag : nullptr;
+    ToplevelDragBox* box = dragSource ? dragSource->toplevelDrag.get() : nullptr;
 
     if (box && box->attached && box->attached->mapped) {
         srv->scene->dragToplevel = box->attached;
