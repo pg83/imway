@@ -72,6 +72,7 @@ server_protocol_paths = [
     # only for the interface symbol the capture-source XML references;
     # the foreign-toplevel globals themselves are deliberately not created
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
+    "staging/ext-data-control/ext-data-control-v1",
 ]
 
 
@@ -192,6 +193,7 @@ client_protocol_paths = [
     "staging/ext-image-capture-source/ext-image-capture-source-v1",
     "staging/ext-image-copy-capture/ext-image-copy-capture-v1",
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
+    "staging/ext-data-control/ext-data-control-v1",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [

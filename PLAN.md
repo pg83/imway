@@ -35,7 +35,7 @@
 - [x] ~~zwlr-screencopy v3 (compat)~~ done (vendored XML in dev/protocols; same FrameCapture readback, region-capable)
 
 ### Этап E — клипборд
-- [ ] ext-data-control v1
+- [x] ~~ext-data-control v1~~ done (dc flag on the shared DataSource/Offer; focus-free set_selection, loopback offer, primary too)
 
 ### Этап F — текст/IME
 - [ ] text-input-v3

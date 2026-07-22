@@ -39,6 +39,7 @@
 #include <ext-image-capture-source-v1-server-protocol.h>
 #include <ext-image-copy-capture-v1-server-protocol.h>
 #include <wlr-screencopy-unstable-v1-server-protocol.h>
+#include <ext-data-control-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -580,6 +581,9 @@ namespace {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         bool primary = false;
+        // the resource is an ext-data-control source: send/cancelled route
+        // through the dc interface, everything else is shared
+        bool dc = false;
         Vector<Mime> mimes;
         IntrusiveList offers;
         u32 dndActions = 0;
@@ -594,6 +598,8 @@ namespace {
         WaylandImpl* srv = nullptr;
         DataSource* source = nullptr;
         wl_resource* res = nullptr;
+        // the offer resource speaks ext-data-control
+        bool dc = false;
         bool dnd = false;
         bool accepted = false;
         bool finished = false;
@@ -607,6 +613,7 @@ namespace {
         Vector<wl_resource*> pointers;
         Vector<wl_resource*> dataDevices;
         Vector<wl_resource*> primaryDevices;
+        Vector<wl_resource*> dcDevices;
         Vector<wl_resource*> relPointers;
         Vector<wl_resource*> swipes;
         Vector<wl_resource*> pinches;
@@ -673,6 +680,8 @@ namespace {
         void forgetCursorShapeDevice(wl_resource* device);
         bool validSelectionSerial(wl_client* client, u32 serial);
         void setSelection(wl_client* client, u32 serial, DataSource* src, bool primary);
+        void applySelection(DataSource* src, bool primary);
+        void sendDcSelections();
         void sendSelections(wl_client* client);
         void sourceGone(DataSource* src);
         void startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon);
@@ -3876,7 +3885,9 @@ namespace {
         }
 
         if (src) {
-            if (src->primary) {
+            if (src->dc) {
+                ext_data_control_source_v1_send_send(src->res, mime, fd);
+            } else if (src->primary) {
                 zwp_primary_selection_source_v1_send_send(src->res, mime, fd);
             } else {
                 wl_data_source_send_send(src->res, mime, fd);
@@ -3981,6 +3992,8 @@ namespace {
         .receive = offerReceive,
         .destroy = resDestroy,
     };
+
+    wl_resource* makeDcOffer(wl_resource* device, DataSource* src);
 
     wl_resource* makeOffer(wl_resource* device, DataSource* src, bool dnd) {
         wl_client* client = wl_resource_get_client(device);
@@ -4886,6 +4899,171 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &commitTimingManagerImpl, data, nullptr);
+    }
+
+    // ---- ext-data-control ----
+    // a privileged clipboard manager: no focus, no serials. Sources, offers
+    // and the loopback share the DataSource/Offer machinery via the dc flag
+    void dcOfferReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
+        Offer* offer = (Offer*)wl_resource_get_user_data(res);
+        DataSource* src = offer ? offer->source : nullptr;
+
+        if (src && src->dc) {
+            ext_data_control_source_v1_send_send(src->res, mime, fd);
+        }
+
+        close(fd);
+    }
+
+    const struct ext_data_control_offer_v1_interface dcOfferImpl = {
+        .receive = dcOfferReceive,
+        .destroy = resDestroy,
+    };
+
+    wl_resource* makeDcOffer(wl_resource* device, DataSource* src) {
+        wl_client* client = wl_resource_get_client(device);
+        u32 version = (u32)wl_resource_get_version(device);
+        wl_resource* resource = wl_resource_create(client, &ext_data_control_offer_v1_interface, (int)version, 0);
+
+        if (!resource) {
+            return nullptr;
+        }
+
+        Offer* offer = src->srv->alloc->make<Offer>();
+
+        offer->srv = src->srv;
+        offer->source = src;
+        offer->dc = true;
+        src->offers.pushFront(offer);
+        offer->res = resource;
+        wl_resource_set_implementation(resource, &dcOfferImpl, offer, offerResourceDestroyed);
+        ext_data_control_device_v1_send_data_offer(device, resource);
+
+        for (const Mime& m : src->mimes) {
+            ext_data_control_offer_v1_send_offer(resource, m.s);
+        }
+
+        return resource;
+    }
+
+    void dcSourceOffer(wl_client*, wl_resource* res, const char* mime) {
+        DataSource* src = (DataSource*)wl_resource_get_user_data(res);
+        StringView mv(mime);
+
+        if (!src || src->usedForSelection || src->mimes.length() >= 64 ||
+            mv.length() >= sizeof(Mime::s)) {
+            return;
+        }
+
+        Mime m;
+
+        memcpy(m.s, mv.data(), mv.length());
+        m.s[mv.length()] = 0;
+        src->mimes.pushBack(m);
+    }
+
+    const struct ext_data_control_source_v1_interface dcSourceImpl = {
+        .offer = dcSourceOffer,
+        .destroy = resDestroy,
+    };
+
+    void dcSourceResourceDestroyed(wl_resource* res) {
+        if (DataSource* src = (DataSource*)wl_resource_get_user_data(res)) {
+            src->srv->seat.sourceGone(src);
+            src->srv->alloc->release(src);
+        }
+    }
+
+    void dcManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &ext_data_control_source_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        DataSource* src = srv->alloc->make<DataSource>();
+
+        src->srv = srv;
+        src->res = r;
+        src->dc = true;
+        wl_resource_set_implementation(r, &dcSourceImpl, src, dcSourceResourceDestroyed);
+    }
+
+    void dcDeviceSetSelection(wl_client*, wl_resource* res, wl_resource* sourceRes, bool primary) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        DataSource* src = sourceRes ? (DataSource*)wl_resource_get_user_data(sourceRes) : nullptr;
+
+        if (src) {
+            if (src->usedForSelection || src->usedForDrag) {
+                wl_resource_post_error(res, EXT_DATA_CONTROL_DEVICE_V1_ERROR_USED_SOURCE, "source already used");
+
+                return;
+            }
+
+            src->usedForSelection = true;
+        }
+
+        srv->seat.applySelection(src, primary);
+    }
+
+    void dcDeviceSetSelectionReq(wl_client* c, wl_resource* res, wl_resource* sourceRes) {
+        dcDeviceSetSelection(c, res, sourceRes, false);
+    }
+
+    void dcDeviceSetPrimaryReq(wl_client* c, wl_resource* res, wl_resource* sourceRes) {
+        dcDeviceSetSelection(c, res, sourceRes, true);
+    }
+
+    void dcDeviceResourceDestroyed(wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        removeOne(srv->seat.dcDevices, res);
+    }
+
+    const struct ext_data_control_device_v1_interface dcDeviceImpl = {
+        .set_selection = dcDeviceSetSelectionReq,
+        .destroy = resDestroy,
+        .set_primary_selection = dcDeviceSetPrimaryReq,
+    };
+
+    void dcManagerGetDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* r = wl_resource_create(client, &ext_data_control_device_v1_interface, wl_resource_get_version(res), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(r, &dcDeviceImpl, srv, dcDeviceResourceDestroyed);
+        srv->seat.dcDevices.pushBack(r);
+        // seed the new device with the current selections
+        ext_data_control_device_v1_send_selection(
+            r, srv->seat.clipboard ? makeDcOffer(r, srv->seat.clipboard) : nullptr);
+        ext_data_control_device_v1_send_primary_selection(
+            r, srv->seat.primarySel ? makeDcOffer(r, srv->seat.primarySel) : nullptr);
+    }
+
+    const struct ext_data_control_manager_v1_interface dcManagerImpl = {
+        .create_data_source = dcManagerCreateSource,
+        .get_data_device = dcManagerGetDevice,
+        .destroy = resDestroy,
+    };
+
+    void dcManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &ext_data_control_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &dcManagerImpl, data, nullptr);
     }
 
     // ---- ext-image-capture-source + ext-image-copy-capture ----
@@ -8610,6 +8788,10 @@ void SeatState::setSelection(wl_client* client, u32 serial, DataSource* src, boo
         return;
     }
 
+    applySelection(src, primary);
+}
+
+void SeatState::applySelection(DataSource* src, bool primary) {
     DataSource*& slot = primary ? primarySel : clipboard;
 
     if (slot == src) {
@@ -8617,7 +8799,9 @@ void SeatState::setSelection(wl_client* client, u32 serial, DataSource* src, boo
     }
 
     if (slot) {
-        if (primary) {
+        if (slot->dc) {
+            ext_data_control_source_v1_send_cancelled(slot->res);
+        } else if (primary) {
             zwp_primary_selection_source_v1_send_cancelled(slot->res);
         } else {
             wl_data_source_send_cancelled(slot->res);
@@ -8628,6 +8812,18 @@ void SeatState::setSelection(wl_client* client, u32 serial, DataSource* src, boo
 
     if (wl_resource* target = kbTargetRes()) {
         sendSelections(wl_resource_get_client(target));
+    }
+
+    sendDcSelections();
+}
+
+// data-control devices see every selection change, focus-free
+void SeatState::sendDcSelections() {
+    for (wl_resource* d : dcDevices) {
+        ext_data_control_device_v1_send_selection(
+            d, clipboard ? makeDcOffer(d, clipboard) : nullptr);
+        ext_data_control_device_v1_send_primary_selection(
+            d, primarySel ? makeDcOffer(d, primarySel) : nullptr);
     }
 }
 
@@ -8684,6 +8880,8 @@ void SeatState::sourceGone(DataSource* src) {
         if (wl_resource* target = kbTargetRes()) {
             sendSelections(wl_resource_get_client(target));
         }
+
+        sendDcSelections();
     }
 }
 
@@ -10172,6 +10370,7 @@ void WaylandImpl::createGlobals() {
     global(display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
     global(display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
     global(display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
+    global(display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
