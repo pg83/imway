@@ -44,6 +44,7 @@
 #include <input-method-unstable-v2-server-protocol.h>
 #include <virtual-keyboard-unstable-v1-server-protocol.h>
 #include <security-context-v1-server-protocol.h>
+#include <tablet-v2-server-protocol.h>
 
 #include <sys/socket.h>
 #include <xdg-dialog-v1-server-protocol.h>
@@ -501,6 +502,18 @@ namespace {
         bool engineSet = false;
     };
 
+    // tablet-v2: one client's view of the (single virtual) tablet + tool.
+    // Created with the tablet_seat; tool events route to the client whose
+    // surface is under the tool, mirroring the pointer
+    struct TabletDev {
+        WaylandImpl* srv = nullptr;
+        wl_resource* seat = nullptr;
+        wl_resource* tablet = nullptr;
+        wl_resource* tool = nullptr;
+        Surface* focus = nullptr;
+        bool down = false;
+    };
+
     struct CaptureCursorSession {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
@@ -826,6 +839,7 @@ namespace {
         void updateModifiers();
         void layoutIndicator();
         void updateShortcutInhibit();
+        void handleTablet(const TabletToolEvent& ev);
 
         void focusToplevel(Toplevel* t);
         void toplevelUnmapped(Toplevel* t);
@@ -924,6 +938,7 @@ namespace {
         IntrusiveList captureSessions;
         Vector<CaptureCursorSession*> cursorSessions;
         Vector<SandboxTag*> sandboxed;
+        Vector<TabletDev*> tablets;
         Vector<WlrCopyFrame*> screencopyFrames;
         ::Output* output = nullptr;
         double dpmsSec = 0;
@@ -946,6 +961,7 @@ namespace {
         bool button(u32 btn, bool pressed) override;
         bool key(u32 code, bool pressed) override;
         bool scroll(const ScrollEvent& ev) override;
+        bool tabletTool(const TabletToolEvent& ev) override;
         bool swipeBegin(u32 fingers) override;
         bool swipeUpdate(double dx, double dy) override;
         bool swipeEnd(bool cancelled) override;
@@ -5562,6 +5578,121 @@ namespace {
         wl_resource_set_implementation(res, &vkManagerImpl, data, nullptr);
     }
 
+    // ---- tablet-v2 ----
+    void tabletToolDestroy(wl_client*, wl_resource* res) {
+        wl_resource_destroy(res);
+    }
+
+    void tabletToolSetCursor(wl_client*, wl_resource*, u32, wl_resource*, i32, i32) {
+        // the tool's cursor surface: our chrome owns the cursor, ignore
+    }
+
+    const struct zwp_tablet_tool_v2_interface tabletToolImpl = {
+        .set_cursor = tabletToolSetCursor,
+        .destroy = tabletToolDestroy,
+    };
+
+    const struct zwp_tablet_v2_interface tabletImpl = {
+        .destroy = resDestroy,
+    };
+
+    // tool and tablet resources die in client-teardown order, not role
+    // order: whoever goes first nulls the shared pointers so the survivor
+    // never dereferences a freed peer
+    void tabletChildDestroyed(wl_resource* res) {
+        auto* dev = (TabletDev*)wl_resource_get_user_data(res);
+
+        if (!dev) {
+            return;
+        }
+
+        if (dev->tool == res) {
+            dev->tool = nullptr;
+            dev->focus = nullptr;
+            dev->down = false;
+        }
+
+        if (dev->tablet == res) {
+            dev->tablet = nullptr;
+        }
+    }
+
+    void tabletDevDestroyed(wl_resource* res) {
+        auto* dev = (TabletDev*)wl_resource_get_user_data(res);
+
+        if (dev->tool) {
+            wl_resource_set_user_data(dev->tool, nullptr);
+        }
+
+        if (dev->tablet) {
+            wl_resource_set_user_data(dev->tablet, nullptr);
+        }
+
+        removeOne(dev->srv->tablets, dev);
+        dev->srv->alloc->release(dev);
+    }
+
+    const struct zwp_tablet_seat_v2_interface tabletSeatImpl = {
+        .destroy = resDestroy,
+    };
+
+    void tabletManagerGetSeat(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        u32 version = wl_resource_get_version(res);
+        wl_resource* seat = wl_resource_create(client, &zwp_tablet_seat_v2_interface, version, id);
+
+        if (!seat) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        TabletDev* dev = srv->alloc->make<TabletDev>();
+
+        dev->srv = srv;
+        dev->seat = seat;
+        srv->tablets.pushBack(dev);
+        wl_resource_set_implementation(seat, &tabletSeatImpl, dev, tabletDevDestroyed);
+
+        // advertise a single virtual tablet and pen tool to this seat
+        dev->tablet = wl_resource_create(client, &zwp_tablet_v2_interface, version, 0);
+        wl_resource_set_implementation(dev->tablet, &tabletImpl, dev, tabletChildDestroyed);
+        zwp_tablet_seat_v2_send_tablet_added(seat, dev->tablet);
+        zwp_tablet_v2_send_name(dev->tablet, "imway virtual tablet");
+        zwp_tablet_v2_send_id(dev->tablet, 0, 0);
+        zwp_tablet_v2_send_done(dev->tablet);
+
+        dev->tool = wl_resource_create(client, &zwp_tablet_tool_v2_interface, version, 0);
+        wl_resource_set_implementation(dev->tool, &tabletToolImpl, dev, tabletChildDestroyed);
+        zwp_tablet_seat_v2_send_tool_added(seat, dev->tool);
+        zwp_tablet_tool_v2_send_type(dev->tool, ZWP_TABLET_TOOL_V2_TYPE_PEN);
+        zwp_tablet_tool_v2_send_hardware_serial(dev->tool, 0, 0);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_PRESSURE);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_DISTANCE);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_TILT);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_ROTATION);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_SLIDER);
+        zwp_tablet_tool_v2_send_capability(dev->tool, ZWP_TABLET_TOOL_V2_CAPABILITY_WHEEL);
+        zwp_tablet_tool_v2_send_done(dev->tool);
+    }
+
+    const struct zwp_tablet_manager_v2_interface tabletManagerImpl = {
+        .get_tablet_seat = tabletManagerGetSeat,
+        .destroy = resDestroy,
+    };
+
+    void tabletManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwp_tablet_manager_v2_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &tabletManagerImpl, data, nullptr);
+    }
+
     // ---- security-context-v1 ----
     static bool privilegedGlobal(const char* name) {
         // protocols a sandbox must not reach: clipboard/screen capture and
@@ -8821,6 +8952,109 @@ void SeatState::handleRelMotion(double dx, double dy, double dxRaw, double dyRaw
     }
 }
 
+void SeatState::handleTablet(const TabletToolEvent& ev) {
+    srv->scene->needsFrame = true;
+
+    // the tool addresses the surface under the pointer, like a pen on a
+    // display tablet; move the pointer position to the tool too so picking
+    // and the pointer focus agree
+    curX = ev.x;
+    curY = ev.y;
+
+    Surface* target = pickPointerTarget();
+
+    for (TabletDev* dev : srv->tablets) {
+        if (!dev->tool || !dev->tablet) {
+            continue;
+        }
+
+        if (!target || wl_resource_get_client(dev->seat) != wl_resource_get_client(resOf(target))) {
+            // left every surface of this client: proximity_out if entered
+            if (dev->focus && (!target || wl_resource_get_client(dev->seat) != wl_resource_get_client(resOf(dev->focus)))) {
+                if (dev->down) {
+                    zwp_tablet_tool_v2_send_up(dev->tool);
+                    dev->down = false;
+                }
+
+                zwp_tablet_tool_v2_send_proximity_out(dev->tool);
+                zwp_tablet_tool_v2_send_frame(dev->tool, nowMsec());
+                dev->focus = nullptr;
+            }
+
+            continue;
+        }
+
+        double sx = ev.x - target->imgX;
+        double sy = ev.y - target->imgY;
+
+        if (dev->focus != target) {
+            if (dev->focus) {
+                zwp_tablet_tool_v2_send_proximity_out(dev->tool);
+            }
+
+            u32 serial = wl_display_next_serial(srv->display);
+
+            zwp_tablet_tool_v2_send_proximity_in(dev->tool, serial, dev->tablet, resOf(target));
+            dev->focus = target;
+            dev->down = false;
+        }
+
+        if (ev.phase == TabletPhase::proximityOut) {
+            if (dev->down) {
+                zwp_tablet_tool_v2_send_up(dev->tool);
+                dev->down = false;
+            }
+
+            zwp_tablet_tool_v2_send_proximity_out(dev->tool);
+            zwp_tablet_tool_v2_send_frame(dev->tool, nowMsec());
+            dev->focus = nullptr;
+
+            continue;
+        }
+
+        zwp_tablet_tool_v2_send_motion(dev->tool, wl_fixed_from_double(sx), wl_fixed_from_double(sy));
+
+        if (ev.pressureSet) {
+            zwp_tablet_tool_v2_send_pressure(dev->tool, (u32)(ev.pressure * 65535.0));
+        }
+
+        if (ev.distanceSet) {
+            zwp_tablet_tool_v2_send_distance(dev->tool, (u32)(ev.distance * 65535.0));
+        }
+
+        if (ev.tiltSet) {
+            zwp_tablet_tool_v2_send_tilt(dev->tool, wl_fixed_from_double(ev.tiltX), wl_fixed_from_double(ev.tiltY));
+        }
+
+        if (ev.rotationSet) {
+            zwp_tablet_tool_v2_send_rotation(dev->tool, wl_fixed_from_double(ev.rotation));
+        }
+
+        if (ev.sliderSet) {
+            zwp_tablet_tool_v2_send_slider(dev->tool, (i32)(ev.slider * 65535.0));
+        }
+
+        if (ev.wheelSet) {
+            zwp_tablet_tool_v2_send_wheel(dev->tool, wl_fixed_from_double(ev.wheelDegrees), ev.wheelClicks);
+        }
+
+        if (ev.phase == TabletPhase::tipDown && !dev->down) {
+            zwp_tablet_tool_v2_send_down(dev->tool, wl_display_next_serial(srv->display));
+            dev->down = true;
+        } else if (ev.phase == TabletPhase::tipUp && dev->down) {
+            zwp_tablet_tool_v2_send_up(dev->tool);
+            dev->down = false;
+        }
+
+        if (ev.buttonSet) {
+            zwp_tablet_tool_v2_send_button(dev->tool, wl_display_next_serial(srv->display), ev.button,
+                ev.buttonPressed ? ZWP_TABLET_TOOL_V2_BUTTON_STATE_PRESSED : ZWP_TABLET_TOOL_V2_BUTTON_STATE_RELEASED);
+        }
+
+        zwp_tablet_tool_v2_send_frame(dev->tool, nowMsec());
+    }
+}
+
 void SeatState::handleSwipeBegin(u32 fingers) {
     if (!ptrFocus) {
         return;
@@ -10084,6 +10318,22 @@ void SeatState::surfaceGone(Surface* s) {
     if (ptrFocus == s) {
         ptrFocus = nullptr;
         buttonsDown = 0;
+    }
+
+    for (TabletDev* dev : srv->tablets) {
+        if (dev->focus == s) {
+            if (dev->tool) {
+                if (dev->down) {
+                    zwp_tablet_tool_v2_send_up(dev->tool);
+                }
+
+                zwp_tablet_tool_v2_send_proximity_out(dev->tool);
+                zwp_tablet_tool_v2_send_frame(dev->tool, nowMsec());
+            }
+
+            dev->down = false;
+            dev->focus = nullptr;
+        }
     }
 
     // the wl_surface can die before its xdg_popup role: popupGone then sees
@@ -11387,6 +11637,7 @@ void WaylandImpl::createGlobals() {
     global(display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
     global(display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
     global(display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
+    global(display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
@@ -11730,6 +11981,13 @@ bool WaylandImpl::key(u32 code, bool pressed) {
 bool WaylandImpl::scroll(const ScrollEvent& ev) {
     activity();
     seat.handleScroll(ev);
+
+    return true;
+}
+
+bool WaylandImpl::tabletTool(const TabletToolEvent& ev) {
+    activity();
+    seat.handleTablet(ev);
 
     return true;
 }

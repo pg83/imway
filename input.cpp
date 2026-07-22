@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "input.h"
 #include "pooled_ev.h"
+#include "scene.h"
 #include "pooled_fd.h"
 #include "input_sink.h"
 #include "listener.h"
@@ -267,6 +268,58 @@ LibinputSource::~LibinputSource() noexcept {
     }
 }
 
+namespace {
+    u32 tabletToolWireType(libinput_tablet_tool* tool) {
+        switch (libinput_tablet_tool_get_type(tool)) {
+            case LIBINPUT_TABLET_TOOL_TYPE_ERASER: return 0x141;
+            case LIBINPUT_TABLET_TOOL_TYPE_BRUSH: return 0x142;
+            case LIBINPUT_TABLET_TOOL_TYPE_PENCIL: return 0x143;
+            case LIBINPUT_TABLET_TOOL_TYPE_AIRBRUSH: return 0x144;
+            case LIBINPUT_TABLET_TOOL_TYPE_MOUSE: return 0x146;
+            case LIBINPUT_TABLET_TOOL_TYPE_LENS: return 0x147;
+            default: return 0x140; // pen
+        }
+    }
+
+    void tabletToolAxes(libinput_event_tablet_tool* t, TabletToolEvent& tev, int outW, int outH) {
+        tev.toolType = tabletToolWireType(libinput_event_tablet_tool_get_tool(t));
+        tev.x = libinput_event_tablet_tool_get_x_transformed(t, (u32)outW);
+        tev.y = libinput_event_tablet_tool_get_y_transformed(t, (u32)outH);
+
+        if (libinput_event_tablet_tool_pressure_has_changed(t)) {
+            tev.pressureSet = true;
+            tev.pressure = libinput_event_tablet_tool_get_pressure(t);
+        }
+
+        if (libinput_event_tablet_tool_distance_has_changed(t)) {
+            tev.distanceSet = true;
+            tev.distance = libinput_event_tablet_tool_get_distance(t);
+        }
+
+        if (libinput_event_tablet_tool_tilt_x_has_changed(t) || libinput_event_tablet_tool_tilt_y_has_changed(t)) {
+            tev.tiltSet = true;
+            tev.tiltX = libinput_event_tablet_tool_get_tilt_x(t);
+            tev.tiltY = libinput_event_tablet_tool_get_tilt_y(t);
+        }
+
+        if (libinput_event_tablet_tool_rotation_has_changed(t)) {
+            tev.rotationSet = true;
+            tev.rotation = libinput_event_tablet_tool_get_rotation(t);
+        }
+
+        if (libinput_event_tablet_tool_slider_has_changed(t)) {
+            tev.sliderSet = true;
+            tev.slider = libinput_event_tablet_tool_get_slider_position(t);
+        }
+
+        if (libinput_event_tablet_tool_wheel_has_changed(t)) {
+            tev.wheelSet = true;
+            tev.wheelDegrees = libinput_event_tablet_tool_get_wheel_delta(t);
+            tev.wheelClicks = (i32)libinput_event_tablet_tool_get_wheel_delta_discrete(t);
+        }
+    }
+}
+
 void LibinputSource::dispatch() {
     libinput_dispatch(li);
 
@@ -328,6 +381,49 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
                 comp->entry->holdBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
                 break;
+            case LIBINPUT_EVENT_TABLET_TOOL_PROXIMITY: {
+                auto* t = libinput_event_get_tablet_tool_event(ev);
+                TabletToolEvent tev;
+
+                tev.phase = libinput_event_tablet_tool_get_proximity_state(t) == LIBINPUT_TABLET_TOOL_PROXIMITY_STATE_IN
+                    ? TabletPhase::proximityIn : TabletPhase::proximityOut;
+                tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
+                comp->entry->tabletTool(tev);
+
+                break;
+            }
+            case LIBINPUT_EVENT_TABLET_TOOL_TIP: {
+                auto* t = libinput_event_get_tablet_tool_event(ev);
+                TabletToolEvent tev;
+
+                tev.phase = libinput_event_tablet_tool_get_tip_state(t) == LIBINPUT_TABLET_TOOL_TIP_DOWN
+                    ? TabletPhase::tipDown : TabletPhase::tipUp;
+                tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
+                comp->entry->tabletTool(tev);
+
+                break;
+            }
+            case LIBINPUT_EVENT_TABLET_TOOL_AXIS: {
+                auto* t = libinput_event_get_tablet_tool_event(ev);
+                TabletToolEvent tev;
+
+                tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
+                comp->entry->tabletTool(tev);
+
+                break;
+            }
+            case LIBINPUT_EVENT_TABLET_TOOL_BUTTON: {
+                auto* t = libinput_event_get_tablet_tool_event(ev);
+                TabletToolEvent tev;
+
+                tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
+                tev.buttonSet = true;
+                tev.button = libinput_event_tablet_tool_get_button(t);
+                tev.buttonPressed = libinput_event_tablet_tool_get_button_state(t) == LIBINPUT_BUTTON_STATE_PRESSED;
+                comp->entry->tabletTool(tev);
+
+                break;
+            }
             case LIBINPUT_EVENT_GESTURE_HOLD_END:
                 comp->entry->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
                 break;

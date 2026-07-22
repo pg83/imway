@@ -259,6 +259,33 @@ void ControlImpl::handleLine(StringView cmd) {
         ev.value120Y = (i32)ev.dy * 120;
         ev.source = ScrollSource::wheel;
         comp->entry->scroll(ev);
+    } else if (verb == "tablet"_sv) {
+        // tablet <proximity_in|proximity_out|down|up|motion> <x> <y> [pressure]
+        StringView phase, rest, xs, ys, ps;
+
+        args.split(' ', phase, rest);
+
+        TabletToolEvent ev;
+
+        ev.phase = phase == "proximity_in"_sv ? TabletPhase::proximityIn :
+                   phase == "proximity_out"_sv ? TabletPhase::proximityOut :
+                   phase == "down"_sv ? TabletPhase::tipDown :
+                   phase == "up"_sv ? TabletPhase::tipUp : TabletPhase::motion;
+
+        if (rest.split(' ', xs, ys)) {
+            StringView yy;
+
+            ys.split(' ', yy, ps);
+            ev.x = parseFloat(xs);
+            ev.y = parseFloat(yy.empty() ? ys : yy);
+
+            if (!ps.empty()) {
+                ev.pressureSet = true;
+                ev.pressure = parseFloat(ps);
+            }
+        }
+
+        comp->entry->tabletTool(ev);
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         sysO << "imway: screenshot by command: "_sv << args << endL;

@@ -42,6 +42,10 @@
 - [x] ~~input-method-v2 + virtual-keyboard-v1~~ done (single IM per seat, commit/preedit/delete bridge, keyboard grab, vkbd injection)
 - [x] ~~input-method popup~~ done (popup surface as a scene role at the cursor rectangle, screen-positioned relative to the app window)
 
+### Сверх плана
+- [x] ~~security-context-v1~~ done (sandbox tagging + privileged-global filter)
+- [x] ~~tablet-v2~~ done (virtual pen: manager/seat/tool, proximity/down/motion/axes frames to the surface under the tool; the pen drives the shared cursor; libinput tablet-tool events wired; `tablet` control command + reg test)
+
 ### Этап G — полнота цвета
 - [x] ~~mastering primaries/luminance, tf_power, named primaries~~ done (tf_power wired through the iccGamma path; mastering stored as target-volume metadata; 6 extra named primaries; get_output honest for the single output)
 

@@ -21,6 +21,7 @@ namespace {
         bool button(u32 evdevBtn, bool pressed) override;
         bool key(u32 evdevCode, bool pressed) override;
         bool scroll(const ScrollEvent& ev) override;
+        bool tabletTool(const TabletToolEvent& ev) override;
         bool swipeBegin(u32 fingers) override;
         bool swipeUpdate(double dx, double dy) override;
         bool swipeEnd(bool cancelled) override;
@@ -70,6 +71,16 @@ bool InputRouter::key(u32 evdevCode, bool pressed) {
 bool InputRouter::scroll(const ScrollEvent& ev) {
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->scroll(ev)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool InputRouter::tabletTool(const TabletToolEvent& ev) {
+    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
+        if (sink->tabletTool(ev)) {
             return true;
         }
     }

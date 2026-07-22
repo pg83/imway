@@ -463,6 +463,7 @@ namespace {
         bool button(u32 btn, bool pressed) override;
         bool key(u32 code, bool pressed) override;
         bool scroll(const ScrollEvent& ev) override;
+        bool tabletTool(const TabletToolEvent& ev) override;
         bool swipeBegin(u32 fingers) override;
         bool swipeUpdate(double dx, double dy) override;
         bool swipeEnd(bool cancelled) override;
@@ -781,6 +782,23 @@ bool RendererImpl::scroll(const ScrollEvent& ev) {
     ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
     return lockState || scene->ptrCaptured;
+}
+
+bool RendererImpl::tabletTool(const TabletToolEvent& ev) {
+    // the pen drives the shared cursor, so hover picking follows it exactly
+    // like the mouse — one frame behind. ImGui has no stylus model beyond
+    // that: the events stay unconsumed and reach the client under the pen
+    posX = ev.x;
+    posY = ev.y;
+    clampPos();
+    scene->needsFrame = true;
+    ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
+
+    if (hwCursorReady && hwVisible) {
+        output->setCursorPos((int)posX - hwHotX, (int)posY - hwHotY, true);
+    }
+
+    return lockState != nullptr;
 }
 
 bool RendererImpl::swipeBegin(u32) {

@@ -40,11 +40,47 @@ struct ScrollEvent {
     bool stopY = false;
 };
 
+// tablet-v2: one atomic frame of a stylus/tool. Absolute x/y are in output
+// pixels; only the *Set axes carry a value this frame. A single frame may
+// combine a phase change (proximity/tip) with axis motion
+enum class TabletPhase : u8 {
+    proximityIn,
+    proximityOut,
+    tipDown,
+    tipUp,
+    motion,
+};
+
+struct TabletToolEvent {
+    TabletPhase phase = TabletPhase::motion;
+    u32 toolType = 0x140;   // wp_tablet_tool_v2 type: pen
+    double x = 0, y = 0;
+
+    bool pressureSet = false;
+    double pressure = 0;    // 0..1
+    bool distanceSet = false;
+    double distance = 0;    // 0..1
+    bool tiltSet = false;
+    double tiltX = 0, tiltY = 0;  // degrees
+    bool rotationSet = false;
+    double rotation = 0;    // degrees
+    bool sliderSet = false;
+    double slider = 0;      // -1..1
+    bool wheelSet = false;
+    double wheelDegrees = 0;
+    i32 wheelClicks = 0;
+
+    bool buttonSet = false;
+    u32 button = 0;
+    bool buttonPressed = false;
+};
+
 struct InputSink: stl::IntrusiveNode {
     virtual bool pointerMotion(PointerMotionEvent& ev) = 0;
     virtual bool button(u32 evdevBtn, bool pressed) = 0;
     virtual bool key(u32 evdevCode, bool pressed) = 0;
     virtual bool scroll(const ScrollEvent& ev) = 0;
+    virtual bool tabletTool(const TabletToolEvent& ev) = 0;
 
     virtual bool swipeBegin(u32 fingers) = 0;
     virtual bool swipeUpdate(double dx, double dy) = 0;

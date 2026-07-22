@@ -75,6 +75,7 @@ server_protocol_paths = [
     "staging/ext-data-control/ext-data-control-v1",
     "unstable/text-input/text-input-unstable-v3",
     "staging/security-context/security-context-v1",
+    "stable/tablet/tablet-v2",
 ]
 
 
@@ -200,6 +201,7 @@ client_protocol_paths = [
     "staging/ext-data-control/ext-data-control-v1",
     "unstable/text-input/text-input-unstable-v3",
     "staging/security-context/security-context-v1",
+    "stable/tablet/tablet-v2",
 ]
 
 client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [
