@@ -172,6 +172,21 @@ class BuildContext:
         self.cc = os.environ.get("CC", "cc")
         self.cxx = os.environ.get("CXX", "c++")
         self.ar = os.environ.get("AR") or shutil.which("ar") or shutil.which("llvm-ar") or "ar"
+        self.tool_paths: dict[str, str] = {}
+
+    def resolve_tool(self, name: str) -> str:
+        cached = self.tool_paths.get(name)
+        if cached is None:
+            found = shutil.which(name)
+            if found is None:
+                raise BuildError(f"command not found in PATH: {name}")
+            # realpath, not abspath: PATH entries are usually realm symlinks
+            # into /ix/store/<hash>-.../; hashing the store path makes an
+            # environment drift change the node UID instead of silently
+            # serving artifacts built by another toolchain
+            cached = os.path.realpath(found)
+            self.tool_paths[name] = cached
+        return cached
 
     def interface(self, *, cflags=(), cxxflags=(), cppflags=(), ldflags=(), enabled=True, name=None) -> Target:
         target = Target(
@@ -759,6 +774,10 @@ class BuildContext:
             if node in active:
                 raise BuildError(f"UID dependency cycle at {node.outputs}")
             active.add(node)
+            for command in node.commands:
+                head = command[0] if command else ""
+                if head and not head.startswith((S + "/", B + "/")) and not os.path.isabs(head):
+                    command[0] = self.resolve_tool(head)
             dep_uids = [calc(dep) for dep in node.deps]
             inputs = [[path, self.source_hash(path)] for path in sorted(node.source_inputs)]
             data = json.dumps(
