@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # imway-args: --hdr 203 --hdr-peak 600
+# imway-env: IMWAY_TEMPORAL_DITHER=1
 # The dither pattern must not be frozen in screen space: a static pattern
 # leaves visible fixed structure on quantized gradients. Two frames of the
 # same scene must carry different noise.

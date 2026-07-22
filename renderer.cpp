@@ -2127,8 +2127,12 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     push.row[6][1] = mapping.hdr ? 0.f : 203.f;
     push.row[6][2] = (float)((1u << ditherBits) - 1);
     // temporal dither: shift the noise pattern every frame so quantization
-    // structure does not freeze in screen space
-    push.row[6][3] = (float)(scene->framesDone % 64);
+    // structure does not freeze in screen space — on a live display only;
+    // headless output is screenshots, which must be frame-independent (the
+    // env override lets the feature's own regression test see the motion)
+    static const bool forceTemporal = getenv("IMWAY_TEMPORAL_DITHER") != nullptr;
+
+    push.row[6][3] = output->vsynced() || forceTemporal ? (float)(scene->framesDone % 64) : 0.f;
     // the roll-off knee reshapes in-range content, so it only runs when
     // something visible can actually exceed the output peak
     push.row[7][0] = sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;

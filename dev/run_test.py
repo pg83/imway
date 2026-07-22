@@ -188,6 +188,11 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         IMWAY_LOG=log,
         IMWAY_CLIENT=client,
         IMWAY_CLIENT_LOG=client_log,
+        # hermetic audio: the host's sndiod/pulseaudio must not be a hidden
+        # input of every scenario (mixer presence shifts frame counts); both
+        # point at addresses that fail fast, imway-env can override
+        AUDIODEVICE="snd@127.0.0.1,9/0",
+        PULSE_SERVER="unix:/nonexistent-imway-test",
     )
     env.update(meta["env"])
 
