@@ -4,6 +4,13 @@ import fnmatch
 import os
 
 
+flags.allow({
+    "runs": {"descr": "runs per test scenario", "default": "3"},
+    "filter": {"descr": "glob restricting which test scenarios build", "default": ""},
+    "allow_flaky": {"descr": "treat flaky tests as a warning, not a failure"},
+})
+
+
 build.cflags += ["-O2", "-g"]
 build.cxxflags += ["-std=c++23"]
 build.cppflags += ["-DGLFW_INCLUDE_NONE"]
@@ -265,7 +272,7 @@ install(imway, *tests)
 # exiting 0 so a failure does not abort the graph. One final `test` node
 # depends on every per-run node, reads all the JSONs and produces the verdict
 # that fails `./build test`. -Dfilter=GLOB restricts which scenarios build.
-runs = int(flags.runs) if flags.runs else 3
+runs = int(flags.runs)
 test_filter = flags.filter
 
 scenarios = sorted(build.glob("$(S)/dev/tests/headless_*.sh"))

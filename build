@@ -49,28 +49,71 @@ class BuildError(RuntimeError):
     pass
 
 
+class AllowSpec(Exception):
+    """Raised by Flags.allow() in --help mode to hand the declared flag
+    spec back to main() for rendering; never seen during a real build."""
+
+    def __init__(self, spec: dict[str, dict]):
+        super().__init__("flag spec")
+        self.spec = spec
+
+
 class Flags(types.ModuleType):
     """`-D` build flags, exposed to build.py as `build.flags`.
 
     An unset flag reads as the empty string, so `if f.A:` is a plain
     truthiness test with no string comparison. `-DA=B` sets A to "B",
     a bare `-DA` sets it to "yes".
+
+    `allow({name: {'descr': ..., 'default': ...}})` declares the accepted
+    flags: a `-D` outside the set is an error (an empty set forbids all -D),
+    and an unset declared flag reads as its default. Under `--help` allow()
+    instead raises AllowSpec so the flags can be listed in the help text.
     """
 
-    def __init__(self, values: dict[str, str]):
+    def __init__(self, values: dict[str, str], help_mode: bool = False):
         super().__init__("build.flags")
         object.__setattr__(self, "_values", dict(values))
+        object.__setattr__(self, "_spec", None)
+        object.__setattr__(self, "_help", help_mode)
+
+    def allow(self, spec: dict[str, dict]) -> None:
+        norm = {
+            str(name): {
+                "descr": str((meta or {}).get("descr", "")),
+                "default": (meta or {}).get("default", ""),
+            }
+            for name, meta in (spec or {}).items()
+        }
+        if object.__getattribute__(self, "_help"):
+            raise AllowSpec(norm)
+        unknown = [k for k in object.__getattribute__(self, "_values") if k not in norm]
+        if unknown:
+            allowed = ", ".join(sorted(norm)) or "(none)"
+            raise BuildError(
+                f"unknown -D flag(s): {', '.join(sorted(unknown))}; allowed: {allowed}"
+            )
+        object.__setattr__(self, "_spec", norm)
+
+    def _get(self, name: str) -> str:
+        values = object.__getattribute__(self, "_values")
+        if name in values:
+            return values[name]
+        spec = object.__getattribute__(self, "_spec")
+        if spec is not None and name in spec:
+            return spec[name]["default"]
+        return ""
 
     def __getattr__(self, name: str) -> str:
         if name.startswith("__"):
             raise AttributeError(name)
-        return object.__getattribute__(self, "_values").get(name, "")
+        return self._get(name)
 
     def __getitem__(self, name: str) -> str:
-        return self._values.get(name, "")
+        return self._get(name)
 
     def __contains__(self, name: str) -> bool:
-        return name in self._values
+        return name in object.__getattribute__(self, "_values")
 
 
 def parse_defines(items: Iterable[str]) -> dict[str, str]:
@@ -1374,8 +1417,12 @@ class Executor:
         return node.outputs[0] if node.outputs else "<no output>"
 
 
-def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="build")
+def make_parser() -> argparse.ArgumentParser:
+    # add_help=False so we can load build.py and list its -D flags before
+    # printing help, instead of argparse exiting immediately
+    parser = argparse.ArgumentParser(prog="build", add_help=False)
+    parser.add_argument("-h", "--help", action="store_true",
+                        help="show this help (including the build's -D flags)")
     parser.add_argument("targets", nargs="*")
     parser.add_argument("-B", "--build-dir", default=os.environ.get("B", ".build"))
     parser.add_argument("-j", "--jobs", type=int, default=os.cpu_count() or 4)
@@ -1394,14 +1441,49 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--list", action="store_true")
     parser.add_argument("-G", "--graph", action="store_true")
     parser.add_argument("--build-file", help=argparse.SUPPRESS)
-    return parser.parse_args(argv)
+    return parser
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    return make_parser().parse_args(argv)
+
+
+def flag_help(build_file: Path, source_root: Path, build_dir: str) -> str:
+    # load build.py in help mode: allow() raises AllowSpec with the declared
+    # flags. A build that never calls allow() has no declared -D flags.
+    flags = Flags({}, help_mode=True)
+    context = BuildContext(source_root, source_root / build_dir, flags)
+    try:
+        context.load(build_file)
+    except AllowSpec as spec:
+        rows = spec.spec
+    except Exception:
+        return ""  # build.py failed before declaring flags
+    else:
+        rows = {}
+    if not rows:
+        return "\nBuild flags (-D):\n  (this build declares none)\n"
+    width = max(len(name) for name in rows)
+    out = ["\nBuild flags (-D KEY[=VALUE]):"]
+    for name in sorted(rows):
+        meta = rows[name]
+        descr = meta["descr"] or ""
+        default = meta["default"]
+        suffix = f" (default: {default})" if default != "" else ""
+        out.append(f"  {name:<{width}}  {descr}{suffix}")
+    return "\n".join(out) + "\n"
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = parse_args(sys.argv[1:] if argv is None else argv)
+    parser = make_parser()
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
     build_file = (Path(args.build_file).resolve() if args.build_file
                   else Path(__file__).resolve().with_name("build.py"))
     source_root = build_file.parent
+    if args.help:
+        sys.stdout.write(parser.format_help())
+        sys.stdout.write(flag_help(build_file, source_root, args.build_dir))
+        return 0
     flags = Flags(parse_defines(args.define))
     context = BuildContext(source_root, source_root / args.build_dir, flags)
     try:
