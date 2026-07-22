@@ -38,6 +38,7 @@
 #include <commit-timing-v1-server-protocol.h>
 #include <ext-image-capture-source-v1-server-protocol.h>
 #include <ext-image-copy-capture-v1-server-protocol.h>
+#include <wlr-screencopy-unstable-v1-server-protocol.h>
 #include <xdg-dialog-v1-server-protocol.h>
 #include <pointer-warp-v1-server-protocol.h>
 #include <xdg-system-bell-v1-server-protocol.h>
@@ -395,6 +396,27 @@ namespace {
         bool bufferDestroyArmed = false;
         bool captured = false;
         bool armed = false;
+        int attempts = 0;
+    };
+
+    // zwlr-screencopy compat: one-shot frames over the same readback
+    struct WlrCopyFrame;
+
+    struct WlrCopyBufferDestroyListener {
+        wl_listener listener{};
+        WlrCopyFrame* frame = nullptr;
+    };
+
+    struct WlrCopyFrame {
+        WaylandImpl* srv = nullptr;
+        wl_resource* res = nullptr;
+        wl_resource* buffer = nullptr;
+        WlrCopyBufferDestroyListener bufferDestroy;
+        bool bufferDestroyArmed = false;
+        int x = 0, y = 0, w = 0, h = 0;
+        bool used = false;
+        bool armed = false;
+        bool withDamage = false;
         int attempts = 0;
     };
 
@@ -804,6 +826,7 @@ namespace {
         IntrusiveList idleInhibitors;
         IntrusiveList captureSessions;
         Vector<CaptureCursorSession*> cursorSessions;
+        Vector<WlrCopyFrame*> screencopyFrames;
         ::Output* output = nullptr;
         double dpmsSec = 0;
         bool dpmsOff = false;
@@ -5228,7 +5251,8 @@ namespace {
 
         wl_shm_buffer_begin_access(shm);
 
-        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride);
+        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride,
+                                    0, 0, (int)wantW, (int)wantH);
 
         wl_shm_buffer_end_access(shm);
 
@@ -5242,6 +5266,196 @@ namespace {
         } else {
             srv->scene->needsFrame = true;
         }
+    }
+
+    // ---- zwlr-screencopy (compat) ----
+    void wlrCopyBufferDestroyed(wl_listener* l, void*) {
+        WlrCopyFrame* f = ((WlrCopyBufferDestroyListener*)l)->frame;
+
+        f->buffer = nullptr;
+        f->bufferDestroyArmed = false;
+        wl_list_remove(&f->bufferDestroy.listener.link);
+    }
+
+    void wlrCopyDrop(WlrCopyFrame* f) {
+        if (f->bufferDestroyArmed) {
+            wl_list_remove(&f->bufferDestroy.listener.link);
+            f->bufferDestroyArmed = false;
+        }
+
+        f->buffer = nullptr;
+    }
+
+    void wlrCopyFrameResourceDestroyed(wl_resource* res) {
+        auto* f = (WlrCopyFrame*)wl_resource_get_user_data(res);
+
+        wlrCopyDrop(f);
+        removeOne(f->srv->screencopyFrames, f);
+        f->srv->alloc->release(f);
+    }
+
+    void wlrCopyStart(WlrCopyFrame* f, wl_resource* res, wl_resource* bufferRes, bool withDamage) {
+        if (f->used) {
+            wl_resource_post_error(res, ZWLR_SCREENCOPY_FRAME_V1_ERROR_ALREADY_USED, "the frame was already used");
+
+            return;
+        }
+
+        wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
+
+        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 ||
+            wl_shm_buffer_get_width(shm) != f->w || wl_shm_buffer_get_height(shm) != f->h ||
+            wl_shm_buffer_get_stride(shm) < f->w * 4) {
+            wl_resource_post_error(res, ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "buffer does not match the announced constraints");
+
+            return;
+        }
+
+        f->used = true;
+        f->withDamage = withDamage;
+        f->buffer = bufferRes;
+        f->bufferDestroy.listener.notify = wlrCopyBufferDestroyed;
+        f->bufferDestroy.frame = f;
+        wl_resource_add_destroy_listener(bufferRes, &f->bufferDestroy.listener);
+        f->bufferDestroyArmed = true;
+        f->armed = true;
+        f->attempts = 0;
+        f->srv->scene->needsFrame = true;
+    }
+
+    void wlrCopyCopy(wl_client*, wl_resource* res, wl_resource* buffer) {
+        wlrCopyStart((WlrCopyFrame*)wl_resource_get_user_data(res), res, buffer, false);
+    }
+
+    void wlrCopyCopyWithDamage(wl_client*, wl_resource* res, wl_resource* buffer) {
+        wlrCopyStart((WlrCopyFrame*)wl_resource_get_user_data(res), res, buffer, true);
+    }
+
+    const struct zwlr_screencopy_frame_v1_interface wlrCopyFrameImpl = {
+        .copy = wlrCopyCopy,
+        .destroy = resDestroy,
+        .copy_with_damage = wlrCopyCopyWithDamage,
+    };
+
+    void wlrCopyCapture(WaylandImpl* srv, wl_client* client, wl_resource* managerRes, u32 id,
+                        int x, int y, int w, int h) {
+        wl_resource* r = wl_resource_create(client, &zwlr_screencopy_frame_v1_interface,
+                                            wl_resource_get_version(managerRes), id);
+
+        if (!r) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        // clamp the region to the output; a degenerate region still yields a
+        // 1x1 frame rather than a protocol wedge
+        RectI rect{x, y, w, h};
+
+        clipRect(rect, srv->scene->outW, srv->scene->outH);
+
+        if (rect.empty()) {
+            rect = {0, 0, 1, 1};
+        }
+
+        WlrCopyFrame* f = srv->alloc->make<WlrCopyFrame>();
+
+        f->srv = srv;
+        f->res = r;
+        f->x = rect.x;
+        f->y = rect.y;
+        f->w = rect.w;
+        f->h = rect.h;
+        srv->screencopyFrames.pushBack(f);
+        wl_resource_set_implementation(r, &wlrCopyFrameImpl, f, wlrCopyFrameResourceDestroyed);
+
+        zwlr_screencopy_frame_v1_send_buffer(r, WL_SHM_FORMAT_XRGB8888, (u32)rect.w, (u32)rect.h, (u32)rect.w * 4);
+
+        if (wl_resource_get_version(r) >= ZWLR_SCREENCOPY_FRAME_V1_BUFFER_DONE_SINCE_VERSION) {
+            zwlr_screencopy_frame_v1_send_buffer_done(r);
+        }
+    }
+
+    void wlrCopyCaptureOutput(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        wlrCopyCapture(srv, client, res, id, 0, 0, srv->scene->outW, srv->scene->outH);
+    }
+
+    void wlrCopyCaptureOutputRegion(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*,
+                                    i32 x, i32 y, i32 w, i32 h) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        wlrCopyCapture(srv, client, res, id, x, y, w, h);
+    }
+
+    const struct zwlr_screencopy_manager_v1_interface wlrCopyManagerImpl = {
+        .capture_output = wlrCopyCaptureOutput,
+        .capture_output_region = wlrCopyCaptureOutputRegion,
+        .destroy = resDestroy,
+    };
+
+    void wlrCopyManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &zwlr_screencopy_manager_v1_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &wlrCopyManagerImpl, data, nullptr);
+    }
+
+    void fulfillWlrCopy(WaylandImpl* srv, WlrCopyFrame& f) {
+        if (!f.buffer) {
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
+
+            return;
+        }
+
+        FrameCapture* cap = srv->composer->frameCapture;
+        wl_shm_buffer* shm = wl_shm_buffer_get(f.buffer);
+
+        if (!cap || !shm) {
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
+
+            return;
+        }
+
+        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+
+        wl_shm_buffer_begin_access(shm);
+
+        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride,
+                                    f.x, f.y, f.w, f.h);
+
+        wl_shm_buffer_end_access(shm);
+
+        if (!ok) {
+            if (++f.attempts >= 3) {
+                f.armed = false;
+                zwlr_screencopy_frame_v1_send_failed(f.res);
+            } else {
+                srv->scene->needsFrame = true;
+            }
+
+            return;
+        }
+
+        f.armed = false;
+        zwlr_screencopy_frame_v1_send_flags(f.res, 0);
+
+        u64 t = nowNs();
+        u64 sec = t / 1000000000ull;
+
+        if (f.withDamage) {
+            zwlr_screencopy_frame_v1_send_damage(f.res, 0, 0, (u32)f.w, (u32)f.h);
+        }
+
+        zwlr_screencopy_frame_v1_send_ready(f.res, (u32)(sec >> 32), (u32)sec, (u32)(t % 1000000000ull));
     }
 
     // ---- wp-content-type ----
@@ -9957,6 +10171,7 @@ void WaylandImpl::createGlobals() {
     global(display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
     global(display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
     global(display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
+    global(display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
     global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
     global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
     global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
@@ -10161,6 +10376,12 @@ void WaylandImpl::onListen(void* arg) {
             fulfillCapture(this, cs, *cs.frame);
         }
     });
+
+    for (WlrCopyFrame* f : screencopyFrames) {
+        if (f->armed) {
+            fulfillWlrCopy(this, *f);
+        }
+    }
 
     for (CaptureCursorSession* cc : cursorSessions) {
         int x = (int)seat.curX, y = (int)seat.curY;

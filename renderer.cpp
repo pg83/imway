@@ -497,7 +497,7 @@ namespace {
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
-        bool captureFrame(unsigned char* dst, size_t stride) override;
+        bool captureFrame(unsigned char* dst, size_t stride, int x, int y, int w, int h) override;
         u64 colorIntermediateBytes() override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
@@ -4492,7 +4492,7 @@ u64 RendererImpl::colorIntermediateBytes() {
 // the copy-capture path: same readback as screenshot, but into caller
 // memory as XRGB8888 rows. A direct-scanout frame has no composed image to
 // read: arm composition for the next frame and report "not this one"
-bool RendererImpl::captureFrame(unsigned char* dst, size_t stride) {
+bool RendererImpl::captureFrame(unsigned char* dst, size_t stride, int rx, int ry, int rw, int rh) {
     if (lastFrameDirect) {
         forceComposition = true;
         scene->needsFrame = true;
@@ -4516,22 +4516,26 @@ bool RendererImpl::captureFrame(unsigned char* dst, size_t stride) {
         forceComposition = false;
     }
 
+    if (rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > width || ry + rh > height) {
+        return false;
+    }
+
     auto* px = (const unsigned char*)readbackMap;
 
-    for (int y = 0; y < height; y++) {
-        const unsigned char* src = px + (size_t)y * width * 4;
+    for (int y = 0; y < rh; y++) {
+        const unsigned char* src = px + ((size_t)(ry + y) * width + rx) * 4;
         unsigned char* out = dst + (size_t)y * stride;
 
         if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
             const u32* p = (const u32*)src;
             u32* o = (u32*)out;
 
-            for (int x = 0; x < width; x++) {
+            for (int x = 0; x < rw; x++) {
                 o[x] = ((((p[x] >> 22) & 0xffu)) << 16) | ((((p[x] >> 12) & 0xffu)) << 8) |
                        ((p[x] >> 2) & 0xffu) | 0xff000000u;
             }
         } else {
-            memcpy(out, src, (size_t)width * 4);
+            memcpy(out, src, (size_t)rw * 4);
         }
     }
 

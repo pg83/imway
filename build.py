@@ -75,9 +75,9 @@ server_protocol_paths = [
 ]
 
 
-def protocol_rule(path, kind, out_dir):
+def protocol_rule(path, kind, out_dir, root=None):
     name = path.rsplit("/", 1)[-1]
-    xml = f"{protocol_root}/{path}.xml"
+    xml = f"{root or protocol_root}/{path}.xml"
     header = f"$(B)/{out_dir}/{name}-{kind}-protocol.h"
     code_name = f"{name}-protocol.c" if kind == "server" else f"{name}-client-code.c"
     code = f"$(B)/{out_dir}/{code_name}"
@@ -93,10 +93,18 @@ def protocol_rule(path, kind, out_dir):
     )
 
 
-server_rules = [protocol_rule(path, "server", "protocols") for path in server_protocol_paths]
+# protocols the installed wayland-protocols does not carry (wlr extras),
+# vendored under dev/protocols
+local_protocol_paths = [
+    "wlr-screencopy-unstable-v1",
+]
+
+server_rules = [protocol_rule(path, "server", "protocols") for path in server_protocol_paths] + [
+    protocol_rule(path, "server", "protocols", root="$(S)/dev/protocols") for path in local_protocol_paths
+]
 server_sources = [
     f"$(B)/protocols/{path.rsplit('/', 1)[-1]}-protocol.c"
-    for path in server_protocol_paths
+    for path in server_protocol_paths + local_protocol_paths
 ]
 
 protocols = library(
@@ -186,10 +194,12 @@ client_protocol_paths = [
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",
 ]
 
-client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths]
+client_rules = [protocol_rule(path, "client", "tests") for path in client_protocol_paths] + [
+    protocol_rule(path, "client", "tests", root="$(S)/dev/protocols") for path in local_protocol_paths
+]
 client_sources = [
     f"$(B)/tests/{path.rsplit('/', 1)[-1]}-client-code.c"
-    for path in client_protocol_paths
+    for path in client_protocol_paths + local_protocol_paths
 ]
 
 client_protocols = library(

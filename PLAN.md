@@ -32,7 +32,7 @@
 
 ### Этап D — захват экрана
 - [x] ~~ext-image-capture-source + ext-image-copy-capture v1~~ done (shm output sessions via the renderer readback; cursor sessions deliver the client cursor surface; dmabuf tranche later)
-- [ ] zwlr-screencopy v3 (compat)
+- [x] ~~zwlr-screencopy v3 (compat)~~ done (vendored XML in dev/protocols; same FrameCapture readback, region-capable)
 
 ### Этап E — клипборд
 - [ ] ext-data-control v1
