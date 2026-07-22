@@ -9162,46 +9162,63 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 
 
+namespace {
+    // the linked protocol XML caps what wl_global_create may advertise: a
+    // build against a stale wayland-protocols must degrade to the XML's
+    // version with a log line, and an outright creation failure is fatal --
+    // silently dropping a global sends every client to a fast exit ("no
+    // XDG shell interface")
+    void global(wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
+        if (version > iface->version) {
+            sysE << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version
+                 << " by the linked protocol XML (implemented v"_sv << (i64)version << ")"_sv << endL;
+            version = iface->version;
+        }
+
+        STD_VERIFY(wl_global_create(display, iface, version, data, bind) != nullptr);
+    }
+}
+
 void WaylandImpl::createGlobals() {
-    wl_global_create(display, &wl_compositor_interface, 7, this, compositorBind);
-    wl_global_create(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
-    wl_global_create(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
-    wl_global_create(display, &wl_output_interface, 4, this, outputBind);
-    wl_global_create(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
-    wl_global_create(display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
-    wl_global_create(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
-    wl_global_create(display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
-    wl_global_create(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
-    wl_global_create(display, &wp_presentation_interface, 2, this, presentationBind);
-    wl_global_create(display, &xdg_activation_v1_interface, 1, this, activationBind);
-    wl_global_create(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
-    wl_global_create(display, &wp_viewporter_interface, 1, this, viewporterBind);
-    wl_global_create(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
-    wl_global_create(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
-    wl_global_create(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
-    wl_global_create(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
-    wl_global_create(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
-    wl_global_create(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
-    wl_global_create(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
-    wl_global_create(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
-    wl_global_create(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
-    wl_global_create(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
-    wl_global_create(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
-    wl_global_create(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
-    wl_global_create(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
-    wl_global_create(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
-    wl_global_create(display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
+    global(display, &wl_compositor_interface, 7, this, compositorBind);
+    global(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
+    global(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
+    global(display, &wl_output_interface, 4, this, outputBind);
+    global(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
+    global(display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
+    global(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
+    global(display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
+    global(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
+    global(display, &wp_presentation_interface, 2, this, presentationBind);
+    global(display, &xdg_activation_v1_interface, 1, this, activationBind);
+    global(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
+    global(display, &wp_viewporter_interface, 1, this, viewporterBind);
+    global(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
+    global(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
+    global(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
+    global(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
+    global(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
+    global(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
+    global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
+    global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
+    global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
+    global(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
+    global(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
+    global(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
+    global(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
+    global(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
+    global(display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
     // Color-management: client electrical values are decoded into the linear
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.
-    wl_global_create(display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
-    wl_global_create(display, &wp_color_representation_manager_v1_interface, 1, this,
+    global(display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
+    global(display, &wp_color_representation_manager_v1_interface, 1, this,
                      representationManagerBind);
 
     u64 syncCap = 0;
 
     if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
-        wl_global_create(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
+        global(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
     }
 
     if (!formats.empty()) {
@@ -9228,7 +9245,7 @@ void WaylandImpl::createGlobals() {
             dmabufVersion = 5;
         }
 
-        wl_global_create(display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
+        global(display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
     } else {
         sysE << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
