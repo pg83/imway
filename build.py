@@ -1,4 +1,6 @@
 import build
+import build.flags as flags
+import fnmatch
 import os
 
 
@@ -255,3 +257,75 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
 
 
 install(imway, *tests)
+
+
+# ---- integration tests as graph nodes -------------------------------------
+# Each scenario becomes `runs` command nodes (default 3, -Druns=N): a node
+# runs one headless compositor + scenario and writes a JSON verdict, always
+# exiting 0 so a failure does not abort the graph. One final `test` node
+# depends on every per-run node, reads all the JSONs and produces the verdict
+# that fails `./build test`. -Dfilter=GLOB restricts which scenarios build.
+runs = int(flags.runs) if flags.runs else 3
+test_filter = flags.filter
+
+scenarios = sorted(build.glob("$(S)/dev/tests/headless_*.sh"))
+# every non-scenario file a scenario may source (lib.sh, *_case.sh, *.inc),
+# plus the runner itself: any change to the harness re-runs every test
+harness = sorted(
+    set(build.glob("$(S)/dev/tests/*.sh")) - set(scenarios)
+) + sorted(build.glob("$(S)/dev/tests/*.inc")) + ["$(S)/dev/run_test.py"]
+
+client_by_name = {target.name: target for target in tests}
+
+test_nodes = []
+for scenario in scenarios:
+    name = os.path.basename(scenario)[:-len(".sh")]
+    if test_filter and not fnmatch.fnmatch(name, test_filter):
+        continue
+
+    client_name = name.replace("headless_", "client_", 1)
+    client_target = client_by_name.get(client_name)
+    # every client binary is a dependency: the harness (lib.sh, *_case.sh,
+    # matrix_run.sh) resolves shared helpers — the input-health probe, client_ok,
+    # the render-matrix client — by path next to the scenario's own client, so
+    # the whole tests/ dir must be restored, not just this test's client
+    node_deps = [imway, *tests]
+
+    for run_index in range(runs):
+        out = f"$(B)/test-results/{name}.run{run_index}.json"
+        cmd = [
+            "python3", "$(S)/dev/run_test.py",
+            "--scenario", scenario,
+            "--imway", "$(B)/imway",
+            "--out", out,
+            "--run", str(run_index),
+        ]
+        if client_target:
+            cmd += ["--client", f"$(B)/tests/{client_name}"]
+        test_nodes.append(command(
+            name=f"test_{name}_r{run_index}",
+            inputs=[scenario, *harness],
+            outputs=[out],
+            deps=node_deps,
+            cmd=cmd,
+            descr="TEST",
+            color="cyan",
+        ))
+
+if test_nodes:
+    verdict_cmd = [
+        "python3", "$(S)/dev/aggregate_tests.py",
+        "--results", "$(B)/test-results",
+        "--out", "$(B)/test-results/verdict.txt",
+    ]
+    if flags.allow_flaky:
+        verdict_cmd.append("--allow-flaky")
+    test = command(
+        name="test",
+        inputs=["$(S)/dev/aggregate_tests.py"],
+        outputs=["$(B)/test-results/verdict.txt"],
+        deps=test_nodes,
+        cmd=verdict_cmd,
+        descr="VERDICT",
+        color="light-green",
+    )

@@ -37,18 +37,23 @@ Raw, no frameworks (no wlroots/Smithay):
 
 ```sh
 ./build                       # .build/imway + all test clients
-dev/test.py                   # a fresh headless compositor per test
+./build test                  # run the integration suite, report the verdict
+./build test -Dfilter='headless_reg_dnd_*' -Druns=5   # a subset, 5 runs each
 ```
 
 `build` imports `build.py`, resolves project includes transitively and executes
-the resulting graph through its content-addressed cache. `dev/test.py` only
-runs already built artifacts: it spreads every scenario across a thread pool, runs each three times
-with the schedule shuffled, and reports OK / FAIL / FLAKY (`--jobs`, `--runs`,
-`--filter`, `--keep`, `--allow-flaky`; `IMWAY=path` points at another binary).
-Tests are
-headless screenshots with pixel checks: shm, subsurfaces, viewporter, dmabuf
-(via udmabuf), popups, protocol errors, and a keyboard e2e test (typing a
-command into foot).
+the resulting graph through its content-addressed cache. The integration tests
+are graph nodes too: every scenario becomes `runs` command nodes (default 3,
+`-Druns=N`) that each start a fresh headless compositor, run the scenario, and
+write a JSON verdict — always exiting 0 so a failure never aborts the graph.
+One final `test` node depends on all of them, reads the JSONs, prints the
+OK / FAIL / FLAKY / SKIP summary and fails the build if anything failed.
+`-Dfilter=GLOB` restricts which scenarios build; `-Dallow_flaky` downgrades
+flakes to a warning. Because the nodes are cached, tests only re-run when the
+compositor, a client, the scenario, or the harness changes. Tests are headless
+screenshots with pixel checks: shm, subsurfaces, viewporter, dmabuf (via
+udmabuf), popups, protocol errors, and a keyboard e2e test (typing a command
+into foot).
 
 The target platform is [stal/ix](https://stal-ix.github.io/): fully static
 linking, with the Vulkan driver linked into the binary.
