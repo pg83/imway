@@ -22,7 +22,7 @@ open_settings() {
     sleep 0.2
     ctl "type settings"
     sleep 0.3
-    ctl "key 108 press"; ctl "key 108 release" # Down: select the action
+    ctl "key 103 press"; ctl "key 103 release" # Up: select the action
     ctl "key 28 press"; ctl "key 28 release"   # Enter
     sleep 0.3
 }

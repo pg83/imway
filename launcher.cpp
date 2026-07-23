@@ -8,6 +8,7 @@
 #include "xdg_utils.h"
 
 #include <imgui.h>
+#include <math.h>
 
 #include <std/alg/qsort.h>
 #include <std/ios/fs_utils.h>
@@ -38,7 +39,10 @@ namespace {
 
         StringBuilder blob;
         Vector<Row> rows;
+        // display order: applications first, then the system actions; the
+        // split point keeps the two grid groups addressable by one index
         Vector<u32> vis;
+        long appsVis = 0;
 
         // case-folding scratch for refilter; a .desktop Name can be longer
         // than any fixed buffer, so grow instead of overflowing the stack
@@ -216,14 +220,24 @@ void Dialog::parseDesktop(StringBuilder& file) {
 
 void Dialog::refilter() {
     vis.clear();
+    appsVis = 0;
 
     StringView ql = StringView(query).lower(queryLower);
 
-    for (size_t i = 0; i < rows.length(); i++) {
-        StringView nl = view(rows[i].name, rows[i].nameLen).lower(nameLower);
+    // pass 0 collects applications (drawn on top), pass 1 the system
+    // actions (the bottom group, next to the input line)
+    for (int pass = 0; pass < 2; pass++) {
+        for (size_t i = 0; i < rows.length(); i++) {
+            if ((rows[i].action != LauncherAction::none) != (pass == 1)) {
+                continue;
+            }
 
-        if (ql.empty() || nl.search(ql)) {
-            vis.pushBack((u32)i);
+            StringView nl = view(rows[i].name, rows[i].nameLen).lower(nameLower);
+
+            if (ql.empty() || nl.search(ql)) {
+                vis.pushBack((u32)i);
+                appsVis += pass == 0;
+            }
         }
     }
 }
@@ -259,7 +273,18 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         sel = n;
     }
 
-    float lw = (float)screenW / 4.f < 320.f ? 320.f : (float)screenW / 4.f;
+    const ImGuiStyle& st = ImGui::GetStyle();
+    float lw = fminf((float)screenW * 0.4f, 560.f * uiScale);
+    float cell = 88.f * uiScale;
+    float contentW = lw - st.WindowPadding.x * 2.f;
+    long cols = (long)((contentW + st.ItemSpacing.x) / (cell + st.ItemSpacing.x));
+
+    if (cols < 1) {
+        cols = 1;
+    }
+
+    long appsN = appsVis;
+    long sysN = n - appsN;
 
     if (anchorX >= 0.f) {
         // an anchor in the lower half (the dock's bottom launcher button)
@@ -270,7 +295,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
     } else {
         ImGui::SetNextWindowPos(ImVec2((float)screenW / 2.f, (float)screenH / 4.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
     }
-    ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH / 2.f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH));
 
     if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
         if (fresh) {
@@ -280,12 +305,153 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
             open = false;
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel < n) {
-            sel++;
+        // spatial grid navigation over the two stacked groups; the input
+        // line sits at the bottom, Up enters the grid from below, Down
+        // walks back toward the input
+        bool navved = false;
+
+        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && n) {
+            navved = true;
+
+            if (sel == 0) {
+                long cnt = sysN ? sysN : appsN;
+                long base = sysN ? appsN : 0;
+
+                sel = base + ((cnt - 1) / cols) * cols + 1;
+            } else {
+                long i = sel - 1;
+                bool inSys = i >= appsN;
+                long gi = inSys ? i - appsN : i;
+                long r = gi / cols, col = gi % cols;
+
+                if (r > 0) {
+                    long cnt = inSys ? sysN : appsN;
+                    long target = (r - 1) * cols + col;
+
+                    sel = (inSys ? appsN : 0) + (target < cnt ? target : cnt - 1) + 1;
+                } else if (inSys && appsN) {
+                    long target = ((appsN - 1) / cols) * cols + col;
+
+                    sel = (target < appsN ? target : appsN - 1) + 1;
+                }
+            }
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && sel > 0) {
-            sel--;
+        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel > 0) {
+            navved = true;
+
+            long i = sel - 1;
+            bool inSys = i >= appsN;
+            long gi = inSys ? i - appsN : i;
+            long r = gi / cols, col = gi % cols;
+            long cnt = inSys ? sysN : appsN;
+
+            if (r < (cnt - 1) / cols) {
+                long target = (r + 1) * cols + col;
+
+                sel = (inSys ? appsN : 0) + (target < cnt ? target : cnt - 1) + 1;
+            } else if (!inSys && sysN) {
+                sel = appsN + (col < sysN ? col : sysN - 1) + 1;
+            } else {
+                sel = 0;
+            }
+        }
+
+        // one grid cell: a big icon, tooltip text on hover, accent frame on
+        // the keyboard selection; missing icons render an initial plate
+        auto cellItem = [&](long flat) {
+            const Row& r = rows[vis[(size_t)flat]];
+            bool selected = sel == flat + 1;
+
+            ImGui::PushID((int)vis[(size_t)flat]);
+
+            ImVec2 p = ImGui::GetCursorScreenPos();
+
+            if (ImGui::InvisibleButton("##cell", ImVec2(cell, cell))) {
+                pick(r);
+            }
+
+            if (selected && navved) {
+                ImGui::SetScrollHereY(0.5f);
+            }
+
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            ImVec2 pmax(p.x + cell, p.y + cell);
+            StringView name = view(r.name, r.nameLen);
+
+            if (ImGui::IsItemHovered()) {
+                dl->AddRectFilled(p, pmax, themeColorU32(themeAlpha(c.theme.neutral[10], 0.08f)), 8.f);
+                ImGui::SetTooltip("%.*s", (int)name.length(), (const char*)name.begin());
+            }
+
+            if (selected) {
+                dl->AddRect(p, pmax, themeColorU32(c.theme.accent), 8.f, 0, 2.f);
+            }
+
+            float pad = cell * 0.15f;
+
+            if (u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)))) {
+                dl->AddImage((ImTextureID)tex, ImVec2(p.x + pad, p.y + pad), ImVec2(pmax.x - pad, pmax.y - pad));
+            } else {
+                ImVec2 a(p.x + pad, p.y + pad), b(pmax.x - pad, pmax.y - pad);
+
+                dl->AddRectFilled(a, b, themeColorU32(themeAlpha(c.theme.neutral[10], 0.12f)), 10.f);
+
+                char ch = name.empty() ? '?' : (char)name[0];
+
+                if (ch >= 'a' && ch <= 'z') {
+                    ch = (char)(ch - 'a' + 'A');
+                }
+
+                char s[2] = {ch, 0};
+                float fs = ImGui::GetFontSize() * 2.f;
+                ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.f, s);
+
+                dl->AddText(ImGui::GetFont(), fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), themeColorU32(c.theme.neutral[9]), s);
+            }
+
+            ImGui::PopID();
+        };
+
+        auto grid = [&](long base, long count) {
+            for (long k = 0; k < count; k++) {
+                if (k % cols) {
+                    ImGui::SameLine();
+                }
+
+                cellItem(base + k);
+            }
+        };
+
+        // bottom-up: the input line, then (group name, group content,
+        // delimiter) per group — so top-down each grid carries its header
+        // underneath, and the topmost group has no leading delimiter
+        auto groupH = [&](long count) {
+            return count ? (float)((count + cols - 1) / cols) * (cell + st.ItemSpacing.y) + ImGui::GetFontSize() + st.ItemSpacing.y : 0.f;
+        };
+
+        float contentH = groupH(appsN) + groupH(sysN) +
+            (appsN && sysN ? st.ItemSpacing.y * 2.f + 1.f : 0.f);
+        float childH = fminf(contentH, (float)screenH * 0.55f);
+
+        if (n) {
+            ImGui::BeginChild("##groups", ImVec2(0.f, childH));
+
+            if (appsN) {
+                grid(0, appsN);
+                ImGui::TextDisabled("applications");
+            }
+
+            if (appsN && sysN) {
+                ImGui::Separator();
+            }
+
+            if (sysN) {
+                grid(appsN, sysN);
+                ImGui::TextDisabled("system");
+            }
+
+            ImGui::EndChild();
         }
 
         ImGui::SetNextItemWidth(-1.f);
@@ -299,39 +465,6 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
 
         if (ImGui::IsItemEdited()) {
             sel = 0;
-        }
-
-        float rowH = ImGui::GetFontSize() * 1.7f;
-        bool navved = ImGui::IsKeyPressed(ImGuiKey_DownArrow) || ImGui::IsKeyPressed(ImGuiKey_UpArrow);
-
-        for (long i = 0; i < n; i++) {
-            const Row& r = rows[vis[(size_t)i]];
-            bool selected = sel == i + 1;
-
-            ImGui::PushID((int)vis[(size_t)i]);
-
-            if (ImGui::Selectable("##row", selected, 0, ImVec2(0.f, rowH))) {
-                pick(r);
-            }
-
-            if (selected && navved) {
-                ImGui::SetScrollHereY(0.5f);
-            }
-
-            ImGui::SameLine(ImGui::GetStyle().FramePadding.x);
-
-            if (u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)))) {
-                ImGui::Image((ImTextureID)tex, ImVec2(rowH, rowH));
-            } else {
-                ImGui::Dummy(ImVec2(rowH, rowH));
-            }
-
-            StringView name = view(r.name, r.nameLen);
-
-            ImGui::SameLine();
-            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (rowH - ImGui::GetFontSize()) / 2.f);
-            ImGui::TextUnformatted((const char*)name.begin(), (const char*)name.end());
-            ImGui::PopID();
         }
 
         if (enter && !picked) {

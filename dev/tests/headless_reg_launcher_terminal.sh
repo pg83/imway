@@ -43,7 +43,7 @@ pick_entry() {
     sleep 0.2
     ctl "type $1"
     sleep 0.2
-    ctl "key 108 press"; ctl "key 108 release" # Down
+    ctl "key 103 press"; ctl "key 103 release" # Up
     ctl "key 28 press"; ctl "key 28 release"   # Enter
 }
 

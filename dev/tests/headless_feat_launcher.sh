@@ -45,7 +45,7 @@ pick_action() {
     sleep 0.2
     ctl "type $query"
     sleep 0.3
-    ctl "key 108 press"; ctl "key 108 release" # Down: select the filtered action
+    ctl "key 103 press"; ctl "key 103 release" # Up: enter the grid from the input line
     ctl "key 28 press"; ctl "key 28 release"   # Enter
     sleep 0.3
 }
