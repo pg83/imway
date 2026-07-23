@@ -1,6 +1,7 @@
 #include "lock_screen.h"
 
 #include "composer.h"
+#include "log.h"
 #include "device_vk.h"
 #include "dialog.h"
 #include "render_filter.h"
@@ -590,7 +591,7 @@ void Dialog::draw(Composer& c, bool& open) {
             focusField = false;
 
             if (failed) {
-                sysO << StringView("imway: lockscreen refocused") << endL;
+                *(c.log) << StringView("imway: lockscreen refocused") << endL;
             }
         }
 
@@ -609,10 +610,10 @@ void Dialog::draw(Composer& c, bool& open) {
             wipeImGuiPasswordState();
 
             if (accepted) {
-                sysO << StringView("imway: lockscreen accepted") << endL;
+                *(c.log) << StringView("imway: lockscreen accepted") << endL;
                 closeRequested = true;
             } else {
-                sysO << StringView("imway: lockscreen rejected") << endL;
+                *(c.log) << StringView("imway: lockscreen rejected") << endL;
                 failed = true;
                 focusField = true;
             }

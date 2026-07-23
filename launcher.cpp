@@ -109,6 +109,7 @@ void Dialog::rescan() {
     addAction("notifications"_sv, "preferences-system-notifications"_sv, LauncherAction::notifications);
     addAction("inspector"_sv, "utilities-system-monitor"_sv, LauncherAction::inspector);
     addAction("color picker"_sv, "color-select"_sv, LauncherAction::colorPicker);
+    addAction("log"_sv, "utilities-terminal"_sv, LauncherAction::logView);
 
     forEachXdgDataDir([this](StringView base) {
         StringBuilder dir;

@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "control.h"
 #include "icon.h"
 #include "input_sink.h"
@@ -127,7 +128,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     ev_io_init(io, controlIoCb, *fd, EV_READ);
     io->data = this;
     ev_io_start(loop, io);
-    sysO << "imway: control FIFO: "_sv << sv(path) << endL;
+    *(comp->log) << "imway: control FIFO: "_sv << sv(path) << endL;
 }
 
 void ControlImpl::handleLine(StringView cmd) {
@@ -289,7 +290,7 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->entry->tabletTool(ev);
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
-        sysO << "imway: screenshot by command: "_sv << args << endL;
+        *(comp->log) << "imway: screenshot by command: "_sv << args << endL;
     } else if (verb == "sdr-white"_sv) {
         comp->output->setSdrWhite(parseFloat(args));
     } else if (verb == "night"_sv) {
@@ -299,7 +300,7 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
     } else {
-        sysE << "imway: unknown command: "_sv << cmd << endL;
+        *(comp->log) << "imway: unknown command: "_sv << cmd << endL;
     }
 }
 
@@ -391,7 +392,7 @@ void ControlImpl::dumpState(StringView outPath) {
     ScopedFD f(open(tmpPath.cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
     if (f.get() < 0) {
-        sysE << "imway: dump: cannot open "_sv << sv(tmpPath) << endL;
+        *(comp->log) << "imway: dump: cannot open "_sv << sv(tmpPath) << endL;
 
         return;
     }

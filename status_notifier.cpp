@@ -1,6 +1,7 @@
 #include "status_notifier.h"
 
 #include "composer.h"
+#include "log.h"
 #include "dbus_conn.h"
 #include "icon.h"
 #include "icon_pool.h"
@@ -427,7 +428,7 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     int rc = dbus_bus_request_name(conn, kWatcher, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
 
     if (rc != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
-        sysE << "imway: StatusNotifierWatcher is taken ("_sv << rc << "), dock tray disabled"_sv << endL;
+        *(c->log) << "imway: StatusNotifierWatcher is taken ("_sv << rc << "), dock tray disabled"_sv << endL;
         dbus_error_free(&err);
 
         return;
@@ -443,7 +444,7 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     dbus_bus_add_match(conn, "type='signal',interface='org.kde.StatusNotifierItem'", nullptr);
     dbus_bus_add_match(conn, "type='signal',interface='com.canonical.dbusmenu',member='LayoutUpdated'", nullptr);
     dbus_connection_add_filter(conn, busSignal, this, nullptr);
-    sysO << "imway: StatusNotifierWatcher on the session bus"_sv << endL;
+    *(c->log) << "imway: StatusNotifierWatcher on the session bus"_sv << endL;
 }
 
 Icon* StatusNotifierImpl::findIcon(u64 sym, StringView) {

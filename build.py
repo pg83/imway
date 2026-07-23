@@ -271,6 +271,10 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         test_sources.append("$(S)/color.cpp")
         test_deps.append(display_info)
 
+    if name == "client_reg_log_ring":
+        # the ring under test, linked standalone
+        test_sources.append("$(S)/log.cpp")
+
     if name == "client_reg_scanout_opaque_policy":
         # scene.h pulls the weak ring in since Surface grew its anchor
         test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp", "$(S)/weak_ptr.cpp"]

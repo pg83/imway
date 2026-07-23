@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "device.h"
 
 #include "device_vk.h"
@@ -290,7 +291,7 @@ namespace {
         sb = ScanBuf{};
     }
 
-    bool createScanBuf(const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, VkFormat vkFmt, u32 fourcc, ScanBuf& sb) {
+    bool createScanBuf(Log& log, const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, VkFormat vkFmt, u32 fourcc, ScanBuf& sb) {
         VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
         VkFormatProperties2 fprops{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
 
@@ -370,7 +371,7 @@ namespace {
         }
 
         if (cands.empty()) {
-            sysE << "imway: scanout: no common modifier (vulkan x plane)"_sv << endL;
+            log << "imway: scanout: no common modifier (vulkan x plane)"_sv << endL;
 
             return false;
         }
@@ -401,7 +402,7 @@ namespace {
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image) != VK_SUCCESS) {
-            sysE << "imway: scanout: vkCreateImage failed"_sv << endL;
+            log << "imway: scanout: vkCreateImage failed"_sv << endL;
 
             return false;
         }
@@ -432,7 +433,7 @@ namespace {
         mai.memoryTypeIndex = typeIdx;
 
         if (vkAllocateMemory(vk.device, &mai, nullptr, &sb.memory) != VK_SUCCESS || vkBindImageMemory(vk.device, sb.pub.image, sb.memory, 0) != VK_SUCCESS) {
-            sysE << "imway: scanout: exportable allocation failed"_sv << endL;
+            log << "imway: scanout: exportable allocation failed"_sv << endL;
             destroyScanBuf(vk, fd, sb);
 
             return false;
@@ -466,14 +467,14 @@ namespace {
         int dmaFd = -1;
 
         if (getMemoryFd(vk.device, &gfi, &dmaFd) != VK_SUCCESS || dmaFd < 0) {
-            sysE << "imway: scanout: dmabuf export failed (udmabuf?)"_sv << endL;
+            log << "imway: scanout: dmabuf export failed (udmabuf?)"_sv << endL;
             destroyScanBuf(vk, fd, sb);
 
             return false;
         }
 
         if (drmPrimeFDToHandle(fd, dmaFd, &sb.gemHandle) != 0) {
-            sysE << "imway: scanout: kms prime import failed, errno "_sv << errno << endL;
+            log << "imway: scanout: kms prime import failed, errno "_sv << errno << endL;
             close(dmaFd);
             destroyScanBuf(vk, fd, sb);
 
@@ -488,7 +489,7 @@ namespace {
         u64 modifiers[4] = {chosen.drmFormatModifier};
 
         if (drmModeAddFB2WithModifiers(fd, w, h, fourcc, handles, pitches, offsets, modifiers, &sb.fbId, DRM_MODE_FB_MODIFIERS) != 0) {
-            sysE << "imway: scanout: AddFB2WithModifiers failed, errno "_sv << errno << endL;
+            log << "imway: scanout: AddFB2WithModifiers failed, errno "_sv << errno << endL;
             destroyScanBuf(vk, fd, sb);
 
             return false;
@@ -908,7 +909,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         ev_io_start(loop, udevIo);
     }
 
-    sysO << "imway: device "_sv << sv(path) << endL;
+    *(c->log) << "imway: device "_sv << sv(path) << endL;
 }
 
 int KmsDevice::drmFd() const {
@@ -1205,7 +1206,7 @@ void KmsOutput::hotplug() {
     connectorConnected = connected;
 
     if (!connected) {
-        sysO << "imway: connector disconnected"_sv << endL;
+        *(c->log) << "imway: connector disconnected"_sv << endL;
 
         return;
     }
@@ -1216,7 +1217,7 @@ void KmsOutput::hotplug() {
 
     if (modesetDone && commit(lastFb, true)) {
         queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
-        sysO << "imway: connector reconnected, remodeset"_sv << endL;
+        *(c->log) << "imway: connector reconnected, remodeset"_sv << endL;
     }
 }
 
@@ -1239,18 +1240,18 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     pickPipe(connector, modeStr);
 
     if (!readEdidColorCapabilities(fd, connectorId, displayCapabilities)) {
-        sysE << "imway: display EDID unavailable or invalid; color volume requires overrides"_sv << endL;
+        *(c.log) << "imway: display EDID unavailable or invalid; color volume requires overrides"_sv << endL;
     }
 
     color = outputColorState(config, displayCapabilities);
 
     if (color.hdr() && displayCapabilities.valid &&
         (!displayCapabilities.pq || !displayCapabilities.bt2020Rgb)) {
-        sysE << "imway: display EDID does not advertise PQ + BT.2020 RGB"_sv << endL;
+        *(c.log) << "imway: display EDID does not advertise PQ + BT.2020 RGB"_sv << endL;
         color = OutputColorState::sdr();
     } else if (color.hdr() && !config.displayPeakNits &&
                !displayCapabilities.peakNits) {
-        sysE << "imway: display has no HDR peak luminance; using 1000 nit fallback (use --hdr-peak)"_sv << endL;
+        *(c.log) << "imway: display has no HDR peak luminance; using 1000 nit fallback (use --hdr-peak)"_sv << endL;
     }
 
     HdrContentMetadata initialContent;
@@ -1289,15 +1290,15 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         maxBpcValue = color.bpc;
 
         if (maxBpcValue < minBpc || maxBpcValue > maxBpc) {
-            sysE << "imway: requested "_sv << maxBpcValue << " bpc is outside connector range "_sv
+            *(c.log) << "imway: requested "_sv << maxBpcValue << " bpc is outside connector range "_sv
                  << minBpc << ".."_sv << maxBpc << endL;
             Errno(EINVAL).raise("invalid --bpc"_sv);
         }
     } else if (config.bpc) {
-        sysE << "imway: connector has no max bpc property for explicit --bpc"_sv << endL;
+        *(c.log) << "imway: connector has no max bpc property for explicit --bpc"_sv << endL;
         Errno(ENOTSUP).raise("--bpc unsupported"_sv);
     } else if (color.hdr()) {
-        sysE << "imway: connector has no max bpc property; HDR link depth cannot be requested"_sv << endL;
+        *(c.log) << "imway: connector has no max bpc property; HDR link depth cannot be requested"_sv << endL;
     }
 
     connLinkBpc = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "link bpc");
@@ -1318,7 +1319,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
                 &connRange, &rangeValue);
 
     if (config.range != OutputRange::automatic && !connRange) {
-        sysE << "imway: connector cannot select requested RGB range"_sv << endL;
+        *(c.log) << "imway: connector cannot select requested RGB range"_sv << endL;
         Errno(ENOTSUP).raise("--rgb-range unsupported"_sv);
     }
 
@@ -1354,9 +1355,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
             curW = (int)cw;
             curH = (int)ch;
-            sysO << "imway: cursor plane "_sv << cursorPlaneId << ", "_sv << curW << "x"_sv << curH << endL;
+            *(c.log) << "imway: cursor plane "_sv << cursorPlaneId << ", "_sv << curW << "x"_sv << curH << endL;
         } catch (...) {
-            sysE << "imway: cursor plane setup failed: "_sv << Exception::current() << ", software cursor"_sv << endL;
+            *(c.log) << "imway: cursor plane setup failed: "_sv << Exception::current() << ", software cursor"_sv << endL;
             cursorPlaneId = 0;
         }
     }
@@ -1371,7 +1372,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         if (setupHdr()) {
             scanFourcc = DRM_FORMAT_XRGB2101010;
             scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-            sysO << "imway: HDR output: BT.2020 + PQ, target "_sv
+            *(c.log) << "imway: HDR output: BT.2020 + PQ, target "_sv
                  << color.displayMinNits << ".."_sv << color.displayPeakNits
                  << " nits, maxFALL "_sv << color.displayMaxFallNits
                  << ", sdr white "_sv << color.sdrWhiteNits << " nits"_sv << endL;
@@ -1381,10 +1382,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
                 // plane's HDR color path; light cursor pixels consequently
                 // arrive black. Composite into XR30 so UI and cursors share
                 // the same DEGAMMA/CTM/GAMMA pipeline.
-                sysO << "imway: hardware cursor disabled under HDR, software cursor"_sv << endL;
+                *(c.log) << "imway: hardware cursor disabled under HDR, software cursor"_sv << endL;
             }
         } else {
-            sysE << "imway: HDR unsupported here, staying SDR"_sv << endL;
+            *(c.log) << "imway: HDR unsupported here, staying SDR"_sv << endL;
             color = OutputColorState::sdr();
         }
     }
@@ -1407,7 +1408,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             ObjPool* trial = ObjPool::fromMemoryRaw();
 
             for (auto& sb : scan) {
-                if (createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
+                if (createScanBuf(*c.log, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
                     scanCount++;
 
                     ScanBuf* slot = &sb;
@@ -1429,7 +1430,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
                 link = trial;
 
                 if (scanFourcc == DRM_FORMAT_XRGB2101010) {
-                    sysO << "imway: 10-bit scanout"_sv << endL;
+                    *(c.log) << "imway: 10-bit scanout"_sv << endL;
                 }
 
                 break;
@@ -1445,7 +1446,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
             // the plane advertises 2101010 but export/import did not pan
             // out — retry plain 8-bit before falling to the dumb path
-            sysE << "imway: 10-bit scanout failed, retrying 8-bit"_sv << endL;
+            *(c.log) << "imway: 10-bit scanout failed, retrying 8-bit"_sv << endL;
             scanFourcc = DRM_FORMAT_XRGB8888;
             scanFormat = kVkFormat;
         }
@@ -1463,14 +1464,14 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         !config.bpc) {
         maxBpcValue = maxBpc < 10 ? maxBpc : 10;
         color.bpc = (u32)maxBpcValue;
-        sysO << "imway: requesting "_sv << maxBpcValue
+        *(c.log) << "imway: requesting "_sv << maxBpcValue
              << " bpc link for the 10-bit framebuffer"_sv << endL;
     }
 
     if (scanCount > 0) {
-        sysO << "imway: scanout swapchain: "_sv << scanCount << " images"_sv << endL;
+        *(c.log) << "imway: scanout swapchain: "_sv << scanCount << " images"_sv << endL;
     } else {
-        sysO << "imway: dumb-buffer path (no zero-copy scanout)"_sv << endL;
+        *(c.log) << "imway: dumb-buffer path (no zero-copy scanout)"_sv << endL;
 
         for (auto& b : bufs) {
             createDumb(b, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888);
@@ -1486,9 +1487,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         // absolute PQ luminance assumes the panel sits at its calibration
         // point; actually put it there instead of hoping
         setBrightness(1.f);
-        sysO << "imway: HDR pins hardware brightness to full; brightness keys adjust SDR white"_sv << endL;
+        *(c.log) << "imway: HDR pins hardware brightness to full; brightness keys adjust SDR white"_sv << endL;
     }
-    sysO << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
+    *(c.log) << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
 }
 
 KmsOutput::~KmsOutput() noexcept {
@@ -1633,7 +1634,7 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     }
 
     if (!conn && !connector.empty()) {
-        sysE << "imway: connector "_sv << connector << " not found or not connected (see imway --list)"_sv << endL;
+        *(c->log) << "imway: connector "_sv << connector << " not found or not connected (see imway --list)"_sv << endL;
     }
 
     STD_VERIFY(conn);
@@ -1660,7 +1661,7 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
         }
 
         if (!found) {
-            sysE << "imway: mode "_sv << modeStr << " not offered by the connector (see imway --list)"_sv << endL;
+            *(c->log) << "imway: mode "_sv << modeStr << " not offered by the connector (see imway --list)"_sv << endL;
         }
 
         STD_VERIFY(found);
@@ -1755,13 +1756,13 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
 // properties describe that signal; the CRTC color pipeline stays passthrough.
 bool KmsOutput::setupHdr() {
     if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "BT2020_RGB", &connColorspace, &colorspaceBt2020)) {
-        sysE << "imway: hdr: connector has no Colorspace/BT2020_RGB"_sv << endL;
+        *(c->log) << "imway: hdr: connector has no Colorspace/BT2020_RGB"_sv << endL;
 
         return false;
     }
 
     if (!connHdrMeta) {
-        sysE << "imway: hdr: connector has no HDR_OUTPUT_METADATA"_sv << endL;
+        *(c->log) << "imway: hdr: connector has no HDR_OUTPUT_METADATA"_sv << endL;
 
         return false;
     }
@@ -1769,7 +1770,7 @@ bool KmsOutput::setupHdr() {
     u64 mods[64];
 
     if (planeModifiers(fd, planeId, DRM_FORMAT_XRGB2101010, mods, 64) == 0) {
-        sysE << "imway: hdr: primary plane has no XRGB2101010"_sv << endL;
+        *(c->log) << "imway: hdr: primary plane has no XRGB2101010"_sv << endL;
 
         return false;
     }
@@ -1854,7 +1855,7 @@ void KmsOutput::setHdrMetadata(const HdrOutputMetadata& value) {
     u32 blob = 0;
 
     if (!createHdrMetadataBlob(value, blob)) {
-        sysE << "imway: cannot create updated HDR metadata blob"_sv << endL;
+        *(c->log) << "imway: cannot create updated HDR metadata blob"_sv << endL;
 
         return;
     }
@@ -2035,7 +2036,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
             // the connector rejected the HDR color/link configuration:
             // degrade to SDR on the same framebuffer instead of never
             // lighting up
-            sysE << "imway: HDR modeset rejected (errno "_sv << testErr
+            *(c->log) << "imway: HDR modeset rejected (errno "_sv << testErr
                  << "), falling back to SDR"_sv << endL;
 
             OutputConfiguration sdrConfig = config;
@@ -2055,13 +2056,13 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
         }
 
         if (testErr != 0) {
-            sysE << "imway: atomic test modeset rejected color/link configuration, errno "_sv
+            *(c->log) << "imway: atomic test modeset rejected color/link configuration, errno "_sv
                  << testErr << endL;
             return false;
         }
 
         if (!withCursor) {
-            sysE << "imway: cursor plane rejected by atomic test, software cursor"_sv << endL;
+            *(c->log) << "imway: cursor plane rejected by atomic test, software cursor"_sv << endL;
             cursorPlaneId = 0;
             curW = curH = 0;
             cursorEnabled = false;
@@ -2080,7 +2081,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
         int errNoCursor = tryCommit(fbId, doModeset, false, inFenceFd);
 
         if (errNoCursor == 0) {
-            sysE << "imway: cursor plane rejected by this mode (errno "_sv << err << "), software cursor"_sv << endL;
+            *(c->log) << "imway: cursor plane rejected by this mode (errno "_sv << err << "), software cursor"_sv << endL;
             cursorPlaneId = 0;
             curW = curH = 0;
             cursorEnabled = false;
@@ -2095,7 +2096,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
     }
 
     if (err != 0) {
-        sysE << "imway: kms atomic commit failed, errno "_sv << err << (doModeset ? " (modeset)"_sv : ""_sv) << endL;
+        *(c->log) << "imway: kms atomic commit failed, errno "_sv << err << (doModeset ? " (modeset)"_sv : ""_sv) << endL;
 
         return false;
     }
@@ -2121,7 +2122,7 @@ void KmsOutput::updateSignalFeedback() {
             color.bpc = (u32)linkBpc;
 
             if (color.hdr() && linkBpc < 10) {
-                sysE << "imway: HDR link degraded to "_sv << linkBpc
+                *(c->log) << "imway: HDR link degraded to "_sv << linkBpc
                      << " bpc; falling back to SDR"_sv << endL;
                 OutputConfiguration sdrConfig = config;
 
@@ -2138,7 +2139,7 @@ void KmsOutput::updateSignalFeedback() {
             }
         }
     } else if (color.hdr()) {
-        sysE << "imway: link bpc feedback unavailable; actual HDR link depth is unverified"_sv << endL;
+        *(c->log) << "imway: link bpc feedback unavailable; actual HDR link depth is unverified"_sv << endL;
     }
 
     if (rangeFullValue || rangeLimitedValue) {
@@ -2282,7 +2283,7 @@ void KmsOutput::initBacklight() {
         return;
     }
 
-    sysO << "imway: backlight "_sv << sv(blPath) << ", max "_sv << blMax << endL;
+    *(c->log) << "imway: backlight "_sv << sv(blPath) << ", max "_sv << blMax << endL;
 }
 
 
@@ -2360,7 +2361,7 @@ void KmsOutput::initDdc(StringView connName) {
     ddcCur = cur;
     pooledFD(*pool, ddcFd);
     ddcTimer = createEvTimer(*pool, loop);
-    sysO << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
+    *(c->log) << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
 
 // DDC/CI Get VCP: write the request, wait, read the 11-byte reply
@@ -2508,7 +2509,7 @@ void KmsOutput::setPowerSave(bool on) {
             queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
             queuedDirect = nullptr;
             queuedDirectFrame = nullptr;
-            sysO << "imway: display back on"_sv << endL;
+            *(c->log) << "imway: display back on"_sv << endL;
         }
     } else {
         drainPendingFlip();
@@ -2520,7 +2521,7 @@ void KmsOutput::setPowerSave(bool on) {
         drmModeAtomicCommit(fd, req, DRM_MODE_ATOMIC_ALLOW_MODESET, nullptr);
         drmModeAtomicFree(req);
         releaseDirectUse(queuedDirect, queuedDirectFrame);
-        sysO << "imway: display off (idle)"_sv << endL;
+        *(c->log) << "imway: display off (idle)"_sv << endL;
     }
 }
 
@@ -2552,7 +2553,7 @@ void KmsOutput::setupVt() {
     }
 
     if (vt <= 0) {
-        sysE << "imway: cannot find own vt, input will leak to console"_sv << endL;
+        *(c->log) << "imway: cannot find own vt, input will leak to console"_sv << endL;
 
         return;
     }
@@ -2563,7 +2564,7 @@ void KmsOutput::setupVt() {
     ttyFd = open(p.cStr(), O_RDWR | O_CLOEXEC);
 
     if (ttyFd < 0) {
-        sysE << "imway: "_sv << sv(p) << " unavailable, input will leak to console"_sv << endL;
+        *(c->log) << "imway: "_sv << sv(p) << " unavailable, input will leak to console"_sv << endL;
 
         return;
     }
@@ -2603,7 +2604,7 @@ bool KmsOutput::start() {
     memset(bufs[0].map, 0, bufs[0].size);
 
     if (!commit(bufs[0].fbId, true)) {
-        sysE << "imway: kms modeset failed"_sv << endL;
+        *(c->log) << "imway: kms modeset failed"_sv << endL;
 
         return false;
     }
@@ -2666,7 +2667,7 @@ bool KmsOutput::prepareScreenshot(Listener& readyListener) {
     screenshotState = 1;
     stdAtomicStore(&screenshotResult, 0, MemoryOrder::Relaxed);
     c->offload->submit([this] {
-        bool ok = createScanBuf(*vk, fd, mode.hdisplay, mode.vdisplay,
+        bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay,
                                 scanMods, scanModCount, scanFormat,
                                 scanFourcc, screenshotReplacement);
 
@@ -2763,7 +2764,7 @@ void KmsOutput::retireScreenshot() {
 
 void KmsOutput::sessionDisabled() {
     sessionActive = false;
-    sysO << "imway: session disabled (vt switch away)"_sv << endL;
+    *(c->log) << "imway: session disabled (vt switch away)"_sv << endL;
 }
 
 void KmsOutput::sessionEnabled() {
@@ -2783,7 +2784,7 @@ void KmsOutput::sessionEnabled() {
         queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
         queuedDirect = nullptr;
         queuedDirectFrame = nullptr;
-        sysO << "imway: session enabled, remodeset"_sv << endL;
+        *(c->log) << "imway: session enabled, remodeset"_sv << endL;
     }
 }
 

@@ -1,5 +1,6 @@
 #include "icon.h"
 #include "composer.h"
+#include "log.h"
 #include "icon_provider.h"
 #include "icon_store.h"
 #include "pooled_ev.h"
@@ -252,7 +253,7 @@ void IconStoreImpl::reload() {
     delete old;
 
     c->scene->needsFrame = true;
-    sysO << "imway: icon store reloaded, "_sv << (u64)desktop->size() << " entries"_sv << endL;
+    *(c->log) << "imway: icon store reloaded, "_sv << (u64)desktop->size() << " entries"_sv << endL;
 }
 
 Icon* IconStoreImpl::loadSvgFile(StringView path) {

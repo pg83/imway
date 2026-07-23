@@ -1,6 +1,7 @@
 #include "screenshot_capture.h"
 
 #include "composer.h"
+#include "log.h"
 #include "device_vk.h"
 #include "main_supervisor.h"
 #include "listener.h"
@@ -315,7 +316,7 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image,
     VkResult result = vkQueueSubmit(queue, 1, &si, fence);
 
     if (result != VK_SUCCESS) {
-        sysE << "imway: screenshot submit failed ("_sv << (long)result
+        *(comp->log) << "imway: screenshot submit failed ("_sv << (long)result
              << ")"_sv << endL;
 
         return false;
@@ -354,7 +355,7 @@ void ScreenshotCaptureImpl::pollFence() {
 
     if (status != VK_SUCCESS) {
         busy_ = false;
-        sysE << "imway: screenshot fence failed ("_sv << (long)status
+        *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status
              << ")"_sv << endL;
 
         return;
@@ -490,7 +491,7 @@ void ScreenshotCaptureImpl::ready() {
     busy_ = false;
 
     if (mfd < 0) {
-        sysE << "imway: screenshot readback failed"_sv << endL;
+        *(comp->log) << "imway: screenshot readback failed"_sv << endL;
 
         return;
     }

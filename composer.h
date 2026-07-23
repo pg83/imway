@@ -21,6 +21,7 @@ struct Filter;
 struct FrameCapture;
 struct Wifi;
 struct Keyboard;
+struct Log;
 struct Mixer;
 struct Notifications;
 struct Notifier;
@@ -52,6 +53,9 @@ struct Composer {
     Icon* findIcon(u64 sym, stl::StringView id = {});
 
     Theme theme;
+    // created right after the pool, before everything else: every subsystem
+    // logs through it from its first line
+    Log* log = nullptr;
     stl::ObjPool* pool = nullptr;
     SmallObjAllocator* alloc = nullptr;
     struct ev_loop* loop = nullptr;

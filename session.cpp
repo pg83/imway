@@ -1,6 +1,7 @@
 #include "session.h"
 
 #include "composer.h"
+#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "util.h"
@@ -72,7 +73,7 @@ namespace {
         // seatd death leaves the fd forever readable: without this check the
         // level-triggered watcher busy-spins at 100% cpu making no progress
         if (libseat_dispatch(((SeatSession*)w->data)->seat, 0) < 0 && errno != EAGAIN) {
-            sysE << "imway: seat connection lost, exiting"_sv << endL;
+            *(((SeatSession*)w->data)->c->log) << "imway: seat connection lost, exiting"_sv << endL;
             ev_io_stop(loop, w);
             ev_break(loop, EVBREAK_ALL);
         }

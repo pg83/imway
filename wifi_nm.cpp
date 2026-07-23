@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "wifi.h"
@@ -984,7 +985,7 @@ Wifi* WifiNm::create(Composer& c) {
         return nullptr;
     }
 
-    sysO << "imway: wifi via NetworkManager"_sv << endL;
+    *(c.log) << "imway: wifi via NetworkManager"_sv << endL;
 
     return c.pool->make<NmWifi>(c, conn);
 }

@@ -15,11 +15,13 @@
 #include "inspector.h"
 #include "launcher.h"
 #include "listener.h"
+#include "log.h"
 #include "main_supervisor.h"
 #include "mixer.h"
 #include "history.h"
 #include "notifier.h"
 #include "lock_screen.h"
+#include "log_view.h"
 #include "osd.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
@@ -350,6 +352,9 @@ namespace {
         bool inspectorToggle = false;
         DialogState* historyState = nullptr;
         bool historyToggle = false;
+        // the log panel: self-owned opaque handle; non-null = open
+        DialogState* logState = nullptr;
+        bool logToggle = false;
 
         // color picker (eyedropper): armed from the launcher, the next
         // click samples the framebuffer pixel under the cursor
@@ -931,7 +936,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     }
 
     if (status != VK_SUCCESS) {
-        sysE << "imway: Vulkan frame fence failed ("_sv << (long)status << ")"_sv << endL;
+        *(comp->log) << "imway: Vulkan frame fence failed ("_sv << (long)status << ")"_sv << endL;
         ev_break(loop, EVBREAK_ALL);
 
         return false;
@@ -940,7 +945,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     status = vkResetFences(device, 1, &fence);
 
     if (status != VK_SUCCESS) {
-        sysE << "imway: Vulkan frame fence reset failed ("_sv << (long)status << ")"_sv << endL;
+        *(comp->log) << "imway: Vulkan frame fence reset failed ("_sv << (long)status << ")"_sv << endL;
         ev_break(loop, EVBREAK_ALL);
 
         return false;
@@ -1686,7 +1691,7 @@ void RendererImpl::uploadSurface(Surface& s) {
             createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
             createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
         } catch (...) {
-            sysE << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
+            *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
             s.frame = nullptr;
             frameUnref(frame);
 
@@ -1796,7 +1801,7 @@ Surface* RendererImpl::scanoutCandidate() {
     }
 
     // any open compositor ui needs composition
-    if (launcherState || calendarState || wifiState || inspectorState || historyState || pickShow || pickArmed || pickPending ||
+    if (launcherState || calendarState || wifiState || inspectorState || historyState || logState || pickShow || pickArmed || pickPending ||
         settingsState || altTabActive || osdMs) {
         return nullptr;
     }
@@ -2300,7 +2305,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     }
 
     if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
-        sysE << "imway: dmabuf vkCreateImage failed"_sv << endL;
+        *(comp->log) << "imway: dmabuf vkCreateImage failed"_sv << endL;
         return false;
     }
 
@@ -2418,7 +2423,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     }
 
     if (!bound) {
-        sysE << "imway: dmabuf memory import failed ("_sv << b->nplanes << " planes)"_sv << endL;
+        *(comp->log) << "imway: dmabuf memory import failed ("_sv << b->nplanes << " planes)"_sv << endL;
         vkDestroyImage(device, tex->image, nullptr);
 
         if (tex->memory) {
@@ -2449,7 +2454,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     }
 
     if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
-        sysE << "imway: dmabuf image view failed"_sv << endL;
+        *(comp->log) << "imway: dmabuf image view failed"_sv << endL;
         destroyTexture(tex);
 
         return false;
@@ -2460,7 +2465,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         vci.subresourceRange.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT;
 
         if (vkCreateImageView(device, &vci, nullptr, &tex->chromaView) != VK_SUCCESS) {
-            sysE << "imway: dmabuf chroma view failed"_sv << endL;
+            *(comp->log) << "imway: dmabuf chroma view failed"_sv << endL;
             destroyTexture(tex);
 
             return false;
@@ -2834,7 +2839,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     if (VkResult res = vkQueueSubmit(queue, 1, &si, curFence); res != VK_SUCCESS) {
         // out is pre-zeroed by the caller: a transparent cursor beats
         // freezing the whole session in an infinite fence wait
-        sysE << "imway: cursor rasterize submit failed ("_sv << (long)res << ")"_sv << endL;
+        *(comp->log) << "imway: cursor rasterize submit failed ("_sv << (long)res << ")"_sv << endL;
 
         return;
     }
@@ -3342,6 +3347,14 @@ void RendererImpl::buildUi(Scene& scene) {
         historyToggle = false;
     }
 
+    drawLogView(*comp, logToggle, &logState);
+    logToggle = false;
+
+    if (logState) {
+        // new lines land between frames; keep the tail fresh while open
+        scene.needsFrame = true;
+    }
+
     if (pickShow) {
         static const char hx[] = "0123456789abcdef";
         char h[8] = {'#', hx[pickR >> 4], hx[pickR & 15], hx[pickG >> 4], hx[pickG & 15], hx[pickB >> 4], hx[pickB & 15], 0};
@@ -3726,6 +3739,9 @@ void RendererImpl::buildUi(Scene& scene) {
                 case LauncherAction::colorPicker:
                     pickArmed = true;
                     break;
+                case LauncherAction::logView:
+                    logToggle = true;
+                    break;
                 case LauncherAction::none:
                     spawnClient(*comp, sv(cmd), scene.socketName, terminal);
                     break;
@@ -3937,7 +3953,7 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
 
 #ifdef IMWAY_FOR_TESTS
         if (getenv("IMWAY_DEBUG_CURSOR") && scene.framesDone % 120 == 0) {
-            sysE << "cursor dbg: kind "_sv << kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
+            *(comp->log) << "cursor dbg: kind "_sv << kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
         }
 #endif
 
@@ -4117,7 +4133,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
                                                    nullptr) != 0) {
                             // the point never signaled: give up on this
                             // acquire once instead of stalling every frame
-                            sysE << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
+                            *(comp->log) << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
                         }
                     }
 
@@ -4350,7 +4366,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     VkResult submitResult = vkQueueSubmit(queue, 1, &si, fence);
 
     if (submitResult != VK_SUCCESS) {
-        sysE << "imway: Vulkan queue submit failed ("_sv << (long)submitResult << ")"_sv << endL;
+        *(comp->log) << "imway: Vulkan queue submit failed ("_sv << (long)submitResult << ")"_sv << endL;
         ev_break(loop, EVBREAK_ALL);
 
         return false;
@@ -4465,7 +4481,7 @@ bool RendererImpl::readbackLastFrame() {
     si.pCommandBuffers = &cmd;
 
     if (VkResult res = vkQueueSubmit(queue, 1, &si, fence); res != VK_SUCCESS) {
-        sysE << "imway: readback submit failed ("_sv << (long)res << ")"_sv << endL;
+        *(comp->log) << "imway: readback submit failed ("_sv << (long)res << ")"_sv << endL;
 
         return false;
     }

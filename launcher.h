@@ -15,6 +15,7 @@ enum class LauncherAction {
     notifications,
     inspector,
     colorPicker,
+    logView,
 };
 
 // the launcher is a plain imgui widget, not an entity. its state is a

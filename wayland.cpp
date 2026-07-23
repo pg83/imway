@@ -12,6 +12,7 @@
 #include "frame_listener.h"
 #include "keyboard.h"
 #include "listener.h"
+#include "log.h"
 #include "output.h"
 #include "intr_list.h"
 #include "scene.h"
@@ -1209,7 +1210,7 @@ namespace {
 
         for (WaylandImpl::WmBasePing* ping : each<WaylandImpl::WmBasePing>(srv->wmBases)) {
             if (!ping->acked) {
-                sysE << "imway: client is not answering ping"_sv << endL;
+                *(srv->composer->log) << "imway: client is not answering ping"_sv << endL;
             }
 
             ping->acked = false;
@@ -1569,14 +1570,14 @@ namespace {
         s.pending.inputRegion.append(box->rects.begin(), box->rects.length());
     }
 
-    void copyShmBufferTo(wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
+    void copyShmBufferTo(Log& log, wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
         i32 w = wl_shm_buffer_get_width(&shm);
         i32 h = wl_shm_buffer_get_height(&shm);
         i32 stride = wl_shm_buffer_get_stride(&shm);
         u32 fmt = wl_shm_buffer_get_format(&shm);
 
         if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
-            sysE << "imway: unsupported shm format "_sv << fmt << endL;
+            log << "imway: unsupported shm format "_sv << fmt << endL;
             outW = outH = 0;
 
             return;
@@ -1585,7 +1586,7 @@ namespace {
         // libwayland validates stride against the pixel width only; a client
         // can pass stride < w*4 and walk the copy loop past the mmap
         if (stride < (i64)w * 4) {
-            sysE << "imway: shm stride "_sv << stride << " < width*4"_sv << endL;
+            log << "imway: shm stride "_sv << stride << " < width*4"_sv << endL;
             outW = outH = 0;
 
             return;
@@ -1634,7 +1635,7 @@ namespace {
     }
 
     void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm, const RectI* rect) {
-        copyShmBufferTo(*shm, s.width, s.height, s.pixels, rect);
+        copyShmBufferTo(*s.srv->composer->log, *shm, s.width, s.height, s.pixels, rect);
 
         if (s.width > 0) {
             s.dirty = true;
@@ -2040,7 +2041,7 @@ namespace {
                 clipRect(dmg, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm));
 
                 if (cache) {
-                    copyShmBufferTo(*shm, cache->width, cache->height, cache->pixels, nullptr);
+                    copyShmBufferTo(*s.srv->composer->log, *shm, cache->width, cache->height, cache->pixels, nullptr);
                     cache->hasContent = cache->width > 0;
                     cache->valid = true;
                 } else {
@@ -2127,7 +2128,7 @@ namespace {
                     s.dirty = true;
                 }
             } else {
-                sysE << "imway: unknown buffer type"_sv << endL;
+                *(s.srv->composer->log) << "imway: unknown buffer type"_sv << endL;
             }
 
             // any get_release that survived (unknown buffer) is dropped
@@ -3123,7 +3124,7 @@ namespace {
         foreignToplevelGone(srv, t);
         foreignListToplevelGone(srv, t);
         t->unlink();
-        sysO << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
+        *(srv->composer->log) << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
         srv->scene->needsFrame = true;
         srv->alloc->release(t);
     }
@@ -3723,7 +3724,7 @@ namespace {
         t.cfgH = h;
         t.cfgDocked = t.docked;
         t.cfgMaximized = t.maximized;
-        sysO << "imway: configure "_sv << sv(t.title) << " -> "_sv << w << "x"_sv << h << endL;
+        *(t.srv->composer->log) << "imway: configure "_sv << sv(t.title) << " -> "_sv << w << "x"_sv << h << endL;
     }
 
     void xdgToplevelReconfigure(ToplevelImpl& t) {
@@ -3824,7 +3825,7 @@ namespace {
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
+            *(s.srv->composer->log) << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
             foreignListToplevelMapped(s.srv, xs->tl());
 
             s.srv->seat.focusToplevel(xs->toplevel.get());
@@ -3833,7 +3834,7 @@ namespace {
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
+            *(s.srv->composer->log) << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
 
             forEach<Popup>(s.srv->scene->popups, [&](Popup& popup) {
                 if (popup.parent == &s && popup.mapped) {
@@ -3854,7 +3855,7 @@ namespace {
         if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
             s.srv->scene->needsFrame = true;
-            sysO << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
+            *(s.srv->composer->log) << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
 
             if (xs->popup->grab) {
                 s.srv->seat.popupGrabStart(xs->popup.get());
@@ -8410,7 +8411,7 @@ namespace {
         }
 
         if (w > kIconMaxSize || box->bufferWatchCount >= kIconMaxBuffers) {
-            sysO << "imway: ignoring toplevel icon buffer ("_sv << w << "x"_sv << h << ", "_sv << box->bufferWatchCount << " buffers already)"_sv << endL;
+            *(box->srv->composer->log) << "imway: ignoring toplevel icon buffer ("_sv << w << "x"_sv << h << ", "_sv << box->bufferWatchCount << " buffers already)"_sv << endL;
 
             return;
         }
@@ -8698,7 +8699,7 @@ namespace {
             return;
         }
 
-        sysO << "imway: activation ("_sv << token << ") -> "_sv << sv(tl->title) << endL;
+        *(srv->composer->log) << "imway: activation ("_sv << token << ") -> "_sv << sv(tl->title) << endL;
         srv->seat.focusToplevel(tl);
         tl->raiseRequested = true;
         srv->scene->needsFrame = true;
@@ -11120,7 +11121,7 @@ void SeatState::focusToplevel(Toplevel* t) {
 
     if (t && t->surface && !kbOverride) {
         kbSendEnter(resOf(t->surface.get()));
-        sysO << "imway: focus -> "_sv << sv(t->title) << endL;
+        *(srv->composer->log) << "imway: focus -> "_sv << sv(t->title) << endL;
     }
 
     updateShortcutInhibit();
@@ -11351,7 +11352,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     pingTimer.data = this;
     ev_timer_start(loop, &pingTimer);
 
-    sysO << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
+    *(composer->log) << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
 }
 
 WaylandImpl::~WaylandImpl() noexcept {
@@ -12463,9 +12464,9 @@ namespace {
     // version with a log line, and an outright creation failure is fatal --
     // silently dropping a global sends every client to a fast exit ("no
     // XDG shell interface")
-    void global(wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
+    void global(Log& log, wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
         if (version > iface->version) {
-            sysE << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version
+            log << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version
                  << " by the linked protocol XML (implemented v"_sv << (i64)version << ")"_sv << endL;
             version = iface->version;
         }
@@ -12486,68 +12487,68 @@ void WaylandImpl::createGlobals() {
         return !clientSandboxed(srv, client);
     }, this);
 
-    global(display, &wl_compositor_interface, 7, this, compositorBind);
-    global(display, &wl_subcompositor_interface, 1, this, subcompositorBind);
-    global(display, &xdg_wm_base_interface, 7, this, wmBaseBind);
-    global(display, &wl_output_interface, 4, this, outputBind);
-    global(display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
-    global(display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
-    global(display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
-    global(display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
-    global(display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
-    global(display, &wp_presentation_interface, 2, this, presentationBind);
-    global(display, &xdg_activation_v1_interface, 1, this, activationBind);
-    global(display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
-    global(display, &wp_viewporter_interface, 1, this, viewporterBind);
-    global(display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
-    global(display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
-    global(display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
-    global(display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
-    global(display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
-    global(display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
-    global(display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
-    global(display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
-    global(display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
-    global(display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
-    global(display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
-    global(display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
-    global(display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
-    global(display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
-    global(display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
-    global(display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
-    global(display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
-    global(display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
-    global(display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
-    global(display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
-    global(display, &xdg_toplevel_drag_manager_v1_interface, 1, this, toplevelDragManagerBind);
-    global(display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
-    global(display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
-    global(display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);
-    global(display, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1, this, tlCaptureSourceManagerBind);
-    global(display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
-    global(display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
-    global(display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
-    global(display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
-    global(display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
-    global(display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
-    global(display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
+    global(*(composer->log), display, &wl_compositor_interface, 7, this, compositorBind);
+    global(*(composer->log), display, &wl_subcompositor_interface, 1, this, subcompositorBind);
+    global(*(composer->log), display, &xdg_wm_base_interface, 7, this, wmBaseBind);
+    global(*(composer->log), display, &wl_output_interface, 4, this, outputBind);
+    global(*(composer->log), display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
+    global(*(composer->log), display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
+    global(*(composer->log), display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
+    global(*(composer->log), display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
+    global(*(composer->log), display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
+    global(*(composer->log), display, &wp_presentation_interface, 2, this, presentationBind);
+    global(*(composer->log), display, &xdg_activation_v1_interface, 1, this, activationBind);
+    global(*(composer->log), display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
+    global(*(composer->log), display, &wp_viewporter_interface, 1, this, viewporterBind);
+    global(*(composer->log), display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
+    global(*(composer->log), display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
+    global(*(composer->log), display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
+    global(*(composer->log), display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
+    global(*(composer->log), display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
+    global(*(composer->log), display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
+    global(*(composer->log), display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
+    global(*(composer->log), display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
+    global(*(composer->log), display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
+    global(*(composer->log), display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
+    global(*(composer->log), display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
+    global(*(composer->log), display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
+    global(*(composer->log), display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
+    global(*(composer->log), display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
+    global(*(composer->log), display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
+    global(*(composer->log), display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
+    global(*(composer->log), display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
+    global(*(composer->log), display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
+    global(*(composer->log), display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
+    global(*(composer->log), display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
+    global(*(composer->log), display, &xdg_toplevel_drag_manager_v1_interface, 1, this, toplevelDragManagerBind);
+    global(*(composer->log), display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
+    global(*(composer->log), display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
+    global(*(composer->log), display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);
+    global(*(composer->log), display, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1, this, tlCaptureSourceManagerBind);
+    global(*(composer->log), display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
+    global(*(composer->log), display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
+    global(*(composer->log), display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
+    global(*(composer->log), display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
+    global(*(composer->log), display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
+    global(*(composer->log), display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
+    global(*(composer->log), display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
     // Color-management: client electrical values are decoded into the linear
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.
-    global(display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
-    global(display, &wp_color_representation_manager_v1_interface, 1, this,
+    global(*(composer->log), display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
+    global(*(composer->log), display, &wp_color_representation_manager_v1_interface, 1, this,
                      representationManagerBind);
 
     u64 syncCap = 0;
 
     if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
-        global(display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
+        global(*(composer->log), display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
     }
 
     // wp-drm-lease: only with a real drm node behind it; the device offers
     // the non-desktop connectors (none in headless / VM without VR hardware)
     if (drmFd >= 0 && composer->device) {
-        global(display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
+        global(*(composer->log), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
     }
 
     if (!formats.empty()) {
@@ -12574,9 +12575,9 @@ void WaylandImpl::createGlobals() {
             dmabufVersion = 5;
         }
 
-        global(display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
+        global(*(composer->log), display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
     } else {
-        sysE << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
+        *(composer->log) << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
 }
 
@@ -12782,7 +12783,7 @@ void WaylandImpl::onListen(void* arg) {
 #endif
 
         if (cfgTrace && (differsView || differsSent)) {
-            sysO << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH
+            *(composer->log) << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH
                  << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH
                  << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH()
                  << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH

@@ -13,6 +13,7 @@
 #include "icon_store.h"
 #include "input.h"
 #include "keyboard.h"
+#include "log.h"
 #include "main_supervisor.h"
 #include "mixer.h"
 #include "notifications.h"
@@ -60,8 +61,8 @@ namespace {
         char** cmdArgv = nullptr;
     };
 
-    void usage(const char* argv0) {
-        sysE << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]" " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]" " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv << endL;
+    void usage(Log& log, const char* argv0) {
+        log << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]" " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]" " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv << endL;
     }
 
 }
@@ -75,12 +76,17 @@ int mainComposer(int argc, char** argv) {
         return 1;
     }
 
+    ObjPool::Ref pool = ObjPool::fromMemory();
+    // the log is the pool's very first object: it outlives everything else,
+    // and every line from here on goes through it (teeing to the IX log)
+    Log* log = Log::create(pool.mutPtr(), &stderrStream());
+
     Config cfg;
 
     for (int i = 1; i < argc; i++) {
         auto next = [&]() -> StringView {
             if (i + 1 >= argc) {
-                usage(argv[0]);
+                usage(*log, argv[0]);
                 exit(2);
             }
 
@@ -107,7 +113,7 @@ int mainComposer(int argc, char** argv) {
             cfg.uiScale = (float)parseFloat(StringView(next()));
 
             if (!(cfg.uiScale > 0.f)) {
-                usage(argv[0]);
+                usage(*log, argv[0]);
 
                 return 2;
             }
@@ -135,7 +141,7 @@ int mainComposer(int argc, char** argv) {
             } else if (range == "limited"_sv) {
                 cfg.outputColor.range = OutputRange::limited;
             } else {
-                usage(argv[0]);
+                usage(*log, argv[0]);
                 return 2;
             }
         } else if (arg == "--screenshot"_sv) {
@@ -144,7 +150,7 @@ int mainComposer(int argc, char** argv) {
             cfg.controlPath = next();
         } else if (arg == "--"_sv) {
             if (i + 1 >= argc) {
-                usage(argv[0]);
+                usage(*log, argv[0]);
 
                 return 2;
             }
@@ -157,7 +163,7 @@ int mainComposer(int argc, char** argv) {
 
             return 0;
         } else {
-            usage(argv[0]);
+            usage(*log, argv[0]);
 
             return 2;
         }
@@ -174,24 +180,24 @@ int mainComposer(int argc, char** argv) {
          oc.displayMinNits >= oc.displayPeakNits) ||
         (oc.displayMaxFallNits && oc.displayPeakNits &&
          oc.displayMaxFallNits > oc.displayPeakNits)) {
-        usage(argv[0]);
+        usage(*log, argv[0]);
         return 2;
     }
 
     bool kms = cfg.devicePath != "headless"_sv;
 
     if (!getenv("XDG_RUNTIME_DIR")) {
-        sysE << "XDG_RUNTIME_DIR is not set"_sv << endL;
+        *log << "XDG_RUNTIME_DIR is not set"_sv << endL;
 
         return 1;
     }
 
-    ObjPool::Ref pool = ObjPool::fromMemory();
-    // the wiring board is the pool's first object: LIFO death makes it
-    // outlive every subsystem that stores the reference
+    // the wiring board is the pool's second object, right after the log:
+    // LIFO death makes it outlive every subsystem holding the reference
     Composer& c = *pool->make<Composer>(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
+    c.log = log;
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
     c.loop = loop;
     c.offload = ThreadPool::simple(c.pool, 1);
@@ -207,9 +213,9 @@ int mainComposer(int argc, char** argv) {
         if (kms) {
             try {
                 session = Session::create(c);
-                sysO << "imway: libseat session on "_sv << session->seatName() << endL;
+                *log << "imway: libseat session on "_sv << session->seatName() << endL;
             } catch (...) {
-                sysE << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
+                *log << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
                 session = Session::createDirect(c);
             }
         }
@@ -306,7 +312,7 @@ int mainComposer(int argc, char** argv) {
             try {
                 InputSource::createLibinput(c);
             } catch (...) {
-                sysE << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
+                *log << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }
         }
 
@@ -314,7 +320,7 @@ int mainComposer(int argc, char** argv) {
 #ifdef IMWAY_FOR_TESTS
             Control::create(c, cfg.controlPath);
 #else
-            sysE << "imway: --control is a test-build feature, ignored"_sv << endL;
+            *log << "imway: --control is a test-build feature, ignored"_sv << endL;
 #endif
         }
 
@@ -344,12 +350,12 @@ int mainComposer(int argc, char** argv) {
 
         if (!cfg.screenshotPath.empty()) {
             renderer->screenshot(cfg.screenshotPath);
-            sysO << "imway: screenshot: "_sv << cfg.screenshotPath << endL;
+            *log << "imway: screenshot: "_sv << cfg.screenshotPath << endL;
         }
 
-        sysO << "imway: clean exit after "_sv << scene->framesDone << " frames"_sv << endL;
+        *log << "imway: clean exit after "_sv << scene->framesDone << " frames"_sv << endL;
     } catch (...) {
-        sysE << "imway: fatal: "_sv << Exception::current() << endL;
+        *log << "imway: fatal: "_sv << Exception::current() << endL;
 
         return 1;
     }

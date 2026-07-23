@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "listener.h"
 #include "notifications.h"
 #include "notifier.h"
@@ -48,7 +49,7 @@ NotificationsImpl::NotificationsImpl(Composer& c)
     int rc = dbus_bus_request_name(conn, kIface, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
 
     if (rc != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) {
-        sysE << "imway: org.freedesktop.Notifications is taken ("_sv << rc << "), dbus notifications disabled"_sv << endL;
+        *(c.log) << "imway: org.freedesktop.Notifications is taken ("_sv << rc << "), dbus notifications disabled"_sv << endL;
         dbus_error_free(&err);
 
         return;
@@ -59,7 +60,7 @@ NotificationsImpl::NotificationsImpl(Composer& c)
     vt.message_function = busMessage;
     dbus_connection_register_object_path(conn, kPath, &vt, this);
     c.notifierListeners.pushBack((Listener*)this);
-    sysO << "imway: notifications on the session bus"_sv << endL;
+    *(c.log) << "imway: notifications on the session bus"_sv << endL;
 }
 
 void NotificationsImpl::onListen(void* arg) {

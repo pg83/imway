@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "input.h"
 #include "pooled_ev.h"
 #include "scene.h"
@@ -162,7 +163,7 @@ LibinputSource::LibinputSource(Composer& c)
     inputIo->data = this;
     ev_io_start(loop, inputIo);
     dispatch();
-    sysO << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
+    *(comp->log) << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }
 
 bool LibinputSource::pathAdd(int n) {
@@ -239,7 +240,7 @@ void LibinputSource::inotifyEvents() {
             if (e->mask & IN_DELETE) {
                 pathDrop(idx);
             } else if (pathAdd(idx)) {
-                sysO << "imway: input device event"_sv << idx << " plugged"_sv << endL;
+                *(comp->log) << "imway: input device event"_sv << idx << " plugged"_sv << endL;
             }
         }
     }

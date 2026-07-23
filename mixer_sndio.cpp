@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "mixer.h"
@@ -196,7 +197,7 @@ namespace {
         }
 
         if (sioctl_eof(m->hdl)) {
-            sysE << "imway: sndiod went away, volume control disabled"_sv << endL;
+            *(m->c->log) << "imway: sndiod went away, volume control disabled"_sv << endL;
             ev_io_stop(m->c->loop, m->io);
             m->levelAddr = -1;
             m->muteAddr = -1;
@@ -220,14 +221,14 @@ Mixer* MixerSndio::create(Composer& c) {
     struct sioctl_hdl* hdl = sioctl_open(SIO_DEVANY, SIOCTL_READ | SIOCTL_WRITE, 1);
 
     if (!hdl) {
-        sysE << "imway: sndiod unreachable, volume control disabled"_sv << endL;
+        *(c.log) << "imway: sndiod unreachable, volume control disabled"_sv << endL;
 
         return nullptr;
     }
 
     SndioMixer* m = c.pool->make<SndioMixer>(c, hdl);
 
-    sysO << "imway: sndio mixer, level "_sv << (i64)m->levelAddr << ", mute "_sv << (i64)m->muteAddr << endL;
+    *(c.log) << "imway: sndio mixer, level "_sv << (i64)m->levelAddr << ", mute "_sv << (i64)m->muteAddr << endL;
 
     return m;
 }

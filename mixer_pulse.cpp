@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
 #include "mixer.h"
@@ -430,7 +431,7 @@ Mixer* MixerPulse::create(Composer& c) {
         return nullptr;
     }
 
-    sysO << "imway: pulse mixer (pulseaudio/pipewire)"_sv << endL;
+    *(c.log) << "imway: pulse mixer (pulseaudio/pipewire)"_sv << endL;
 
     return m;
 }
