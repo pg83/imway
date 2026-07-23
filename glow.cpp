@@ -33,6 +33,11 @@ void bakeGlow(ImFontAtlas* atlas) {
             float oy = qy > 0.f ? qy : 0.f;
             float d = sqrtf(ox * ox + oy * oy) - kGlowRadius;
             float a = d <= 0.f ? 1.f : expf(-d * d / (2.f * kGlowSigma * kGlowSigma));
+
+            // steepen the skirt perceptually: the HDR path blends the ui in
+            // linear light, where a shallow alpha ramp of a warm tint over a
+            // dark background washes into a pale fog
+            a = powf(a, 2.2f);
             unsigned char av = (unsigned char)(a * 255.f + 0.5f);
             unsigned char* p = (unsigned char*)tex->GetPixelsAt(r.x + x, r.y + y);
 

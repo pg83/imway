@@ -99,9 +99,16 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
 
     // the focused window: an accent glow behind, and half the inner
     // padding so the icon reads bigger than its neighbours. The negative
-    // reach pulls the rim in, so it starts right at the icon edge
+    // reach pulls the rim in, so it starts right at the icon edge. The
+    // tint is the accent driven toward its pure chroma: the hdr pipeline's
+    // linear blend and tone mapping wash the ratio out, an emission-deep
+    // source is what still lands as the accent hue on screen
     if (active) {
-        drawGlow(draw, p, max, size * -0.06f, themeColorU32(themeAlpha(theme.accent, 0.38f)));
+        ThemeColor ember = theme.accent;
+
+        ember.g *= 0.5f;
+        ember.b *= 0.25f;
+        drawGlow(draw, p, max, size * -0.06f, themeColorU32(themeAlpha(ember, 0.5f)));
     }
 
     if (ImGui::IsItemHovered()) {
