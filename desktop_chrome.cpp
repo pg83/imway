@@ -25,15 +25,11 @@ namespace {
         // Their internal halves are subsequently covered by chrome itself;
         // only the union's outer shadow remains visible.
         if (io.WindowShadowCallback) {
-            ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+            ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
 
-            io.WindowShadowCallback(background, pos, ImVec2(dockW, size.y), 0.f,
-                flags, io.WindowShadowCallbackUserData);
-            io.WindowShadowCallback(background, ImVec2(pos.x + dockW, pos.y),
-                ImVec2(size.x - dockW, topH), 0.f, flags, io.WindowShadowCallbackUserData);
+            io.WindowShadowCallback(background, pos, ImVec2(dockW, size.y), 0.f, flags, io.WindowShadowCallbackUserData);
+            io.WindowShadowCallback(background, ImVec2(pos.x + dockW, pos.y), ImVec2(size.x - dockW, topH), 0.f, flags, io.WindowShadowCallbackUserData);
         }
-
     }
 
     void drawOuterBorder(ImDrawList& draw) {
@@ -57,9 +53,7 @@ namespace {
         };
 
         draw.PushClipRectFullScreen();
-        draw.AddPolyline(outline, 6,
-            ImGui::GetColorU32(ImGuiCol_Border), ImDrawFlags_Closed,
-            style.WindowBorderSize);
+        draw.AddPolyline(outline, 6, ImGui::GetColorU32(ImGuiCol_Border), ImDrawFlags_Closed, style.WindowBorderSize);
         draw.PopClipRect();
     }
 
@@ -86,8 +80,7 @@ namespace {
 
         char clock[32];
 
-        snprintf(clock, sizeof(clock), "%02d.%02d %02d:%02d", local.tm_mday,
-            local.tm_mon + 1, local.tm_hour, local.tm_min);
+        snprintf(clock, sizeof(clock), "%02d.%02d %02d:%02d", local.tm_mday, local.tm_mon + 1, local.tm_hour, local.tm_min);
 
         const ImGuiStyle& style = ImGui::GetStyle();
         float clockW = ImGui::CalcTextSize(clock).x;

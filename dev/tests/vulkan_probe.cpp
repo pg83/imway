@@ -11,20 +11,23 @@
 
 namespace {
 
-const char* const kRequired[] = {
-    VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-    VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
-    VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-    VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-    VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME,
-};
+    const char* const kRequired[] = {
+        VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
+        VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
+        VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
+        VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME,
+    };
 
-bool has_ext(const std::vector<VkExtensionProperties>& exts, const char* name) {
-    for (const auto& e : exts)
-        if (std::strcmp(e.extensionName, name) == 0) return true;
-    return false;
-}
+    bool has_ext(const std::vector<VkExtensionProperties>& exts, const char* name) {
+        for (const auto& e : exts) {
+            if (std::strcmp(e.extensionName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
 
 } // namespace
 
@@ -66,16 +69,12 @@ int main() {
         std::vector<VkExtensionProperties> exts(en);
         vkEnumerateDeviceExtensionProperties(dev, nullptr, &en, exts.data());
 
-        std::printf("\n%s (api %d.%d.%d, %s)\n", props.deviceName,
-                    VK_API_VERSION_MAJOR(props.apiVersion),
-                    VK_API_VERSION_MINOR(props.apiVersion),
-                    VK_API_VERSION_PATCH(props.apiVersion),
-                    props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "cpu" : "gpu");
+        std::printf("\n%s (api %d.%d.%d, %s)\n", props.deviceName, VK_API_VERSION_MAJOR(props.apiVersion), VK_API_VERSION_MINOR(props.apiVersion), VK_API_VERSION_PATCH(props.apiVersion), props.deviceType == VK_PHYSICAL_DEVICE_TYPE_CPU ? "cpu" : "gpu");
 
-        for (const char* name : kRequired)
+        for (const char* name : kRequired) {
             std::printf("  %-42s %s\n", name, has_ext(exts, name) ? "ok" : "MISSING");
-        std::printf("  %-42s %s\n", "timelineSemaphore",
-                    feat12.timelineSemaphore ? "ok" : "MISSING");
+        }
+        std::printf("  %-42s %s\n", "timelineSemaphore", feat12.timelineSemaphore ? "ok" : "MISSING");
 
         if (has_ext(exts, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
             VkPhysicalDeviceDrmPropertiesEXT drm{};
@@ -84,9 +83,7 @@ int main() {
             props2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
             props2.pNext = &drm;
             vkGetPhysicalDeviceProperties2(dev, &props2);
-            std::printf("  drm node: primary=%d (%lld:%lld) render=%d (%lld:%lld)\n",
-                        drm.hasPrimary, (long long)drm.primaryMajor, (long long)drm.primaryMinor,
-                        drm.hasRender, (long long)drm.renderMajor, (long long)drm.renderMinor);
+            std::printf("  drm node: primary=%d (%lld:%lld) render=%d (%lld:%lld)\n", drm.hasPrimary, (long long)drm.primaryMajor, (long long)drm.primaryMinor, drm.hasRender, (long long)drm.renderMajor, (long long)drm.renderMinor);
         }
     }
 

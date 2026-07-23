@@ -8,10 +8,7 @@ int main() {
     ColorDescription legacy = ColorDescription::sRgb();
     ColorDescription pq = ColorDescription::bt2100Pq();
 
-    if (!directScanoutColorCompatible(sdr, legacy) ||
-        directScanoutColorCompatible(sdr, pq) ||
-        directScanoutColorCompatible(hdr, legacy) ||
-        directScanoutColorCompatible(hdr, pq)) {
+    if (!directScanoutColorCompatible(sdr, legacy) || directScanoutColorCompatible(sdr, pq) || directScanoutColorCompatible(hdr, legacy) || directScanoutColorCompatible(hdr, pq)) {
         fputs("direct scanout accepted incompatible color state\n", stderr);
 
         return 1;

@@ -9,18 +9,18 @@
 
 #if __has_include(<sndio.h>)
 
-#include "scene.h"
-#include "util.h"
+    #include "scene.h"
+    #include "util.h"
 
-#include <math.h>
-#include <poll.h>
+    #include <math.h>
+    #include <poll.h>
 
-#include <ev.h>
+    #include <ev.h>
 
-#include <sndio.h>
+    #include <sndio.h>
 
-#include <std/ios/sys.h>
-#include <std/mem/obj_pool.h>
+    #include <std/ios/sys.h>
+    #include <std/mem/obj_pool.h>
 
 using namespace stl;
 

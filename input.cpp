@@ -305,13 +305,20 @@ LibinputSource::~LibinputSource() noexcept {
 namespace {
     u32 tabletToolWireType(libinput_tablet_tool* tool) {
         switch (libinput_tablet_tool_get_type(tool)) {
-            case LIBINPUT_TABLET_TOOL_TYPE_ERASER: return 0x141;
-            case LIBINPUT_TABLET_TOOL_TYPE_BRUSH: return 0x142;
-            case LIBINPUT_TABLET_TOOL_TYPE_PENCIL: return 0x143;
-            case LIBINPUT_TABLET_TOOL_TYPE_AIRBRUSH: return 0x144;
-            case LIBINPUT_TABLET_TOOL_TYPE_MOUSE: return 0x146;
-            case LIBINPUT_TABLET_TOOL_TYPE_LENS: return 0x147;
-            default: return 0x140; // pen
+            case LIBINPUT_TABLET_TOOL_TYPE_ERASER:
+                return 0x141;
+            case LIBINPUT_TABLET_TOOL_TYPE_BRUSH:
+                return 0x142;
+            case LIBINPUT_TABLET_TOOL_TYPE_PENCIL:
+                return 0x143;
+            case LIBINPUT_TABLET_TOOL_TYPE_AIRBRUSH:
+                return 0x144;
+            case LIBINPUT_TABLET_TOOL_TYPE_MOUSE:
+                return 0x146;
+            case LIBINPUT_TABLET_TOOL_TYPE_LENS:
+                return 0x147;
+            default:
+                return 0x140; // pen
         }
     }
 
@@ -419,8 +426,7 @@ void LibinputSource::dispatch() {
                 auto* t = libinput_event_get_tablet_tool_event(ev);
                 TabletToolEvent tev;
 
-                tev.phase = libinput_event_tablet_tool_get_proximity_state(t) == LIBINPUT_TABLET_TOOL_PROXIMITY_STATE_IN
-                    ? TabletPhase::proximityIn : TabletPhase::proximityOut;
+                tev.phase = libinput_event_tablet_tool_get_proximity_state(t) == LIBINPUT_TABLET_TOOL_PROXIMITY_STATE_IN ? TabletPhase::proximityIn : TabletPhase::proximityOut;
                 tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
                 comp->entry->tabletTool(tev);
 
@@ -430,8 +436,7 @@ void LibinputSource::dispatch() {
                 auto* t = libinput_event_get_tablet_tool_event(ev);
                 TabletToolEvent tev;
 
-                tev.phase = libinput_event_tablet_tool_get_tip_state(t) == LIBINPUT_TABLET_TOOL_TIP_DOWN
-                    ? TabletPhase::tipDown : TabletPhase::tipUp;
+                tev.phase = libinput_event_tablet_tool_get_tip_state(t) == LIBINPUT_TABLET_TOOL_TIP_DOWN ? TabletPhase::tipDown : TabletPhase::tipUp;
                 tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
                 comp->entry->tabletTool(tev);
 
@@ -510,8 +515,7 @@ void LibinputSource::dispatch() {
                 scroll.source = wheel ? ScrollSource::wheel : finger ? ScrollSource::finger : ScrollSource::continuous;
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)) {
-                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL)
-                                       : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
+                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL) : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_VERTICAL);
 
                     scroll.dy = raw / (wheel ? 120.0 : 15.0);
                     scroll.discreteY = wheel ? (i32)(raw / 120.0) : 0;
@@ -520,8 +524,7 @@ void LibinputSource::dispatch() {
                 }
 
                 if (libinput_event_pointer_has_axis(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)) {
-                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL)
-                                       : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
+                    double raw = wheel ? libinput_event_pointer_get_scroll_value_v120(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL) : libinput_event_pointer_get_scroll_value(p, LIBINPUT_POINTER_AXIS_SCROLL_HORIZONTAL);
 
                     scroll.dx = raw / (wheel ? 120.0 : 15.0);
                     scroll.discreteX = wheel ? (i32)(raw / 120.0) : 0;

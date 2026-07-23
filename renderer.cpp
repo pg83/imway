@@ -124,7 +124,6 @@ struct TextureLease {
     ~TextureLease() noexcept;
 };
 
-
 namespace {
     // the imgui vulkan backend swallows every VkResult unless this hook is
     // set (it only ever calls it, never acts on the code): an exhausted
@@ -142,25 +141,16 @@ namespace {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
         if (!surface) {
-            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr,
-                                             0, 0, 0, 0, 0);
+            ImGui_ImplVulkan_SetTextureColor(0, 0, 0, 0, 0, nullptr, nullptr, 0, 0, 0, 0, 0);
 
             return;
         }
 
-        int source = surface->color.transfer == ColorTransfer::pq ? 4 :
-                     surface->color.transfer == ColorTransfer::hlg ? 5 :
-                     surface->color.transfer == ColorTransfer::extendedLinear ? 6 :
-                     surface->color.transfer == ColorTransfer::bt1886 ? 7 :
-                     surface->color.transfer == ColorTransfer::gamma22 ? 8 :
-                     surface->color.transfer == ColorTransfer::iccGamma ? 9 : 1;
+        int source = surface->color.transfer == ColorTransfer::pq ? 4 : surface->color.transfer == ColorTransfer::hlg ? 5 : surface->color.transfer == ColorTransfer::extendedLinear ? 6 : surface->color.transfer == ColorTransfer::bt1886 ? 7 : surface->color.transfer == ColorTransfer::gamma22 ? 8 : surface->color.transfer == ColorTransfer::iccGamma ? 9 : 1;
         int primaries = surface->color.primaries == ColorPrimaries::bt2020 ? 1 : 0;
-        float reference = source == 6 ? (float)surface->color.linearOneNits :
-                          source == 8 || source == 9 ?
-                          (float)surface->color.referenceNits : 0;
+        float reference = source == 6 ? (float)surface->color.linearOneNits : source == 8 || source == 9 ? (float)surface->color.referenceNits : 0;
 
-        ColorMatrix transform = colorPrimariesTransform(surface->color.primary,
-                                                        Chromaticities::bt2020());
+        ColorMatrix transform = colorPrimariesTransform(surface->color.primary, Chromaticities::bt2020());
         if (surface->color.directToBt2020) {
             for (int i = 0; i < 9; i++) {
                 transform.v[i] = surface->color.toBt2020[i];
@@ -181,24 +171,14 @@ namespace {
         int chromaLocation = 0;
         int yuvBits = 0;
 
-        if (surface->dmabuf &&
-            (surface->dmabuf->format == kFourccNv12 ||
-             surface->dmabuf->format == kFourccP010)) {
-            coefficients = surface->representation.coefficients ?
-                (int)surface->representation.coefficients : 2;
-            range = surface->representation.range ?
-                (int)surface->representation.range : 2;
-            chromaLocation = surface->representation.chromaLocation ?
-                (int)surface->representation.chromaLocation : 1;
+        if (surface->dmabuf && (surface->dmabuf->format == kFourccNv12 || surface->dmabuf->format == kFourccP010)) {
+            coefficients = surface->representation.coefficients ? (int)surface->representation.coefficients : 2;
+            range = surface->representation.range ? (int)surface->representation.range : 2;
+            chromaLocation = surface->representation.chromaLocation ? (int)surface->representation.chromaLocation : 1;
             yuvBits = surface->dmabuf->format == kFourccP010 ? 10 : 8;
         }
 
-        ImGui_ImplVulkan_SetTextureColor(source, primaries, reference,
-                                         (float)surface->color.minNits,
-                                         (float)surface->color.maxNits, matrix,
-                                         gamma, (int)surface->representation.alphaMode,
-                                         coefficients, range, chromaLocation,
-                                         yuvBits);
+        ImGui_ImplVulkan_SetTextureColor(source, primaries, reference, (float)surface->color.minNits, (float)surface->color.maxNits, matrix, gamma, (int)surface->representation.alphaMode, coefficients, range, chromaLocation, yuvBits);
     }
 
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
@@ -317,20 +297,20 @@ namespace {
         float uiScale = 1.f;
         u64 themeRevision = 0;
         ThemeColor desktopColor;
-        float nextUiScale = 1.f;   // written by the ui, applied at frame start
+        float nextUiScale = 1.f; // written by the ui, applied at frame start
         // settings: renderer-owned values plus a self-owned dialog handle
         Settings settings;
         DialogState* settingsState = nullptr;
         bool settingsToggle = false;
         // the keys page rows: the chord table plus the non-chord bindings
         Vector<KeyBinding> bindingsView;
-        ShadowSprite shadow;       // window drop shadows, see window_shadow.h
+        ShadowSprite shadow; // window drop shadows, see window_shadow.h
 
         // bar battery widget, /sys-fed; sampled at most once per ~2s, the
         // clock timer keeps frames coming. Shown only while discharging: on
         // mains the number is noise
         u64 statMs = 0;
-        long batPct = -1;          // -1 no battery
+        long batPct = -1; // -1 no battery
         bool batDischarging = false;
         StringBuilder batPath;
 
@@ -402,8 +382,8 @@ namespace {
         int hwCapW = 0, hwCapH = 0;
         int hwHotX = 0, hwHotY = 0;
         bool hwVisible = false;
-        int hwKind = -2;               // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
-        int pendingShape = -1;         // shape waiting for end-of-frame rasterization
+        int hwKind = -2;       // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
+        int pendingShape = -1; // shape waiting for end-of-frame rasterization
         // weak: identity of the uploaded cursor surface; a recycled
         // allocation must not read as "already uploaded"
         Weak<Surface> hwSurf;
@@ -455,11 +435,8 @@ namespace {
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup(int w, int h);
         void setupOutputTransform();
-        void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer,
-                                   VkDescriptorSet source, int w, int h,
-                                   const OutputColorState& color, double kelvin);
-        void recordCursorTransform(VkCommandBuffer commands,
-                                   VkFramebuffer outputFramebuffer, int w, int h);
+        void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, VkDescriptorSet source, int w, int h, const OutputColorState& color, double kelvin);
+        void recordCursorTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, int w, int h);
 
         void drawSurfaceTree(Surface& s, float x, float y);
         void drawSurfaceTreeOverlay(Surface& s, float x, float y);
@@ -639,7 +616,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , pool(comp.pool)
     , scene(comp.scene)
     , output(comp.output)
-        , notifier(comp.notifier)
+    , notifier(comp.notifier)
     , framesLimit(limit)
     , instance(vk.instance)
     , phys(vk.phys)
@@ -671,9 +648,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     bindingsView.pushBack({"XF86 volume keys"_sv, "volume up/down 5%, mute"_sv});
     bindingsView.pushBack({"XF86 brightness keys"_sv, "backlight 5% or sdr white 10 nits"_sv});
     setup(scene->outW, scene->outH);
-    shotCapture = ScreenshotCapture::create(
-        comp, vk, width, height, fmt, uiScale,
-        *comp.pool->make<CallScreenshotReady>(this));
+    shotCapture = ScreenshotCapture::create(comp, vk, width, height, fmt, uiScale, *comp.pool->make<CallScreenshotReady>(this));
 
     // before any input arrives the cursor sits at the screen center
     posX = scene->outW / 2.0;
@@ -1031,42 +1006,176 @@ void RendererImpl::onListen(void*) {
 namespace {
     ImGuiKey evdevToImGuiKey(u32 code) {
         switch (code) {
-            case KEY_A: return ImGuiKey_A; case KEY_B: return ImGuiKey_B; case KEY_C: return ImGuiKey_C;
-            case KEY_D: return ImGuiKey_D; case KEY_E: return ImGuiKey_E; case KEY_F: return ImGuiKey_F;
-            case KEY_G: return ImGuiKey_G; case KEY_H: return ImGuiKey_H; case KEY_I: return ImGuiKey_I;
-            case KEY_J: return ImGuiKey_J; case KEY_K: return ImGuiKey_K; case KEY_L: return ImGuiKey_L;
-            case KEY_M: return ImGuiKey_M; case KEY_N: return ImGuiKey_N; case KEY_O: return ImGuiKey_O;
-            case KEY_P: return ImGuiKey_P; case KEY_Q: return ImGuiKey_Q; case KEY_R: return ImGuiKey_R;
-            case KEY_S: return ImGuiKey_S; case KEY_T: return ImGuiKey_T; case KEY_U: return ImGuiKey_U;
-            case KEY_V: return ImGuiKey_V; case KEY_W: return ImGuiKey_W; case KEY_X: return ImGuiKey_X;
-            case KEY_Y: return ImGuiKey_Y; case KEY_Z: return ImGuiKey_Z;
-            case KEY_1: return ImGuiKey_1; case KEY_2: return ImGuiKey_2; case KEY_3: return ImGuiKey_3;
-            case KEY_4: return ImGuiKey_4; case KEY_5: return ImGuiKey_5; case KEY_6: return ImGuiKey_6;
-            case KEY_7: return ImGuiKey_7; case KEY_8: return ImGuiKey_8; case KEY_9: return ImGuiKey_9;
-            case KEY_0: return ImGuiKey_0;
-            case KEY_F1: return ImGuiKey_F1; case KEY_F2: return ImGuiKey_F2; case KEY_F3: return ImGuiKey_F3;
-            case KEY_F4: return ImGuiKey_F4; case KEY_F5: return ImGuiKey_F5; case KEY_F6: return ImGuiKey_F6;
-            case KEY_F7: return ImGuiKey_F7; case KEY_F8: return ImGuiKey_F8; case KEY_F9: return ImGuiKey_F9;
-            case KEY_F10: return ImGuiKey_F10; case KEY_F11: return ImGuiKey_F11; case KEY_F12: return ImGuiKey_F12;
-            case KEY_LEFT: return ImGuiKey_LeftArrow; case KEY_RIGHT: return ImGuiKey_RightArrow;
-            case KEY_UP: return ImGuiKey_UpArrow; case KEY_DOWN: return ImGuiKey_DownArrow;
-            case KEY_HOME: return ImGuiKey_Home; case KEY_END: return ImGuiKey_End;
-            case KEY_PAGEUP: return ImGuiKey_PageUp; case KEY_PAGEDOWN: return ImGuiKey_PageDown;
-            case KEY_INSERT: return ImGuiKey_Insert; case KEY_DELETE: return ImGuiKey_Delete;
-            case KEY_BACKSPACE: return ImGuiKey_Backspace; case KEY_TAB: return ImGuiKey_Tab;
-            case KEY_ENTER: return ImGuiKey_Enter; case KEY_KPENTER: return ImGuiKey_KeypadEnter;
-            case KEY_ESC: return ImGuiKey_Escape; case KEY_SPACE: return ImGuiKey_Space;
-            case KEY_MINUS: return ImGuiKey_Minus; case KEY_EQUAL: return ImGuiKey_Equal;
-            case KEY_LEFTBRACE: return ImGuiKey_LeftBracket; case KEY_RIGHTBRACE: return ImGuiKey_RightBracket;
-            case KEY_SEMICOLON: return ImGuiKey_Semicolon; case KEY_APOSTROPHE: return ImGuiKey_Apostrophe;
-            case KEY_GRAVE: return ImGuiKey_GraveAccent; case KEY_BACKSLASH: return ImGuiKey_Backslash;
-            case KEY_COMMA: return ImGuiKey_Comma; case KEY_DOT: return ImGuiKey_Period;
-            case KEY_SLASH: return ImGuiKey_Slash; case KEY_CAPSLOCK: return ImGuiKey_CapsLock;
-            case KEY_LEFTSHIFT: return ImGuiKey_LeftShift; case KEY_RIGHTSHIFT: return ImGuiKey_RightShift;
-            case KEY_LEFTCTRL: return ImGuiKey_LeftCtrl; case KEY_RIGHTCTRL: return ImGuiKey_RightCtrl;
-            case KEY_LEFTALT: return ImGuiKey_LeftAlt; case KEY_RIGHTALT: return ImGuiKey_RightAlt;
-            case KEY_LEFTMETA: return ImGuiKey_LeftSuper; case KEY_RIGHTMETA: return ImGuiKey_RightSuper;
-            default: return ImGuiKey_None;
+            case KEY_A:
+                return ImGuiKey_A;
+            case KEY_B:
+                return ImGuiKey_B;
+            case KEY_C:
+                return ImGuiKey_C;
+            case KEY_D:
+                return ImGuiKey_D;
+            case KEY_E:
+                return ImGuiKey_E;
+            case KEY_F:
+                return ImGuiKey_F;
+            case KEY_G:
+                return ImGuiKey_G;
+            case KEY_H:
+                return ImGuiKey_H;
+            case KEY_I:
+                return ImGuiKey_I;
+            case KEY_J:
+                return ImGuiKey_J;
+            case KEY_K:
+                return ImGuiKey_K;
+            case KEY_L:
+                return ImGuiKey_L;
+            case KEY_M:
+                return ImGuiKey_M;
+            case KEY_N:
+                return ImGuiKey_N;
+            case KEY_O:
+                return ImGuiKey_O;
+            case KEY_P:
+                return ImGuiKey_P;
+            case KEY_Q:
+                return ImGuiKey_Q;
+            case KEY_R:
+                return ImGuiKey_R;
+            case KEY_S:
+                return ImGuiKey_S;
+            case KEY_T:
+                return ImGuiKey_T;
+            case KEY_U:
+                return ImGuiKey_U;
+            case KEY_V:
+                return ImGuiKey_V;
+            case KEY_W:
+                return ImGuiKey_W;
+            case KEY_X:
+                return ImGuiKey_X;
+            case KEY_Y:
+                return ImGuiKey_Y;
+            case KEY_Z:
+                return ImGuiKey_Z;
+            case KEY_1:
+                return ImGuiKey_1;
+            case KEY_2:
+                return ImGuiKey_2;
+            case KEY_3:
+                return ImGuiKey_3;
+            case KEY_4:
+                return ImGuiKey_4;
+            case KEY_5:
+                return ImGuiKey_5;
+            case KEY_6:
+                return ImGuiKey_6;
+            case KEY_7:
+                return ImGuiKey_7;
+            case KEY_8:
+                return ImGuiKey_8;
+            case KEY_9:
+                return ImGuiKey_9;
+            case KEY_0:
+                return ImGuiKey_0;
+            case KEY_F1:
+                return ImGuiKey_F1;
+            case KEY_F2:
+                return ImGuiKey_F2;
+            case KEY_F3:
+                return ImGuiKey_F3;
+            case KEY_F4:
+                return ImGuiKey_F4;
+            case KEY_F5:
+                return ImGuiKey_F5;
+            case KEY_F6:
+                return ImGuiKey_F6;
+            case KEY_F7:
+                return ImGuiKey_F7;
+            case KEY_F8:
+                return ImGuiKey_F8;
+            case KEY_F9:
+                return ImGuiKey_F9;
+            case KEY_F10:
+                return ImGuiKey_F10;
+            case KEY_F11:
+                return ImGuiKey_F11;
+            case KEY_F12:
+                return ImGuiKey_F12;
+            case KEY_LEFT:
+                return ImGuiKey_LeftArrow;
+            case KEY_RIGHT:
+                return ImGuiKey_RightArrow;
+            case KEY_UP:
+                return ImGuiKey_UpArrow;
+            case KEY_DOWN:
+                return ImGuiKey_DownArrow;
+            case KEY_HOME:
+                return ImGuiKey_Home;
+            case KEY_END:
+                return ImGuiKey_End;
+            case KEY_PAGEUP:
+                return ImGuiKey_PageUp;
+            case KEY_PAGEDOWN:
+                return ImGuiKey_PageDown;
+            case KEY_INSERT:
+                return ImGuiKey_Insert;
+            case KEY_DELETE:
+                return ImGuiKey_Delete;
+            case KEY_BACKSPACE:
+                return ImGuiKey_Backspace;
+            case KEY_TAB:
+                return ImGuiKey_Tab;
+            case KEY_ENTER:
+                return ImGuiKey_Enter;
+            case KEY_KPENTER:
+                return ImGuiKey_KeypadEnter;
+            case KEY_ESC:
+                return ImGuiKey_Escape;
+            case KEY_SPACE:
+                return ImGuiKey_Space;
+            case KEY_MINUS:
+                return ImGuiKey_Minus;
+            case KEY_EQUAL:
+                return ImGuiKey_Equal;
+            case KEY_LEFTBRACE:
+                return ImGuiKey_LeftBracket;
+            case KEY_RIGHTBRACE:
+                return ImGuiKey_RightBracket;
+            case KEY_SEMICOLON:
+                return ImGuiKey_Semicolon;
+            case KEY_APOSTROPHE:
+                return ImGuiKey_Apostrophe;
+            case KEY_GRAVE:
+                return ImGuiKey_GraveAccent;
+            case KEY_BACKSLASH:
+                return ImGuiKey_Backslash;
+            case KEY_COMMA:
+                return ImGuiKey_Comma;
+            case KEY_DOT:
+                return ImGuiKey_Period;
+            case KEY_SLASH:
+                return ImGuiKey_Slash;
+            case KEY_CAPSLOCK:
+                return ImGuiKey_CapsLock;
+            case KEY_LEFTSHIFT:
+                return ImGuiKey_LeftShift;
+            case KEY_RIGHTSHIFT:
+                return ImGuiKey_RightShift;
+            case KEY_LEFTCTRL:
+                return ImGuiKey_LeftCtrl;
+            case KEY_RIGHTCTRL:
+                return ImGuiKey_RightCtrl;
+            case KEY_LEFTALT:
+                return ImGuiKey_LeftAlt;
+            case KEY_RIGHTALT:
+                return ImGuiKey_RightAlt;
+            case KEY_LEFTMETA:
+                return ImGuiKey_LeftSuper;
+            case KEY_RIGHTMETA:
+                return ImGuiKey_RightSuper;
+            default:
+                return ImGuiKey_None;
         }
     }
 }
@@ -1082,14 +1191,11 @@ bool RendererImpl::key(u32 code, bool pressed) {
     bool consumed = false;
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
-    if (!locked && pressed &&
-        (output->hasBrightness() || output->colorState().hdr()) &&
-        (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
+    if (!locked && pressed && (output->hasBrightness() || output->colorState().hdr()) && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
         bool up = code == KEY_BRIGHTNESSUP;
 
         if (output->colorState().hdr()) {
-            output->setSdrWhite(output->colorState().sdrWhiteNits +
-                                (up ? 10.0 : -10.0));
+            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? 10.0 : -10.0));
             osdKind = 3;
         } else {
             output->setBrightness(output->brightness() + (up ? .05f : -.05f));
@@ -1276,7 +1382,6 @@ void RendererImpl::altTabCommit() {
     scene->needsFrame = true;
 }
 
-
 u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     VkPhysicalDeviceMemoryProperties mp{};
 
@@ -1348,10 +1453,7 @@ void RendererImpl::setup(int w, int h) {
         fmt = output->scanoutBuffer(0)->format;
     }
 
-    createImage(width, height, sceneFormat,
-                VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-                VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-                sceneTarget, sceneMemory);
+    createImage(width, height, sceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, sceneTarget, sceneMemory);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
@@ -1592,9 +1694,7 @@ void RendererImpl::setup(int w, int h) {
     hwCapH = output->cursorCapH();
 
     if (hwCapW > 0 && hwCapH > 0) {
-        createImage(hwCapW, hwCapH, VK_FORMAT_R16G16B16A16_SFLOAT,
-                    VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
-                    curScene, curSceneMem);
+        createImage(hwCapW, hwCapH, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, curScene, curSceneMem);
         createImage(hwCapW, hwCapH, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
 
         VkImageViewCreateInfo cvi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -1690,7 +1790,6 @@ void RendererImpl::setup(int w, int h) {
         pooledVk(*pool, device, curReadback);
         pooledVk(*pool, device, curFence);
     }
-
 }
 
 void RendererImpl::uploadSurface(Surface& s) {
@@ -1836,16 +1935,14 @@ Surface* RendererImpl::scanoutCandidate() {
     }
 
     // any open compositor ui needs composition
-    if (launcherState || calendarState || wifiState || inspectorState || historyState || logState || pickShow || pickArmed || pickPending ||
-        settingsState || altTabActive || osdMs) {
+    if (launcherState || calendarState || wifiState || inspectorState || historyState || logState || pickShow || pickArmed || pickPending || settingsState || altTabActive || osdMs) {
         return nullptr;
     }
 
     if (scene->drawCursor) {
         Surface* cursor = scene->cursorSurface;
 
-        if (!hwCursorReady || output->cursorCapW() <= 0 || (cursor &&
-            (cursor->dmabuf || cursor->width > output->cursorCapW() || cursor->height > output->cursorCapH()))) {
+        if (!hwCursorReady || output->cursorCapW() <= 0 || (cursor && (cursor->dmabuf || cursor->width > output->cursorCapW() || cursor->height > output->cursorCapH()))) {
             return nullptr;
         }
     }
@@ -1882,11 +1979,7 @@ Surface* RendererImpl::scanoutCandidate() {
 
     Surface* s = fs->surface.get();
 
-    if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 ||
-        s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst ||
-        s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 ||
-        s->representation.alphaMode != 0 || s->representation.coefficients ||
-        s->representation.chromaLocation) {
+    if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 || s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst || s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 || s->representation.alphaMode != 0 || s->representation.coefficients || s->representation.chromaLocation) {
         return nullptr;
     }
 
@@ -1902,9 +1995,7 @@ Surface* RendererImpl::scanoutCandidate() {
 
     // the primary plane does not blend: an alpha-capable format may bypass
     // composition only when the client declares the surface fully opaque
-    if ((s->dmabuf->format == kFourccArgb || s->dmabuf->format == kFourccAr30 ||
-         s->dmabuf->format == kFourccAb30 || s->dmabuf->format == kFourccAb4h) &&
-        !s->opaqueCovers()) {
+    if ((s->dmabuf->format == kFourccArgb || s->dmabuf->format == kFourccAr30 || s->dmabuf->format == kFourccAb30 || s->dmabuf->format == kFourccAb4h) && !s->opaqueCovers()) {
         return nullptr;
     }
 
@@ -2053,8 +2144,7 @@ void RendererImpl::setupOutputTransform() {
 
     VkPipelineColorBlendAttachmentState attachment{};
 
-    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
 
     VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
 
@@ -2122,11 +2212,7 @@ void RendererImpl::setupOutputTransform() {
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 }
 
-void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
-                                         VkFramebuffer outputFramebuffer,
-                                         VkDescriptorSet source, int w, int h,
-                                         const OutputColorState& outputColor,
-                                         double kelvin) {
+void RendererImpl::recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, VkDescriptorSet source, int w, int h, const OutputColorState& outputColor, double kelvin) {
     VkClearValue clear{};
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
@@ -2137,8 +2223,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     begin.pClearValues = &clear;
     vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, outputPipeline);
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, outputPipeLayout,
-                            0, 1, &source, 0, nullptr);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, outputPipeLayout, 0, 1, &source, 0, nullptr);
 
     VkViewport viewport{0.f, 0.f, (float)w, (float)h, 0.f, 1.f};
     VkRect2D scissor{{0, 0}, {(u32)w, (u32)h}};
@@ -2147,6 +2232,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     vkCmdSetScissor(commands, 0, 1, &scissor);
 
     OutputMapping mapping = outputMapping(outputColor, kelvin);
+
     struct {
         float row[8][4];
     } push{};
@@ -2192,9 +2278,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands,
     vkCmdEndRenderPass(commands);
 }
 
-void RendererImpl::recordCursorTransform(VkCommandBuffer commands,
-                                         VkFramebuffer outputFramebuffer,
-                                         int w, int h) {
+void RendererImpl::recordCursorTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, int w, int h) {
     VkClearValue clear{};
     VkRenderPassBeginInfo begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
 
@@ -2205,8 +2289,7 @@ void RendererImpl::recordCursorTransform(VkCommandBuffer commands,
     begin.pClearValues = &clear;
     vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, cursorPipeline);
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, cursorPipeLayout,
-                            0, 1, &cursorOutputDesc, 0, nullptr);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, cursorPipeLayout, 0, 1, &cursorOutputDesc, 0, nullptr);
 
     VkViewport viewport{0.f, 0.f, (float)w, (float)h, 0.f, 1.f};
     VkRect2D scissor{{0, 0}, {(u32)w, (u32)h}};
@@ -2257,19 +2340,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     tex->weak.anchor(tex);
     bool yuv = b->format == kFourccNv12 || b->format == kFourccP010;
     bool p010 = b->format == kFourccP010;
-    VkFormat vkFormat = b->format == kFourccNv12 ?
-                        VK_FORMAT_G8_B8R8_2PLANE_420_UNORM :
-                        b->format == kFourccP010 ?
-                        VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 :
-                        b->format == kFourccAr30 ||
-                        b->format == kFourccXr30 ?
-                        VK_FORMAT_A2R10G10B10_UNORM_PACK32 :
-                        b->format == kFourccAb30 ||
-                        b->format == kFourccXb30 ?
-                        VK_FORMAT_A2B10G10R10_UNORM_PACK32 :
-                        b->format == kFourccAb4h ||
-                        b->format == kFourccXb4h ?
-                        VK_FORMAT_R16G16B16A16_SFLOAT : kVkFormat;
+    VkFormat vkFormat = b->format == kFourccNv12 ? VK_FORMAT_G8_B8R8_2PLANE_420_UNORM : b->format == kFourccP010 ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16 : b->format == kFourccAr30 || b->format == kFourccXr30 ? VK_FORMAT_A2R10G10B10_UNORM_PACK32 : b->format == kFourccAb30 || b->format == kFourccXb30 ? VK_FORMAT_A2B10G10R10_UNORM_PACK32 : b->format == kFourccAb4h || b->format == kFourccXb4h ? VK_FORMAT_R16G16B16A16_SFLOAT : kVkFormat;
 
     tex->w = b->width;
     tex->h = b->height;
@@ -2286,14 +2357,12 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
         struct stat planeStat{};
 
-        if (i > 0 && (!firstStatOk || fstat(b->fds[i], &planeStat) != 0 ||
-                      planeStat.st_dev != firstStat.st_dev || planeStat.st_ino != firstStat.st_ino)) {
+        if (i > 0 && (!firstStatOk || fstat(b->fds[i], &planeStat) != 0 || planeStat.st_dev != firstStat.st_dev || planeStat.st_ino != firstStat.st_ino)) {
             disjoint = true;
         }
     }
 
-    VkImageDrmFormatModifierExplicitCreateInfoEXT modInfo{
-        VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT};
+    VkImageDrmFormatModifierExplicitCreateInfoEXT modInfo{VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT};
 
     modInfo.drmFormatModifier = b->modifier;
     modInfo.drmFormatModifierPlaneCount = (u32)b->nplanes;
@@ -2308,8 +2377,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8_UNORM,
         p010 ? VK_FORMAT_R16G16_UNORM : VK_FORMAT_R8G8_UNORM,
     };
-    VkImageFormatListCreateInfo formatList{
-        VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
+    VkImageFormatListCreateInfo formatList{VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO};
 
     if (yuv) {
         formatList.viewFormatCount = 2;
@@ -2479,12 +2547,9 @@ bool RendererImpl::importDmabuf(Surface& s) {
     vci.image = tex->image;
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = yuv ? planeFormats[0] : vkFormat;
-    vci.subresourceRange = {
-        yuv ? VK_IMAGE_ASPECT_PLANE_0_BIT : VK_IMAGE_ASPECT_COLOR_BIT,
-        0, 1, 0, 1};
+    vci.subresourceRange = {yuv ? VK_IMAGE_ASPECT_PLANE_0_BIT : VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    if (b->format == kFourccXrgb || b->format == kFourccXr30 ||
-        b->format == kFourccXb30 || b->format == kFourccXb4h) {
+    if (b->format == kFourccXrgb || b->format == kFourccXr30 || b->format == kFourccXb30 || b->format == kFourccXb4h) {
         vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
     }
 
@@ -2507,8 +2572,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         }
     }
 
-    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-                             tex->dsPool, tex->chromaView);
+    tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool, tex->chromaView);
 
     if (!tex->ds) {
         // genuine device OOM: drop this import, the surface stays untextured
@@ -2529,14 +2593,22 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
 ImVec2 transformedUv(int transform, float x, float y) {
     switch (transform) {
-        case 1: return ImVec2(1.f - y, x);       // 90
-        case 2: return ImVec2(1.f - x, 1.f - y); // 180
-        case 3: return ImVec2(y, 1.f - x);       // 270
-        case 4: return ImVec2(1.f - x, y);       // flipped
-        case 5: return ImVec2(1.f - y, 1.f - x); // flipped 90
-        case 6: return ImVec2(x, 1.f - y);       // flipped 180
-        case 7: return ImVec2(y, x);             // flipped 270
-        default: return ImVec2(x, y);
+        case 1:
+            return ImVec2(1.f - y, x); // 90
+        case 2:
+            return ImVec2(1.f - x, 1.f - y); // 180
+        case 3:
+            return ImVec2(y, 1.f - x); // 270
+        case 4:
+            return ImVec2(1.f - x, y); // flipped
+        case 5:
+            return ImVec2(1.f - y, 1.f - x); // flipped 90
+        case 6:
+            return ImVec2(x, 1.f - y); // flipped 180
+        case 7:
+            return ImVec2(y, x); // flipped 270
+        default:
+            return ImVec2(x, y);
     }
 }
 
@@ -2595,13 +2667,11 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         ImU32 tint = IM_COL32(255, 255, 255, (int)(s.alphaMult * 255.f + .5f));
 
         if (s.bufferTransform == 0) {
-            ImGui::ImageWithBg((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2],
-                               ImVec4(0.f, 0.f, 0.f, 0.f), ImVec4(1.f, 1.f, 1.f, s.alphaMult));
+            ImGui::ImageWithBg((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(w, h), uv[0], uv[2], ImVec4(0.f, 0.f, 0.f, 0.f), ImVec4(1.f, 1.f, 1.f, s.alphaMult));
         } else {
             ImGui::PushID(&s);
             ImGui::InvisibleButton("surface", ImVec2(w, h));
-            draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
-                ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3], tint);
+            draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3], tint);
             ImGui::PopID();
         }
 
@@ -2662,9 +2732,7 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         ImDrawList* draw = ImGui::GetForegroundDrawList();
 
         draw->AddCallback(surfaceColorCallback, &s);
-        draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds,
-            ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3],
-            IM_COL32(255, 255, 255, (int)(s.alphaMult * 255.f + .5f)));
+        draw->AddImageQuad((ImTextureID)(uintptr_t)s.texture->ds, ImVec2(x, y), ImVec2(x + w, y), ImVec2(x + w, y + h), ImVec2(x, y + h), uv[0], uv[1], uv[2], uv[3], IM_COL32(255, 255, 255, (int)(s.alphaMult * 255.f + .5f)));
         draw->AddCallback(surfaceColorCallback, nullptr);
         s.imgX = x - gx;
         s.imgY = y - gy;
@@ -2988,7 +3056,11 @@ void RendererImpl::sampleStats() {
 }
 
 // resizeAnchor bits: which edge stays under the hand during a drag
-enum { kResizeLeft = 1, kResizeTop = 2, kResizeActive = 0x80 };
+enum {
+    kResizeLeft = 1,
+    kResizeTop = 2,
+    kResizeActive = 0x80
+};
 
 // transactional resize: a border/grip drag is a request, not a resize. the
 // callback pins the window at the client's committed size (applyW/H) and
@@ -3092,11 +3164,16 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
 
 static StringView wifiGlyph(WifiState s) {
     switch (s) {
-        case WifiState::connected: return "wifi"_sv;
-        case WifiState::connecting: return "wifi..."_sv;
-        case WifiState::scanning: return "wifi.."_sv;
-        case WifiState::disconnected: return "wifi off"_sv;
-        case WifiState::unavailable: return "no wifi"_sv;
+        case WifiState::connected:
+            return "wifi"_sv;
+        case WifiState::connecting:
+            return "wifi..."_sv;
+        case WifiState::scanning:
+            return "wifi.."_sv;
+        case WifiState::disconnected:
+            return "wifi off"_sv;
+        case WifiState::unavailable:
+            return "no wifi"_sv;
     }
 
     return "wifi"_sv;
@@ -3214,8 +3291,7 @@ void RendererImpl::buildUi(Scene& scene) {
         settings.volume = -1.f;
     }
 
-    settings.brightness = output->hasBrightness() && !output->colorState().hdr() ?
-        output->brightness() : -1.f;
+    settings.brightness = output->hasBrightness() && !output->colorState().hdr() ? output->brightness() : -1.f;
     settings.hdrPeakNits = (float)output->colorState().displayPeakNits;
     settings.hasDnd = notifier != nullptr;
 
@@ -3308,10 +3384,7 @@ void RendererImpl::buildUi(Scene& scene) {
             } else if (osdKind == 2) {
                 drawOsd(width, uiScale, "brightness"_sv, output->brightness(), false, alpha);
             } else if (osdKind == 3 && output->colorState().hdr()) {
-                drawOsd(width, uiScale, "hdr"_sv,
-                        (float)(output->colorState().sdrWhiteNits /
-                                output->colorState().displayPeakNits),
-                        false, alpha);
+                drawOsd(width, uiScale, "hdr"_sv, (float)(output->colorState().sdrWhiteNits / output->colorState().displayPeakNits), false, alpha);
             }
 
             scene.needsFrame = true;
@@ -3413,8 +3486,7 @@ void RendererImpl::buildUi(Scene& scene) {
         label << title << "###toplevel"_sv << (u64)t->id;
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
-        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.f + 30.f * i,
-            viewport->WorkPos.y + 30.f + 30.f * i), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.f + 30.f * i, viewport->WorkPos.y + 30.f + 30.f * i), ImGuiCond_FirstUseEver);
         i++;
 
         const ImGuiStyle& st = ImGui::GetStyle();
@@ -3455,8 +3527,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
         if (dragTracking) {
             ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
-            ImGui::SetNextWindowPos(ImVec2((float)posX - scene.dragToplevelOffX,
-                                           (float)posY - scene.dragToplevelOffY), ImGuiCond_Always);
+            ImGui::SetNextWindowPos(ImVec2((float)posX - scene.dragToplevelOffX, (float)posY - scene.dragToplevelOffY), ImGuiCond_Always);
             t->docked = false;
         }
 
@@ -3567,9 +3638,7 @@ void RendererImpl::buildUi(Scene& scene) {
                     t->resizeStartMouseY = mouse.y;
                     t->resizeStartW = t->applyW;
                     t->resizeStartH = t->applyH;
-                    t->resizeAnchor = kResizeActive |
-                                      ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? kResizeLeft : 0) |
-                                      ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? kResizeTop : 0);
+                    t->resizeAnchor = kResizeActive | ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? kResizeLeft : 0) | ((t->resizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? kResizeTop : 0);
                 }
 
                 t->resizeEdges = 0;
@@ -3580,10 +3649,8 @@ void RendererImpl::buildUi(Scene& scene) {
                     ImVec2 mouse = ImGui::GetMousePos();
                     float dx = mouse.x - t->resizeStartMouseX;
                     float dy = mouse.y - t->resizeStartMouseY;
-                    float rw = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) ? dx
-                             : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? -dx : 0.f;
-                    float rh = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) ? dy
-                             : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? -dy : 0.f;
+                    float rw = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_RIGHT) ? dx : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_LEFT) ? -dx : 0.f;
+                    float rh = (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM) ? dy : (t->clientResizeEdges & XDG_TOPLEVEL_RESIZE_EDGE_TOP) ? -dy : 0.f;
 
                     t->dragW = t->resizeStartW + rw;
                     t->dragH = t->resizeStartH + rh;
@@ -3724,8 +3791,7 @@ void RendererImpl::buildUi(Scene& scene) {
         LauncherAction act = LauncherAction::none;
         bool terminal = false;
 
-        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, terminal,
-                         launcherX, launcherY)) {
+        if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, terminal, launcherX, launcherY)) {
             switch (act) {
                 case LauncherAction::lockScreen:
                     openLockOverlay(*comp, &lockState);
@@ -3854,9 +3920,7 @@ void RendererImpl::buildUi(Scene& scene) {
         if (age < 150) {
             float a = (1.f - (float)age / 150.f) * 0.35f;
 
-            ImGui::GetForegroundDrawList()->AddRectFilled(
-                ImVec2(0.f, 0.f), ImVec2((float)width, (float)height),
-                IM_COL32(255, 255, 255, (int)(a * 255.f)));
+            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), ImVec2((float)width, (float)height), IM_COL32(255, 255, 255, (int)(a * 255.f)));
             scene.needsFrame = true;
         } else {
             scene.bellMs = 0;
@@ -3883,18 +3947,41 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
         ImGuiMouseCursor c = ImGuiMouseCursor_Arrow;
 
         switch (scene.cursorShape) {
-            case CursorKind::hidden: c = ImGuiMouseCursor_None; break;
-            case CursorKind::text: c = ImGuiMouseCursor_TextInput; break;
-            case CursorKind::hand: c = ImGuiMouseCursor_Hand; break;
-            case CursorKind::grab: c = ImGuiMouseCursor_Hand; break;
-            case CursorKind::move: c = ImGuiMouseCursor_ResizeAll; break;
-            case CursorKind::nsResize: c = ImGuiMouseCursor_ResizeNS; break;
-            case CursorKind::ewResize: c = ImGuiMouseCursor_ResizeEW; break;
-            case CursorKind::neswResize: c = ImGuiMouseCursor_ResizeNESW; break;
-            case CursorKind::nwseResize: c = ImGuiMouseCursor_ResizeNWSE; break;
-            case CursorKind::notAllowed: c = ImGuiMouseCursor_NotAllowed; break;
-            case CursorKind::wait: c = ImGuiMouseCursor_Wait; break;
-            default: break;
+            case CursorKind::hidden:
+                c = ImGuiMouseCursor_None;
+                break;
+            case CursorKind::text:
+                c = ImGuiMouseCursor_TextInput;
+                break;
+            case CursorKind::hand:
+                c = ImGuiMouseCursor_Hand;
+                break;
+            case CursorKind::grab:
+                c = ImGuiMouseCursor_Hand;
+                break;
+            case CursorKind::move:
+                c = ImGuiMouseCursor_ResizeAll;
+                break;
+            case CursorKind::nsResize:
+                c = ImGuiMouseCursor_ResizeNS;
+                break;
+            case CursorKind::ewResize:
+                c = ImGuiMouseCursor_ResizeEW;
+                break;
+            case CursorKind::neswResize:
+                c = ImGuiMouseCursor_ResizeNESW;
+                break;
+            case CursorKind::nwseResize:
+                c = ImGuiMouseCursor_ResizeNWSE;
+                break;
+            case CursorKind::notAllowed:
+                c = ImGuiMouseCursor_NotAllowed;
+                break;
+            case CursorKind::wait:
+                c = ImGuiMouseCursor_Wait;
+                break;
+            default:
+                break;
         }
 
         ImGui::SetMouseCursor(c);
@@ -3917,8 +4004,7 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
         // double-size with a misplaced hotspot; likewise anything that needs
         // the color pipeline (managed description, non-default alpha)
         bool plainBuffer = cs->bufferScale == 1 && cs->bufferTransform == 0 && !cs->vp.hasSrc && !cs->vp.hasDst;
-        bool plainColor = !cs->color.managed() && cs->representation.alphaMode == 0 &&
-                          !cs->representation.coefficients;
+        bool plainColor = !cs->color.managed() && cs->representation.alphaMode == 0 && !cs->representation.coefficients;
         bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
 
         if (hwOk) {
@@ -4017,8 +4103,7 @@ void RendererImpl::syncScanoutTargets() {
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = fmt;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vci, nullptr,
-                                  &scanViews.mut(i)));
+        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &scanViews.mut(i)));
 
         VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
@@ -4028,8 +4113,7 @@ void RendererImpl::syncScanoutTargets() {
         fci.width = width;
         fci.height = height;
         fci.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr,
-                                     &scanFbs.mut(i)));
+        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &scanFbs.mut(i)));
         scanImages.mut(i) = image;
     }
 }
@@ -4103,9 +4187,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
                     // transfer wait for materialization instead of failing
                     u32 binary = 0;
                     int syncFd = -1;
-                    bool exported = drmSyncobjCreate(drmFd, 0, &binary) == 0 &&
-                                    drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) == 0 &&
-                                    drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
+                    bool exported = drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
 
                     if (binary) {
                         drmSyncobjDestroy(drmFd, binary);
@@ -4127,13 +4209,9 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
                         u32 handle = s->syncAcquireHandle;
                         u64 point = s->syncAcquirePoint;
-                        i64 deadline = (i64)now.tv_sec * 1000000000ll +
-                                       now.tv_nsec + 100000000ll;
+                        i64 deadline = (i64)now.tv_sec * 1000000000ll + now.tv_nsec + 100000000ll;
 
-                        if (drmSyncobjTimelineWait(drmFd, &handle, &point, 1,
-                                                   deadline,
-                                                   DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT,
-                                                   nullptr) != 0) {
+                        if (drmSyncobjTimelineWait(drmFd, &handle, &point, 1, deadline, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, nullptr) != 0) {
                             // the point never signaled: give up on this
                             // acquire once instead of stalling every frame
                             *(comp->log) << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
@@ -4323,9 +4401,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
     renderCtx.finish();
 
-    recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer,
-                          outputDesc, width, height, outputColor,
-                          output->colorTemp());
+    recordOutputTransform(cmd, scanIdx >= 0 ? scanFbs[scanIdx] : framebuffer, outputDesc, width, height, outputColor, output->colorTemp());
 
     lastImage = scanIdx >= 0 ? output->scanoutBuffer(scanIdx)->image : target;
     lastLayout = scanIdx >= 0 ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -4603,8 +4679,7 @@ bool RendererImpl::captureFrame(unsigned char* dst, size_t stride, int rx, int r
             u32* o = (u32*)out;
 
             for (int x = 0; x < rw; x++) {
-                o[x] = ((((p[x] >> 22) & 0xffu)) << 16) | ((((p[x] >> 12) & 0xffu)) << 8) |
-                       ((p[x] >> 2) & 0xffu) | 0xff000000u;
+                o[x] = ((((p[x] >> 22) & 0xffu)) << 16) | ((((p[x] >> 12) & 0xffu)) << 8) | ((p[x] >> 2) & 0xffu) | 0xff000000u;
             }
         } else {
             memcpy(out, src, (size_t)rw * 4);

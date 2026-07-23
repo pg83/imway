@@ -99,8 +99,7 @@ namespace {
     };
 
     struct Texture;
-    void readTexture(const Image& img, const Texture& tex, int x0, int y0,
-                     int x1, int y1, Image& out);
+    void readTexture(const Image& img, const Texture& tex, int x0, int y0, int x1, int y1, Image& out);
 
     constexpr u32 kMagic = 0x31574d49u; // 'IMW1' little-endian
 
@@ -115,8 +114,7 @@ namespace {
         for (int i = 0; i < 8; i++) {
             size_t begin = pos;
 
-            while (pos < spec.length() && spec[pos] >= '0' &&
-                   spec[pos] <= '9') {
+            while (pos < spec.length() && spec[pos] >= '0' && spec[pos] <= '9') {
                 u64 digit = (u64)(spec[pos] - '0');
 
                 if (values[i] > (UINT64_MAX - digit) / 10) {
@@ -127,9 +125,7 @@ namespace {
                 pos++;
             }
 
-            if (pos == begin ||
-                (i < 7 ? pos >= spec.length() || spec[pos] != ':' :
-                         pos != spec.length())) {
+            if (pos == begin || (i < 7 ? pos >= spec.length() || spec[pos] != ':' : pos != spec.length())) {
                 return false;
             }
 
@@ -160,13 +156,10 @@ namespace {
 
             if (value.split(':', hs, rest)) {
                 StringView whiteString, minString, peakString, fallString;
-                bool volume = rest.split(':', whiteString, rest) &&
-                              rest.split(':', minString, rest) &&
-                              rest.split(':', peakString, fallString);
+                bool volume = rest.split(':', whiteString, rest) && rest.split(':', minString, rest) && rest.split(':', peakString, fallString);
                 double white = parseFloat(volume ? whiteString : rest);
 
-                img.color = hs == "1"_sv ? OutputColorState::hdr10(white) :
-                                             OutputColorState::sdr();
+                img.color = hs == "1"_sv ? OutputColorState::hdr10(white) : OutputColorState::sdr();
 
                 if (volume) {
                     img.color.displayMinNits = parseFloat(minString);
@@ -183,12 +176,10 @@ namespace {
                 fail("bad shared screenshot metadata"_sv);
             }
 
-            img.dmaFd = inherited ? fcntl(3, F_DUPFD_CLOEXEC, 0)
-                                  : open(p.cStr(), O_RDONLY | O_CLOEXEC);
+            img.dmaFd = inherited ? fcntl(3, F_DUPFD_CLOEXEC, 0) : open(p.cStr(), O_RDONLY | O_CLOEXEC);
 
             if (img.dmaFd < 0) {
-                fail(sv(StringBuilder() << "cannot take the shared screenshot fd: "_sv
-                                        << StringView(strerror(errno))));
+                fail(sv(StringBuilder() << "cannot take the shared screenshot fd: "_sv << StringView(strerror(errno))));
             }
 
             img.dmabuf = true;
@@ -249,14 +240,12 @@ namespace {
         constexpr double c3 = 2392.0 / 128.0;
         double p = pow(fmax(value, 0.0), 1.0 / m2);
 
-        return pow(fmax(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1) *
-               10000.0;
+        return pow(fmax(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1) * 10000.0;
     }
 
     u8 linearToSrgb8(double value) {
         value = fmax(0.0, fmin(1.0, value));
-        double encoded = value <= .0031308 ? value * 12.92 :
-            1.055 * pow(value, 1.0 / 2.4) - .055;
+        double encoded = value <= .0031308 ? value * 12.92 : 1.055 * pow(value, 1.0 / 2.4) - .055;
 
         return (u8)lround(encoded * 255.0);
     }
@@ -299,21 +288,15 @@ namespace {
                     if (img.rgb16.length()) {
                         const u16* src = (const u16*)img.rgb16.data() + source * 3;
 
-                        pq = {(double)src[0] / 65535.0,
-                              (double)src[1] / 65535.0,
-                              (double)src[2] / 65535.0};
+                        pq = {(double)src[0] / 65535.0, (double)src[1] / 65535.0, (double)src[2] / 65535.0};
                     } else {
                         const u8* src = img.px + source * 4;
 
-                        pq = {(double)src[0] / 255.0,
-                              (double)src[1] / 255.0,
-                              (double)src[2] / 255.0};
+                        pq = {(double)src[0] / 255.0, (double)src[1] / 255.0, (double)src[2] / 255.0};
                     }
 
-                    ColorRgb nits{pqToNits(pq.r), pqToNits(pq.g),
-                                  pqToNits(pq.b)};
-                    ColorRgb mapped = mapping.toTarget.apply(
-                        mapOutputNits(mapping, nits));
+                    ColorRgb nits{pqToNits(pq.r), pqToNits(pq.g), pqToNits(pq.b)};
+                    ColorRgb mapped = mapping.toTarget.apply(mapOutputNits(mapping, nits));
                     size_t at = (size_t)(x - x0) * 4;
 
                     dst[at + 0] = linearToSrgb8(mapped.r / 203.0);
@@ -344,8 +327,7 @@ namespace {
         out.flush();
     }
 
-    void encodeJxlPixels(const Image& img, const u16* pixels, u32 w, u32 h,
-                         Buffer& out) {
+    void encodeJxlPixels(const Image& img, const u16* pixels, u32 w, u32 h, Buffer& out) {
         JxlEncoder* enc = JxlEncoderCreate(nullptr);
 
         if (!enc) {
@@ -383,10 +365,7 @@ namespace {
         JxlEncoderFrameSettings* frame = JxlEncoderFrameSettingsCreate(enc, nullptr);
         JxlPixelFormat format{3, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
         size_t bytes = (size_t)w * h * 3 * sizeof(u16);
-        bool ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS &&
-                  JxlEncoderSetColorEncoding(enc, &color) == JXL_ENC_SUCCESS &&
-                  frame && JxlEncoderSetFrameLossless(frame, JXL_TRUE) == JXL_ENC_SUCCESS &&
-                  JxlEncoderAddImageFrame(frame, &format, pixels, bytes) == JXL_ENC_SUCCESS;
+        bool ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS && JxlEncoderSetColorEncoding(enc, &color) == JXL_ENC_SUCCESS && frame && JxlEncoderSetFrameLossless(frame, JXL_TRUE) == JXL_ENC_SUCCESS && JxlEncoderAddImageFrame(frame, &format, pixels, bytes) == JXL_ENC_SUCCESS;
 
         if (!ok) {
             JxlEncoderDestroy(enc);
@@ -416,8 +395,7 @@ namespace {
         JxlEncoderDestroy(enc);
     }
 
-    void encodeJxlSelection(const Image& img, const Texture& tex, int x0,
-                            int y0, int x1, int y1, Buffer& out) {
+    void encodeJxlSelection(const Image& img, const Texture& tex, int x0, int y0, int x1, int y1, Buffer& out) {
         Image selected;
 
         if (img.shared()) {
@@ -441,8 +419,7 @@ namespace {
         }
 
         selected.color = img.color;
-        encodeJxlPixels(selected, (const u16*)selected.rgb16.data(),
-                        selected.w, selected.h, out);
+        encodeJxlPixels(selected, (const u16*)selected.rgb16.data(), selected.w, selected.h, out);
     }
 
     // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.jxl (fallback ~/Pictures)
@@ -485,7 +462,7 @@ namespace {
         wl_data_device_manager* ddm = nullptr;
         wl_data_device* device = nullptr;
         wl_data_source* source = nullptr;
-        Buffer png;         // must outlive the source: send() can fire anytime
+        Buffer png; // must outlive the source: send() can fire anytime
         Buffer jxl;
         u32 serial = 0;
         bool cancelled = false;
@@ -707,8 +684,7 @@ namespace {
         Vector<VkExtensionProperties> props;
 
         props.zero(count);
-        vkEnumerateDeviceExtensionProperties(device, nullptr, &count,
-                                             props.mutData());
+        vkEnumerateDeviceExtensionProperties(device, nullptr, &count, props.mutData());
 
         for (const VkExtensionProperties& prop : props) {
             if (StringView(prop.extensionName) == StringView(name)) {
@@ -757,25 +733,18 @@ namespace {
             vkEnumeratePhysicalDevices(gInstance, &count, devices.mutData());
 
             for (VkPhysicalDevice device : devices) {
-                if (!hasDeviceExtension(
-                        device, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
+                if (!hasDeviceExtension(device, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
                     continue;
                 }
 
-                VkPhysicalDeviceDrmPropertiesEXT drm{
-                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
-                VkPhysicalDeviceProperties2 props{
-                    VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+                VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+                VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 
                 props.pNext = &drm;
                 vkGetPhysicalDeviceProperties2(device, &props);
 
-                bool render = drm.hasRender &&
-                    (u64)makedev((u32)drm.renderMajor,
-                                 (u32)drm.renderMinor) == img.renderDevice;
-                bool primary = drm.hasPrimary &&
-                    (u64)makedev((u32)drm.primaryMajor,
-                                 (u32)drm.primaryMinor) == img.renderDevice;
+                bool render = drm.hasRender && (u64)makedev((u32)drm.renderMajor, (u32)drm.renderMinor) == img.renderDevice;
+                bool primary = drm.hasPrimary && (u64)makedev((u32)drm.primaryMajor, (u32)drm.primaryMinor) == img.renderDevice;
 
                 if (render || primary) {
                     gPhys = device;
@@ -868,11 +837,9 @@ namespace {
         };
         const VkFormat* fmts = hdr ? hdrFmts : sdrFmts;
 
-        VkColorSpaceKHR colorSpace = hdr ? VK_COLOR_SPACE_HDR10_ST2084_EXT :
-                                          VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+        VkColorSpaceKHR colorSpace = hdr ? VK_COLOR_SPACE_HDR10_ST2084_EXT : VK_COLORSPACE_SRGB_NONLINEAR_KHR;
 
-        wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(
-            gPhys, surface, fmts, 4, colorSpace);
+        wd->SurfaceFormat = ImGui_ImplVulkanH_SelectSurfaceFormat(gPhys, surface, fmts, 4, colorSpace);
 
         if (hdr && wd->SurfaceFormat.colorSpace != colorSpace) {
             fail("vulkan WSI has no BT.2020/PQ surface"_sv);
@@ -919,10 +886,18 @@ namespace {
             vkFreeDescriptorSets(gDevice, gDescPool, 1, &gOutputSet);
             gOutputSet = VK_NULL_HANDLE;
         }
-        if (gSceneFramebuffer) vkDestroyFramebuffer(gDevice, gSceneFramebuffer, gAlloc);
-        if (gSceneView) vkDestroyImageView(gDevice, gSceneView, gAlloc);
-        if (gSceneImage) vkDestroyImage(gDevice, gSceneImage, gAlloc);
-        if (gSceneMemory) vkFreeMemory(gDevice, gSceneMemory, gAlloc);
+        if (gSceneFramebuffer) {
+            vkDestroyFramebuffer(gDevice, gSceneFramebuffer, gAlloc);
+        }
+        if (gSceneView) {
+            vkDestroyImageView(gDevice, gSceneView, gAlloc);
+        }
+        if (gSceneImage) {
+            vkDestroyImage(gDevice, gSceneImage, gAlloc);
+        }
+        if (gSceneMemory) {
+            vkFreeMemory(gDevice, gSceneMemory, gAlloc);
+        }
         gSceneFramebuffer = VK_NULL_HANDLE;
         gSceneView = VK_NULL_HANDLE;
         gSceneImage = VK_NULL_HANDLE;
@@ -951,8 +926,7 @@ namespace {
         VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
 
         mai.allocationSize = req.size;
-        mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits,
-                                             VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
         vkc(vkAllocateMemory(gDevice, &mai, gAlloc, &gSceneMemory));
         vkc(vkBindImageMemory(gDevice, gSceneImage, gSceneMemory, 0));
 
@@ -981,8 +955,7 @@ namespace {
         ai.pSetLayouts = &gOutputSetLayout;
         vkc(vkAllocateDescriptorSets(gDevice, &ai, &gOutputSet));
 
-        VkDescriptorImageInfo image{gSceneSampler, gSceneView,
-                                    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo image{gSceneSampler, gSceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
 
         write.dstSet = gOutputSet;
@@ -1039,8 +1012,7 @@ namespace {
 
         sci.magFilter = VK_FILTER_NEAREST;
         sci.minFilter = VK_FILTER_NEAREST;
-        sci.addressModeU = sci.addressModeV = sci.addressModeW =
-            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        sci.addressModeU = sci.addressModeV = sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         vkc(vkCreateSampler(gDevice, &sci, gAlloc, &gSceneSampler));
 
         VkDescriptorSetLayoutBinding binding{};
@@ -1049,48 +1021,33 @@ namespace {
         binding.descriptorCount = 1;
         binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
-        VkDescriptorSetLayoutCreateInfo dlci{
-            VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        VkDescriptorSetLayoutCreateInfo dlci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
 
         dlci.bindingCount = 1;
         dlci.pBindings = &binding;
-        vkc(vkCreateDescriptorSetLayout(gDevice, &dlci, gAlloc,
-                                        &gOutputSetLayout));
+        vkc(vkCreateDescriptorSetLayout(gDevice, &dlci, gAlloc, &gOutputSetLayout));
 
         VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
 
         plci.setLayoutCount = 1;
         plci.pSetLayouts = &gOutputSetLayout;
-        vkc(vkCreatePipelineLayout(gDevice, &plci, gAlloc,
-                                   &gOutputPipelineLayout));
+        vkc(vkCreatePipelineLayout(gDevice, &plci, gAlloc, &gOutputPipelineLayout));
 
-        VkShaderModule vert = shaderModule(fullscreen_spv,
-                                           sizeof(fullscreen_spv));
-        VkShaderModule frag = shaderModule(main_screenshot_output_spv,
-                                           sizeof(main_screenshot_output_spv));
+        VkShaderModule vert = shaderModule(fullscreen_spv, sizeof(fullscreen_spv));
+        VkShaderModule frag = shaderModule(main_screenshot_output_spv, sizeof(main_screenshot_output_spv));
         VkPipelineShaderStageCreateInfo stages[2] = {
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-             VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
-            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0,
-             VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT, vert, "main", nullptr},
+            {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, frag, "main", nullptr},
         };
-        VkPipelineVertexInputStateCreateInfo vertex{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo assembly{
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        VkPipelineViewportStateCreateInfo viewport{
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        VkPipelineRasterizationStateCreateInfo raster{
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        VkPipelineMultisampleStateCreateInfo multisample{
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+        VkPipelineVertexInputStateCreateInfo vertex{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+        VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+        VkPipelineViewportStateCreateInfo viewport{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+        VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+        VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
         VkPipelineColorBlendAttachmentState blendAttachment{};
-        VkPipelineColorBlendStateCreateInfo blend{
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                          VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dynamic{
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+        VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+        VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dynamic{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
 
         assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
         viewport.viewportCount = viewport.scissorCount = 1;
@@ -1099,16 +1056,13 @@ namespace {
         raster.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         raster.lineWidth = 1.f;
         multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT |
-            VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT |
-            VK_COLOR_COMPONENT_A_BIT;
+        blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
         blend.attachmentCount = 1;
         blend.pAttachments = &blendAttachment;
         dynamic.dynamicStateCount = 2;
         dynamic.pDynamicStates = dynamicStates;
 
-        VkGraphicsPipelineCreateInfo gpci{
-            VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+        VkGraphicsPipelineCreateInfo gpci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
 
         gpci.stageCount = 2;
         gpci.pStages = stages;
@@ -1121,8 +1075,7 @@ namespace {
         gpci.pDynamicState = &dynamic;
         gpci.layout = gOutputPipelineLayout;
         gpci.renderPass = gWin.RenderPass;
-        vkc(vkCreateGraphicsPipelines(gDevice, VK_NULL_HANDLE, 1, &gpci,
-                                      gAlloc, &gOutputPipeline));
+        vkc(vkCreateGraphicsPipelines(gDevice, VK_NULL_HANDLE, 1, &gpci, gAlloc, &gOutputPipeline));
         vkDestroyShaderModule(gDevice, frag, gAlloc);
         vkDestroyShaderModule(gDevice, vert, gAlloc);
 
@@ -1136,11 +1089,21 @@ namespace {
 
     void destroyLinearHdr() {
         destroySceneTarget();
-        if (gOutputPipeline) vkDestroyPipeline(gDevice, gOutputPipeline, gAlloc);
-        if (gOutputPipelineLayout) vkDestroyPipelineLayout(gDevice, gOutputPipelineLayout, gAlloc);
-        if (gOutputSetLayout) vkDestroyDescriptorSetLayout(gDevice, gOutputSetLayout, gAlloc);
-        if (gSceneSampler) vkDestroySampler(gDevice, gSceneSampler, gAlloc);
-        if (gScenePass) vkDestroyRenderPass(gDevice, gScenePass, gAlloc);
+        if (gOutputPipeline) {
+            vkDestroyPipeline(gDevice, gOutputPipeline, gAlloc);
+        }
+        if (gOutputPipelineLayout) {
+            vkDestroyPipelineLayout(gDevice, gOutputPipelineLayout, gAlloc);
+        }
+        if (gOutputSetLayout) {
+            vkDestroyDescriptorSetLayout(gDevice, gOutputSetLayout, gAlloc);
+        }
+        if (gSceneSampler) {
+            vkDestroySampler(gDevice, gSceneSampler, gAlloc);
+        }
+        if (gScenePass) {
+            vkDestroyRenderPass(gDevice, gScenePass, gAlloc);
+        }
     }
 
     struct Texture {
@@ -1157,8 +1120,7 @@ namespace {
         vci.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         vci.image = tex.image;
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vci.format = img.shared() ? (VkFormat)img.format :
-                                    VK_FORMAT_R8G8B8A8_UNORM;
+        vci.format = img.shared() ? (VkFormat)img.format : VK_FORMAT_R8G8B8A8_UNORM;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkc(vkCreateImageView(gDevice, &vci, gAlloc, &tex.view));
 
@@ -1175,8 +1137,7 @@ namespace {
         sci.maxLod = 1000;
         vkc(vkCreateSampler(gDevice, &sci, gAlloc, &tex.sampler));
 
-        tex.ds = ImGui_ImplVulkan_AddTexture(
-            tex.sampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        tex.ds = ImGui_ImplVulkan_AddTexture(tex.sampler, tex.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void importTexture(Image& img, Texture& tex) {
@@ -1209,9 +1170,7 @@ namespace {
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         vkc(vkCreateImage(gDevice, &ici, gAlloc, &tex.image));
@@ -1220,14 +1179,10 @@ namespace {
 
         vkGetImageMemoryRequirements(gDevice, tex.image, &req);
 
-        auto getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(
-            gDevice, "vkGetMemoryFdPropertiesKHR");
-        VkMemoryFdPropertiesKHR fdProps{
-            VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+        auto getFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(gDevice, "vkGetMemoryFdPropertiesKHR");
+        VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
-        if (!getFdProps ||
-            getFdProps(gDevice, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-                       img.dmaFd, &fdProps) != VK_SUCCESS) {
+        if (!getFdProps || getFdProps(gDevice, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, img.dmaFd, &fdProps) != VK_SUCCESS) {
             fail("cannot query shared screenshot memory"_sv);
         }
 
@@ -1237,13 +1192,11 @@ namespace {
             fail("shared screenshot memory is incompatible"_sv);
         }
 
-        VkMemoryDedicatedAllocateInfo dedicated{
-            VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
 
         dedicated.image = tex.image;
 
-        VkImportMemoryFdInfoKHR import{
-            VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+        VkImportMemoryFdInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
 
         import.pNext = &dedicated;
         import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
@@ -1266,16 +1219,14 @@ namespace {
         vkc(vkCreateCommandPool(gDevice, &pci, gAlloc, &pool));
 
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        VkCommandBufferAllocateInfo cai{
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 
         cai.commandPool = pool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
         vkc(vkAllocateCommandBuffers(gDevice, &cai, &cmd));
 
-        VkCommandBufferBeginInfo begin{
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
 
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkc(vkBeginCommandBuffer(cmd, &begin));
@@ -1290,9 +1241,7 @@ namespace {
         barrier.dstQueueFamilyIndex = gQueueFamily;
         barrier.image = tex.image;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         vkc(vkEndCommandBuffer(cmd));
 
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -1424,8 +1373,7 @@ namespace {
         finishTexture(img, tex);
     }
 
-    void readTexture(const Image& img, const Texture& tex, int x0, int y0,
-                     int x1, int y1, Image& out) {
+    void readTexture(const Image& img, const Texture& tex, int x0, int y0, int x1, int y1, Image& out) {
         out.w = (u32)(x1 - x0);
         out.h = (u32)(y1 - y0);
 
@@ -1445,9 +1393,7 @@ namespace {
         VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
 
         mai.allocationSize = req.size;
-        mai.memoryTypeIndex = findMemoryType(
-            req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                    VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
         vkc(vkAllocateMemory(gDevice, &mai, gAlloc, &memory));
         vkc(vkBindBufferMemory(gDevice, buffer, memory, 0));
 
@@ -1459,16 +1405,14 @@ namespace {
         vkc(vkCreateCommandPool(gDevice, &pci, gAlloc, &pool));
 
         VkCommandBuffer cmd = VK_NULL_HANDLE;
-        VkCommandBufferAllocateInfo cai{
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 
         cai.commandPool = pool;
         cai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cai.commandBufferCount = 1;
         vkc(vkAllocateCommandBuffers(gDevice, &cai, &cmd));
 
-        VkCommandBufferBeginInfo begin{
-            VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
 
         begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
         vkc(vkBeginCommandBuffer(cmd, &begin));
@@ -1483,26 +1427,20 @@ namespace {
         barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         barrier.image = tex.image;
         barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0,
-                             nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
         VkBufferImageCopy copy = {};
 
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageOffset = {x0, y0, 0};
         copy.imageExtent = {out.w, out.h, 1};
-        vkCmdCopyImageToBuffer(cmd, tex.image,
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1,
-                               &copy);
+        vkCmdCopyImageToBuffer(cmd, tex.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buffer, 1, &copy);
 
         barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0,
-                             nullptr, 0, nullptr, 1, &barrier);
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
         vkc(vkEndCommandBuffer(cmd));
 
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -1525,8 +1463,7 @@ namespace {
         for (size_t i = 0; i < (size_t)out.w * out.h; i++) {
             u32 pixel = source[i];
 
-            if ((VkFormat)img.format ==
-                VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            if ((VkFormat)img.format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
                 u32 r = (pixel >> 20) & 1023;
                 u32 g = (pixel >> 10) & 1023;
                 u32 b = pixel & 1023;
@@ -1554,8 +1491,7 @@ namespace {
         vkFreeMemory(gDevice, memory, gAlloc);
     }
 
-    void encodeSelection(const Image& img, const Texture& tex, int x0, int y0,
-                         int x1, int y1, Buffer& png) {
+    void encodeSelection(const Image& img, const Texture& tex, int x0, int y0, int x1, int y1, Buffer& png) {
         if (!img.shared()) {
             encodePng(img, x0, y0, x1, y1, png);
 
@@ -1617,11 +1553,8 @@ namespace {
             rp.framebuffer = fd->Framebuffer;
             rp.pClearValues = &wd->ClearValue;
             vkCmdBeginRenderPass(fd->CommandBuffer, &rp, VK_SUBPASS_CONTENTS_INLINE);
-            vkCmdBindPipeline(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              gOutputPipeline);
-            vkCmdBindDescriptorSets(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    gOutputPipelineLayout, 0, 1, &gOutputSet,
-                                    0, nullptr);
+            vkCmdBindPipeline(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, gOutputPipeline);
+            vkCmdBindDescriptorSets(fd->CommandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, gOutputPipelineLayout, 0, 1, &gOutputSet, 0, nullptr);
             VkViewport viewport{0, 0, (float)wd->Width, (float)wd->Height, 0, 1};
             VkRect2D scissor{{0, 0}, {(u32)wd->Width, (u32)wd->Height}};
 
@@ -1840,12 +1773,10 @@ namespace {
         ImDrawList* dl = ImGui::GetWindowDrawList();
 
         if (img.color.hdr()) {
-            dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback,
-                            (void*)(intptr_t)2);
+            dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)(intptr_t)2);
         }
 
-        dl->AddImage((ImTextureID)tex.ds, origin,
-                     ImVec2(origin.x + content.x, origin.y + content.y));
+        dl->AddImage((ImTextureID)tex.ds, origin, ImVec2(origin.x + content.x, origin.y + content.y));
 
         if (img.color.hdr()) {
             dl->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
@@ -1904,9 +1835,9 @@ namespace {
             ImVec2 hi(origin.x + content.x, origin.y + content.y);
             ImU32 dim = IM_COL32(0, 0, 0, 140);
 
-            dl->AddRectFilled(origin, ImVec2(hi.x, s0.y), dim);              // above
+            dl->AddRectFilled(origin, ImVec2(hi.x, s0.y), dim);             // above
             dl->AddRectFilled(ImVec2(origin.x, s1.y), hi, dim);             // below
-            dl->AddRectFilled(ImVec2(origin.x, s0.y), s0, dim);            // left
+            dl->AddRectFilled(ImVec2(origin.x, s0.y), s0, dim);             // left
             dl->AddRectFilled(ImVec2(s1.x, s0.y), ImVec2(hi.x, s1.y), dim); // right
             dl->AddRect(s0, s1, IM_COL32(255, 255, 255, 230), 0, 0, 1.5f);
         }
@@ -2212,8 +2143,7 @@ int mainScreenshot(StringView path) {
         ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
         if (loaded && img.color.hdr()) {
-            ii.CustomShaderFragCreateInfo.sType =
-                VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            ii.CustomShaderFragCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
             ii.CustomShaderFragCreateInfo.codeSize = sizeof(main_screenshot_scene_spv);
             ii.CustomShaderFragCreateInfo.pCode = main_screenshot_scene_spv;
         }
@@ -2222,8 +2152,7 @@ int mainScreenshot(StringView path) {
         pooledGuard(*shot, [] {
             ImGui_ImplVulkan_Shutdown();
         });
-        ImGui_ImplVulkan_SetSdrWhite(
-            img.color.hdr() ? (float)img.color.sdrWhiteNits : 203.f);
+        ImGui_ImplVulkan_SetSdrWhite(img.color.hdr() ? (float)img.color.sdrWhiteNits : 203.f);
         initClipboard();
 
         if (loaded) {
@@ -2296,7 +2225,9 @@ int mainScreenshot(StringView path) {
 
             if (!errText.empty()) {
                 glfwShowWindow(window);
-                runLoop(window, [&] { return drawError(sv(errText)); });
+                runLoop(window, [&] {
+                    return drawError(sv(errText));
+                });
             }
         }
 

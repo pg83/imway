@@ -33,12 +33,8 @@ int main() {
 
     HdrOutputMetadata metadata = hdrOutputMetadata(output, content);
 
-    if (!(metadata.primaries == Chromaticities::displayP3()) ||
-        !near(metadata.minNits, .005) || !near(metadata.maxNits, 600) ||
-        metadata.maxCll != 599 || metadata.maxFall != 300) {
-        fprintf(stderr, "mapped metadata mismatch: min %.4f max %.1f CLL %u FALL %u\n",
-                metadata.minNits, metadata.maxNits, metadata.maxCll,
-                metadata.maxFall);
+    if (!(metadata.primaries == Chromaticities::displayP3()) || !near(metadata.minNits, .005) || !near(metadata.maxNits, 600) || metadata.maxCll != 599 || metadata.maxFall != 300) {
+        fprintf(stderr, "mapped metadata mismatch: min %.4f max %.1f CLL %u FALL %u\n", metadata.minNits, metadata.maxNits, metadata.maxCll, metadata.maxFall);
         return 1;
     }
 
@@ -58,8 +54,7 @@ int main() {
     unknownContent.add(unknown, output.sdrWhiteNits);
     metadata = hdrOutputMetadata(output, unknownContent);
 
-    if (metadata.maxCll != 600 || metadata.maxFall != 350 ||
-        metadata.maxFall > metadata.maxCll) {
+    if (metadata.maxCll != 600 || metadata.maxFall != 350 || metadata.maxFall > metadata.maxCll) {
         fputs("unknown HDR metadata does not conservatively use output volume\n", stderr);
         return 1;
     }

@@ -61,8 +61,7 @@ namespace {
         // (rasterizeShape) that a real headless output otherwise never hits
         int curCap = 0;
 
-        HeadlessOutput(Composer& comp, int width, int height, double refresh,
-                       const OutputConfiguration& config);
+        HeadlessOutput(Composer& comp, int width, int height, double refresh, const OutputConfiguration& config);
 
         int width() const override;
         int height() const override;
@@ -104,7 +103,9 @@ namespace {
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
         void scanoutFormatsImpl(stl::VisitorFace&&) override;
-        void setTearingHint(bool) override {}
+
+        void setTearingHint(bool) override {
+        }
     };
 
     struct HeadlessDevice: public Device {
@@ -120,17 +121,23 @@ namespace {
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
-        void leaseConnectorsImpl(VisitorFace&&) override {}
-        int createLease(const u32*, int, u32&) override { return -ENODEV; }
-        void revokeLease(u32) override {}
-        ::Output* createOutput(StringView, StringView modeStr,
-                               const OutputConfiguration& config) override;
+
+        void leaseConnectorsImpl(VisitorFace&&) override {
+        }
+
+        int createLease(const u32*, int, u32&) override {
+            return -ENODEV;
+        }
+
+        void revokeLease(u32) override {
+        }
+
+        ::Output* createOutput(StringView, StringView modeStr, const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
 }
 
-HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh,
-                               const OutputConfiguration& config)
+HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double refresh, const OutputConfiguration& config)
     : c(&comp)
     , w(width)
     , h(height)
@@ -163,11 +170,25 @@ double HeadlessOutput::refresh() const {
     return hz;
 }
 
-StringView HeadlessOutput::outputName() const { return "HEADLESS-1"_sv; }
-StringView HeadlessOutput::make() const { return "imway"_sv; }
-StringView HeadlessOutput::model() const { return "headless"_sv; }
-int HeadlessOutput::physicalWidthMm() const { return 0; }
-int HeadlessOutput::physicalHeightMm() const { return 0; }
+StringView HeadlessOutput::outputName() const {
+    return "HEADLESS-1"_sv;
+}
+
+StringView HeadlessOutput::make() const {
+    return "imway"_sv;
+}
+
+StringView HeadlessOutput::model() const {
+    return "headless"_sv;
+}
+
+int HeadlessOutput::physicalWidthMm() const {
+    return 0;
+}
+
+int HeadlessOutput::physicalHeightMm() const {
+    return 0;
+}
 
 int HeadlessOutput::cursorCapW() const {
     return curCap;
@@ -312,7 +333,9 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
     vk = pool->make<DeviceVk>(*c->log, -1);
 
     if (vk->hasDmabuf) {
-        vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
+        vk->queryDmabufFormats([this](const DmabufFormat& f) {
+            formats.pushBack(f);
+        });
 
         // a render node is enough for syncobj ioctls (explicit sync)
         for (int i = 128; i < 136 && syncFd < 0; i++) {
@@ -357,8 +380,7 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     }
 }
 
-::Output* HeadlessDevice::createOutput(StringView, StringView modeStr,
-                                       const OutputConfiguration& config) {
+::Output* HeadlessDevice::createOutput(StringView, StringView modeStr, const OutputConfiguration& config) {
     ModeSpec m{1280, 800, 60};
 
     if (!modeStr.empty()) {

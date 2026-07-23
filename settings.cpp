@@ -87,9 +87,7 @@ void Dialog::pageDisplay(Settings& s) {
 
         // keep room in the cell for the headroom ratio
         ImGui::SetNextItemWidth(-48.f * s.uiScale);
-        s.sdrChanged |= ImGui::SliderFloat("##hdr", &s.sdrNits, low, high,
-                                           "%.0f nits",
-                                           ImGuiSliderFlags_AlwaysClamp);
+        s.sdrChanged |= ImGui::SliderFloat("##hdr", &s.sdrNits, low, high, "%.0f nits", ImGuiSliderFlags_AlwaysClamp);
         ImGui::SameLine();
         ImGui::TextDisabled("%.1fx", s.hdrPeakNits / s.sdrNits);
     } else {
@@ -268,12 +266,24 @@ void Dialog::draw(Settings& s, bool& open) {
     ImGui::BeginChild("page");
 
     switch (page) {
-        case 0: pageDisplay(s); break;
-        case 1: pageColor(s); break;
-        case 2: pageAudio(s); break;
-        case 3: pageInput(s); break;
-        case 4: pageKeys(s); break;
-        case 5: pageNotifications(s); break;
+        case 0:
+            pageDisplay(s);
+            break;
+        case 1:
+            pageColor(s);
+            break;
+        case 2:
+            pageAudio(s);
+            break;
+        case 3:
+            pageInput(s);
+            break;
+        case 4:
+            pageKeys(s);
+            break;
+        case 5:
+            pageNotifications(s);
+            break;
     }
 
     ImGui::EndChild();

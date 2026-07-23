@@ -203,8 +203,7 @@ void drawDock(Composer& c, DockResult& result) {
     float scale = ImGui::GetStyle().FontScaleMain;
     float width = dockBarWidth();
     float iconSize = dockIconSize();
-    ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
-        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2((width - iconSize) * 0.5f, 5.f * scale));
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 5.f * scale));
@@ -429,5 +428,4 @@ void drawDock(Composer& c, DockResult& result) {
 
     ImGui::End();
     ImGui::PopStyleVar(2);
-
 }

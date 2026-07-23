@@ -79,9 +79,7 @@ bool colorDescriptionFromIcc(const void* data, size_t size, ColorDescription& ou
 
     double version = cmsGetProfileVersion(input);
     cmsProfileClassSignature profileClass = cmsGetDeviceClass(input);
-    bool valid = version >= 2 && version < 5 &&
-        (profileClass == cmsSigDisplayClass || profileClass == cmsSigColorSpaceClass) &&
-        cmsGetColorSpace(input) == cmsSigRgbData && cmsIsMatrixShaper(input);
+    bool valid = version >= 2 && version < 5 && (profileClass == cmsSigDisplayClass || profileClass == cmsSigColorSpaceClass) && cmsGetColorSpace(input) == cmsSigRgbData && cmsIsMatrixShaper(input);
 
     const cmsToneCurve* curves[3] = {
         (const cmsToneCurve*)cmsReadTag(input, cmsSigRedTRCTag),
@@ -112,9 +110,7 @@ bool colorDescriptionFromIcc(const void* data, size_t size, ColorDescription& ou
     }
 
     cmsHPROFILE output = valid ? linearBt2020Profile() : nullptr;
-    cmsHTRANSFORM transform = output ? cmsCreateTransform(
-        input, TYPE_RGB_FLT, output, TYPE_RGB_FLT,
-        INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE) : nullptr;
+    cmsHTRANSFORM transform = output ? cmsCreateTransform(input, TYPE_RGB_FLT, output, TYPE_RGB_FLT, INTENT_RELATIVE_COLORIMETRIC, cmsFLAGS_NOOPTIMIZE | cmsFLAGS_NOCACHE) : nullptr;
 
     if (!transform) {
         valid = false;
@@ -122,10 +118,18 @@ bool colorDescriptionFromIcc(const void* data, size_t size, ColorDescription& ou
 
     if (valid) {
         const float basis[12] = {
-            0, 0, 0,
-            1, 0, 0,
-            0, 1, 0,
-            0, 0, 1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            1,
         };
         float mapped[12] = {};
 

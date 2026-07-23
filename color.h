@@ -122,8 +122,7 @@ struct ColorMatrix {
     ColorRgb apply(const ColorRgb& color) const;
 };
 
-ColorMatrix colorPrimariesTransform(const Chromaticities& from,
-                                    const Chromaticities& to);
+ColorMatrix colorPrimariesTransform(const Chromaticities& from, const Chromaticities& to);
 
 struct OutputMapping {
     ColorMatrix toTarget;
@@ -155,12 +154,9 @@ struct HdrOutputMetadata {
     bool operator!=(const HdrOutputMetadata& other) const;
 };
 
-bool parseEdidColorCapabilities(const void* data, size_t size,
-                                DisplayColorCapabilities& capabilities);
-OutputColorState outputColorState(const OutputConfiguration& config,
-                                  const DisplayColorCapabilities& capabilities);
-OutputMapping outputMapping(const OutputColorState& output,
-                            double colorTemperature = 0);
+bool parseEdidColorCapabilities(const void* data, size_t size, DisplayColorCapabilities& capabilities);
+OutputColorState outputColorState(const OutputConfiguration& config, const DisplayColorCapabilities& capabilities);
+OutputMapping outputMapping(const OutputColorState& output, double colorTemperature = 0);
 ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
 
 // The brightest scene value a surface with this description can produce,
@@ -168,8 +164,6 @@ ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
 // when nothing on screen can exceed the output peak, the roll-off knee must
 // not touch in-range content.
 double surfaceMaxNits(const ColorDescription& color, double sdrWhiteNits);
-HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
-                                    const HdrContentMetadata& content);
+HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrContentMetadata& content);
 
-bool directScanoutColorCompatible(const OutputColorState& output,
-                                  const ColorDescription& surface);
+bool directScanoutColorCompatible(const OutputColorState& output, const ColorDescription& surface);

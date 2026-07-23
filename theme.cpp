@@ -125,12 +125,18 @@ namespace {
         float t = value * (1.f - saturation * (1.f - f));
 
         switch (sector % 6) {
-        case 0: return {value, t, p, 1.f};
-        case 1: return {q, value, p, 1.f};
-        case 2: return {p, value, t, 1.f};
-        case 3: return {p, q, value, 1.f};
-        case 4: return {t, p, value, 1.f};
-        default: return {value, p, q, 1.f};
+            case 0:
+                return {value, t, p, 1.f};
+            case 1:
+                return {q, value, p, 1.f};
+            case 2:
+                return {p, value, t, 1.f};
+            case 3:
+                return {p, q, value, 1.f};
+            case 4:
+                return {t, p, value, 1.f};
+            default:
+                return {value, p, q, 1.f};
         }
     }
 

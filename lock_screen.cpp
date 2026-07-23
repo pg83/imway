@@ -42,12 +42,17 @@ namespace {
         ImGuiContext& context = *GImGui;
         ImGuiInputTextState& state = context.InputTextState;
 
-        if (state.TextA.Data) wipe(state.TextA.Data, (size_t)state.TextA.Capacity);
-        if (state.TextToRevertTo.Data) wipe(state.TextToRevertTo.Data, (size_t)state.TextToRevertTo.Capacity);
-        if (state.CallbackTextBackup.Data) wipe(state.CallbackTextBackup.Data, (size_t)state.CallbackTextBackup.Capacity);
+        if (state.TextA.Data) {
+            wipe(state.TextA.Data, (size_t)state.TextA.Capacity);
+        }
+        if (state.TextToRevertTo.Data) {
+            wipe(state.TextToRevertTo.Data, (size_t)state.TextToRevertTo.Capacity);
+        }
+        if (state.CallbackTextBackup.Data) {
+            wipe(state.CallbackTextBackup.Data, (size_t)state.CallbackTextBackup.Capacity);
+        }
         if (context.InputTextDeactivatedState.TextA.Data) {
-            wipe(context.InputTextDeactivatedState.TextA.Data,
-                 (size_t)context.InputTextDeactivatedState.TextA.Capacity);
+            wipe(context.InputTextDeactivatedState.TextA.Data, (size_t)context.InputTextDeactivatedState.TextA.Capacity);
         }
 
         state.ClearFreeMemory();
@@ -166,8 +171,7 @@ namespace {
         void setup(RenderContext& ctx);
         void recordBlur(VkCommandBuffer commands);
         u32 findMemoryType(u32 bits, VkMemoryPropertyFlags flags) const;
-        void createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage,
-                         VkImage& image, VkDeviceMemory& memory);
+        void createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory);
     };
 
     struct Dialog {
@@ -203,8 +207,7 @@ u32 LockFilter::findMemoryType(u32 bits, VkMemoryPropertyFlags flags) const {
     return UINT32_MAX;
 }
 
-void LockFilter::createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage,
-                             VkImage& image, VkDeviceMemory& memory) {
+void LockFilter::createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
@@ -241,9 +244,7 @@ void LockFilter::setup(RenderContext& ctx) {
     blurW = width > 4 ? (width + 3) / 4 : 1;
     blurH = height > 4 ? (height + 3) / 4 : 1;
 
-    createImage(width, height, format,
-        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT,
-        baseImage, baseMemory);
+    createImage(width, height, format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, baseImage, baseMemory);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
@@ -290,9 +291,7 @@ void LockFilter::setup(RenderContext& ctx) {
     VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &baseFramebuffer));
 
     for (int i = 0; i < 2; i++) {
-        createImage(blurW, blurH, VK_FORMAT_R16G16B16A16_SFLOAT,
-            VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
-            blurImages[i], blurMemory[i]);
+        createImage(blurW, blurH, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, blurImages[i], blurMemory[i]);
 
         vci.image = blurImages[i];
         vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -390,20 +389,44 @@ LockFilter::~LockFilter() noexcept {
     if (blurUi) {
         textures->free(blurUi, blurUiPool);
     }
-    if (descriptorPool) vkDestroyDescriptorPool(device, descriptorPool, nullptr);
-    if (pipeline) vkDestroyPipeline(device, pipeline, nullptr);
-    if (pipeLayout) vkDestroyPipelineLayout(device, pipeLayout, nullptr);
-    if (setLayout) vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
-    if (baseFramebuffer) vkDestroyFramebuffer(device, baseFramebuffer, nullptr);
-    if (basePass) vkDestroyRenderPass(device, basePass, nullptr);
-    for (int i = 0; i < 2; i++) {
-        if (blurViews[i]) vkDestroyImageView(device, blurViews[i], nullptr);
-        if (blurImages[i]) vkDestroyImage(device, blurImages[i], nullptr);
-        if (blurMemory[i]) vkFreeMemory(device, blurMemory[i], nullptr);
+    if (descriptorPool) {
+        vkDestroyDescriptorPool(device, descriptorPool, nullptr);
     }
-    if (baseView) vkDestroyImageView(device, baseView, nullptr);
-    if (baseImage) vkDestroyImage(device, baseImage, nullptr);
-    if (baseMemory) vkFreeMemory(device, baseMemory, nullptr);
+    if (pipeline) {
+        vkDestroyPipeline(device, pipeline, nullptr);
+    }
+    if (pipeLayout) {
+        vkDestroyPipelineLayout(device, pipeLayout, nullptr);
+    }
+    if (setLayout) {
+        vkDestroyDescriptorSetLayout(device, setLayout, nullptr);
+    }
+    if (baseFramebuffer) {
+        vkDestroyFramebuffer(device, baseFramebuffer, nullptr);
+    }
+    if (basePass) {
+        vkDestroyRenderPass(device, basePass, nullptr);
+    }
+    for (int i = 0; i < 2; i++) {
+        if (blurViews[i]) {
+            vkDestroyImageView(device, blurViews[i], nullptr);
+        }
+        if (blurImages[i]) {
+            vkDestroyImage(device, blurImages[i], nullptr);
+        }
+        if (blurMemory[i]) {
+            vkFreeMemory(device, blurMemory[i], nullptr);
+        }
+    }
+    if (baseView) {
+        vkDestroyImageView(device, baseView, nullptr);
+    }
+    if (baseImage) {
+        vkDestroyImage(device, baseImage, nullptr);
+    }
+    if (baseMemory) {
+        vkFreeMemory(device, baseMemory, nullptr);
+    }
 }
 
 void LockFilter::recordBlur(VkCommandBuffer commands) {
@@ -417,8 +440,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     base.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     base.image = baseImage;
     base.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &base);
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &base);
 
     VkImageMemoryBarrier down{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
 
@@ -430,8 +452,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     down.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     down.image = blurImages[0];
     down.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(commands, fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &down);
+    vkCmdPipelineBarrier(commands, fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &down);
 
     VkImageBlit blit{};
 
@@ -439,8 +460,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     blit.srcOffsets[1] = {width, height, 1};
     blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     blit.dstOffsets[1] = {blurW, blurH, 1};
-    vkCmdBlitImage(commands, baseImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        blurImages[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+    vkCmdBlitImage(commands, baseImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, blurImages[0], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
 
     VkImageMemoryBarrier firstRead = down;
 
@@ -448,8 +468,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     firstRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     firstRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     firstRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &firstRead);
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &firstRead);
 
     VkImageMemoryBarrier secondWrite{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
 
@@ -461,8 +480,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     secondWrite.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     secondWrite.image = blurImages[1];
     secondWrite.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(commands, fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &secondWrite);
+    vkCmdPipelineBarrier(commands, fresh ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &secondWrite);
 
     vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout, 0, 1, &descriptorSets[0], 0, nullptr);
@@ -476,8 +494,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     secondRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     secondRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     secondRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &secondRead);
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &secondRead);
 
     VkImageMemoryBarrier finalWrite = firstRead;
 
@@ -485,8 +502,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     finalWrite.dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
     finalWrite.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     finalWrite.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &finalWrite);
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &finalWrite);
 
     vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout, 0, 1, &descriptorSets[1], 0, nullptr);
     i32 vertical[2] = {0, 1};
@@ -499,8 +515,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
     finalRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     finalRead.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     finalRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 1, &finalRead);
+    vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &finalRead);
     fresh = false;
 }
 
@@ -557,10 +572,7 @@ void Dialog::draw(Composer& c, bool& open) {
     ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.f);
 
-    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar |
-        ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings |
-        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
     if (ImGui::Begin("##lock-overlay", nullptr, flags)) {
         filter.overlayDrawList = ImGui::GetWindowDrawList();
@@ -596,8 +608,7 @@ void Dialog::draw(Composer& c, bool& open) {
             }
         }
 
-        bool enter = ImGui::InputText("##password", password, sizeof(password),
-            ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+        bool enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
 
         if (failed) {
             ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));

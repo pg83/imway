@@ -23,10 +23,7 @@ namespace {
     }
 
     ColorMatrix inverse(const ColorMatrix& m) {
-        double determinant =
-            m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) -
-            m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) +
-            m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
+        double determinant = m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) - m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) + m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
 
         if (fabs(determinant) < 1e-12) {
             return ColorMatrix::identity();
@@ -47,15 +44,23 @@ namespace {
     }
 
     ColorMatrix rgbToXyz(const Chromaticities& c) {
-        auto unit = [](i32 value) { return (double)value / 1000000.0; };
+        auto unit = [](i32 value) {
+            return (double)value / 1000000.0;
+        };
         double xr = unit(c.rx), yr = unit(c.ry);
         double xg = unit(c.gx), yg = unit(c.gy);
         double xb = unit(c.bx), yb = unit(c.by);
         double xw = unit(c.wx), yw = unit(c.wy);
         ColorMatrix primaries{{
-            xr / yr, xg / yg, xb / yb,
-            1, 1, 1,
-            (1 - xr - yr) / yr, (1 - xg - yg) / yg, (1 - xb - yb) / yb,
+            xr / yr,
+            xg / yg,
+            xb / yb,
+            1,
+            1,
+            1,
+            (1 - xr - yr) / yr,
+            (1 - xg - yg) / yg,
+            (1 - xb - yb) / yb,
         }};
         ColorRgb white{xw / yw, 1, (1 - xw - yw) / yw};
         ColorRgb scale = inverse(primaries).apply(white);
@@ -75,33 +80,33 @@ namespace {
         }
 
         double t = fmax(1667.0, fmin(25000.0, kelvin));
-        double x = t <= 4000.0 ?
-            -.2661239e9 / (t * t * t) - .2343580e6 / (t * t) +
-                .8776956e3 / t + .179910 :
-            -3.0258469e9 / (t * t * t) + 2.1070379e6 / (t * t) +
-                .2226347e3 / t + .240390;
-        double y = t <= 2222.0 ?
-            -1.1063814 * x * x * x - 1.34811020 * x * x +
-                2.18555832 * x - .20219683 :
-            t <= 4000.0 ?
-                -.9549476 * x * x * x - 1.37418593 * x * x +
-                    2.09137015 * x - .16748867 :
-                3.0817580 * x * x * x - 5.87338670 * x * x +
-                    3.75112997 * x - .37001483;
-        ColorRgb source{.3127 / .3290, 1.0,
-                        (1.0 - .3127 - .3290) / .3290};
+        double x = t <= 4000.0 ? -.2661239e9 / (t * t * t) - .2343580e6 / (t * t) + .8776956e3 / t + .179910 : -3.0258469e9 / (t * t * t) + 2.1070379e6 / (t * t) + .2226347e3 / t + .240390;
+        double y = t <= 2222.0 ? -1.1063814 * x * x * x - 1.34811020 * x * x + 2.18555832 * x - .20219683 : t <= 4000.0 ? -.9549476 * x * x * x - 1.37418593 * x * x + 2.09137015 * x - .16748867 : 3.0817580 * x * x * x - 5.87338670 * x * x + 3.75112997 * x - .37001483;
+        ColorRgb source{.3127 / .3290, 1.0, (1.0 - .3127 - .3290) / .3290};
         ColorRgb target{x / y, 1.0, (1.0 - x - y) / y};
         ColorMatrix bradford{{
-            .8951, .2664, -.1614,
-            -.7502, 1.7135, .0367,
-            .0389, -.0685, 1.0296,
+            .8951,
+            .2664,
+            -.1614,
+            -.7502,
+            1.7135,
+            .0367,
+            .0389,
+            -.0685,
+            1.0296,
         }};
         ColorRgb sourceCone = bradford.apply(source);
         ColorRgb targetCone = bradford.apply(target);
         ColorMatrix scale{{
-            targetCone.r / sourceCone.r, 0, 0,
-            0, targetCone.g / sourceCone.g, 0,
-            0, 0, targetCone.b / sourceCone.b,
+            targetCone.r / sourceCone.r,
+            0,
+            0,
+            0,
+            targetCone.g / sourceCone.g,
+            0,
+            0,
+            0,
+            targetCone.b / sourceCone.b,
         }};
 
         return multiply(inverse(bradford), multiply(scale, bradford));
@@ -122,8 +127,7 @@ namespace {
     }
 }
 
-ColorMatrix colorPrimariesTransform(const Chromaticities& from,
-                                    const Chromaticities& to) {
+ColorMatrix colorPrimariesTransform(const Chromaticities& from, const Chromaticities& to) {
     return multiply(inverse(rgbToXyz(to)), rgbToXyz(from));
 }
 
@@ -145,10 +149,7 @@ bool Chromaticities::valid() const {
     }
 
     ColorMatrix m = rgbToXyz(*this);
-    double determinant =
-        m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) -
-        m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) +
-        m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
+    double determinant = m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) - m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) + m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
 
     if (!isfinite(determinant) || fabs(determinant) < 1e-9) {
         return false;
@@ -164,8 +165,7 @@ bool Chromaticities::valid() const {
 }
 
 bool Chromaticities::operator==(const Chromaticities& o) const {
-    return rx == o.rx && ry == o.ry && gx == o.gx && gy == o.gy &&
-           bx == o.bx && by == o.by && wx == o.wx && wy == o.wy;
+    return rx == o.rx && ry == o.ry && gx == o.gx && gy == o.gy && bx == o.bx && by == o.by && wx == o.wx && wy == o.wy;
 }
 
 ColorDescription ColorDescription::sRgb() {
@@ -234,8 +234,7 @@ ColorDescription ColorDescription::gamma22() {
 }
 
 bool ColorDescription::managed() const {
-    return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb ||
-           directToBt2020;
+    return transfer != ColorTransfer::sRgb || primaries != ColorPrimaries::sRgb || directToBt2020;
 }
 
 bool ColorDescription::hdr() const {
@@ -243,16 +242,7 @@ bool ColorDescription::hdr() const {
 }
 
 bool ColorDescription::operator==(const ColorDescription& o) const {
-    return transfer == o.transfer && primaries == o.primaries && primary == o.primary &&
-           minNits == o.minNits && maxNits == o.maxNits &&
-           referenceNits == o.referenceNits && linearOneNits == o.linearOneNits &&
-           target == o.target &&
-           targetMinNits == o.targetMinNits && targetMaxNits == o.targetMaxNits &&
-           maxCll == o.maxCll && maxFall == o.maxFall &&
-           maxCllSet == o.maxCllSet && maxFallSet == o.maxFallSet &&
-           directToBt2020 == o.directToBt2020 &&
-           !memcmp(toBt2020, o.toBt2020, sizeof(toBt2020)) &&
-           !memcmp(gamma, o.gamma, sizeof(gamma));
+    return transfer == o.transfer && primaries == o.primaries && primary == o.primary && minNits == o.minNits && maxNits == o.maxNits && referenceNits == o.referenceNits && linearOneNits == o.linearOneNits && target == o.target && targetMinNits == o.targetMinNits && targetMaxNits == o.targetMaxNits && maxCll == o.maxCll && maxFall == o.maxFall && maxCllSet == o.maxCllSet && maxFallSet == o.maxFallSet && directToBt2020 == o.directToBt2020 && !memcmp(toBt2020, o.toBt2020, sizeof(toBt2020)) && !memcmp(gamma, o.gamma, sizeof(gamma));
 }
 
 bool ColorDescription::operator!=(const ColorDescription& o) const {
@@ -297,10 +287,7 @@ bool OutputColorState::hdr() const {
 }
 
 bool OutputColorState::operator==(const OutputColorState& o) const {
-    return encoding == o.encoding && sdrWhiteNits == o.sdrWhiteNits &&
-           displayMinNits == o.displayMinNits && displayPeakNits == o.displayPeakNits &&
-           displayMaxFallNits == o.displayMaxFallNits && bpc == o.bpc &&
-           range == o.range;
+    return encoding == o.encoding && sdrWhiteNits == o.sdrWhiteNits && displayMinNits == o.displayMinNits && displayPeakNits == o.displayPeakNits && displayMaxFallNits == o.displayMaxFallNits && bpc == o.bpc && range == o.range;
 }
 
 ColorMatrix ColorMatrix::identity() {
@@ -315,8 +302,7 @@ ColorRgb ColorMatrix::apply(const ColorRgb& c) const {
     };
 }
 
-bool parseEdidColorCapabilities(const void* data, size_t size,
-                                DisplayColorCapabilities& capabilities) {
+bool parseEdidColorCapabilities(const void* data, size_t size, DisplayColorCapabilities& capabilities) {
     capabilities = {};
 
     di_info* info = di_info_parse_edid(data, size);
@@ -328,8 +314,7 @@ bool parseEdidColorCapabilities(const void* data, size_t size,
     capabilities.valid = true;
 
     const di_hdr_static_metadata* hdr = di_info_get_hdr_static_metadata(info);
-    const di_supported_signal_colorimetry* signal =
-        di_info_get_supported_signal_colorimetry(info);
+    const di_supported_signal_colorimetry* signal = di_info_get_supported_signal_colorimetry(info);
     const di_color_primaries* primaries = di_info_get_default_color_primaries(info);
 
     capabilities.pq = hdr->pq;
@@ -338,17 +323,22 @@ bool parseEdidColorCapabilities(const void* data, size_t size,
     capabilities.minNits = hdr->desired_content_min_luminance;
     capabilities.peakNits = hdr->desired_content_max_luminance;
     capabilities.maxFallNits = hdr->desired_content_max_frame_avg_luminance;
-    capabilities.hasPrimaries = primaries->has_primaries &&
-                                primaries->has_default_white_point;
+    capabilities.hasPrimaries = primaries->has_primaries && primaries->has_default_white_point;
 
     if (capabilities.hasPrimaries) {
-        auto scaled = [](float value) { return (i32)lround((double)value * 1000000.0); };
+        auto scaled = [](float value) {
+            return (i32)lround((double)value * 1000000.0);
+        };
 
         capabilities.primaries = {
-            scaled(primaries->primary[0].x), scaled(primaries->primary[0].y),
-            scaled(primaries->primary[1].x), scaled(primaries->primary[1].y),
-            scaled(primaries->primary[2].x), scaled(primaries->primary[2].y),
-            scaled(primaries->default_white.x), scaled(primaries->default_white.y),
+            scaled(primaries->primary[0].x),
+            scaled(primaries->primary[0].y),
+            scaled(primaries->primary[1].x),
+            scaled(primaries->primary[1].y),
+            scaled(primaries->primary[2].x),
+            scaled(primaries->primary[2].y),
+            scaled(primaries->default_white.x),
+            scaled(primaries->default_white.y),
         };
     }
 
@@ -357,10 +347,8 @@ bool parseEdidColorCapabilities(const void* data, size_t size,
     return true;
 }
 
-OutputColorState outputColorState(const OutputConfiguration& config,
-                                  const DisplayColorCapabilities& capabilities) {
-    OutputColorState state = config.hdrSdrWhiteNits > 0 ?
-        OutputColorState::hdr10(config.hdrSdrWhiteNits) : OutputColorState::sdr();
+OutputColorState outputColorState(const OutputConfiguration& config, const DisplayColorCapabilities& capabilities) {
+    OutputColorState state = config.hdrSdrWhiteNits > 0 ? OutputColorState::hdr10(config.hdrSdrWhiteNits) : OutputColorState::sdr();
 
     if (state.hdr()) {
         if (capabilities.peakNits > 0) {
@@ -407,17 +395,13 @@ OutputColorState outputColorState(const OutputConfiguration& config,
     return state;
 }
 
-OutputMapping outputMapping(const OutputColorState& output,
-                            double colorTemperature) {
+OutputMapping outputMapping(const OutputColorState& output, double colorTemperature) {
     OutputMapping mapping;
-    Chromaticities target = output.hdr() ?
-        output.encoding.target : Chromaticities::sRgb();
+    Chromaticities target = output.hdr() ? output.encoding.target : Chromaticities::sRgb();
     ColorMatrix sceneToXyz = rgbToXyz(Chromaticities::bt2020());
     ColorMatrix targetToXyz = rgbToXyz(target);
 
-    mapping.toTarget = multiply(
-        inverse(targetToXyz),
-        multiply(chromaticAdaptation(colorTemperature), sceneToXyz));
+    mapping.toTarget = multiply(inverse(targetToXyz), multiply(chromaticAdaptation(colorTemperature), sceneToXyz));
     mapping.fromTarget = multiply(inverse(sceneToXyz), targetToXyz);
     mapping.targetLuma = {targetToXyz.v[3], targetToXyz.v[4], targetToXyz.v[5]};
     mapping.hdr = output.hdr();
@@ -437,9 +421,7 @@ OutputMapping outputMapping(const OutputColorState& output,
 
 ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color) {
     ColorRgb target = mapping.toTarget.apply(color);
-    double luminance = mapping.targetLuma.r * target.r +
-                       mapping.targetLuma.g * target.g +
-                       mapping.targetLuma.b * target.b;
+    double luminance = mapping.targetLuma.r * target.r + mapping.targetLuma.g * target.g + mapping.targetLuma.b * target.b;
     double mappedLuminance = toneMap(luminance, mapping);
 
     if (luminance > 1e-9) {
@@ -458,12 +440,9 @@ ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color) {
 
     for (double channel : channels) {
         if (channel < 0) {
-            chromaScale = fmin(chromaScale,
-                mappedLuminance / (mappedLuminance - channel));
+            chromaScale = fmin(chromaScale, mappedLuminance / (mappedLuminance - channel));
         } else if (channel > mapping.peakNits) {
-            chromaScale = fmin(chromaScale,
-                (mapping.peakNits - mappedLuminance) /
-                (channel - mappedLuminance));
+            chromaScale = fmin(chromaScale, (mapping.peakNits - mappedLuminance) / (channel - mappedLuminance));
         }
     }
 
@@ -520,17 +499,14 @@ void HdrContentMetadata::add(const ColorDescription& color, double sdrWhiteNits)
 }
 
 bool HdrOutputMetadata::operator==(const HdrOutputMetadata& o) const {
-    return primaries == o.primaries && minNits == o.minNits &&
-           maxNits == o.maxNits && maxCll == o.maxCll &&
-           maxFall == o.maxFall && hdr == o.hdr;
+    return primaries == o.primaries && minNits == o.minNits && maxNits == o.maxNits && maxCll == o.maxCll && maxFall == o.maxFall && hdr == o.hdr;
 }
 
 bool HdrOutputMetadata::operator!=(const HdrOutputMetadata& o) const {
     return !(*this == o);
 }
 
-HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
-                                    const HdrContentMetadata& content) {
+HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrContentMetadata& content) {
     HdrOutputMetadata metadata;
 
     if (!output.hdr()) {
@@ -547,15 +523,11 @@ HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output,
         ColorRgb mapped = mapOutputNits(mapping, {nits, nits, nits});
         ColorRgb target = mapping.toTarget.apply(mapped);
 
-        return mapping.targetLuma.r * target.r +
-               mapping.targetLuma.g * target.g +
-               mapping.targetLuma.b * target.b;
+        return mapping.targetLuma.r * target.r + mapping.targetLuma.g * target.g + mapping.targetLuma.b * target.b;
     };
 
-    double sourceCll = content.maxCllUnknown ?
-        output.encoding.maxNits : content.maxCllNits;
-    double sourceFall = content.maxFallUnknown ?
-        output.displayMaxFallNits : content.maxFallNits;
+    double sourceCll = content.maxCllUnknown ? output.encoding.maxNits : content.maxCllNits;
+    double sourceFall = content.maxFallUnknown ? output.displayMaxFallNits : content.maxFallNits;
     double mappedCll = mappedNeutral(sourceCll);
     double mappedFall = mappedNeutral(sourceFall);
 
@@ -573,7 +545,6 @@ bool OutputColorState::operator!=(const OutputColorState& o) const {
     return !(*this == o);
 }
 
-bool directScanoutColorCompatible(const OutputColorState& output,
-                                  const ColorDescription& surface) {
+bool directScanoutColorCompatible(const OutputColorState& output, const ColorDescription& surface) {
     return !output.hdr() && !surface.managed();
 }

@@ -53,8 +53,7 @@ namespace {
         action.sa_handler = SIG_IGN;
         action.sa_flags = SA_NOCLDWAIT | SA_NOCLDSTOP;
 
-        return sigaction(SIGCHLD, &action, nullptr) == 0 &&
-               sigaction(SIGPIPE, &action, nullptr) == 0;
+        return sigaction(SIGCHLD, &action, nullptr) == 0 && sigaction(SIGPIPE, &action, nullptr) == 0;
     }
 
     [[noreturn]] void finish(int code) {
@@ -123,8 +122,7 @@ namespace {
 
         int nullFd = open("/dev/null", O_RDWR | O_CLOEXEC);
 
-        if (nullFd < 0 || dup2(nullFd, STDIN_FILENO) < 0 ||
-            dup2(nullFd, STDOUT_FILENO) < 0 || dup2(nullFd, STDERR_FILENO) < 0) {
+        if (nullFd < 0 || dup2(nullFd, STDIN_FILENO) < 0 || dup2(nullFd, STDOUT_FILENO) < 0 || dup2(nullFd, STDERR_FILENO) < 0) {
             _exit(126);
         }
 
@@ -170,17 +168,14 @@ namespace {
 
         memcpy(&request, packet, sizeof(request));
 
-        if (!request.argCount || request.argCount > 1024 ||
-            request.envCount > 1024) {
+        if (!request.argCount || request.argCount > 1024 || request.envCount > 1024) {
             return false;
         }
 
         char* cursor = (char*)packet + sizeof(request);
         char* end = (char*)packet + size;
 
-        if (!takeStrings(cursor, end, args, request.argCount) ||
-            !takeStrings(cursor, end, env, request.envCount) || cursor != end ||
-            !*args[0]) {
+        if (!takeStrings(cursor, end, args, request.argCount) || !takeStrings(cursor, end, env, request.envCount) || cursor != end || !*args[0]) {
             return false;
         }
 
@@ -218,8 +213,7 @@ namespace {
         }
 
         for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
-            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS &&
-                c->cmsg_len == CMSG_LEN(sizeof(int))) {
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int))) {
                 memcpy(fd, CMSG_DATA(c), sizeof(int));
             }
         }
@@ -256,8 +250,7 @@ namespace {
 }
 
 void SupervisorImpl::spawn(const SupervisorSpawn& spec) {
-    if (!spec.args || !spec.argCount || spec.argCount > 1024 ||
-        spec.envCount > 1024) {
+    if (!spec.args || !spec.argCount || spec.argCount > 1024 || spec.envCount > 1024) {
         return;
     }
 

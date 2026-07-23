@@ -13,8 +13,7 @@ static bool failed;
 static bool ready;
 static uint32_t failedCause;
 
-static void descriptionFailed(void*, wp_image_description_v1*, uint32_t cause,
-                              const char*) {
+static void descriptionFailed(void*, wp_image_description_v1*, uint32_t cause, const char*) {
     failed = true;
     failedCause = cause;
 }
@@ -33,11 +32,9 @@ static const wp_image_description_v1_listener descriptionListener = {
     .ready2 = descriptionReady2,
 };
 
-static void extraGlobal(void*, wl_registry* registry, uint32_t name,
-                        const char* interface, uint32_t version) {
+static void extraGlobal(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     if (!strcmp(interface, wp_color_manager_v1_interface.name)) {
-        manager = (wp_color_manager_v1*)wl_registry_bind(
-            registry, name, &wp_color_manager_v1_interface, version < 3 ? version : 3);
+        manager = (wp_color_manager_v1*)wl_registry_bind(registry, name, &wp_color_manager_v1_interface, version < 3 ? version : 3);
     }
 }
 
@@ -52,8 +49,7 @@ static int expectCreatorError(uint32_t code) {
     uint32_t object = 0;
     uint32_t actual = wl_display_get_protocol_error(wl_dpy, &interface, &object);
     if (wl_display_get_error(wl_dpy) != EPROTO || actual != code) {
-        fprintf(stderr, "wrong ICC creator error %u, want %u (interface=%s object=%u)\n",
-                actual, code, interface ? interface->name : "?", object);
+        fprintf(stderr, "wrong ICC creator error %u, want %u (interface=%s object=%u)\n", actual, code, interface ? interface->name : "?", object);
         return 1;
     }
     return 0;
@@ -97,8 +93,7 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    wp_image_description_creator_icc_v1* creator =
-        wp_color_manager_v1_create_icc_creator(manager);
+    wp_image_description_creator_icc_v1* creator = wp_color_manager_v1_create_icc_creator(manager);
 
     if (!strcmp(argv[1], "incomplete")) {
         wp_image_description_creator_icc_v1_create(creator);
@@ -107,7 +102,9 @@ int main(int argc, char** argv) {
 
     if (!strcmp(argv[1], "bad-fd")) {
         int pipeFd[2];
-        if (pipe(pipeFd)) return 2;
+        if (pipe(pipeFd)) {
+            return 2;
+        }
         wp_image_description_creator_icc_v1_set_icc_file(creator, pipeFd[0], 0, 4);
         close(pipeFd[0]);
         close(pipeFd[1]);
@@ -139,8 +136,7 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[1], "invalid-profile")) {
         wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, 64);
         close(fd);
-        wp_image_description_v1* description =
-            wp_image_description_creator_icc_v1_create(creator);
+        wp_image_description_v1* description = wp_image_description_creator_icc_v1_create(creator);
         wp_image_description_v1_add_listener(description, &descriptionListener, nullptr);
         wl_display_roundtrip(wl_dpy);
         return !failed || failedCause != WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED;
@@ -149,23 +145,24 @@ int main(int argc, char** argv) {
     if (!strcmp(argv[1], "invalid-class") || !strcmp(argv[1], "information")) {
         close(fd);
         uint32_t size = 0;
-        fd = profileFd(!strcmp(argv[1], "invalid-class") ?
-                       cmsSigInputClass : cmsSigDisplayClass, size);
-        if (fd < 0) return 2;
+        fd = profileFd(!strcmp(argv[1], "invalid-class") ? cmsSigInputClass : cmsSigDisplayClass, size);
+        if (fd < 0) {
+            return 2;
+        }
         wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, size);
         close(fd);
-        wp_image_description_v1* description =
-            wp_image_description_creator_icc_v1_create(creator);
+        wp_image_description_v1* description = wp_image_description_creator_icc_v1_create(creator);
         wp_image_description_v1_add_listener(description, &descriptionListener, nullptr);
         wl_display_roundtrip(wl_dpy);
 
         if (!strcmp(argv[1], "invalid-class")) {
             return !failed || failedCause != WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED;
         }
-        if (!ready || failed) return 1;
+        if (!ready || failed) {
+            return 1;
+        }
         wp_image_description_v1_get_information(description);
-        return wl_expect_error(wp_image_description_v1_interface.name,
-                               WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION);
+        return wl_expect_error(wp_image_description_v1_interface.name, WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION);
     }
 
     close(fd);

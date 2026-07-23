@@ -26,6 +26,7 @@ namespace {
         // a flat copy of every byte ever written; line starts and lengths
         // follow the same split rule as the implementation
         StringBuilder bytes;
+
         // parallel arrays: start offset into `bytes` and length
         struct Line {
             size_t start = 0;
@@ -54,7 +55,6 @@ namespace {
                 }
             }
         }
-
     };
 
     u64 rng = 0x1badf00d;
@@ -80,8 +80,7 @@ namespace {
             StringView expect((const u8*)model.bytes.data() + want.start, want.len);
 
             if (got != expect) {
-                fprintf(stderr, "line %zu of %zu mismatch: got %zu bytes, want %zu bytes\n",
-                        i, kept, got.length(), expect.length());
+                fprintf(stderr, "line %zu of %zu mismatch: got %zu bytes, want %zu bytes\n", i, kept, got.length(), expect.length());
 
                 return false;
             }
@@ -194,8 +193,7 @@ int main() {
                 }
 
                 if (log->histLen() < mustKeep(model)) {
-                    fprintf(stderr, "round %d step %d: kept %zu, must keep %zu\n",
-                            round, step, log->histLen(), mustKeep(model));
+                    fprintf(stderr, "round %d step %d: kept %zu, must keep %zu\n", round, step, log->histLen(), mustKeep(model));
 
                     return 1;
                 }

@@ -35,23 +35,76 @@ namespace {
             u32 code;
             bool shift;
         } table[] = {
-            {'a', KEY_A, 0}, {'b', KEY_B, 0}, {'c', KEY_C, 0}, {'d', KEY_D, 0}, {'e', KEY_E, 0},
-            {'f', KEY_F, 0}, {'g', KEY_G, 0}, {'h', KEY_H, 0}, {'i', KEY_I, 0}, {'j', KEY_J, 0},
-            {'k', KEY_K, 0}, {'l', KEY_L, 0}, {'m', KEY_M, 0}, {'n', KEY_N, 0}, {'o', KEY_O, 0},
-            {'p', KEY_P, 0}, {'q', KEY_Q, 0}, {'r', KEY_R, 0}, {'s', KEY_S, 0}, {'t', KEY_T, 0},
-            {'u', KEY_U, 0}, {'v', KEY_V, 0}, {'w', KEY_W, 0}, {'x', KEY_X, 0}, {'y', KEY_Y, 0},
-            {'z', KEY_Z, 0}, {'1', KEY_1, 0}, {'2', KEY_2, 0}, {'3', KEY_3, 0}, {'4', KEY_4, 0},
-            {'5', KEY_5, 0}, {'6', KEY_6, 0}, {'7', KEY_7, 0}, {'8', KEY_8, 0}, {'9', KEY_9, 0},
-            {'0', KEY_0, 0}, {' ', KEY_SPACE, 0}, {'-', KEY_MINUS, 0}, {'=', KEY_EQUAL, 0},
-            {'/', KEY_SLASH, 0}, {'.', KEY_DOT, 0}, {',', KEY_COMMA, 0}, {';', KEY_SEMICOLON, 0},
-            {'\'', KEY_APOSTROPHE, 0}, {'[', KEY_LEFTBRACE, 0}, {']', KEY_RIGHTBRACE, 0},
-            {'\\', KEY_BACKSLASH, 0}, {'`', KEY_GRAVE, 0}, {'\t', KEY_TAB, 0},
-            {'_', KEY_MINUS, 1}, {'+', KEY_EQUAL, 1}, {'?', KEY_SLASH, 1}, {'>', KEY_DOT, 1},
-            {'<', KEY_COMMA, 1}, {':', KEY_SEMICOLON, 1}, {'"', KEY_APOSTROPHE, 1},
-            {'{', KEY_LEFTBRACE, 1}, {'}', KEY_RIGHTBRACE, 1}, {'|', KEY_BACKSLASH, 1},
-            {'~', KEY_GRAVE, 1}, {'!', KEY_1, 1}, {'@', KEY_2, 1}, {'#', KEY_3, 1},
-            {'$', KEY_4, 1}, {'%', KEY_5, 1}, {'^', KEY_6, 1}, {'&', KEY_7, 1}, {'*', KEY_8, 1},
-            {'(', KEY_9, 1}, {')', KEY_0, 1},
+            {'a', KEY_A, 0},
+            {'b', KEY_B, 0},
+            {'c', KEY_C, 0},
+            {'d', KEY_D, 0},
+            {'e', KEY_E, 0},
+            {'f', KEY_F, 0},
+            {'g', KEY_G, 0},
+            {'h', KEY_H, 0},
+            {'i', KEY_I, 0},
+            {'j', KEY_J, 0},
+            {'k', KEY_K, 0},
+            {'l', KEY_L, 0},
+            {'m', KEY_M, 0},
+            {'n', KEY_N, 0},
+            {'o', KEY_O, 0},
+            {'p', KEY_P, 0},
+            {'q', KEY_Q, 0},
+            {'r', KEY_R, 0},
+            {'s', KEY_S, 0},
+            {'t', KEY_T, 0},
+            {'u', KEY_U, 0},
+            {'v', KEY_V, 0},
+            {'w', KEY_W, 0},
+            {'x', KEY_X, 0},
+            {'y', KEY_Y, 0},
+            {'z', KEY_Z, 0},
+            {'1', KEY_1, 0},
+            {'2', KEY_2, 0},
+            {'3', KEY_3, 0},
+            {'4', KEY_4, 0},
+            {'5', KEY_5, 0},
+            {'6', KEY_6, 0},
+            {'7', KEY_7, 0},
+            {'8', KEY_8, 0},
+            {'9', KEY_9, 0},
+            {'0', KEY_0, 0},
+            {' ', KEY_SPACE, 0},
+            {'-', KEY_MINUS, 0},
+            {'=', KEY_EQUAL, 0},
+            {'/', KEY_SLASH, 0},
+            {'.', KEY_DOT, 0},
+            {',', KEY_COMMA, 0},
+            {';', KEY_SEMICOLON, 0},
+            {'\'', KEY_APOSTROPHE, 0},
+            {'[', KEY_LEFTBRACE, 0},
+            {']', KEY_RIGHTBRACE, 0},
+            {'\\', KEY_BACKSLASH, 0},
+            {'`', KEY_GRAVE, 0},
+            {'\t', KEY_TAB, 0},
+            {'_', KEY_MINUS, 1},
+            {'+', KEY_EQUAL, 1},
+            {'?', KEY_SLASH, 1},
+            {'>', KEY_DOT, 1},
+            {'<', KEY_COMMA, 1},
+            {':', KEY_SEMICOLON, 1},
+            {'"', KEY_APOSTROPHE, 1},
+            {'{', KEY_LEFTBRACE, 1},
+            {'}', KEY_RIGHTBRACE, 1},
+            {'|', KEY_BACKSLASH, 1},
+            {'~', KEY_GRAVE, 1},
+            {'!', KEY_1, 1},
+            {'@', KEY_2, 1},
+            {'#', KEY_3, 1},
+            {'$', KEY_4, 1},
+            {'%', KEY_5, 1},
+            {'^', KEY_6, 1},
+            {'&', KEY_7, 1},
+            {'*', KEY_8, 1},
+            {'(', KEY_9, 1},
+            {')', KEY_0, 1},
         };
 
         if (c >= 'A' && c <= 'Z') {
@@ -269,10 +322,7 @@ void ControlImpl::handleLine(StringView cmd) {
 
         TabletToolEvent ev;
 
-        ev.phase = phase == "proximity_in"_sv ? TabletPhase::proximityIn :
-                   phase == "proximity_out"_sv ? TabletPhase::proximityOut :
-                   phase == "down"_sv ? TabletPhase::tipDown :
-                   phase == "up"_sv ? TabletPhase::tipUp : TabletPhase::motion;
+        ev.phase = phase == "proximity_in"_sv ? TabletPhase::proximityIn : phase == "proximity_out"_sv ? TabletPhase::proximityOut : phase == "down"_sv ? TabletPhase::tipDown : phase == "up"_sv ? TabletPhase::tipUp : TabletPhase::motion;
 
         if (rest.split(' ', xs, ys)) {
             StringView yy;
@@ -314,52 +364,22 @@ void ControlImpl::dumpState(StringView outPath) {
         Surface* s = t.surface.get();
         Icon* icon = t.icon(*comp);
 
-        out << "toplevel id="_sv << t.id
-            << " mapped="_sv << (int)t.mapped
-            << " csd="_sv << (int)t.csd
-            << " fullscreen="_sv << (int)t.fullscreen
-            << " minimized="_sv << (int)t.minimized
-            << " maximized="_sv << (int)t.maximized
-            << " activated="_sv << (int)t.activated
-            << " docked="_sv << (int)t.docked
-            << " modal="_sv << (int)t.modal
-            << " focused="_sv << (int)(scene->focusedToplevel.get() == &t)
-            << " focus_seq="_sv << t.focusedAt
-            << " x="_sv << (int)t.curX
-            << " y="_sv << (int)t.curY
-            << " w="_sv << (int)t.applyW
-            << " h="_sv << (int)t.applyH;
+        out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(scene->focusedToplevel.get() == &t) << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
 
         if (s) {
-            out << " imgx="_sv << (int)s->imgX
-                << " imgy="_sv << (int)s->imgY
-                << " client_w="_sv << s->geomW()
-                << " client_h="_sv << s->geomH()
-                << " content_type="_sv << s->contentType
-                << " tearing="_sv << (int)s->tearingAsync;
+            out << " imgx="_sv << (int)s->imgX << " imgy="_sv << (int)s->imgY << " client_w="_sv << s->geomW() << " client_h="_sv << s->geomH() << " content_type="_sv << s->contentType << " tearing="_sv << (int)s->tearingAsync;
         }
 
-        out << " parent="_sv << (t.parent ? t.parent->id : 0)
-            << " icon_gen="_sv << (icon ? icon->gen : 0)
-            << " tag="_sv << sv(t.tag)
-            << " app_id="_sv << sv(t.appId)
-            << " title="_sv << sv(t.title)
-            << "\n"_sv;
+        out << " parent="_sv << (t.parent ? t.parent->id : 0) << " icon_gen="_sv << (icon ? icon->gen : 0) << " tag="_sv << sv(t.tag) << " app_id="_sv << sv(t.appId) << " title="_sv << sv(t.title) << "\n"_sv;
     });
 
     forEach<Popup>(scene->popups, [&](Popup& p) {
         Surface* s = p.surface.get();
 
-        out << "popup mapped="_sv << (int)p.mapped
-            << " grab="_sv << (int)p.grab
-            << " x="_sv << p.x
-            << " y="_sv << p.y;
+        out << "popup mapped="_sv << (int)p.mapped << " grab="_sv << (int)p.grab << " x="_sv << p.x << " y="_sv << p.y;
 
         if (s) {
-            out << " imgx="_sv << (int)s->imgX
-                << " imgy="_sv << (int)s->imgY
-                << " w="_sv << s->viewW()
-                << " h="_sv << s->viewH();
+            out << " imgx="_sv << (int)s->imgX << " imgy="_sv << (int)s->imgY << " w="_sv << s->viewW() << " h="_sv << s->viewH();
         }
 
         out << "\n"_sv;
@@ -370,21 +390,13 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
-    out << "cursor shape="_sv << (int)scene->cursorShape
-        << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
-    out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr)
-        << " x="_sv << (int)scene->imePopupX
-        << " y="_sv << (int)scene->imePopupY << "\n"_sv;
+    out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
+    out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;
 
     const HdrOutputMetadata& metadata = comp->output->hdrMetadata();
 
-    out << "hdr metadata="_sv << (int)metadata.hdr
-        << " min="_sv << metadata.minNits
-        << " max="_sv << metadata.maxNits
-        << " max_cll="_sv << metadata.maxCll
-        << " max_fall="_sv << metadata.maxFall << "\n"_sv;
-    out << "color_intermediate_bytes="_sv << renderer->colorIntermediateBytes()
-        << "\n"_sv;
+    out << "hdr metadata="_sv << (int)metadata.hdr << " min="_sv << metadata.minNits << " max="_sv << metadata.maxNits << " max_cll="_sv << metadata.maxCll << " max_fall="_sv << metadata.maxFall << "\n"_sv;
+    out << "color_intermediate_bytes="_sv << renderer->colorIntermediateBytes() << "\n"_sv;
 
     StringBuilder tmpPath;
 

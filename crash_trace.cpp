@@ -2,12 +2,12 @@
 
 #ifdef IMWAY_FILL_GARBAGE
 
-#include <csignal>
-#include <cstdint>
-#include <cstdio>
-#include <cstring>
+    #include <csignal>
+    #include <cstdint>
+    #include <cstdio>
+    #include <cstring>
 
-#include <unistd.h>
+    #include <unistd.h>
 
 // A frame-pointer stack walk for the poisoned test build (imway_test is built
 // with -fno-omit-frame-pointer and is not stripped). It prints raw pc plus the
@@ -41,8 +41,7 @@ namespace {
             char perms[8] = "";
             char path[4096] = "";
 
-            if (sscanf(line, "%lx-%lx %7s %*x %*x:%*x %*u %4095[^\n]",
-                       &start, &end, perms, path) >= 3) {
+            if (sscanf(line, "%lx-%lx %7s %*x %*x:%*x %*u %4095[^\n]", &start, &end, perms, path) >= 3) {
                 const char* p = path;
 
                 while (*p == ' ') {
@@ -64,10 +63,13 @@ namespace {
     void crashHandler(int sig) {
         uintptr_t base = exeBase();
 
-        std::fprintf(stderr,
-                     "\n=== imway crash: signal %d  exe_base=0x%lx"
-                     "  (addr2line -e .build/imway_test -f -C <off>) ===\n",
-                     sig, (unsigned long)base);
+        std::fprintf(
+            stderr,
+            "\n=== imway crash: signal %d  exe_base=0x%lx"
+            "  (addr2line -e .build/imway_test -f -C <off>) ===\n",
+            sig,
+            (unsigned long)base
+        );
 
         void** fp = (void**)__builtin_frame_address(0);
 
@@ -80,8 +82,7 @@ namespace {
 
             uintptr_t a = (uintptr_t)ret;
 
-            std::fprintf(stderr, "  #%02d  pc=0x%lx  off=0x%lx\n",
-                         i, (unsigned long)a, (unsigned long)(base ? a - base : a));
+            std::fprintf(stderr, "  #%02d  pc=0x%lx  off=0x%lx\n", i, (unsigned long)a, (unsigned long)(base ? a - base : a));
 
             void** next = (void**)fp[0];
 

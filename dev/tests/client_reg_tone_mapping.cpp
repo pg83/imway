@@ -8,12 +8,9 @@ namespace {
         return fabs(a - b) < epsilon;
     }
 
-    bool inTargetGamut(const OutputMapping& mapping, const ColorRgb& color,
-                       double peak) {
+    bool inTargetGamut(const OutputMapping& mapping, const ColorRgb& color, double peak) {
         ColorRgb target = mapping.toTarget.apply(color);
-        return target.r >= -.001 && target.g >= -.001 && target.b >= -.001 &&
-               target.r <= peak + .001 && target.g <= peak + .001 &&
-               target.b <= peak + .001;
+        return target.r >= -.001 && target.g >= -.001 && target.b >= -.001 && target.r <= peak + .001 && target.g <= peak + .001 && target.b <= peak + .001;
     }
 }
 
@@ -39,8 +36,7 @@ int main() {
     for (double sample : samples) {
         ColorRgb mapped = mapOutputNits(mapping, {sample, sample, sample});
 
-        if (mapped.r + .001 < previous || mapped.r > 600.001 ||
-            !near(mapped.r, mapped.g) || !near(mapped.g, mapped.b)) {
+        if (mapped.r + .001 < previous || mapped.r > 600.001 || !near(mapped.r, mapped.g) || !near(mapped.g, mapped.b)) {
             fputs("tone curve is not neutral, monotonic and bounded\n", stderr);
             return 1;
         }
@@ -56,7 +52,10 @@ int main() {
     }
 
     const ColorRgb wideSamples[] = {
-        {0, 1000, 0}, {1000, 0, 0}, {0, 0, 1000}, {-20, 700, 120},
+        {0, 1000, 0},
+        {1000, 0, 0},
+        {0, 0, 1000},
+        {-20, 700, 120},
     };
 
     for (ColorRgb sample : wideSamples) {
@@ -72,8 +71,7 @@ int main() {
     OutputMapping sdrMapping = outputMapping(sdr);
     ColorRgb sdrHighlight = mapOutputNits(sdrMapping, {1000, 1000, 1000});
 
-    if (sdrHighlight.r < 190 || sdrHighlight.r > 203.001 ||
-        !inTargetGamut(sdrMapping, sdrHighlight, 203)) {
+    if (sdrHighlight.r < 190 || sdrHighlight.r > 203.001 || !inTargetGamut(sdrMapping, sdrHighlight, 203)) {
         fputs("HDR to SDR mapping is missing\n", stderr);
         return 1;
     }

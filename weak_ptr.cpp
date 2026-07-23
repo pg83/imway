@@ -9,13 +9,11 @@
 // detach by hand.
 
 WeakRefBase::WeakRefBase(void* p) noexcept
-    : ptr(p)
-{
+    : ptr(p) {
 }
 
 WeakRefBase::WeakRefBase(WeakRefBase& o) noexcept
-    : ptr(o.ptr)
-{
+    : ptr(o.ptr) {
     stl::IntrusiveList::insertAfter(&o, this);
 }
 

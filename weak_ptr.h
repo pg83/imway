@@ -52,14 +52,12 @@ struct Weak: WeakRefBase {
 
     // seat an anchor on its target (or make an observer aimed straight at t)
     explicit Weak(T* t) noexcept
-        : WeakRefBase((void*)t)
-    {
+        : WeakRefBase((void*)t) {
     }
 
     // spin a new reference off an existing node
     Weak(Weak& o) noexcept
-        : WeakRefBase(o)
-    {
+        : WeakRefBase(o) {
     }
 
     void bind(Weak& o) noexcept {

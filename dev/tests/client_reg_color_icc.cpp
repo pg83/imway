@@ -39,8 +39,7 @@ static const wp_color_manager_v1_listener managerListener = {
     .done = managerDoneEvent,
 };
 
-static void descriptionFailedEvent(void*, wp_image_description_v1*, uint32_t,
-                                   const char* message) {
+static void descriptionFailedEvent(void*, wp_image_description_v1*, uint32_t, const char* message) {
     fprintf(stderr, "ICC image description failed: %s\n", message);
     descriptionFailed = true;
 }
@@ -59,11 +58,9 @@ static const wp_image_description_v1_listener descriptionListener = {
     .ready2 = descriptionReady2Event,
 };
 
-static void extraGlobal(void*, wl_registry* registry, uint32_t name,
-                        const char* interface, uint32_t version) {
+static void extraGlobal(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     if (!strcmp(interface, wp_color_manager_v1_interface.name)) {
-        manager = (wp_color_manager_v1*)wl_registry_bind(
-            registry, name, &wp_color_manager_v1_interface, version < 3 ? version : 3);
+        manager = (wp_color_manager_v1*)wl_registry_bind(registry, name, &wp_color_manager_v1_interface, version < 3 ? version : 3);
     }
 }
 
@@ -100,8 +97,7 @@ static int p3ProfileFd(uint32_t& offset, uint32_t& length) {
     offset = 137;
     length = bytes;
     int fd = memfd_create("icc-display-p3", 0);
-    if (fd < 0 || ftruncate(fd, (off_t)offset + length + 29) < 0 ||
-        pwrite(fd, data.data(), length, offset) != (ssize_t)length) {
+    if (fd < 0 || ftruncate(fd, (off_t)offset + length + 29) < 0 || pwrite(fd, data.data(), length, offset) != (ssize_t)length) {
         perror("test ICC memfd");
         exit(2);
     }
@@ -138,12 +134,10 @@ int main() {
 
     uint32_t offset = 0, length = 0;
     int fd = p3ProfileFd(offset, length);
-    wp_image_description_creator_icc_v1* creator =
-        wp_color_manager_v1_create_icc_creator(manager);
+    wp_image_description_creator_icc_v1* creator = wp_color_manager_v1_create_icc_creator(manager);
     wp_image_description_creator_icc_v1_set_icc_file(creator, fd, offset, length);
     close(fd);
-    wp_image_description_v1* description =
-        wp_image_description_creator_icc_v1_create(creator);
+    wp_image_description_v1* description = wp_image_description_creator_icc_v1_create(creator);
     wp_image_description_v1_add_listener(description, &descriptionListener, nullptr);
 
     while (!descriptionReady && !descriptionFailed && wl_display_dispatch(wl_dpy) != -1) {
@@ -152,10 +146,8 @@ int main() {
         return 1;
     }
 
-    wp_color_management_surface_v1* colorSurface =
-        wp_color_manager_v1_get_surface(manager, top.surface);
-    wp_color_management_surface_v1_set_image_description(
-        colorSurface, description, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+    wp_color_management_surface_v1* colorSurface = wp_color_manager_v1_get_surface(manager, top.surface);
+    wp_color_management_surface_v1_set_image_description(colorSurface, description, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
     wl_surface_commit(top.surface);
     puts("client_reg_color_icc: managed");
 

@@ -47,7 +47,7 @@ namespace {
         // two independent generations, each rebuilt wholesale by its reply:
         // the arena swap is the commit, the old generation dies whole
         ObjPool* infoGen = nullptr;
-        Vector<NetInfo*> infos;   // rebuilt on every GetManagedObjects
+        Vector<NetInfo*> infos; // rebuilt on every GetManagedObjects
 
         ObjPool* netGen = nullptr;
         Vector<WifiNetwork*> nets; // the ordered, ui-facing list

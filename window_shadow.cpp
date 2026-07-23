@@ -8,7 +8,7 @@ namespace {
     constexpr int kMargin = 20;
     constexpr int kCore = 12;
     constexpr int kSprite = kMargin * 2 + kCore;
-    constexpr float kRadius = 5.f;  // core corner radius
+    constexpr float kRadius = 5.f; // core corner radius
     constexpr float kSigma = kMargin / 2.6f;
     constexpr int kAlpha = 105; // shadow strength
 
@@ -73,9 +73,9 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
         return;
     }
 
-    float m = kMargin * s.scale;         // blur reach on screen
-    float in = kCore / 2.f * s.scale;    // slice overlap under the window edge
-    float dy = 2.f * s.scale;            // light from above
+    float m = kMargin * s.scale;      // blur reach on screen
+    float in = kCore / 2.f * s.scale; // slice overlap under the window edge
+    float dy = 2.f * s.scale;         // light from above
 
     if (in * 2.f > size.x) {
         in = size.x / 2.f;

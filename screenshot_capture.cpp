@@ -63,14 +63,12 @@ namespace {
         int resultFd = -1;
         SharedScanout shared;
 
-        ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h,
-                              VkFormat fmt, float scale, Listener& ready);
+        ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, float scale, Listener& ready);
         ~ScreenshotCaptureImpl() noexcept;
 
         bool busy() const override;
         void request() override;
-        bool submit(int scanoutIndex, VkImage image,
-                    VkImageLayout layout) override;
+        bool submit(int scanoutIndex, VkImage image, VkImageLayout layout) override;
         void onListen(void* data) override;
         void ensureReadback();
         void pollFence();
@@ -93,8 +91,7 @@ namespace {
         vkGetPhysicalDeviceMemoryProperties(phys, &mp);
 
         for (u32 i = 0; i < mp.memoryTypeCount; i++) {
-            if ((typeBits & (1u << i)) &&
-                (mp.memoryTypes[i].propertyFlags & props) == props) {
+            if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) {
                 return i;
             }
         }
@@ -103,9 +100,7 @@ namespace {
     }
 }
 
-ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk,
-                                             int w, int h, VkFormat fmt,
-                                             float scale, Listener& ready)
+ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, float scale, Listener& ready)
     : comp(&c)
     , output(c.output)
     , renderReady(&ready)
@@ -227,17 +222,13 @@ void ScreenshotCaptureImpl::ensureReadback() {
     VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
 
     mai.allocationSize = req.size;
-    mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits,
-                                         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
-                                         VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &readbackMemory));
     VK_CHECK(vkBindBufferMemory(device, readback, readbackMemory, 0));
-    VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0,
-                        &readbackMap));
+    VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &readbackMap));
 }
 
-bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image,
-                                   VkImageLayout layout) {
+bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayout layout) {
     if (!busy_ || fencePending || workerPending || waitingRetire) {
         return false;
     }
@@ -266,14 +257,10 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image,
     bar.oldLayout = layout;
     bar.newLayout = layout;
     bar.srcQueueFamilyIndex = handoff ? queueFamily : VK_QUEUE_FAMILY_IGNORED;
-    bar.dstQueueFamilyIndex = handoff ? VK_QUEUE_FAMILY_EXTERNAL :
-                                        VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = handoff ? VK_QUEUE_FAMILY_EXTERNAL : VK_QUEUE_FAMILY_IGNORED;
     bar.image = image;
     bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         handoff ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT :
-                                   VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         0, 0, nullptr, 0, nullptr, 1, &bar);
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, handoff ? VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
 
     if (!handoff) {
         VkBufferImageCopy region{};
@@ -292,8 +279,7 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image,
     VkResult result = vkQueueSubmit(queue, 1, &si, fence);
 
     if (result != VK_SUCCESS) {
-        *(comp->log) << "imway: screenshot submit failed ("_sv << (long)result
-             << ")"_sv << endL;
+        *(comp->log) << "imway: screenshot submit failed ("_sv << (long)result << ")"_sv << endL;
 
         return false;
     }
@@ -331,8 +317,7 @@ void ScreenshotCaptureImpl::pollFence() {
 
     if (status != VK_SUCCESS) {
         busy_ = false;
-        *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status
-             << ")"_sv << endL;
+        *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status << ")"_sv << endL;
 
         return;
     }
@@ -429,19 +414,13 @@ int ScreenshotCaptureImpl::buildFile() {
             for (size_t i = 0; i < count; i++) {
                 u32 src = chunk[i];
 
-                chunk[i] = ((src >> 22) & 0xff) |
-                           (((src >> 12) & 0xff) << 8) |
-                           (((src >> 2) & 0xff) << 16) |
-                           0xff000000u;
+                chunk[i] = ((src >> 22) & 0xff) | (((src >> 12) & 0xff) << 8) | (((src >> 2) & 0xff) << 16) | 0xff000000u;
             }
         } else {
             for (size_t i = 0; i < count; i++) {
                 u32 src = chunk[i];
 
-                chunk[i] = ((src >> 16) & 0xff) |
-                           (src & 0x0000ff00u) |
-                           ((src & 0xff) << 16) |
-                           0xff000000u;
+                chunk[i] = ((src >> 16) & 0xff) | (src & 0x0000ff00u) | ((src & 0xff) << 16) | 0xff000000u;
             }
         }
 
@@ -494,22 +473,10 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     bool hdr = shotColor.hdr();
     double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
 
-    color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv
-          << (long double)sdrWhite << ":"_sv
-          << (long double)shotColor.displayMinNits << ":"_sv
-          << (long double)shotColor.displayPeakNits << ":"_sv
-          << (long double)shotColor.displayMaxFallNits;
+    color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv << (long double)sdrWhite << ":"_sv << (long double)shotColor.displayMinNits << ":"_sv << (long double)shotColor.displayPeakNits << ":"_sv << (long double)shotColor.displayMaxFallNits;
 
     if (image) {
-        metadata << "IMWAY_SHOT_DMABUF="_sv
-                 << (unsigned long long)image->width << ":"_sv
-                 << (unsigned long long)image->height << ":"_sv
-                 << (unsigned long long)image->format << ":"_sv
-                 << (unsigned long long)image->offset << ":"_sv
-                 << (unsigned long long)image->stride << ":"_sv
-                 << (unsigned long long)image->modifier << ":"_sv
-                 << (unsigned long long)image->allocationSize << ":"_sv
-                 << (unsigned long long)image->renderDevice;
+        metadata << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
     }
 
     StringView env[] = {sv(display), sv(scale), sv(color), sv(metadata)};
@@ -526,10 +493,6 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     close(fd);
 }
 
-ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk,
-                                             int width, int height,
-                                             VkFormat format, float uiScale,
-                                             Listener& ready) {
-    return c.pool->make<ScreenshotCaptureImpl>(c, vk, width, height, format,
-                                                uiScale, ready);
+ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk, int width, int height, VkFormat format, float uiScale, Listener& ready) {
+    return c.pool->make<ScreenshotCaptureImpl>(c, vk, width, height, format, uiScale, ready);
 }

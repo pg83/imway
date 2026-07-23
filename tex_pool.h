@@ -21,9 +21,7 @@ namespace stl {
 struct VkTexturePool {
     // returns a descriptor set sampling (view, layout), or VK_NULL_HANDLE only
     // on genuine device out-of-memory; outPool receives its owning pool
-    virtual VkDescriptorSet alloc(VkImageView view, VkImageLayout layout,
-                                  VkDescriptorPool& outPool,
-                                  VkImageView chromaView = VK_NULL_HANDLE) = 0;
+    virtual VkDescriptorSet alloc(VkImageView view, VkImageLayout layout, VkDescriptorPool& outPool, VkImageView chromaView = VK_NULL_HANDLE) = 0;
     virtual void free(VkDescriptorSet set, VkDescriptorPool pool) = 0;
 
     static VkTexturePool* create(stl::ObjPool& pool, VkDevice device, VkSampler sampler);

@@ -19,9 +19,9 @@ struct Toast: stl::IntrusiveNode {
     stl::StringBuilder summary;
     stl::StringBuilder body;
     stl::StringBuilder icon;
-    bool critical = false;  // urgency 2: never expires, accented
+    bool critical = false; // urgency 2: never expires, accented
     bool onScreen = false;
-    bool fromBus = false;   // dbus origin -> NotificationClosed is emitted
+    bool fromBus = false; // dbus origin -> NotificationClosed is emitted
     u64 postedMs = 0;
 };
 

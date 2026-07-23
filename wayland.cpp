@@ -339,9 +339,6 @@ namespace {
         Weak<XdgSurface> xdg;
     };
 
-
-
-
     // one commit's worth of double-buffered state, parked instead of
     // applied: the subsurface sync cache merges successive commits into
     // one of these, a fifo queue entry snapshots exactly one
@@ -671,8 +668,7 @@ namespace {
         int parentW = 0, parentH = 0;
         u32 parentConfigure = 0;
 
-        void place(int& outX, int& outY, int& outW, int& outH,
-                   int minX, int minY, int maxX, int maxY) const;
+        void place(int& outX, int& outY, int& outW, int& outH, int minX, int minY, int maxX, int maxY) const;
     };
 
     struct PopupImpl: public Popup {
@@ -1455,8 +1451,7 @@ namespace {
         // v5 split the attach offset into wl_surface.offset; attaching with a
         // non-zero offset is a protocol error there
         if ((x || y) && wl_resource_get_version(res) >= WL_SURFACE_OFFSET_SINCE_VERSION) {
-            wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_OFFSET,
-                                   "attach offset must be zero since version 5");
+            wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_OFFSET, "attach offset must be zero since version 5");
 
             return;
         }
@@ -1669,7 +1664,6 @@ namespace {
     }
 
     void applyCache(SurfaceImpl& s, CommitCache& cache) {
-
         if (cache.scaleSet) {
             s.bufferScale = cache.scale;
             cache.scaleSet = false;
@@ -1839,8 +1833,7 @@ namespace {
             // an invisible surface cannot hold a barrier (the spec's escape
             // hatch against stalled clients): ignore barriers entirely. A
             // commit-timing target holds either way: it expires by itself
-            if ((presented && e->waitBarrier && s.fifo->barrier) ||
-                (e->hasTime && e->timeNs > now)) {
+            if ((presented && e->waitBarrier && s.fifo->barrier) || (e->hasTime && e->timeNs > now)) {
                 break;
             }
 
@@ -1954,8 +1947,7 @@ namespace {
         s.pending.timeSet = false;
         s.pending.timeNs = 0;
 
-        if (!cache && s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) ||
-                       (timeSet && timeNs > nowNs()))) {
+        if (!cache && s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) || (timeSet && timeNs > nowNs()))) {
             FifoEntry* entry = s.srv->alloc->make<FifoEntry>();
 
             entry->setBarrier = fifoSet;
@@ -1995,8 +1987,7 @@ namespace {
 
             int scale = s.pending.scale > 0 ? s.pending.scale : cache && cache->scaleSet ? cache->scale : s.bufferScale;
             int transform = s.pending.transform >= 0 ? s.pending.transform : cache && cache->transformSet ? cache->transform : s.bufferTransform;
-            bool swapped = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270 ||
-                           transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
+            bool swapped = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
             int tw = swapped ? bh : bw, th = swapped ? bw : bh;
 
             if (bw > 0 && (tw % scale != 0 || th % scale != 0)) {
@@ -2196,33 +2187,17 @@ namespace {
         bool targetHasDst = cache && cache->vpDstSet ? cache->vpHasDst : s.vp.hasDst;
         bool targetHasContent = cache && cache->valid ? cache->hasContent : s.hasContent;
 
-        ColorRepresentation targetRepresentation =
-            cache && cache->representationChanged ?
-            cache->representation : s.representation;
+        ColorRepresentation targetRepresentation = cache && cache->representationChanged ? cache->representation : s.representation;
         if (s.pendRepresentationChanged) {
             targetRepresentation = s.pendRepresentation;
         }
 
-        DmabufBuffer* targetDmabuf =
-            cache && cache->valid ? cache->dmabuf : s.dmabuf;
-        bool targetYuv = targetDmabuf &&
-            (targetDmabuf->format == kFourccNv12 ||
-             targetDmabuf->format == kFourccP010);
-        bool incompatibleRepresentation = targetYuv ?
-            targetRepresentation.coefficients ==
-                WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY :
-            targetRepresentation.chromaLocation ||
-                (targetRepresentation.coefficients &&
-                 targetRepresentation.coefficients !=
-                    WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY);
+        DmabufBuffer* targetDmabuf = cache && cache->valid ? cache->dmabuf : s.dmabuf;
+        bool targetYuv = targetDmabuf && (targetDmabuf->format == kFourccNv12 || targetDmabuf->format == kFourccP010);
+        bool incompatibleRepresentation = targetYuv ? targetRepresentation.coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY : targetRepresentation.chromaLocation || (targetRepresentation.coefficients && targetRepresentation.coefficients != WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY);
 
         if (targetHasContent && incompatibleRepresentation) {
-            wl_resource_post_error(
-                s.representationRes,
-                WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT,
-                targetYuv ?
-                    "identity coefficients are incompatible with a YCbCr buffer" :
-                    "YCbCr representation is incompatible with an RGB buffer");
+            wl_resource_post_error(s.representationRes, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT, targetYuv ? "identity coefficients are incompatible with a YCbCr buffer" : "YCbCr representation is incompatible with an RGB buffer");
 
             return;
         }
@@ -2236,8 +2211,7 @@ namespace {
             double sy = cache && cache->vpSrcSet ? cache->sy : s.vp.sy;
             double sw = cache && cache->vpSrcSet ? cache->sw : s.vp.sw;
             double sh = cache && cache->vpSrcSet ? cache->sh : s.vp.sh;
-            bool swapped = targetTransform == WL_OUTPUT_TRANSFORM_90 || targetTransform == WL_OUTPUT_TRANSFORM_270 ||
-                           targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
+            bool swapped = targetTransform == WL_OUTPUT_TRANSFORM_90 || targetTransform == WL_OUTPUT_TRANSFORM_270 || targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || targetTransform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
             double contentW = (double)(swapped ? targetH : targetW) / targetScale;
             double contentH = (double)(swapped ? targetW : targetH) / targetScale;
 
@@ -2506,7 +2480,6 @@ namespace {
             wl_resource_set_user_data(s->colorRes, nullptr);
             s->colorRes = nullptr;
         }
-
 
         if (s->representationRes) {
             wl_resource_set_user_data(s->representationRes, nullptr);
@@ -2891,8 +2864,7 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
         if (t->decoRes) {
-            wl_resource_post_error(t->decoRes, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ORPHANED,
-                                   "xdg_toplevel destroyed before its decoration object");
+            wl_resource_post_error(t->decoRes, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ORPHANED, "xdg_toplevel destroyed before its decoration object");
 
             return;
         }
@@ -2945,9 +2917,7 @@ namespace {
     bool validToplevelGrab(ToplevelImpl& toplevel, wl_client* client, wl_resource* seatRes, u32 serial) {
         auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
 
-        return seat == &toplevel.srv->seat && seat->buttonsDown > 0 &&
-               seat->pointerGrabClient == client && seat->pointerGrabSerial == serial &&
-               seat->pointerGrabOrigin && seat->pointerGrabOrigin->rootToplevel() == &toplevel;
+        return seat == &toplevel.srv->seat && seat->buttonsDown > 0 && seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->pointerGrabOrigin && seat->pointerGrabOrigin->rootToplevel() == &toplevel;
     }
 
     void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
@@ -2967,8 +2937,7 @@ namespace {
     void toplevelResize(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial, u32 edges) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (!xdg_toplevel_resize_edge_is_valid(edges, wl_resource_get_version(res)) ||
-            edges == XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
+        if (!xdg_toplevel_resize_edge_is_valid(edges, wl_resource_get_version(res)) || edges == XDG_TOPLEVEL_RESIZE_EDGE_NONE) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ERROR_INVALID_RESIZE_EDGE, "invalid resize edge");
 
             return;
@@ -3415,8 +3384,7 @@ namespace {
         return (int)(v < min ? min : v > max ? max : v);
     }
 
-    void placePopup(const PopupImpl& popup, const Positioner& positioner,
-                    int& x, int& y, int& w, int& h) {
+    void placePopup(const PopupImpl& popup, const Positioner& positioner, int& x, int& y, int& w, int& h) {
         int minX = 0, minY = 0;
         int maxX = popup.srv->scene->outW, maxY = popup.srv->scene->outH;
 
@@ -3451,8 +3419,7 @@ namespace {
 
         for (Popup* child : each<Popup>(popup->srv->scene->popups)) {
             if (child->parent == popup->surface.get()) {
-                wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP,
-                                       "popup has a live child popup");
+                wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP, "popup has a live child popup");
 
                 return;
             }
@@ -3476,11 +3443,8 @@ namespace {
 
         // the origin going away invalidates the implicit grab: the weak ref
         // nulls it, the stale serial/client alone must not authorize
-        bool pointerOk = seat->pointerGrabOrigin && seat->pointerGrabClient == client &&
-                         seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
-        bool keyOk = seat->keyGrabClient == client &&
-                     seat->keyGrabSerial == serial &&
-                     seat->keyGrabGeneration == seat->focusGeneration;
+        bool pointerOk = seat->pointerGrabOrigin && seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->buttonsDown > 0;
+        bool keyOk = seat->keyGrabClient == client && seat->keyGrabSerial == serial && seat->keyGrabGeneration == seat->focusGeneration;
 
         // keyboard-opened menus (Menu key, Shift+F10) grab with a key-press
         // serial; a stale serial is not an error per xdg-shell — dismiss the
@@ -3499,8 +3463,7 @@ namespace {
         Positioner* pos = positionerFrom(positioner);
 
         if (!pos || pos->w <= 0 || pos->h <= 0 || pos->aw <= 0 || pos->ah <= 0) {
-            wl_resource_post_error(p->xdg->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER,
-                                   "positioner needs size and anchor rectangle");
+            wl_resource_post_error(p->xdg->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER, "positioner needs size and anchor rectangle");
 
             return;
         }
@@ -3584,8 +3547,7 @@ namespace {
             auto* impl = (SurfaceImpl*)surface;
 
             if (impl->xdg && impl->xdg->wmBaseRes == res) {
-                wl_resource_post_error(res, XDG_WM_BASE_ERROR_DEFUNCT_SURFACES,
-                                       "xdg_wm_base still owns xdg_surface objects");
+                wl_resource_post_error(res, XDG_WM_BASE_ERROR_DEFUNCT_SURFACES, "xdg_wm_base still owns xdg_surface objects");
 
                 return;
             }
@@ -3698,8 +3660,7 @@ namespace {
 
         // a minimized window is not visible: tell the client (v6) so it can
         // throttle or stop rendering
-        if (t.minimized &&
-            wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
+        if (t.minimized && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_SUSPENDED;
         }
 
@@ -3764,20 +3725,16 @@ namespace {
 
         if (xs->popup && !xs->initialConfigureSent) {
             auto* parent = (SurfaceImpl*)xs->popup->parent;
-            bool parentMapped = parent && parent->xdg &&
-                                ((parent->xdg->toplevel && parent->xdg->toplevel->mapped) ||
-                                 (parent->xdg->popup && parent->xdg->popup->mapped));
+            bool parentMapped = parent && parent->xdg && ((parent->xdg->toplevel && parent->xdg->toplevel->mapped) || (parent->xdg->popup && parent->xdg->popup->mapped));
 
             if (!parentMapped) {
-                wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT,
-                                       "popup parent is missing or not mapped");
+                wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "popup parent is missing or not mapped");
 
                 return;
             }
         }
 
-        if (xs->popup && xs->pop()->positionPending &&
-            (i32)(xs->committedAckSerial - xs->pop()->positionSerial) >= 0) {
+        if (xs->popup && xs->pop()->positionPending && (i32)(xs->committedAckSerial - xs->pop()->positionSerial) >= 0) {
             PopupImpl& popup = *xs->pop();
 
             popup.x = popup.pendingX;
@@ -3796,8 +3753,7 @@ namespace {
             int maxH = toplevel.pendingMaxSet ? toplevel.pendingMaxH : toplevel.maxH;
 
             if ((minW && maxW && minW > maxW) || (minH && maxH && minH > maxH)) {
-                wl_resource_post_error(toplevel.res, XDG_TOPLEVEL_ERROR_INVALID_SIZE,
-                                       "minimum size exceeds maximum size");
+                wl_resource_post_error(toplevel.res, XDG_TOPLEVEL_ERROR_INVALID_SIZE, "minimum size exceeds maximum size");
 
                 return;
             }
@@ -3929,8 +3885,7 @@ namespace {
             return true;
         }
 
-        return surface.srv->scene->cursorSurface == root ||
-               surface.srv->scene->dragIcon.get() == root;
+        return surface.srv->scene->cursorSurface == root || surface.srv->scene->dragIcon.get() == root;
     }
 
     void syncSurfaceOutputs(SurfaceImpl& surface) {
@@ -3949,8 +3904,7 @@ namespace {
         wl_client* client = wl_resource_get_client(surface.res);
 
         for (wl_resource* output : surface.srv->outputResources) {
-            if (wl_resource_get_client(output) == client &&
-                !contains(surface.enteredOutputs, output)) {
+            if (wl_resource_get_client(output) == client && !contains(surface.enteredOutputs, output)) {
                 wl_surface_send_enter(surface.res, output);
                 surface.enteredOutputs.pushBack(output);
             }
@@ -3975,9 +3929,7 @@ namespace {
         Buffer model(srv->output ? srv->output->model() : "unknown"_sv);
         Buffer name(srv->output ? srv->output->outputName() : "UNKNOWN-1"_sv);
 
-        wl_output_send_geometry(res, 0, 0, srv->output ? srv->output->physicalWidthMm() : 0,
-                                srv->output ? srv->output->physicalHeightMm() : 0,
-                                WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_geometry(res, 0, 0, srv->output ? srv->output->physicalWidthMm() : 0, srv->output ? srv->output->physicalHeightMm() : 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
         wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
@@ -4023,20 +3975,16 @@ namespace {
 
     void sourceSetActions(wl_client*, wl_resource* res, u32 actions) {
         if (DataSource* src = sourceFrom(res)) {
-            constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY |
-                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE |
-                                  WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
+            constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
             if (actions & ~valid) {
-                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_ACTION_MASK,
-                                       "drag action mask contains unknown bits");
+                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_ACTION_MASK, "drag action mask contains unknown bits");
 
                 return;
             }
 
             if (src->actionsSet || src->usedForSelection || src->usedForDrag) {
-                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
-                                       "set_actions is only valid once before start_drag");
+                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "set_actions is only valid once before start_drag");
 
                 return;
             }
@@ -4092,8 +4040,7 @@ namespace {
         DataSource* src = offer ? offer->source.get() : nullptr;
 
         if (offer && offer->finished) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
-                                   "offer was already finished");
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "offer was already finished");
 
             return;
         }
@@ -4113,8 +4060,7 @@ namespace {
 
         if (offer && offer->finished) {
             close(fd);
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
-                                   "offer was already finished");
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "offer was already finished");
 
             return;
         }
@@ -4136,10 +4082,8 @@ namespace {
         Offer* offer = offerFrom(res);
         DataSource* src = offer ? offer->source.get() : nullptr;
 
-        if (!offer || !offer->dnd || offer->finished || !src || !src->dropPerformed ||
-            !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_FINISH,
-                                   "finish is not valid for this offer state");
+        if (!offer || !offer->dnd || offer->finished || !src || !src->dropPerformed || !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_FINISH, "finish is not valid for this offer state");
 
             return;
         }
@@ -4154,30 +4098,22 @@ namespace {
     void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32 preferred) {
         Offer* offer = offerFrom(res);
         DataSource* src = offer ? offer->source.get() : nullptr;
-        constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY |
-                              WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE |
-                              WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
+        constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
         if (!offer || !offer->dnd || offer->finished || !src || src->primary) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER,
-                                   "set_actions requires an active drag offer");
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "set_actions requires an active drag offer");
 
             return;
         }
 
         if (actions & ~valid) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION_MASK,
-                                   "drag action mask contains unknown bits");
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION_MASK, "drag action mask contains unknown bits");
 
             return;
         }
 
-        if (preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE &&
-            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY &&
-            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE &&
-            preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION,
-                                   "preferred drag action must contain one bit");
+        if (preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE && preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY && preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE && preferred != WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK) {
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION, "preferred drag action must contain one bit");
 
             return;
         }
@@ -4185,8 +4121,7 @@ namespace {
         u32 available = actions & src->dndActions;
 
         if (preferred && !(preferred & available)) {
-            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION,
-                                   "preferred drag action is unavailable");
+            wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_ACTION, "preferred drag action is unavailable");
 
             return;
         }
@@ -4296,8 +4231,7 @@ namespace {
 
         SurfaceImpl* origin = surfaceFrom(originRes);
 
-        if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial ||
-            client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin.get()) {
+        if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial || client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin.get()) {
             // cancelled is a v1 event (v3 only added dnd_drop_performed and
             // friends); gating it left old clients waiting forever
             if (src) {
@@ -4308,8 +4242,7 @@ namespace {
         }
 
         if (src && (src->usedForDrag || src->usedForSelection)) {
-            wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE,
-                                   "data source was already used");
+            wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE, "data source was already used");
 
             return;
         }
@@ -4342,15 +4275,13 @@ namespace {
             }
 
             if (src && (src->usedForDrag || src->usedForSelection)) {
-                wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE,
-                                       "data source was already used");
+                wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE, "data source was already used");
 
                 return;
             }
 
             if (src && src->actionsSet) {
-                wl_resource_post_error(src->res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE,
-                                       "drag data source cannot become a selection");
+                wl_resource_post_error(src->res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "drag data source cannot become a selection");
 
                 return;
             }
@@ -4449,8 +4380,7 @@ namespace {
 
         // destroy is only legal after the underlying drag ended
         if (box->source && box->srv->seat.dragSource == box->source.get()) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_ONGOING_DRAG,
-                                   "the drag has not ended");
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_ONGOING_DRAG, "the drag has not ended");
 
             return;
         }
@@ -4463,8 +4393,7 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
 
         if (box->attached.get() && box->attached.get() != t && box->attached->mapped) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_TOPLEVEL_ATTACHED,
-                                   "a valid toplevel is already attached");
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_V1_ERROR_TOPLEVEL_ATTACHED, "a valid toplevel is already attached");
 
             return;
         }
@@ -4504,8 +4433,7 @@ namespace {
         // the source must be fresh: already used for a drag/selection, or
         // already carrying a drag object, is invalid
         if (!src || src->usedForDrag || src->usedForSelection || src->toplevelDrag) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE,
-                                   "the data source is already in use");
+            wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE, "the data source is already in use");
 
             return;
         }
@@ -4636,11 +4564,8 @@ namespace {
     }
 
     void decoSetMode(wl_client*, wl_resource* res, u32 mode) {
-        if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res)) ||
-            (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE &&
-             mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)) {
-            wl_resource_post_error(res, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE,
-                                   "invalid decoration mode");
+        if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res)) || (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE && mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)) {
+            wl_resource_post_error(res, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE, "invalid decoration mode");
 
             return;
         }
@@ -4683,8 +4608,7 @@ namespace {
 
         if (t->decoRes) {
             wl_resource_set_implementation(d, &decoImpl, nullptr, nullptr);
-            wl_resource_post_error(d, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ALREADY_CONSTRUCTED,
-                                   "xdg_toplevel already has a decoration object");
+            wl_resource_post_error(d, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_ALREADY_CONSTRUCTED, "xdg_toplevel already has a decoration object");
 
             return;
         }
@@ -5163,8 +5087,7 @@ namespace {
 
     void foreignListAnnounce(ForeignList* list, ToplevelImpl* t) {
         wl_client* client = wl_resource_get_client(list->res);
-        wl_resource* r = wl_resource_create(client, &ext_foreign_toplevel_handle_v1_interface,
-                                            wl_resource_get_version(list->res), 0);
+        wl_resource* r = wl_resource_create(client, &ext_foreign_toplevel_handle_v1_interface, wl_resource_get_version(list->res), 0);
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -5259,16 +5182,13 @@ namespace {
     }
 
     // ---- wp-pointer-warp ----
-    void pointerWarp(wl_client* client, wl_resource* res, wl_resource* surfaceRes,
-                     wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
+    void pointerWarp(wl_client* client, wl_resource* res, wl_resource* surfaceRes, wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         // only the focused surface, with a serial that matches its pointer
         // enter, may place the cursor — and only within the surface
-        if (!s || srv->seat.ptrFocus != s ||
-            !srv->seat.validPointerEnter(pointerRes, serial) ||
-            wl_resource_get_client(resOf(s)) != client) {
+        if (!s || srv->seat.ptrFocus != s || !srv->seat.validPointerEnter(pointerRes, serial) || wl_resource_get_client(resOf(s)) != client) {
             return;
         }
 
@@ -5333,8 +5253,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         if (s->tearingRes) {
-            wl_resource_post_error(res, WP_TEARING_CONTROL_MANAGER_V1_ERROR_TEARING_CONTROL_EXISTS,
-                                   "surface already has a tearing control");
+            wl_resource_post_error(res, WP_TEARING_CONTROL_MANAGER_V1_ERROR_TEARING_CONTROL_EXISTS, "surface already has a tearing control");
 
             return;
         }
@@ -5616,8 +5535,7 @@ namespace {
         DataSource* src = (DataSource*)wl_resource_get_user_data(res);
         StringView mv(mime);
 
-        if (!src || src->usedForSelection || src->mimes.length() >= 64 ||
-            mv.length() >= sizeof(Mime::s)) {
+        if (!src || src->usedForSelection || src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
             return;
         }
 
@@ -5709,10 +5627,8 @@ namespace {
         wl_resource_set_implementation(r, &dcDeviceImpl, srv, dcDeviceResourceDestroyed);
         srv->seat.dcDevices.pushBack(r);
         // seed the new device with the current selections
-        ext_data_control_device_v1_send_selection(
-            r, srv->seat.clipboard ? makeDcOffer(r, srv->seat.clipboard) : nullptr);
-        ext_data_control_device_v1_send_primary_selection(
-            r, srv->seat.primarySel ? makeDcOffer(r, srv->seat.primarySel) : nullptr);
+        ext_data_control_device_v1_send_selection(r, srv->seat.clipboard ? makeDcOffer(r, srv->seat.clipboard) : nullptr);
+        ext_data_control_device_v1_send_primary_selection(r, srv->seat.primarySel ? makeDcOffer(r, srv->seat.primarySel) : nullptr);
     }
 
     const struct ext_data_control_manager_v1_interface dcManagerImpl = {
@@ -5993,10 +5909,8 @@ namespace {
 
         SeatState& seat = im->srv->seat;
 
-        zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1,
-            seat.kb->keymapFd(), seat.kb->keymapSize());
-        zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display),
-            seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
+        zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat.kb->keymapFd(), seat.kb->keymapSize());
+        zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display), seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
         zwp_input_method_keyboard_grab_v2_send_repeat_info(r, 25, 600);
     }
 
@@ -6265,14 +6179,7 @@ namespace {
     static bool privilegedGlobal(const char* name) {
         // protocols a sandbox must not reach: clipboard/screen capture and
         // synthetic input
-        return !strcmp(name, ext_data_control_manager_v1_interface.name) ||
-               !strcmp(name, ext_image_copy_capture_manager_v1_interface.name) ||
-               !strcmp(name, ext_output_image_capture_source_manager_v1_interface.name) ||
-               !strcmp(name, ext_foreign_toplevel_list_v1_interface.name) ||
-               !strcmp(name, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) ||
-               !strcmp(name, zwlr_screencopy_manager_v1_interface.name) ||
-               !strcmp(name, zwp_virtual_keyboard_manager_v1_interface.name) ||
-               !strcmp(name, zwp_input_method_manager_v2_interface.name);
+        return !strcmp(name, ext_data_control_manager_v1_interface.name) || !strcmp(name, ext_image_copy_capture_manager_v1_interface.name) || !strcmp(name, ext_output_image_capture_source_manager_v1_interface.name) || !strcmp(name, ext_foreign_toplevel_list_v1_interface.name) || !strcmp(name, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) || !strcmp(name, zwlr_screencopy_manager_v1_interface.name) || !strcmp(name, zwp_virtual_keyboard_manager_v1_interface.name) || !strcmp(name, zwp_input_method_manager_v2_interface.name);
     }
 
     bool clientSandboxed(WaylandImpl* srv, const wl_client* client) {
@@ -6369,9 +6276,7 @@ namespace {
         auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
 
         if (ctx->committed || ctx->engineSet) {
-            wl_resource_post_error(res, ctx->committed ?
-                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
-                "sandbox engine already set");
+            wl_resource_post_error(res, ctx->committed ? WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET, "sandbox engine already set");
 
             return;
         }
@@ -6384,9 +6289,7 @@ namespace {
         auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
 
         if (ctx->committed || ctx->appIdSet) {
-            wl_resource_post_error(res, ctx->committed ?
-                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
-                "app id already set");
+            wl_resource_post_error(res, ctx->committed ? WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET, "app id already set");
 
             return;
         }
@@ -6399,9 +6302,7 @@ namespace {
         auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
 
         if (ctx->committed || ctx->instanceIdSet) {
-            wl_resource_post_error(res, ctx->committed ?
-                WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET,
-                "instance id already set");
+            wl_resource_post_error(res, ctx->committed ? WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED : WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET, "instance id already set");
 
             return;
         }
@@ -6420,8 +6321,7 @@ namespace {
         }
 
         if (!ctx->engineSet || !ctx->appIdSet || !ctx->instanceIdSet) {
-            wl_resource_post_error(res, WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA,
-                                   "sandbox engine, app id and instance id are all required");
+            wl_resource_post_error(res, WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA, "sandbox engine, app id and instance id are all required");
 
             return;
         }
@@ -6450,8 +6350,7 @@ namespace {
         socklen_t len = sizeof(type);
 
         if (getsockopt(listenFd, SOL_SOCKET, SO_ACCEPTCONN, &type, &len) < 0 || !type) {
-            wl_resource_post_error(res, WP_SECURITY_CONTEXT_MANAGER_V1_ERROR_INVALID_LISTEN_FD,
-                                   "the listen fd is not a listening socket");
+            wl_resource_post_error(res, WP_SECURITY_CONTEXT_MANAGER_V1_ERROR_INVALID_LISTEN_FD, "the listen fd is not a listening socket");
             close(listenFd);
             close(closeFd);
 
@@ -6616,8 +6515,7 @@ namespace {
 
         for (u32 existing : req->connectors) {
             if (existing == id) {
-                wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_DUPLICATE_CONNECTOR,
-                                       "connector already requested");
+                wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_DUPLICATE_CONNECTOR, "connector already requested");
 
                 return;
             }
@@ -6631,8 +6529,7 @@ namespace {
         WaylandImpl* srv = req->srv;
 
         if (req->connectors.empty()) {
-            wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_EMPTY_LEASE,
-                                   "lease request has no connectors");
+            wl_resource_post_error(res, WP_DRM_LEASE_REQUEST_V1_ERROR_EMPTY_LEASE, "lease request has no connectors");
 
             return;
         }
@@ -6655,9 +6552,7 @@ namespace {
         // runs leaseRequestResourceDestroyed, which frees req, so reading
         // req->connectors afterwards would be a use-after-free
         u32 lesseeId = 0;
-        int leaseFd = srv->composer->device
-            ? srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId)
-            : -1;
+        int leaseFd = srv->composer->device ? srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId) : -1;
 
         // submit is a destructor request
         wl_resource_destroy(res);
@@ -7031,8 +6926,7 @@ namespace {
 
         ext_image_copy_capture_frame_v1_send_transform(f.res, WL_OUTPUT_TRANSFORM_NORMAL);
         ext_image_copy_capture_frame_v1_send_damage(f.res, 0, 0, (i32)w, (i32)h);
-        ext_image_copy_capture_frame_v1_send_presentation_time(
-            f.res, (u32)(sec >> 32), (u32)sec, (u32)(t % 1000000000ull));
+        ext_image_copy_capture_frame_v1_send_presentation_time(f.res, (u32)(sec >> 32), (u32)sec, (u32)(t % 1000000000ull));
         ext_image_copy_capture_frame_v1_send_ready(f.res);
     }
 
@@ -7104,10 +6998,7 @@ namespace {
             }
         }
 
-        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 ||
-            (u32)wl_shm_buffer_get_width(shm) != wantW ||
-            (u32)wl_shm_buffer_get_height(shm) != wantH ||
-            (u32)wl_shm_buffer_get_stride(shm) < wantW * 4) {
+        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 || (u32)wl_shm_buffer_get_width(shm) != wantW || (u32)wl_shm_buffer_get_height(shm) != wantH || (u32)wl_shm_buffer_get_stride(shm) < wantW * 4) {
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS);
 
             return;
@@ -7149,8 +7040,7 @@ namespace {
 
         wl_shm_buffer_begin_access(shm);
 
-        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride,
-                                    regionX, regionY, (int)wantW, (int)wantH);
+        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride, regionX, regionY, (int)wantW, (int)wantH);
 
         wl_shm_buffer_end_access(shm);
 
@@ -7201,9 +7091,7 @@ namespace {
 
         wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
 
-        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 ||
-            wl_shm_buffer_get_width(shm) != f->w || wl_shm_buffer_get_height(shm) != f->h ||
-            wl_shm_buffer_get_stride(shm) < f->w * 4) {
+        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 || wl_shm_buffer_get_width(shm) != f->w || wl_shm_buffer_get_height(shm) != f->h || wl_shm_buffer_get_stride(shm) < f->w * 4) {
             wl_resource_post_error(res, ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "buffer does not match the announced constraints");
 
             return;
@@ -7235,10 +7123,8 @@ namespace {
         .copy_with_damage = wlrCopyCopyWithDamage,
     };
 
-    void wlrCopyCapture(WaylandImpl* srv, wl_client* client, wl_resource* managerRes, u32 id,
-                        int x, int y, int w, int h) {
-        wl_resource* r = wl_resource_create(client, &zwlr_screencopy_frame_v1_interface,
-                                            wl_resource_get_version(managerRes), id);
+    void wlrCopyCapture(WaylandImpl* srv, wl_client* client, wl_resource* managerRes, u32 id, int x, int y, int w, int h) {
+        wl_resource* r = wl_resource_create(client, &zwlr_screencopy_frame_v1_interface, wl_resource_get_version(managerRes), id);
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7280,8 +7166,7 @@ namespace {
         wlrCopyCapture(srv, client, res, id, 0, 0, srv->scene->outW, srv->scene->outH);
     }
 
-    void wlrCopyCaptureOutputRegion(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*,
-                                    i32 x, i32 y, i32 w, i32 h) {
+    void wlrCopyCaptureOutputRegion(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*, i32 x, i32 y, i32 w, i32 h) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
         wlrCopyCapture(srv, client, res, id, x, y, w, h);
@@ -7327,8 +7212,7 @@ namespace {
 
         wl_shm_buffer_begin_access(shm);
 
-        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride,
-                                    f.x, f.y, f.w, f.h);
+        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride, f.x, f.y, f.w, f.h);
 
         wl_shm_buffer_end_access(shm);
 
@@ -7381,8 +7265,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         if (s->contentTypeRes) {
-            wl_resource_post_error(res, WP_CONTENT_TYPE_MANAGER_V1_ERROR_ALREADY_CONSTRUCTED,
-                                   "surface already has a content type object");
+            wl_resource_post_error(res, WP_CONTENT_TYPE_MANAGER_V1_ERROR_ALREADY_CONSTRUCTED, "surface already has a content type object");
 
             return;
         }
@@ -7455,8 +7338,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(res);
 
         if (!s) {
-            wl_resource_post_error(res, WP_ALPHA_MODIFIER_SURFACE_V1_ERROR_NO_SURFACE,
-                                   "the surface was destroyed");
+            wl_resource_post_error(res, WP_ALPHA_MODIFIER_SURFACE_V1_ERROR_NO_SURFACE, "the surface was destroyed");
 
             return;
         }
@@ -7483,8 +7365,7 @@ namespace {
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         if (s->alphaModRes) {
-            wl_resource_post_error(res, WP_ALPHA_MODIFIER_V1_ERROR_ALREADY_CONSTRUCTED,
-                                   "surface already has an alpha modifier");
+            wl_resource_post_error(res, WP_ALPHA_MODIFIER_V1_ERROR_ALREADY_CONSTRUCTED, "surface already has an alpha modifier");
 
             return;
         }
@@ -7685,9 +7566,7 @@ namespace {
     }
 
     // ---- pointer-gestures ----
-    void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list,
-                                  Vector<wl_resource*> SeatState::* active,
-                                  wl_resource* res) {
+    void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list, Vector<wl_resource*> SeatState::* active, wl_resource* res) {
         if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
             removeOne(seat->*list, res);
             removeOne(seat->*active, res);
@@ -8332,8 +8211,7 @@ namespace {
 
         wl_list_remove(&destroy->listener.link);
         watch->unlink();
-        wl_resource_post_error(box->res, XDG_TOPLEVEL_ICON_V1_ERROR_NO_BUFFER,
-                               "icon buffer was destroyed before the icon object");
+        wl_resource_post_error(box->res, XDG_TOPLEVEL_ICON_V1_ERROR_NO_BUFFER, "icon buffer was destroyed before the icon object");
         box->srv->alloc->release(watch);
     }
 
@@ -8354,8 +8232,7 @@ namespace {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
 
         if (box->immutable) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE,
-                                   "icon was already assigned to a toplevel");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE, "icon was already assigned to a toplevel");
 
             return;
         }
@@ -8368,8 +8245,7 @@ namespace {
         auto* box = (IconBox*)wl_resource_get_user_data(res);
 
         if (box->immutable) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE,
-                                   "icon was already assigned to a toplevel");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_IMMUTABLE, "icon was already assigned to a toplevel");
 
             return;
         }
@@ -8377,8 +8253,7 @@ namespace {
         wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
 
         if (!shm) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
-                                   "icon buffer must be backed by wl_shm");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer must be backed by wl_shm");
 
             return;
         }
@@ -8386,8 +8261,7 @@ namespace {
         u32 fmt = wl_shm_buffer_get_format(shm);
 
         if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
-                                   "unsupported icon buffer format");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "unsupported icon buffer format");
 
             return;
         }
@@ -8396,8 +8270,7 @@ namespace {
         int h = wl_shm_buffer_get_height(shm);
 
         if (w <= 0 || h <= 0 || w != h || scale <= 0) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
-                                   "icon buffer must be square with a positive scale");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer must be square with a positive scale");
 
             return;
         }
@@ -8405,8 +8278,7 @@ namespace {
         i32 stride = wl_shm_buffer_get_stride(shm);
 
         if (stride < (i64)w * 4) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER,
-                                   "icon buffer stride is too small");
+            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer stride is too small");
 
             return;
         }
@@ -8630,10 +8502,8 @@ namespace {
             random = ((u64)nowMsec() << 32) ^ ++request->srv->tokenCounter;
         }
 
-        snprintf(grant.token, sizeof(grant.token), "imway-%016llx-%016llx",
-                 (unsigned long long)++request->srv->tokenCounter, (unsigned long long)random);
-        grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) &&
-                           (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface.get())) == request->client));
+        snprintf(grant.token, sizeof(grant.token), "imway-%016llx-%016llx", (unsigned long long)++request->srv->tokenCounter, (unsigned long long)random);
+        grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) && (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface.get())) == request->client));
 
         if (request->srv->activationGrants.length() == 64) {
             for (size_t i = 1; i < request->srv->activationGrants.length(); i++) {
@@ -8846,9 +8716,7 @@ namespace {
         }
     }
 
-    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId,
-                                  i32 width, i32 height, u32 format, u32 flags,
-                                  bool immediate) {
+    wl_resource* paramsMakeBuffer(wl_client* client, wl_resource* res, u32 bufferId, i32 width, i32 height, u32 format, u32 flags, bool immediate) {
         Params* p = paramsFrom(res);
 
         if (!p->pending) {
@@ -8896,16 +8764,13 @@ namespace {
         int expectedPlanes = format == kFourccNv12 || format == kFourccP010 ? 2 : 1;
 
         if (b.nplanes != expectedPlanes) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE,
-                                   "format 0x%x requires exactly %d plane(s)",
-                                   format, expectedPlanes);
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "format 0x%x requires exactly %d plane(s)", format, expectedPlanes);
 
             return nullptr;
         }
 
         if (flags != 0) {
-            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT,
-                                   "interlaced and y-inverted buffers are unsupported");
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_FORMAT, "interlaced and y-inverted buffers are unsupported");
 
             return nullptr;
         }
@@ -8914,8 +8779,7 @@ namespace {
             paramsDropPending(*p);
 
             if (immediate) {
-                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_WL_BUFFER,
-                                       "fd cannot be imported as a dmabuf");
+                wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_WL_BUFFER, "fd cannot be imported as a dmabuf");
             }
 
             return nullptr;
@@ -9019,8 +8883,7 @@ namespace {
             zwp_linux_dmabuf_feedback_v1_send_tranche_target_device(res, &dev);
             zwp_linux_dmabuf_feedback_v1_send_tranche_formats(res, &scanout);
             wl_array_release(&scanout);
-            zwp_linux_dmabuf_feedback_v1_send_tranche_flags(
-                res, ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS_SCANOUT);
+            zwp_linux_dmabuf_feedback_v1_send_tranche_flags(res, ZWP_LINUX_DMABUF_FEEDBACK_V1_TRANCHE_FLAGS_SCANOUT);
             zwp_linux_dmabuf_feedback_v1_send_tranche_done(res);
         }
 
@@ -9130,8 +8993,7 @@ namespace {
         auto* seat = (SeatState*)wl_resource_get_user_data(res);
 
         if (!wp_cursor_shape_device_v1_shape_is_valid(shape, wl_resource_get_version(res))) {
-            wl_resource_post_error(res, WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE,
-                                   "invalid cursor shape");
+            wl_resource_post_error(res, WP_CURSOR_SHAPE_DEVICE_V1_ERROR_INVALID_SHAPE, "invalid cursor shape");
 
             return;
         }
@@ -9359,7 +9221,8 @@ namespace {
         if (version >= WL_SEAT_NAME_SINCE_VERSION) {
             wl_seat_send_name(res, "seat0");
         }
-    }}
+    }
+}
 
 bool SubsurfaceImpl::effectiveSync() const {
     for (const SubsurfaceImpl* s = this; s; s = s->parent ? (const SubsurfaceImpl*)s->parent->sub.get() : nullptr) {
@@ -9373,25 +9236,39 @@ bool SubsurfaceImpl::effectiveSync() const {
 
 static u32 flipPositionerX(u32 value) {
     switch (value) {
-        case XDG_POSITIONER_ANCHOR_LEFT: return XDG_POSITIONER_ANCHOR_RIGHT;
-        case XDG_POSITIONER_ANCHOR_RIGHT: return XDG_POSITIONER_ANCHOR_LEFT;
-        case XDG_POSITIONER_ANCHOR_TOP_LEFT: return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
-        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT: return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
-        case XDG_POSITIONER_ANCHOR_TOP_RIGHT: return XDG_POSITIONER_ANCHOR_TOP_LEFT;
-        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT: return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
-        default: return value;
+        case XDG_POSITIONER_ANCHOR_LEFT:
+            return XDG_POSITIONER_ANCHOR_RIGHT;
+        case XDG_POSITIONER_ANCHOR_RIGHT:
+            return XDG_POSITIONER_ANCHOR_LEFT;
+        case XDG_POSITIONER_ANCHOR_TOP_LEFT:
+            return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
+            return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+        case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
+            return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
+            return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+        default:
+            return value;
     }
 }
 
 static u32 flipPositionerY(u32 value) {
     switch (value) {
-        case XDG_POSITIONER_ANCHOR_TOP: return XDG_POSITIONER_ANCHOR_BOTTOM;
-        case XDG_POSITIONER_ANCHOR_BOTTOM: return XDG_POSITIONER_ANCHOR_TOP;
-        case XDG_POSITIONER_ANCHOR_TOP_LEFT: return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
-        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT: return XDG_POSITIONER_ANCHOR_TOP_LEFT;
-        case XDG_POSITIONER_ANCHOR_TOP_RIGHT: return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
-        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT: return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
-        default: return value;
+        case XDG_POSITIONER_ANCHOR_TOP:
+            return XDG_POSITIONER_ANCHOR_BOTTOM;
+        case XDG_POSITIONER_ANCHOR_BOTTOM:
+            return XDG_POSITIONER_ANCHOR_TOP;
+        case XDG_POSITIONER_ANCHOR_TOP_LEFT:
+            return XDG_POSITIONER_ANCHOR_BOTTOM_LEFT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_LEFT:
+            return XDG_POSITIONER_ANCHOR_TOP_LEFT;
+        case XDG_POSITIONER_ANCHOR_TOP_RIGHT:
+            return XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT;
+        case XDG_POSITIONER_ANCHOR_BOTTOM_RIGHT:
+            return XDG_POSITIONER_ANCHOR_TOP_RIGHT;
+        default:
+            return value;
     }
 }
 
@@ -9468,8 +9345,7 @@ static void placePositionerRaw(const Positioner& p, u32 anchor, u32 gravity, int
     outY = clampPosition(py + p.dy);
 }
 
-void Positioner::place(int& outX, int& outY, int& outW, int& outH,
-                       int minX, int minY, int maxX, int maxY) const {
+void Positioner::place(int& outX, int& outY, int& outW, int& outH, int minX, int minY, int maxX, int maxY) const {
     placePositionerRaw(*this, anchor, gravity, outX, outY);
     outW = w;
     outH = h;
@@ -9908,8 +9784,7 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
         }
 
         if (ev.buttonSet) {
-            zwp_tablet_tool_v2_send_button(dev->tool, wl_display_next_serial(srv->display), ev.button,
-                ev.buttonPressed ? ZWP_TABLET_TOOL_V2_BUTTON_STATE_PRESSED : ZWP_TABLET_TOOL_V2_BUTTON_STATE_RELEASED);
+            zwp_tablet_tool_v2_send_button(dev->tool, wl_display_next_serial(srv->display), ev.button, ev.buttonPressed ? ZWP_TABLET_TOOL_V2_BUTTON_STATE_PRESSED : ZWP_TABLET_TOOL_V2_BUTTON_STATE_RELEASED);
         }
 
         zwp_tablet_tool_v2_send_frame(dev->tool, nowMsec());
@@ -10274,9 +10149,7 @@ void SeatState::handleScroll(const ScrollEvent& ev) {
         bool relDir = pv >= WL_POINTER_AXIS_RELATIVE_DIRECTION_SINCE_VERSION;
 
         if (source) {
-            u32 wlSource = ev.source == ScrollSource::wheel ? WL_POINTER_AXIS_SOURCE_WHEEL
-                         : ev.source == ScrollSource::finger ? WL_POINTER_AXIS_SOURCE_FINGER
-                                                            : WL_POINTER_AXIS_SOURCE_CONTINUOUS;
+            u32 wlSource = ev.source == ScrollSource::wheel ? WL_POINTER_AXIS_SOURCE_WHEEL : ev.source == ScrollSource::finger ? WL_POINTER_AXIS_SOURCE_FINGER : WL_POINTER_AXIS_SOURCE_CONTINUOUS;
 
             wl_pointer_send_axis_source(p, wlSource);
         }
@@ -10491,8 +10364,7 @@ void SeatState::handleKey(u32 code, bool pressed) {
         u32 t = nowMsec();
         u32 serial = wl_display_next_serial(srv->display);
 
-        zwp_input_method_keyboard_grab_v2_send_key(inputMethod->grab, serial, t, code,
-            pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
+        zwp_input_method_keyboard_grab_v2_send_key(inputMethod->grab, serial, t, code, pressed ? WL_KEYBOARD_KEY_STATE_PRESSED : WL_KEYBOARD_KEY_STATE_RELEASED);
 
         return;
     }
@@ -10580,8 +10452,7 @@ bool SeatState::validSerial(wl_client* client, u32 serial) const {
         const InputSerial& entry = inputSerials[i - 1];
 
         if (entry.value == serial) {
-            return entry.client == client &&
-                   entry.focusGeneration == focusGeneration;
+            return entry.client == client && entry.focusGeneration == focusGeneration;
         }
     }
 
@@ -10693,10 +10564,8 @@ void SeatState::applySelection(DataSource* src, bool primary) {
 // data-control devices see every selection change, focus-free
 void SeatState::sendDcSelections() {
     for (wl_resource* d : dcDevices) {
-        ext_data_control_device_v1_send_selection(
-            d, clipboard ? makeDcOffer(d, clipboard) : nullptr);
-        ext_data_control_device_v1_send_primary_selection(
-            d, primarySel ? makeDcOffer(d, primarySel) : nullptr);
+        ext_data_control_device_v1_send_selection(d, clipboard ? makeDcOffer(d, clipboard) : nullptr);
+        ext_data_control_device_v1_send_primary_selection(d, primarySel ? makeDcOffer(d, primarySel) : nullptr);
     }
 }
 
@@ -11042,8 +10911,7 @@ void SeatState::imUpdatePopup() {
     RectI r = ti->rectSet ? ti->rect : RectI{0, 0, 0, 0};
     RectI popupRect{-r.x, -r.y, r.w, r.h};
 
-    if (popupRect.x != im->lastRect.x || popupRect.y != im->lastRect.y ||
-        popupRect.w != im->lastRect.w || popupRect.h != im->lastRect.h) {
+    if (popupRect.x != im->lastRect.x || popupRect.y != im->lastRect.y || popupRect.w != im->lastRect.w || popupRect.h != im->lastRect.h) {
         im->lastRect = popupRect;
         zwp_input_popup_surface_v2_send_text_input_rectangle(im->popupRes, popupRect.x, popupRect.y, r.w, r.h);
     }
@@ -11248,7 +11116,6 @@ void SeatState::surfaceGone(Surface* s) {
     while (inputSerials.length() > keep) {
         inputSerials.popBack();
     }
-
 }
 
 void SeatState::toplevelGone(Toplevel* t) {
@@ -11296,8 +11163,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     // render device can also sample qualify
     for (size_t i = 0; i < cfg.scanoutFormatCount; i++) {
         for (u16 j = 0; j < (u16)formats.length(); j++) {
-            if (formats[j].fourcc == cfg.scanoutFormats[i].fourcc &&
-                formats[j].modifier == cfg.scanoutFormats[i].modifier) {
+            if (formats[j].fourcc == cfg.scanoutFormats[i].fourcc && formats[j].modifier == cfg.scanoutFormats[i].modifier) {
                 scanoutIndices.pushBack(j);
                 break;
             }
@@ -11372,551 +11238,441 @@ WaylandImpl::~WaylandImpl() noexcept {
     }
 }
 
-    // ---- color-management-v1 ----
+// ---- color-management-v1 ----
 
-    void cmImageDescDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
+void cmImageDescDestroy(wl_client*, wl_resource* res) {
+    wl_resource_destroy(res);
+}
+
+u32 cmTfNamed(const ColorDescription& d, u32 version) {
+    if (d.transfer == ColorTransfer::pq) {
+        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
     }
 
-    u32 cmTfNamed(const ColorDescription& d, u32 version) {
-        if (d.transfer == ColorTransfer::pq) {
-            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
-        }
-
-        if (d.transfer == ColorTransfer::hlg) {
-            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
-        }
-
-        if (d.transfer == ColorTransfer::extendedLinear) {
-            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
-        }
-
-        if (d.transfer == ColorTransfer::bt1886) {
-            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
-        }
-
-        if (d.transfer == ColorTransfer::gamma22) {
-            return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
-        }
-
-        return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
-                              WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
+    if (d.transfer == ColorTransfer::hlg) {
+        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
     }
 
-    u32 cmPrimariesNamed(const ColorDescription& d) {
-        return d.primaries == ColorPrimaries::bt2020 ?
-            WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 :
-            d.primaries == ColorPrimaries::displayP3 ?
-            WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 :
-            WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+    if (d.transfer == ColorTransfer::extendedLinear) {
+        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
     }
 
-    u32 cmMinLuminance(double nits) {
-        return (u32)(nits * 10000.0 + .5);
+    if (d.transfer == ColorTransfer::bt1886) {
+        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
     }
 
-    u32 cmLuminance(double nits) {
-        return (u32)(nits + .5);
+    if (d.transfer == ColorTransfer::gamma22) {
+        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
     }
 
-    void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
-        auto* d = (CImgDesc*)wl_resource_get_user_data(res);
+    return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 : WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
+}
 
-        if (!d || !d->ready) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NOT_READY,
-                                   "this image description is not ready");
+u32 cmPrimariesNamed(const ColorDescription& d) {
+    return d.primaries == ColorPrimaries::bt2020 ? WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 : d.primaries == ColorPrimaries::displayP3 ? WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 : WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+}
 
-            return;
-        }
+u32 cmMinLuminance(double nits) {
+    return (u32)(nits * 10000.0 + .5);
+}
 
-        if (!d->allowInfo) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION,
-                                   "this image description cannot be introspected");
+u32 cmLuminance(double nits) {
+    return (u32)(nits + .5);
+}
 
-            return;
-        }
+void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
+    auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
-        wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface,
-                                               wl_resource_get_version(res), id);
+    if (!d || !d->ready) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NOT_READY, "this image description is not ready");
 
-        if (!info) {
-            wl_client_post_no_memory(client);
-
-            return;
-        }
-
-        const ColorDescription& color = d->color;
-        const Chromaticities& primary = color.primary;
-        const Chromaticities& target = color.target;
-
-        if (color.primaries != ColorPrimaries::custom) {
-            wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
-        }
-        wp_image_description_info_v1_send_primaries(
-            info, primary.rx, primary.ry, primary.gx, primary.gy,
-            primary.bx, primary.by, primary.wx, primary.wy);
-        wp_image_description_info_v1_send_tf_named(
-            info, cmTfNamed(color, wl_resource_get_version(res)));
-        wp_image_description_info_v1_send_luminances(
-            info, cmMinLuminance(color.minNits), cmLuminance(color.maxNits),
-            cmLuminance(color.referenceNits));
-        wp_image_description_info_v1_send_target_primaries(
-            info, target.rx, target.ry, target.gx, target.gy,
-            target.bx, target.by, target.wx, target.wy);
-        wp_image_description_info_v1_send_target_luminance(
-            info, cmMinLuminance(color.targetMinNits), cmLuminance(color.targetMaxNits));
-
-        if (color.maxCllSet) {
-            wp_image_description_info_v1_send_target_max_cll(info, color.maxCll);
-        }
-
-        if (color.maxFallSet) {
-            wp_image_description_info_v1_send_target_max_fall(info, color.maxFall);
-        }
-
-        wp_image_description_info_v1_send_done(info);
-        wl_resource_destroy(info);
+        return;
     }
 
-    const struct wp_image_description_v1_interface cmImageDescImpl = {
-        .destroy = cmImageDescDestroy,
-        .get_information = cmImageDescGetInfo,
-    };
+    if (!d->allowInfo) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NO_INFORMATION, "this image description cannot be introspected");
 
-    void cmImageDescResourceDestroyed(wl_resource* res) {
-        auto* d = (CImgDesc*)wl_resource_get_user_data(res);
-
-        if (d && d->srv) {
-            d->srv->alloc->release(d);
-        }
+        return;
     }
 
-    // build an image description resource carrying `d`, sent ready
-    wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, const CImgDesc& d) {
-        wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
+    wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface, wl_resource_get_version(res), id);
 
-        if (!res) {
-            wl_client_post_no_memory(client);
+    if (!info) {
+        wl_client_post_no_memory(client);
 
-            return nullptr;
-        }
-
-        CImgDesc* obj = srv->alloc->make<CImgDesc>();
-
-        *obj = d;
-        obj->srv = srv;
-
-        if (!obj->identity) {
-            obj->identity = ++srv->cimgIdentity;
-        }
-
-        wl_resource_set_implementation(res, &cmImageDescImpl, obj, cmImageDescResourceDestroyed);
-
-        if (version >= 2) {
-            wp_image_description_v1_send_ready2(res, (u32)(obj->identity >> 32), (u32)obj->identity);
-        } else {
-            wp_image_description_v1_send_ready(res, (u32)obj->identity);
-        }
-
-        return res;
+        return;
     }
 
-    wl_resource* cmMakeFailedImageDesc(WaylandImpl* srv, wl_client* client,
-                                        u32 version, u32 id, u32 cause,
-                                        const char* message) {
-        wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface,
-                                              version, id);
+    const ColorDescription& color = d->color;
+    const Chromaticities& primary = color.primary;
+    const Chromaticities& target = color.target;
 
-        if (!res) {
-            wl_client_post_no_memory(client);
+    if (color.primaries != ColorPrimaries::custom) {
+        wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
+    }
+    wp_image_description_info_v1_send_primaries(info, primary.rx, primary.ry, primary.gx, primary.gy, primary.bx, primary.by, primary.wx, primary.wy);
+    wp_image_description_info_v1_send_tf_named(info, cmTfNamed(color, wl_resource_get_version(res)));
+    wp_image_description_info_v1_send_luminances(info, cmMinLuminance(color.minNits), cmLuminance(color.maxNits), cmLuminance(color.referenceNits));
+    wp_image_description_info_v1_send_target_primaries(info, target.rx, target.ry, target.gx, target.gy, target.bx, target.by, target.wx, target.wy);
+    wp_image_description_info_v1_send_target_luminance(info, cmMinLuminance(color.targetMinNits), cmLuminance(color.targetMaxNits));
 
-            return nullptr;
-        }
-
-        CImgDesc* obj = srv->alloc->make<CImgDesc>();
-
-        *obj = {};
-        obj->srv = srv;
-        obj->ready = false;
-        wl_resource_set_implementation(res, &cmImageDescImpl, obj,
-                                       cmImageDescResourceDestroyed);
-        wp_image_description_v1_send_failed(res, cause, message);
-
-        return res;
+    if (color.maxCllSet) {
+        wp_image_description_info_v1_send_target_max_cll(info, color.maxCll);
     }
 
-    // params creator
-    void cmParamsSetTfNamed(wl_client*, wl_resource* res, u32 tf) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
-
-        if (p->tfSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "transfer function is already set");
-
-            return;
-        }
-
-        u32 version = wl_resource_get_version(res);
-        bool sRgb = version >= 2 ?
-            tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 :
-            tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
-
-        bool pq = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
-        bool hlg = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
-        bool linear = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
-        bool bt1886 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
-        bool gamma22 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
-
-        if (!sRgb && !pq && !hlg && !linear && !bt1886 && !gamma22) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
-                                   "transfer function was not advertised");
-
-            return;
-        }
-
-        p->d.color.transfer = pq ? ColorTransfer::pq :
-                              hlg ? ColorTransfer::hlg :
-                              linear ? ColorTransfer::extendedLinear :
-                              bt1886 ? ColorTransfer::bt1886 :
-                              gamma22 ? ColorTransfer::gamma22 : ColorTransfer::sRgb;
-
-        if (linear) {
-            p->d.color.linearOneNits = p->d.color.referenceNits;
-        }
-
-        if (bt1886 && !p->lumSet) {
-            ColorDescription defaults = ColorDescription::bt1886();
-
-            p->d.color.minNits = defaults.minNits;
-            p->d.color.maxNits = defaults.maxNits;
-            p->d.color.referenceNits = defaults.referenceNits;
-            p->d.color.targetMinNits = defaults.targetMinNits;
-            p->d.color.targetMaxNits = defaults.targetMaxNits;
-        }
-
-        if ((pq || hlg) && !p->lumSet) {
-            ColorDescription defaults = pq ? ColorDescription::bt2100Pq() :
-                                                ColorDescription::bt2100Hlg();
-
-            p->d.color.minNits = defaults.minNits;
-            p->d.color.maxNits = defaults.maxNits;
-            p->d.color.referenceNits = defaults.referenceNits;
-            p->d.color.targetMinNits = defaults.targetMinNits;
-            p->d.color.targetMaxNits = defaults.targetMaxNits;
-        } else if (pq) {
-            p->d.color.maxNits = 10000.0 + p->d.color.minNits;
-            p->d.color.targetMaxNits = p->d.color.maxNits;
-        }
-
-        p->tfSet = true;
+    if (color.maxFallSet) {
+        wp_image_description_info_v1_send_target_max_fall(info, color.maxFall);
     }
 
-    void cmParamsSetTfPower(wl_client*, wl_resource* res, u32 eexp) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    wp_image_description_info_v1_send_done(info);
+    wl_resource_destroy(info);
+}
 
-        if (p->tfSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "the transfer function is already set");
+const struct wp_image_description_v1_interface cmImageDescImpl = {
+    .destroy = cmImageDescDestroy,
+    .get_information = cmImageDescGetInfo,
+};
 
-            return;
-        }
+void cmImageDescResourceDestroyed(wl_resource* res) {
+    auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
-        // wire units are 1/10000 of the exponent; 1.0..10.0 is the valid range
-        double g = (double)eexp / 10000.0;
+    if (d && d->srv) {
+        d->srv->alloc->release(d);
+    }
+}
 
-        if (g < 1.0 || g > 10.0) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF,
-                                   "power exponent out of range");
+// build an image description resource carrying `d`, sent ready
+wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, const CImgDesc& d) {
+    wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
 
-            return;
-        }
+    if (!res) {
+        wl_client_post_no_memory(client);
 
-        p->tfSet = true;
-        p->d.color.transfer = ColorTransfer::iccGamma;
-        p->d.color.gamma[0] = p->d.color.gamma[1] = p->d.color.gamma[2] = g;
+        return nullptr;
     }
 
-    // wp_color_manager_v1 named primaries -> chromaticities in 1/1000000
-    // units (D65 white unless noted). false = not a primaries name we map
-    bool namedPrimaries(u32 prim, Chromaticities& out) {
-        switch (prim) {
-            case WP_COLOR_MANAGER_V1_PRIMARIES_SRGB:
-                out = Chromaticities::sRgb();
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_BT2020:
-                out = Chromaticities::bt2020();
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3:
-                out = Chromaticities::displayP3();
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M:
-                out = {670000, 330000, 210000, 710000, 140000, 80000, 310000, 316000};
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_PAL:
-                out = {640000, 330000, 290000, 600000, 150000, 60000, 313000, 329000};
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_NTSC:
-                out = {630000, 340000, 310000, 595000, 155000, 70000, 312727, 329024};
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM:
-                out = {681000, 319000, 243000, 692000, 145000, 49000, 310000, 316000};
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3:
-                // DCI white, not D65
-                out = {680000, 320000, 265000, 690000, 150000, 60000, 314000, 351000};
-                return true;
-            case WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB:
-                out = {640000, 330000, 210000, 710000, 150000, 60000, 313000, 329000};
-                return true;
-            default:
-                return false;
-        }
+    CImgDesc* obj = srv->alloc->make<CImgDesc>();
+
+    *obj = d;
+    obj->srv = srv;
+
+    if (!obj->identity) {
+        obj->identity = ++srv->cimgIdentity;
     }
 
-    void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    wl_resource_set_implementation(res, &cmImageDescImpl, obj, cmImageDescResourceDestroyed);
 
-        if (p->primSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "primaries are already set");
-
-            return;
-        }
-
-        Chromaticities chroma;
-
-        if (!namedPrimaries(prim, chroma)) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_PRIMARIES_NAMED,
-                                   "primaries were not advertised");
-
-            return;
-        }
-
-        p->d.color.primaries = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 ?
-            ColorPrimaries::bt2020 :
-            prim == WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 ?
-            ColorPrimaries::displayP3 :
-            prim == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB ?
-            ColorPrimaries::sRgb : ColorPrimaries::custom;
-        p->d.color.primary = chroma;
-        p->d.color.target = chroma;
-        p->primSet = true;
+    if (version >= 2) {
+        wp_image_description_v1_send_ready2(res, (u32)(obj->identity >> 32), (u32)obj->identity);
+    } else {
+        wp_image_description_v1_send_ready(res, (u32)obj->identity);
     }
 
-    void cmParamsSetPrim(wl_client*, wl_resource* res,
-                         i32 rx, i32 ry, i32 gx, i32 gy,
-                         i32 bx, i32 by, i32 wx, i32 wy) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    return res;
+}
 
-        if (p->primSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "primaries are already set");
+wl_resource* cmMakeFailedImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, u32 cause, const char* message) {
+    wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
 
-            return;
-        }
+    if (!res) {
+        wl_client_post_no_memory(client);
 
-        p->d.color.primaries = ColorPrimaries::custom;
-        p->d.color.primary = {rx, ry, gx, gy, bx, by, wx, wy};
-        p->d.color.target = p->d.color.primary;
-        p->primSet = true;
+        return nullptr;
     }
 
-    bool cmInvalidLumRange(u32 minLum, u32 maxLum) {
-        return (u64)maxLum * 10000 <= minLum;
+    CImgDesc* obj = srv->alloc->make<CImgDesc>();
+
+    *obj = {};
+    obj->srv = srv;
+    obj->ready = false;
+    wl_resource_set_implementation(res, &cmImageDescImpl, obj, cmImageDescResourceDestroyed);
+    wp_image_description_v1_send_failed(res, cause, message);
+
+    return res;
+}
+
+// params creator
+void cmParamsSetTfNamed(wl_client*, wl_resource* res, u32 tf) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    if (p->tfSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET, "transfer function is already set");
+
+        return;
     }
 
-    void cmParamsSetLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum, u32 refLum) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    u32 version = wl_resource_get_version(res);
+    bool sRgb = version >= 2 ? tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 : tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
 
-        if (p->lumSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET,
-                                   "primary luminances are already set");
+    bool pq = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
+    bool hlg = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
+    bool linear = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
+    bool bt1886 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
+    bool gamma22 = tf == WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
 
-            return;
-        }
+    if (!sRgb && !pq && !hlg && !linear && !bt1886 && !gamma22) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF, "transfer function was not advertised");
 
-        if (cmInvalidLumRange(minLum, refLum) ||
-            (p->tfSet && !p->d.color.hdr() && cmInvalidLumRange(minLum, maxLum))) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
-                                   "primary max and reference luminance must exceed min luminance");
+        return;
+    }
 
-            return;
-        }
+    p->d.color.transfer = pq ? ColorTransfer::pq : hlg ? ColorTransfer::hlg : linear ? ColorTransfer::extendedLinear : bt1886 ? ColorTransfer::bt1886 : gamma22 ? ColorTransfer::gamma22 : ColorTransfer::sRgb;
 
-        p->lumSet = true;
-        p->d.color.minNits = (double)minLum / 10000.0;
-        p->d.color.maxNits = p->d.color.transfer == ColorTransfer::pq ?
-            10000.0 + p->d.color.minNits : (double)maxLum;
-        p->d.color.referenceNits = (double)refLum;
-        if (p->d.color.transfer == ColorTransfer::extendedLinear) {
-            p->d.color.linearOneNits = p->d.color.referenceNits;
-        }
-        p->d.color.targetMinNits = p->d.color.minNits;
+    if (linear) {
+        p->d.color.linearOneNits = p->d.color.referenceNits;
+    }
+
+    if (bt1886 && !p->lumSet) {
+        ColorDescription defaults = ColorDescription::bt1886();
+
+        p->d.color.minNits = defaults.minNits;
+        p->d.color.maxNits = defaults.maxNits;
+        p->d.color.referenceNits = defaults.referenceNits;
+        p->d.color.targetMinNits = defaults.targetMinNits;
+        p->d.color.targetMaxNits = defaults.targetMaxNits;
+    }
+
+    if ((pq || hlg) && !p->lumSet) {
+        ColorDescription defaults = pq ? ColorDescription::bt2100Pq() : ColorDescription::bt2100Hlg();
+
+        p->d.color.minNits = defaults.minNits;
+        p->d.color.maxNits = defaults.maxNits;
+        p->d.color.referenceNits = defaults.referenceNits;
+        p->d.color.targetMinNits = defaults.targetMinNits;
+        p->d.color.targetMaxNits = defaults.targetMaxNits;
+    } else if (pq) {
+        p->d.color.maxNits = 10000.0 + p->d.color.minNits;
         p->d.color.targetMaxNits = p->d.color.maxNits;
     }
 
-    void cmParamsSetMasteringPrim(wl_client*, wl_resource* res,
-                                  i32 rx, i32 ry, i32 gx, i32 gy,
-                                  i32 bx, i32 by, i32 wx, i32 wy) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    p->tfSet = true;
+}
 
-        // the target volume the content was mastered against: our tone map
-        // reads it as the target chromaticities
-        p->d.color.target = {rx, ry, gx, gy, bx, by, wx, wy};
+void cmParamsSetTfPower(wl_client*, wl_resource* res, u32 eexp) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    if (p->tfSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET, "the transfer function is already set");
+
+        return;
     }
 
-    void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    // wire units are 1/10000 of the exponent; 1.0..10.0 is the valid range
+    double g = (double)eexp / 10000.0;
 
-        // min in 1/10000 cd/m^2, max in cd/m^2
-        p->d.color.targetMinNits = (double)minLum / 10000.0;
-        p->d.color.targetMaxNits = (double)maxLum;
+    if (g < 1.0 || g > 10.0) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF, "power exponent out of range");
+
+        return;
     }
 
-    void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    p->tfSet = true;
+    p->d.color.transfer = ColorTransfer::iccGamma;
+    p->d.color.gamma[0] = p->d.color.gamma[1] = p->d.color.gamma[2] = g;
+}
 
-        p->d.color.maxCll = v;
-        p->d.color.maxCllSet = true;
-        p->maxCllSet = true;
+// wp_color_manager_v1 named primaries -> chromaticities in 1/1000000
+// units (D65 white unless noted). false = not a primaries name we map
+bool namedPrimaries(u32 prim, Chromaticities& out) {
+    switch (prim) {
+        case WP_COLOR_MANAGER_V1_PRIMARIES_SRGB:
+            out = Chromaticities::sRgb();
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_BT2020:
+            out = Chromaticities::bt2020();
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3:
+            out = Chromaticities::displayP3();
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M:
+            out = {670000, 330000, 210000, 710000, 140000, 80000, 310000, 316000};
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_PAL:
+            out = {640000, 330000, 290000, 600000, 150000, 60000, 313000, 329000};
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_NTSC:
+            out = {630000, 340000, 310000, 595000, 155000, 70000, 312727, 329024};
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM:
+            out = {681000, 319000, 243000, 692000, 145000, 49000, 310000, 316000};
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3:
+            // DCI white, not D65
+            out = {680000, 320000, 265000, 690000, 150000, 60000, 314000, 351000};
+            return true;
+        case WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB:
+            out = {640000, 330000, 210000, 710000, 150000, 60000, 313000, 329000};
+            return true;
+        default:
+            return false;
+    }
+}
+
+void cmParamsSetPrimNamed(wl_client*, wl_resource* res, u32 prim) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    if (p->primSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET, "primaries are already set");
+
+        return;
     }
 
-    void cmParamsSetMaxFall(wl_client*, wl_resource* res, u32 v) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    Chromaticities chroma;
 
-        p->d.color.maxFall = v;
-        p->d.color.maxFallSet = true;
-        p->maxFallSet = true;
+    if (!namedPrimaries(prim, chroma)) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_PRIMARIES_NAMED, "primaries were not advertised");
+
+        return;
     }
 
-    void cmParamsCreate(wl_client* client, wl_resource* res, u32 id) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    p->d.color.primaries = prim == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 ? ColorPrimaries::bt2020 : prim == WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 ? ColorPrimaries::displayP3 : prim == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB ? ColorPrimaries::sRgb : ColorPrimaries::custom;
+    p->d.color.primary = chroma;
+    p->d.color.target = chroma;
+    p->primSet = true;
+}
 
-        if (!p->tfSet || !p->primSet) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INCOMPLETE_SET, "transfer function and primaries are required");
+void cmParamsSetPrim(wl_client*, wl_resource* res, i32 rx, i32 ry, i32 gx, i32 gy, i32 bx, i32 by, i32 wx, i32 wy) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
 
-            return;
-        }
+    if (p->primSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET, "primaries are already set");
 
-        u32 minLum = cmMinLuminance(p->d.color.minNits);
-        u32 maxLum = cmLuminance(p->d.color.maxNits);
-
-        if (p->d.color.transfer != ColorTransfer::pq && cmInvalidLumRange(minLum, maxLum)) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
-                                   "primary max luminance must exceed min luminance");
-
-            return;
-        }
-
-        auto levelInMasteringRange = [minLum, maxLum](u32 level) {
-            return (u64)level * 10000 > minLum && level <= maxLum;
-        };
-
-        bool version1RangeError = wl_resource_get_version(res) < 2 &&
-            ((p->maxCllSet && !levelInMasteringRange(p->d.color.maxCll)) ||
-             (p->maxFallSet && !levelInMasteringRange(p->d.color.maxFall)));
-
-        if (version1RangeError ||
-            (p->maxCllSet && p->maxFallSet && p->d.color.maxFall > p->d.color.maxCll)) {
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE,
-                                   "content light levels are outside the mastering luminance range");
-
-            return;
-        }
-
-        if (!p->d.color.primary.valid()) {
-            cmMakeFailedImageDesc(p->srv, client, wl_resource_get_version(res), id,
-                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
-                                  "degenerate primaries");
-            wl_resource_destroy(res);
-
-            return;
-        }
-
-        cmMakeImageDesc(p->srv, client, wl_resource_get_version(res), id, p->d);
-        wl_resource_destroy(res); // create consumes the creator
+        return;
     }
 
-    const struct wp_image_description_creator_params_v1_interface cmParamsImpl = {
-        .create = cmParamsCreate,
-        .set_tf_named = cmParamsSetTfNamed,
-        .set_tf_power = cmParamsSetTfPower,
-        .set_primaries_named = cmParamsSetPrimNamed,
-        .set_primaries = cmParamsSetPrim,
-        .set_luminances = cmParamsSetLum,
-        .set_mastering_display_primaries = cmParamsSetMasteringPrim,
-        .set_mastering_luminance = cmParamsSetMasteringLum,
-        .set_max_cll = cmParamsSetMaxCll,
-        .set_max_fall = cmParamsSetMaxFall,
+    p->d.color.primaries = ColorPrimaries::custom;
+    p->d.color.primary = {rx, ry, gx, gy, bx, by, wx, wy};
+    p->d.color.target = p->d.color.primary;
+    p->primSet = true;
+}
+
+bool cmInvalidLumRange(u32 minLum, u32 maxLum) {
+    return (u64)maxLum * 10000 <= minLum;
+}
+
+void cmParamsSetLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum, u32 refLum) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    if (p->lumSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET, "primary luminances are already set");
+
+        return;
+    }
+
+    if (cmInvalidLumRange(minLum, refLum) || (p->tfSet && !p->d.color.hdr() && cmInvalidLumRange(minLum, maxLum))) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE, "primary max and reference luminance must exceed min luminance");
+
+        return;
+    }
+
+    p->lumSet = true;
+    p->d.color.minNits = (double)minLum / 10000.0;
+    p->d.color.maxNits = p->d.color.transfer == ColorTransfer::pq ? 10000.0 + p->d.color.minNits : (double)maxLum;
+    p->d.color.referenceNits = (double)refLum;
+    if (p->d.color.transfer == ColorTransfer::extendedLinear) {
+        p->d.color.linearOneNits = p->d.color.referenceNits;
+    }
+    p->d.color.targetMinNits = p->d.color.minNits;
+    p->d.color.targetMaxNits = p->d.color.maxNits;
+}
+
+void cmParamsSetMasteringPrim(wl_client*, wl_resource* res, i32 rx, i32 ry, i32 gx, i32 gy, i32 bx, i32 by, i32 wx, i32 wy) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    // the target volume the content was mastered against: our tone map
+    // reads it as the target chromaticities
+    p->d.color.target = {rx, ry, gx, gy, bx, by, wx, wy};
+}
+
+void cmParamsSetMasteringLum(wl_client*, wl_resource* res, u32 minLum, u32 maxLum) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    // min in 1/10000 cd/m^2, max in cd/m^2
+    p->d.color.targetMinNits = (double)minLum / 10000.0;
+    p->d.color.targetMaxNits = (double)maxLum;
+}
+
+void cmParamsSetMaxCll(wl_client*, wl_resource* res, u32 v) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    p->d.color.maxCll = v;
+    p->d.color.maxCllSet = true;
+    p->maxCllSet = true;
+}
+
+void cmParamsSetMaxFall(wl_client*, wl_resource* res, u32 v) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    p->d.color.maxFall = v;
+    p->d.color.maxFallSet = true;
+    p->maxFallSet = true;
+}
+
+void cmParamsCreate(wl_client* client, wl_resource* res, u32 id) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
+
+    if (!p->tfSet || !p->primSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INCOMPLETE_SET, "transfer function and primaries are required");
+
+        return;
+    }
+
+    u32 minLum = cmMinLuminance(p->d.color.minNits);
+    u32 maxLum = cmLuminance(p->d.color.maxNits);
+
+    if (p->d.color.transfer != ColorTransfer::pq && cmInvalidLumRange(minLum, maxLum)) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE, "primary max luminance must exceed min luminance");
+
+        return;
+    }
+
+    auto levelInMasteringRange = [minLum, maxLum](u32 level) {
+        return (u64)level * 10000 > minLum && level <= maxLum;
     };
 
-    void cmParamsResourceDestroyed(wl_resource* res) {
-        auto* p = (CParams*)wl_resource_get_user_data(res);
+    bool version1RangeError = wl_resource_get_version(res) < 2 && ((p->maxCllSet && !levelInMasteringRange(p->d.color.maxCll)) || (p->maxFallSet && !levelInMasteringRange(p->d.color.maxFall)));
 
-        if (p && p->srv) {
-            p->srv->alloc->release(p);
-        }
+    if (version1RangeError || (p->maxCllSet && p->maxFallSet && p->d.color.maxFall > p->d.color.maxCll)) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE, "content light levels are outside the mastering luminance range");
+
+        return;
     }
 
-    // surface color object: user_data = the SurfaceImpl
-    void cmSurfaceDestroy(wl_client*, wl_resource* res) {
-        if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
-            s->pendColorChanged = true;
-
-            if (!s->pendColor) {
-                s->pendColor = s->srv->alloc->make<ColorDescription>();
-            }
-
-            *s->pendColor = ColorDescription::sRgb();
-        }
-
+    if (!p->d.color.primary.valid()) {
+        cmMakeFailedImageDesc(p->srv, client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "degenerate primaries");
         wl_resource_destroy(res);
+
+        return;
     }
 
-    void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32 intent) {
-        auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
-        auto* d = descRes ? (CImgDesc*)wl_resource_get_user_data(descRes) : nullptr;
+    cmMakeImageDesc(p->srv, client, wl_resource_get_version(res), id, p->d);
+    wl_resource_destroy(res); // create consumes the creator
+}
 
-        if (!s) {
-            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
+const struct wp_image_description_creator_params_v1_interface cmParamsImpl = {
+    .create = cmParamsCreate,
+    .set_tf_named = cmParamsSetTfNamed,
+    .set_tf_power = cmParamsSetTfPower,
+    .set_primaries_named = cmParamsSetPrimNamed,
+    .set_primaries = cmParamsSetPrim,
+    .set_luminances = cmParamsSetLum,
+    .set_mastering_display_primaries = cmParamsSetMasteringPrim,
+    .set_mastering_luminance = cmParamsSetMasteringLum,
+    .set_max_cll = cmParamsSetMaxCll,
+    .set_max_fall = cmParamsSetMaxFall,
+};
 
-            return;
-        }
+void cmParamsResourceDestroyed(wl_resource* res) {
+    auto* p = (CParams*)wl_resource_get_user_data(res);
 
-        if (!d || !d->ready) {
-            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION,
-                                   "image description is not ready");
-
-            return;
-        }
-
-        if (intent != WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL) {
-            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_RENDER_INTENT,
-                                   "render intent was not advertised");
-
-            return;
-        }
-
-        s->pendColorChanged = true;
-
-        if (!s->pendColor) {
-            s->pendColor = s->srv->alloc->make<ColorDescription>();
-        }
-
-        *s->pendColor = d->color;
+    if (p && p->srv) {
+        p->srv->alloc->release(p);
     }
+}
 
-    void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
-        auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
-
-        if (!s) {
-            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
-
-            return;
-        }
-
+// surface color object: user_data = the SurfaceImpl
+void cmSurfaceDestroy(wl_client*, wl_resource* res) {
+    if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
         s->pendColorChanged = true;
 
         if (!s->pendColor) {
@@ -11926,538 +11682,536 @@ WaylandImpl::~WaylandImpl() noexcept {
         *s->pendColor = ColorDescription::sRgb();
     }
 
-    const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
-        .destroy = cmSurfaceDestroy,
-        .set_image_description = cmSurfaceSetImageDesc,
-        .unset_image_description = cmSurfaceUnsetImageDesc,
-    };
+    wl_resource_destroy(res);
+}
 
-    void cmSurfaceResourceDestroyed(wl_resource* res) {
-        if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
-            s->colorRes = nullptr;
-        }
+void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32 intent) {
+    auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
+    auto* d = descRes ? (CImgDesc*)wl_resource_get_user_data(descRes) : nullptr;
+
+    if (!s) {
+        wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
+
+        return;
     }
 
-    // Output and preferred descriptions refer to the same immutable record and
-    // therefore carry the same identity until the output color state changes.
-    CImgDesc cmDisplayDesc(WaylandImpl* srv, u32 version) {
-        (void)version;
-        CImgDesc d;
+    if (!d || !d->ready) {
+        wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION, "image description is not ready");
 
-        d.identity = srv->cmDisplayIdentity;
-        d.allowInfo = true;
-        d.color = srv->cmDisplayColor.encoding;
-
-        return d;
+        return;
     }
 
-    void cmOutputDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
+    if (intent != WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL) {
+        wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_RENDER_INTENT, "render intent was not advertised");
+
+        return;
     }
 
-    void cmOutputGetImageDesc(wl_client* client, wl_resource* res, u32 id) {
-        auto* obj = (CmOutput*)wl_resource_get_user_data(res);
+    s->pendColorChanged = true;
 
-        if (!obj->srv->output) {
-            cmMakeFailedImageDesc(obj->srv, client, wl_resource_get_version(res), id,
-                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_NO_OUTPUT,
-                                  "the wl_output is gone");
-
-            return;
-        }
-
-        cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id,
-                        cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
+    if (!s->pendColor) {
+        s->pendColor = s->srv->alloc->make<ColorDescription>();
     }
 
-    const struct wp_color_management_output_v1_interface cmOutputImpl = {
-        .destroy = cmOutputDestroy,
-        .get_image_description = cmOutputGetImageDesc,
-    };
+    *s->pendColor = d->color;
+}
 
-    void cmOutputResourceDestroyed(wl_resource* res) {
-        auto* obj = (CmOutput*)wl_resource_get_user_data(res);
+void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
+    auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
 
-        if (obj) {
-            obj->unlink();
-            obj->srv->alloc->release(obj);
-        }
+    if (!s) {
+        wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
+
+        return;
     }
 
-    void cmFeedbackDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
+    s->pendColorChanged = true;
+
+    if (!s->pendColor) {
+        s->pendColor = s->srv->alloc->make<ColorDescription>();
     }
 
-    void cmFeedbackGetPreferred(wl_client* client, wl_resource* res, u32 id) {
-        auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
+    *s->pendColor = ColorDescription::sRgb();
+}
 
-        if (!obj->surface) {
-            wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
+const struct wp_color_management_surface_v1_interface cmSurfaceImpl = {
+    .destroy = cmSurfaceDestroy,
+    .set_image_description = cmSurfaceSetImageDesc,
+    .unset_image_description = cmSurfaceUnsetImageDesc,
+};
 
-            return;
-        }
+void cmSurfaceResourceDestroyed(wl_resource* res) {
+    if (auto* s = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+        s->colorRes = nullptr;
+    }
+}
 
-        cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id,
-                        cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
+// Output and preferred descriptions refer to the same immutable record and
+// therefore carry the same identity until the output color state changes.
+CImgDesc cmDisplayDesc(WaylandImpl* srv, u32 version) {
+    (void)version;
+    CImgDesc d;
+
+    d.identity = srv->cmDisplayIdentity;
+    d.allowInfo = true;
+    d.color = srv->cmDisplayColor.encoding;
+
+    return d;
+}
+
+void cmOutputDestroy(wl_client*, wl_resource* res) {
+    wl_resource_destroy(res);
+}
+
+void cmOutputGetImageDesc(wl_client* client, wl_resource* res, u32 id) {
+    auto* obj = (CmOutput*)wl_resource_get_user_data(res);
+
+    if (!obj->srv->output) {
+        cmMakeFailedImageDesc(obj->srv, client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_NO_OUTPUT, "the wl_output is gone");
+
+        return;
     }
 
-    const struct wp_color_management_surface_feedback_v1_interface cmFeedbackImpl = {
-        .destroy = cmFeedbackDestroy,
-        .get_preferred = cmFeedbackGetPreferred,
-        .get_preferred_parametric = cmFeedbackGetPreferred,
-    };
+    cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id, cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
+}
 
-    void cmFeedbackResourceDestroyed(wl_resource* res) {
-        auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
+const struct wp_color_management_output_v1_interface cmOutputImpl = {
+    .destroy = cmOutputDestroy,
+    .get_image_description = cmOutputGetImageDesc,
+};
 
-        if (obj) {
-            obj->unlink();
-            obj->srv->alloc->release(obj);
-        }
+void cmOutputResourceDestroyed(wl_resource* res) {
+    auto* obj = (CmOutput*)wl_resource_get_user_data(res);
+
+    if (obj) {
+        obj->unlink();
+        obj->srv->alloc->release(obj);
+    }
+}
+
+void cmFeedbackDestroy(wl_client*, wl_resource* res) {
+    wl_resource_destroy(res);
+}
+
+void cmFeedbackGetPreferred(wl_client* client, wl_resource* res, u32 id) {
+    auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
+
+    if (!obj->surface) {
+        wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_FEEDBACK_V1_ERROR_INERT, "the wl_surface is gone");
+
+        return;
     }
 
-    // manager
-    void cmManagerDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
+    cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id, cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
+}
+
+const struct wp_color_management_surface_feedback_v1_interface cmFeedbackImpl = {
+    .destroy = cmFeedbackDestroy,
+    .get_preferred = cmFeedbackGetPreferred,
+    .get_preferred_parametric = cmFeedbackGetPreferred,
+};
+
+void cmFeedbackResourceDestroyed(wl_resource* res) {
+    auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
+
+    if (obj) {
+        obj->unlink();
+        obj->srv->alloc->release(obj);
+    }
+}
+
+// manager
+void cmManagerDestroy(wl_client*, wl_resource* res) {
+    wl_resource_destroy(res);
+}
+
+void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
+    wl_resource* out = wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id);
+
+    if (!out) {
+        wl_client_post_no_memory(client);
+
+        return;
     }
 
-    void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
-        wl_resource* out = wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id);
+    auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+    CmOutput* obj = srv->alloc->make<CmOutput>();
 
-        if (!out) {
-            wl_client_post_no_memory(client);
+    obj->srv = srv;
+    obj->res = out;
+    wl_resource_set_implementation(out, &cmOutputImpl, obj, cmOutputResourceDestroyed);
+    srv->cmOutputResources.pushBack(obj);
+}
 
-            return;
-        }
+void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+    auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
 
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CmOutput* obj = srv->alloc->make<CmOutput>();
+    if (surface->colorRes) {
+        wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_SURFACE_EXISTS, "surface already has a color-management object");
 
-        obj->srv = srv;
-        obj->res = out;
-        wl_resource_set_implementation(out, &cmOutputImpl, obj, cmOutputResourceDestroyed);
-        srv->cmOutputResources.pushBack(obj);
+        return;
     }
 
-    void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
-        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
+    wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
 
-        if (surface->colorRes) {
-            wl_resource_post_error(res, WP_COLOR_MANAGER_V1_ERROR_SURFACE_EXISTS,
-                                   "surface already has a color-management object");
+    if (!cs) {
+        wl_client_post_no_memory(client);
 
-            return;
-        }
-
-        wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
-
-        if (!cs) {
-            wl_client_post_no_memory(client);
-
-            return;
-        }
-
-        surface->colorRes = cs;
-        wl_resource_set_implementation(cs, &cmSurfaceImpl, surface, cmSurfaceResourceDestroyed);
+        return;
     }
 
-    void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
-        wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
+    surface->colorRes = cs;
+    wl_resource_set_implementation(cs, &cmSurfaceImpl, surface, cmSurfaceResourceDestroyed);
+}
 
-        if (!fb) {
-            wl_client_post_no_memory(client);
+void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+    wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
 
-            return;
-        }
+    if (!fb) {
+        wl_client_post_no_memory(client);
 
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CmFeedback* obj = srv->alloc->make<CmFeedback>();
-
-        obj->srv = srv;
-        obj->res = fb;
-        obj->surface.bind(((SurfaceImpl*)wl_resource_get_user_data(surfaceRes))->weak);
-        wl_resource_set_implementation(fb, &cmFeedbackImpl, obj, cmFeedbackResourceDestroyed);
-        srv->cmFeedbackResources.pushBack(obj);
+        return;
     }
 
-    void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* pr = wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id);
+    auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+    CmFeedback* obj = srv->alloc->make<CmFeedback>();
 
-        if (!pr) {
-            wl_client_post_no_memory(client);
+    obj->srv = srv;
+    obj->res = fb;
+    obj->surface.bind(((SurfaceImpl*)wl_resource_get_user_data(surfaceRes))->weak);
+    wl_resource_set_implementation(fb, &cmFeedbackImpl, obj, cmFeedbackResourceDestroyed);
+    srv->cmFeedbackResources.pushBack(obj);
+}
 
-            return;
-        }
+void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
+    auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+    wl_resource* pr = wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id);
 
-        CParams* p = srv->alloc->make<CParams>();
+    if (!pr) {
+        wl_client_post_no_memory(client);
 
-        *p = {};
-        p->srv = srv;
-        wl_resource_set_implementation(pr, &cmParamsImpl, p, cmParamsResourceDestroyed);
+        return;
     }
 
-    void cmIccCreate(wl_client* client, wl_resource* res, u32 id) {
-        auto* icc = (CIcc*)wl_resource_get_user_data(res);
+    CParams* p = srv->alloc->make<CParams>();
 
-        if (!icc->fileSet) {
-            wl_resource_post_error(
-                res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_INCOMPLETE_SET,
-                "an ICC profile file is required");
+    *p = {};
+    p->srv = srv;
+    wl_resource_set_implementation(pr, &cmParamsImpl, p, cmParamsResourceDestroyed);
+}
 
-            return;
-        }
+void cmIccCreate(wl_client* client, wl_resource* res, u32 id) {
+    auto* icc = (CIcc*)wl_resource_get_user_data(res);
 
-        ColorDescription color;
-        if (icc->readFailed) {
-            cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id,
-                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_OPERATING_SYSTEM,
-                                  "the ICC profile could not be read");
-        } else if (!colorDescriptionFromIcc(icc->data.data(), icc->data.length(), color)) {
-            cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id,
-                                  WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
-                                  "the ICC profile is invalid or unsupported");
-        } else {
-            CImgDesc description;
+    if (!icc->fileSet) {
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_INCOMPLETE_SET, "an ICC profile file is required");
 
-            description.color = color;
-            cmMakeImageDesc(icc->srv, client, wl_resource_get_version(res), id,
-                            description);
-        }
-
-        wl_resource_destroy(res);
+        return;
     }
 
-    void cmIccSetFile(wl_client*, wl_resource* res, int fd, u32 offset, u32 length) {
-        auto* icc = (CIcc*)wl_resource_get_user_data(res);
-
-        if (icc->fileSet) {
-            close(fd);
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_ALREADY_SET,
-                                   "the ICC profile file is already set");
-
-            return;
-        }
-
-        if (!length || length > 32 * 1024 * 1024) {
-            close(fd);
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE,
-                                   "the ICC profile size must be between 1 byte and 32 MiB");
-
-            return;
-        }
-
-        int flags = fcntl(fd, F_GETFL);
-        struct stat st;
-        bool readable = flags >= 0 && (flags & O_ACCMODE) != O_WRONLY;
-        bool seekable = lseek(fd, 0, SEEK_CUR) >= 0;
-
-        if (!readable || !seekable || fstat(fd, &st)) {
-            close(fd);
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD,
-                                   "the ICC profile fd must be readable and seekable");
-
-            return;
-        }
-
-        if ((u64)offset + length > (u64)st.st_size) {
-            close(fd);
-            wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_OUT_OF_FILE,
-                                   "the ICC profile range exceeds the file size");
-
-            return;
-        }
-
-        icc->fileSet = true;
-        icc->data.zero(length);
-        size_t done = 0;
-
-        while (done < length) {
-            ssize_t n = pread(fd, icc->data.mutData() + done, length - done,
-                              (off_t)offset + done);
-
-            if (n > 0) {
-                done += (size_t)n;
-            } else if (n < 0 && errno == EINTR) {
-                continue;
-            } else {
-                icc->readFailed = true;
-                break;
-            }
-        }
-        close(fd);
-    }
-
-    const struct wp_image_description_creator_icc_v1_interface cmIccImpl = {
-        .create = cmIccCreate,
-        .set_icc_file = cmIccSetFile,
-    };
-
-    void cmIccResourceDestroyed(wl_resource* res) {
-        auto* icc = (CIcc*)wl_resource_get_user_data(res);
-
-        if (icc && icc->srv) {
-            icc->srv->alloc->release(icc);
-        }
-    }
-
-    void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* creator = wl_resource_create(
-            client, &wp_image_description_creator_icc_v1_interface,
-            wl_resource_get_version(res), id);
-
-        if (!creator) {
-            wl_client_post_no_memory(client);
-
-            return;
-        }
-
-        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        CIcc* icc = srv->alloc->make<CIcc>();
-
-        icc->srv = srv;
-        wl_resource_set_implementation(creator, &cmIccImpl, icc,
-                                       cmIccResourceDestroyed);
-    }
-
-    void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
-        CImgDesc d;
-
-        d.color = ColorDescription::extendedLinear();
-        d.color.minNits = 0;
-        d.color.maxNits = 10000.0;
-        d.color.referenceNits = 203.0;
-        d.color.linearOneNits = 80.0;
-        d.color.targetMinNits = 0;
-        d.color.targetMaxNits = 10000.0;
-        cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
-                        wl_resource_get_version(res), id, d);
-    }
-
-    void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource* reference) {
-        (void)reference;
-        cmMakeFailedImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
-                              wl_resource_get_version(res), id,
-                              WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED,
-                              "foreign image description references are unsupported");
-    }
-
-    void cmManagerCreateWindowsBt2100(wl_client* client, wl_resource* res, u32 id) {
+    ColorDescription color;
+    if (icc->readFailed) {
+        cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_OPERATING_SYSTEM, "the ICC profile could not be read");
+    } else if (!colorDescriptionFromIcc(icc->data.data(), icc->data.length(), color)) {
+        cmMakeFailedImageDesc(icc->srv, client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "the ICC profile is invalid or unsupported");
+    } else {
         CImgDesc description;
 
-        description.color = ColorDescription::bt2100Pq();
-        cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client,
-                        wl_resource_get_version(res), id, description);
+        description.color = color;
+        cmMakeImageDesc(icc->srv, client, wl_resource_get_version(res), id, description);
     }
 
-    const struct wp_color_manager_v1_interface cmManagerImpl = {
-        .destroy = cmManagerDestroy,
-        .get_output = cmManagerGetOutput,
-        .get_surface = cmManagerGetSurface,
-        .get_surface_feedback = cmManagerGetSurfaceFeedback,
-        .create_icc_creator = cmManagerCreateIccCreator,
-        .create_parametric_creator = cmManagerCreateParamsCreator,
-        .create_windows_scrgb = cmManagerCreateWindowsScrgb,
-        .get_image_description = cmManagerGetImageDesc,
-        .create_windows_bt2100 = cmManagerCreateWindowsBt2100,
-    };
+    wl_resource_destroy(res);
+}
 
-    void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_color_manager_v1_interface, version, id);
+void cmIccSetFile(wl_client*, wl_resource* res, int fd, u32 offset, u32 length) {
+    auto* icc = (CIcc*)wl_resource_get_user_data(res);
 
-        if (!res) {
-            wl_client_post_no_memory(client);
+    if (icc->fileSet) {
+        close(fd);
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_ALREADY_SET, "the ICC profile file is already set");
 
-            return;
-        }
+        return;
+    }
 
-        wl_resource_set_implementation(res, &cmManagerImpl, data, nullptr);
-        wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_ICC_V2_V4);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_TF_POWER);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
-        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
-        if (version >= 3) {
-            wp_color_manager_v1_send_supported_feature(
-                res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_BT2100);
-        }
-        if (version >= 2) {
-            wp_color_manager_v1_send_supported_tf_named(
-                res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4);
+    if (!length || length > 32 * 1024 * 1024) {
+        close(fd);
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_SIZE, "the ICC profile size must be between 1 byte and 32 MiB");
+
+        return;
+    }
+
+    int flags = fcntl(fd, F_GETFL);
+    struct stat st;
+    bool readable = flags >= 0 && (flags & O_ACCMODE) != O_WRONLY;
+    bool seekable = lseek(fd, 0, SEEK_CUR) >= 0;
+
+    if (!readable || !seekable || fstat(fd, &st)) {
+        close(fd);
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD, "the ICC profile fd must be readable and seekable");
+
+        return;
+    }
+
+    if ((u64)offset + length > (u64)st.st_size) {
+        close(fd);
+        wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_OUT_OF_FILE, "the ICC profile range exceeds the file size");
+
+        return;
+    }
+
+    icc->fileSet = true;
+    icc->data.zero(length);
+    size_t done = 0;
+
+    while (done < length) {
+        ssize_t n = pread(fd, icc->data.mutData() + done, length - done, (off_t)offset + done);
+
+        if (n > 0) {
+            done += (size_t)n;
+        } else if (n < 0 && errno == EINTR) {
+            continue;
         } else {
-            wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+            icc->readFailed = true;
+            break;
         }
+    }
+    close(fd);
+}
 
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
-        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_NTSC);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3);
-        wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB);
-        wp_color_manager_v1_send_done(res);
+const struct wp_image_description_creator_icc_v1_interface cmIccImpl = {
+    .create = cmIccCreate,
+    .set_icc_file = cmIccSetFile,
+};
+
+void cmIccResourceDestroyed(wl_resource* res) {
+    auto* icc = (CIcc*)wl_resource_get_user_data(res);
+
+    if (icc && icc->srv) {
+        icc->srv->alloc->release(icc);
+    }
+}
+
+void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
+    wl_resource* creator = wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, wl_resource_get_version(res), id);
+
+    if (!creator) {
+        wl_client_post_no_memory(client);
+
+        return;
     }
 
-    // ---- color-representation-v1 ----
+    auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+    CIcc* icc = srv->alloc->make<CIcc>();
 
-    void representationDestroy(wl_client*, wl_resource* res) {
-        if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
-            surface->pendRepresentation = {};
-            surface->pendRepresentationChanged = true;
-        }
-        wl_resource_destroy(res);
+    icc->srv = srv;
+    wl_resource_set_implementation(creator, &cmIccImpl, icc, cmIccResourceDestroyed);
+}
+
+void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
+    CImgDesc d;
+
+    d.color = ColorDescription::extendedLinear();
+    d.color.minNits = 0;
+    d.color.maxNits = 10000.0;
+    d.color.referenceNits = 203.0;
+    d.color.linearOneNits = 80.0;
+    d.color.targetMinNits = 0;
+    d.color.targetMaxNits = 10000.0;
+    cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client, wl_resource_get_version(res), id, d);
+}
+
+void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource* reference) {
+    (void)reference;
+    cmMakeFailedImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "foreign image description references are unsupported");
+}
+
+void cmManagerCreateWindowsBt2100(wl_client* client, wl_resource* res, u32 id) {
+    CImgDesc description;
+
+    description.color = ColorDescription::bt2100Pq();
+    cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client, wl_resource_get_version(res), id, description);
+}
+
+const struct wp_color_manager_v1_interface cmManagerImpl = {
+    .destroy = cmManagerDestroy,
+    .get_output = cmManagerGetOutput,
+    .get_surface = cmManagerGetSurface,
+    .get_surface_feedback = cmManagerGetSurfaceFeedback,
+    .create_icc_creator = cmManagerCreateIccCreator,
+    .create_parametric_creator = cmManagerCreateParamsCreator,
+    .create_windows_scrgb = cmManagerCreateWindowsScrgb,
+    .get_image_description = cmManagerGetImageDesc,
+    .create_windows_bt2100 = cmManagerCreateWindowsBt2100,
+};
+
+void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+    wl_resource* res = wl_resource_create(client, &wp_color_manager_v1_interface, version, id);
+
+    if (!res) {
+        wl_client_post_no_memory(client);
+
+        return;
     }
 
-    void representationSetAlpha(wl_client*, wl_resource* res, u32 mode) {
-        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
-        if (!surface) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
-            return;
-        }
-        if (mode > WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_ALPHA_MODE,
-                                   "unsupported alpha mode");
-            return;
-        }
-        if (!surface->pendRepresentationChanged) {
-            surface->pendRepresentation = surface->representation;
-        }
-        surface->pendRepresentation.alphaMode = mode;
+    wl_resource_set_implementation(res, &cmManagerImpl, data, nullptr);
+    wp_color_manager_v1_send_supported_intent(res, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_ICC_V2_V4);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_PRIMARIES);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_TF_POWER);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES);
+    wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_SCRGB);
+    if (version >= 3) {
+        wp_color_manager_v1_send_supported_feature(res, WP_COLOR_MANAGER_V1_FEATURE_WINDOWS_BT2100);
+    }
+    if (version >= 2) {
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4);
+    } else {
+        wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+    }
+
+    wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+    wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
+    wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+    wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
+    wp_color_manager_v1_send_supported_tf_named(res, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL_M);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_PAL);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_NTSC);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_GENERIC_FILM);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3);
+    wp_color_manager_v1_send_supported_primaries_named(res, WP_COLOR_MANAGER_V1_PRIMARIES_ADOBE_RGB);
+    wp_color_manager_v1_send_done(res);
+}
+
+// ---- color-representation-v1 ----
+
+void representationDestroy(wl_client*, wl_resource* res) {
+    if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+        surface->pendRepresentation = {};
         surface->pendRepresentationChanged = true;
     }
+    wl_resource_destroy(res);
+}
 
-    void representationSetCoefficients(wl_client*, wl_resource* res, u32 coefficients,
-                                       u32 range) {
-        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
-        if (!surface) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
-            return;
-        }
-        bool rgb = coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY &&
-                   range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL;
-        bool yuv = (coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709 ||
-                    coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601 ||
-                    coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020) &&
-                   (range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL ||
-                    range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
-        if (!rgb && !yuv) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS,
-                                   "unsupported coefficients and range combination");
-            return;
-        }
-        if (!surface->pendRepresentationChanged) {
-            surface->pendRepresentation = surface->representation;
-        }
-        surface->pendRepresentation.coefficients = coefficients;
-        surface->pendRepresentation.range = range;
-        surface->pendRepresentationChanged = true;
+void representationSetAlpha(wl_client*, wl_resource* res, u32 mode) {
+    auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+    if (!surface) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
+        return;
     }
-
-    void representationSetChroma(wl_client*, wl_resource* res, u32 location) {
-        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
-        if (!surface) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT,
-                                   "the wl_surface is gone");
-            return;
-        }
-        if (location < WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0 ||
-            location > WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_5) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_CHROMA_LOCATION,
-                                   "invalid chroma location");
-            return;
-        }
-        if (!surface->pendRepresentationChanged) {
-            surface->pendRepresentation = surface->representation;
-        }
-        surface->pendRepresentation.chromaLocation = location;
-        surface->pendRepresentationChanged = true;
+    if (mode > WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_ALPHA_MODE, "unsupported alpha mode");
+        return;
     }
+    if (!surface->pendRepresentationChanged) {
+        surface->pendRepresentation = surface->representation;
+    }
+    surface->pendRepresentation.alphaMode = mode;
+    surface->pendRepresentationChanged = true;
+}
 
-    const struct wp_color_representation_surface_v1_interface representationImpl = {
-        .destroy = representationDestroy,
-        .set_alpha_mode = representationSetAlpha,
-        .set_coefficients_and_range = representationSetCoefficients,
-        .set_chroma_location = representationSetChroma,
+void representationSetCoefficients(wl_client*, wl_resource* res, u32 coefficients, u32 range) {
+    auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+    if (!surface) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
+        return;
+    }
+    bool rgb = coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY && range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL;
+    bool yuv = (coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709 || coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601 || coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020) && (range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL || range == WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
+    if (!rgb && !yuv) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS, "unsupported coefficients and range combination");
+        return;
+    }
+    if (!surface->pendRepresentationChanged) {
+        surface->pendRepresentation = surface->representation;
+    }
+    surface->pendRepresentation.coefficients = coefficients;
+    surface->pendRepresentation.range = range;
+    surface->pendRepresentationChanged = true;
+}
+
+void representationSetChroma(wl_client*, wl_resource* res, u32 location) {
+    auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res);
+    if (!surface) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
+        return;
+    }
+    if (location < WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0 || location > WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_5) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_CHROMA_LOCATION, "invalid chroma location");
+        return;
+    }
+    if (!surface->pendRepresentationChanged) {
+        surface->pendRepresentation = surface->representation;
+    }
+    surface->pendRepresentation.chromaLocation = location;
+    surface->pendRepresentationChanged = true;
+}
+
+const struct wp_color_representation_surface_v1_interface representationImpl = {
+    .destroy = representationDestroy,
+    .set_alpha_mode = representationSetAlpha,
+    .set_coefficients_and_range = representationSetCoefficients,
+    .set_chroma_location = representationSetChroma,
+};
+
+void representationResourceDestroyed(wl_resource* res) {
+    if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
+        surface->representationRes = nullptr;
+    }
+}
+
+void representationManagerDestroy(wl_client*, wl_resource* res) {
+    wl_resource_destroy(res);
+}
+
+void representationManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+    auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
+    if (surface->representationRes) {
+        wl_resource_post_error(res, WP_COLOR_REPRESENTATION_MANAGER_V1_ERROR_SURFACE_EXISTS, "surface already has a color representation object");
+        return;
+    }
+    wl_resource* object = wl_resource_create(client, &wp_color_representation_surface_v1_interface, 1, id);
+    if (!object) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    surface->representationRes = object;
+    wl_resource_set_implementation(object, &representationImpl, surface, representationResourceDestroyed);
+}
+
+const struct wp_color_representation_manager_v1_interface representationManagerImpl = {
+    .destroy = representationManagerDestroy,
+    .get_surface = representationManagerGetSurface,
+};
+
+void representationManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+    wl_resource* res = wl_resource_create(client, &wp_color_representation_manager_v1_interface, version, id);
+    if (!res) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(res, &representationManagerImpl, data, nullptr);
+    wp_color_representation_manager_v1_send_supported_alpha_mode(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_ELECTRICAL);
+    wp_color_representation_manager_v1_send_supported_alpha_mode(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_OPTICAL);
+    wp_color_representation_manager_v1_send_supported_alpha_mode(res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT);
+    wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(res, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+    constexpr u32 yuvCoefficients[] = {
+        WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
+        WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601,
+        WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020,
     };
-
-    void representationResourceDestroyed(wl_resource* res) {
-        if (auto* surface = (SurfaceImpl*)wl_resource_get_user_data(res)) {
-            surface->representationRes = nullptr;
-        }
+    for (u32 coefficients : yuvCoefficients) {
+        wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+        wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
     }
-
-    void representationManagerDestroy(wl_client*, wl_resource* res) {
-        wl_resource_destroy(res);
-    }
-
-    void representationManagerGetSurface(wl_client* client, wl_resource* res,
-                                         u32 id, wl_resource* surfaceRes) {
-        auto* surface = (SurfaceImpl*)wl_resource_get_user_data(surfaceRes);
-        if (surface->representationRes) {
-            wl_resource_post_error(res, WP_COLOR_REPRESENTATION_MANAGER_V1_ERROR_SURFACE_EXISTS,
-                                   "surface already has a color representation object");
-            return;
-        }
-        wl_resource* object = wl_resource_create(
-            client, &wp_color_representation_surface_v1_interface, 1, id);
-        if (!object) {
-            wl_client_post_no_memory(client);
-            return;
-        }
-        surface->representationRes = object;
-        wl_resource_set_implementation(object, &representationImpl, surface,
-                                       representationResourceDestroyed);
-    }
-
-    const struct wp_color_representation_manager_v1_interface representationManagerImpl = {
-        .destroy = representationManagerDestroy,
-        .get_surface = representationManagerGetSurface,
-    };
-
-    void representationManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(
-            client, &wp_color_representation_manager_v1_interface, version, id);
-        if (!res) {
-            wl_client_post_no_memory(client);
-            return;
-        }
-        wl_resource_set_implementation(res, &representationManagerImpl, data, nullptr);
-        wp_color_representation_manager_v1_send_supported_alpha_mode(
-            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_ELECTRICAL);
-        wp_color_representation_manager_v1_send_supported_alpha_mode(
-            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_PREMULTIPLIED_OPTICAL);
-        wp_color_representation_manager_v1_send_supported_alpha_mode(
-            res, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT);
-        wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
-            res, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY,
-            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
-        constexpr u32 yuvCoefficients[] = {
-            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
-            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601,
-            WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020,
-        };
-        for (u32 coefficients : yuvCoefficients) {
-            wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
-                res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
-            wp_color_representation_manager_v1_send_supported_coefficients_and_ranges(
-                res, coefficients, WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
-        }
-        wp_color_representation_manager_v1_send_done(res);
-    }
-
+    wp_color_representation_manager_v1_send_done(res);
+}
 
 namespace {
     // the linked protocol XML caps what wl_global_create may advertise: a
@@ -12467,8 +12221,7 @@ namespace {
     // XDG shell interface")
     void global(Log& log, wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
         if (version > iface->version) {
-            log << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version
-                 << " by the linked protocol XML (implemented v"_sv << (i64)version << ")"_sv << endL;
+            log << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version << " by the linked protocol XML (implemented v"_sv << (i64)version << ")"_sv << endL;
             version = iface->version;
         }
 
@@ -12537,8 +12290,7 @@ void WaylandImpl::createGlobals() {
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.
     global(*(composer->log), display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
-    global(*(composer->log), display, &wp_color_representation_manager_v1_interface, 1, this,
-                     representationManagerBind);
+    global(*(composer->log), display, &wp_color_representation_manager_v1_interface, 1, this, representationManagerBind);
 
     u64 syncCap = 0;
 
@@ -12614,11 +12366,9 @@ void WaylandImpl::syncColorState() {
         }
 
         if (wl_resource_get_version(obj->res) >= 2) {
-            wp_color_management_surface_feedback_v1_send_preferred_changed2(
-                obj->res, (u32)(cmDisplayIdentity >> 32), (u32)cmDisplayIdentity);
+            wp_color_management_surface_feedback_v1_send_preferred_changed2(obj->res, (u32)(cmDisplayIdentity >> 32), (u32)cmDisplayIdentity);
         } else {
-            wp_color_management_surface_feedback_v1_send_preferred_changed(
-                obj->res, (u32)cmDisplayIdentity);
+            wp_color_management_surface_feedback_v1_send_preferred_changed(obj->res, (u32)cmDisplayIdentity);
         }
     }
 
@@ -12638,8 +12388,7 @@ void WaylandImpl::onListen(void* arg) {
 
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
         seat.focusToplevel(nullptr);
-    } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized &&
-        scene->focusedToplevel->mapped && scene->focusedToplevel.get() != seat.kbFocus) {
+    } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized && scene->focusedToplevel->mapped && scene->focusedToplevel.get() != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel.get());
     }
 
@@ -12784,13 +12533,7 @@ void WaylandImpl::onListen(void* arg) {
 #endif
 
         if (cfgTrace && (differsView || differsSent)) {
-            *(composer->log) << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH
-                 << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH
-                 << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH()
-                 << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH
-                 << " ack="_sv << (int)(ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0)
-                 << " docked="_sv << (int)ti->docked << (int)ti->cfgDocked
-                 << " max="_sv << (int)ti->maximized << (int)ti->cfgMaximized << endL;
+            *(composer->log) << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH() << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH << " ack="_sv << (int)(ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0) << " docked="_sv << (int)ti->docked << (int)ti->cfgDocked << " max="_sv << (int)ti->maximized << (int)ti->cfgMaximized << endL;
         }
 
         // one configure in flight: during an interactive resize the desired
@@ -12800,8 +12543,7 @@ void WaylandImpl::onListen(void* arg) {
         bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
 
         // dock state changes alone need a configure: TILED comes and goes
-        if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked ||
-            ti->maximized != ti->cfgMaximized) {
+        if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked || ti->maximized != ti->cfgMaximized) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
         }
     });

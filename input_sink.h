@@ -55,19 +55,19 @@ enum class TabletPhase : u8 {
 
 struct TabletToolEvent {
     TabletPhase phase = TabletPhase::motion;
-    u32 toolType = 0x140;   // wp_tablet_tool_v2 type: pen
+    u32 toolType = 0x140; // wp_tablet_tool_v2 type: pen
     double x = 0, y = 0;
 
     bool pressureSet = false;
-    double pressure = 0;    // 0..1
+    double pressure = 0; // 0..1
     bool distanceSet = false;
-    double distance = 0;    // 0..1
+    double distance = 0; // 0..1
     bool tiltSet = false;
-    double tiltX = 0, tiltY = 0;  // degrees
+    double tiltX = 0, tiltY = 0; // degrees
     bool rotationSet = false;
-    double rotation = 0;    // degrees
+    double rotation = 0; // degrees
     bool sliderSet = false;
-    double slider = 0;      // -1..1
+    double slider = 0; // -1..1
     bool wheelSet = false;
     double wheelDegrees = 0;
     i32 wheelClicks = 0;

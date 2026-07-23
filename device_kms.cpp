@@ -166,8 +166,7 @@ namespace {
         return found;
     }
 
-    bool getRangeProp(int fd, u32 objId, u32 objType, const char* name,
-                      u32* propId, u64* min, u64* max) {
+    bool getRangeProp(int fd, u32 objId, u32 objType, const char* name, u32* propId, u64* min, u64* max) {
         drmModeObjectProperties* props = drmModeObjectGetProperties(fd, objId, objType);
 
         if (!props) {
@@ -179,27 +178,25 @@ namespace {
         for (u32 i = 0; i < props->count_props && !found; i++) {
             drmModePropertyRes* p = drmModeGetProperty(fd, props->props[i]);
 
-            if (p && StringView(p->name) == StringView(name) &&
-                (p->flags & DRM_MODE_PROP_RANGE) && p->count_values >= 2) {
+            if (p && StringView(p->name) == StringView(name) && (p->flags & DRM_MODE_PROP_RANGE) && p->count_values >= 2) {
                 *propId = p->prop_id;
                 *min = p->values[0];
                 *max = p->values[1];
                 found = true;
             }
 
-            if (p) drmModeFreeProperty(p);
+            if (p) {
+                drmModeFreeProperty(p);
+            }
         }
 
         drmModeFreeObjectProperties(props);
         return found;
     }
 
-    bool readEdidColorCapabilities(int fd, u32 connectorId,
-                                   DisplayColorCapabilities& capabilities) {
-        u64 blobId = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
-                                  "EDID", 0);
-        drmModePropertyBlobRes* blob = blobId ?
-            drmModeGetPropertyBlob(fd, (u32)blobId) : nullptr;
+    bool readEdidColorCapabilities(int fd, u32 connectorId, DisplayColorCapabilities& capabilities) {
+        u64 blobId = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "EDID", 0);
+        drmModePropertyBlobRes* blob = blobId ? drmModeGetPropertyBlob(fd, (u32)blobId) : nullptr;
 
         if (!blob) {
             return false;
@@ -311,8 +308,7 @@ namespace {
                 continue;
             }
 
-            constexpr VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
-                                                    VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+            constexpr VkFormatFeatureFlags needed = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
 
             if ((m.drmFormatModifierTilingFeatures & needed) != needed) {
                 continue;
@@ -346,9 +342,7 @@ namespace {
             ifi.format = vkFmt;
             ifi.type = VK_IMAGE_TYPE_2D;
             ifi.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-            ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                        VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                        VK_IMAGE_USAGE_SAMPLED_BIT;
+            ifi.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 
             VkExternalImageFormatProperties extProps{VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES};
             VkImageFormatProperties2 iprops{VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2};
@@ -359,9 +353,7 @@ namespace {
                 continue;
             }
 
-            constexpr VkExternalMemoryFeatureFlags neededExternal =
-                VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
-                VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+            constexpr VkExternalMemoryFeatureFlags neededExternal = VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT | VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
 
             if ((extProps.externalMemoryProperties.externalMemoryFeatures & neededExternal) != neededExternal) {
                 continue;
@@ -396,9 +388,7 @@ namespace {
         ici.arrayLayers = 1;
         ici.samples = VK_SAMPLE_COUNT_1_BIT;
         ici.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
-        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
-                    VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
-                    VK_IMAGE_USAGE_SAMPLED_BIT;
+        ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
         if (vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image) != VK_SUCCESS) {
@@ -593,6 +583,7 @@ namespace {
             int nh = 0;
             DirectFbOwner* owner = nullptr;
         };
+
         Vector<DirectFb> directFbs;
 
         // GEM handles are per-BO on a drm fd, not per-import: two wl_buffers
@@ -604,7 +595,7 @@ namespace {
         DmabufBuffer* currentDirect = nullptr;
         FrameResource* queuedDirectFrame = nullptr;
         FrameResource* currentDirectFrame = nullptr;
-        bool asyncFlipCap = false;  // DRM_CAP_ASYNC_PAGE_FLIP
+        bool asyncFlipCap = false; // DRM_CAP_ASYNC_PAGE_FLIP
         bool tearingAllowed = false;
         long ddcMax = 0;
         int ddcCur = 0;
@@ -650,8 +641,7 @@ namespace {
         bool connectorConnected = true;
         bool powered = true;
 
-        KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector,
-                  StringView modeStr, const OutputConfiguration& config);
+        KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, const OutputConfiguration& config);
 
         void sessionEnabled();
         void sessionDisabled();
@@ -678,8 +668,7 @@ namespace {
         double colorTemp() const override;
         bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
-        int tryCommit(u32 fbId, bool doModeset, bool withCursor,
-                      int inFenceFd = -1, bool testOnly = false);
+        int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1, bool testOnly = false);
         void drainPendingFlip();
         bool commit(u32 fbId, bool doModeset, int inFenceFd = -1);
         void updateSignalFeedback();
@@ -719,7 +708,11 @@ namespace {
         bool presentNeedsPixels() const override;
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
-        void setTearingHint(bool allow) override { tearingAllowed = allow && asyncFlipCap; }
+
+        void setTearingHint(bool allow) override {
+            tearingAllowed = allow && asyncFlipCap;
+        }
+
         void scanoutFormatsImpl(stl::VisitorFace&& vis) override;
         u32 importDirectFb(DmabufBuffer* buf);
         void gemHandleRef(u32 handle);
@@ -811,8 +804,7 @@ namespace {
         void leaseConnectorsImpl(VisitorFace&& vis) override;
         int createLease(const u32* connectorIds, int count, u32& lesseeId) override;
         void revokeLease(u32 lesseeId) override;
-        ::Output* createOutput(StringView connector, StringView modeStr,
-                               const OutputConfiguration& config) override;
+        ::Output* createOutput(StringView connector, StringView modeStr, const OutputConfiguration& config) override;
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
 
@@ -872,7 +864,9 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     vk = pool->make<DeviceVk>(*comp.log, fd);
 
     if (vk->hasDmabuf) {
-        vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });
+        vk->queryDmabufFormats([this](const DmabufFormat& f) {
+            formats.pushBack(f);
+        });
     }
 
     ev_io* drmIo = createEvIo(*pool, loop);
@@ -935,8 +929,7 @@ namespace {
     // panels set it to 1); such connectors are never driven as outputs and
     // are the only ones offered for lease
     bool connectorNonDesktop(int fd, u32 connectorId) {
-        drmModeObjectProperties* props =
-            drmModeObjectGetProperties(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR);
+        drmModeObjectProperties* props = drmModeObjectGetProperties(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR);
 
         if (!props) {
             return false;
@@ -1128,8 +1121,7 @@ void KmsDevice::revokeLease(u32 lesseeId) {
     }
 }
 
-::Output* KmsDevice::createOutput(StringView connector, StringView modeStr,
-                                  const OutputConfiguration& config) {
+::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, const OutputConfiguration& config) {
     output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, config);
     outputConnectorId = output->connectorId;
 
@@ -1221,8 +1213,7 @@ void KmsOutput::hotplug() {
     }
 }
 
-KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector,
-                     StringView modeStr, const OutputConfiguration& outputConfig)
+KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, const OutputConfiguration& outputConfig)
     : c(&c)
     , pool(c.pool)
     , loop(c.loop)
@@ -1245,12 +1236,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
     color = outputColorState(config, displayCapabilities);
 
-    if (color.hdr() && displayCapabilities.valid &&
-        (!displayCapabilities.pq || !displayCapabilities.bt2020Rgb)) {
+    if (color.hdr() && displayCapabilities.valid && (!displayCapabilities.pq || !displayCapabilities.bt2020Rgb)) {
         *(c.log) << "imway: display EDID does not advertise PQ + BT.2020 RGB"_sv << endL;
         color = OutputColorState::sdr();
-    } else if (color.hdr() && !config.displayPeakNits &&
-               !displayCapabilities.peakNits) {
+    } else if (color.hdr() && !config.displayPeakNits && !displayCapabilities.peakNits) {
         *(c.log) << "imway: display has no HDR peak luminance; using 1000 nit fallback (use --hdr-peak)"_sv << endL;
     }
 
@@ -1285,13 +1274,11 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 
     u64 minBpc = 0, maxBpc = 0;
 
-    if (getRangeProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "max bpc",
-                     &connMaxBpc, &minBpc, &maxBpc)) {
+    if (getRangeProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "max bpc", &connMaxBpc, &minBpc, &maxBpc)) {
         maxBpcValue = color.bpc;
 
         if (maxBpcValue < minBpc || maxBpcValue > maxBpc) {
-            *(c.log) << "imway: requested "_sv << maxBpcValue << " bpc is outside connector range "_sv
-                 << minBpc << ".."_sv << maxBpc << endL;
+            *(c.log) << "imway: requested "_sv << maxBpcValue << " bpc is outside connector range "_sv << minBpc << ".."_sv << maxBpc << endL;
             Errno(EINVAL).raise("invalid --bpc"_sv);
         }
     } else if (config.bpc) {
@@ -1304,19 +1291,13 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     connLinkBpc = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "link bpc");
 
     u32 rangeProp = 0;
-    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Full",
-                &rangeProp, &rangeFullValue);
-    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited 16:235",
-                     &rangeProp, &rangeLimitedValue)) {
-        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited",
-                    &rangeProp, &rangeLimitedValue);
+    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Full", &rangeProp, &rangeFullValue);
+    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited 16:235", &rangeProp, &rangeLimitedValue)) {
+        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited", &rangeProp, &rangeLimitedValue);
     }
 
-    const char* rangeName = config.range == OutputRange::limited ?
-        (rangeLimitedValue ? "Limited 16:235" : "Limited") :
-        config.range == OutputRange::full ? "Full" : "Automatic";
-    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", rangeName,
-                &connRange, &rangeValue);
+    const char* rangeName = config.range == OutputRange::limited ? (rangeLimitedValue ? "Limited 16:235" : "Limited") : config.range == OutputRange::full ? "Full" : "Automatic";
+    getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", rangeName, &connRange, &rangeValue);
 
     if (config.range != OutputRange::automatic && !connRange) {
         *(c.log) << "imway: connector cannot select requested RGB range"_sv << endL;
@@ -1372,10 +1353,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
         if (setupHdr()) {
             scanFourcc = DRM_FORMAT_XRGB2101010;
             scanFormat = VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-            *(c.log) << "imway: HDR output: BT.2020 + PQ, target "_sv
-                 << color.displayMinNits << ".."_sv << color.displayPeakNits
-                 << " nits, maxFALL "_sv << color.displayMaxFallNits
-                 << ", sdr white "_sv << color.sdrWhiteNits << " nits"_sv << endL;
+            *(c.log) << "imway: HDR output: BT.2020 + PQ, target "_sv << color.displayMinNits << ".."_sv << color.displayPeakNits << " nits, maxFALL "_sv << color.displayMaxFallNits << ", sdr white "_sv << color.sdrWhiteNits << " nits"_sv << endL;
 
             if (cursorPlaneId) {
                 // AMD cursor planes consume ARGB8888 outside the primary
@@ -1460,12 +1438,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     // connector, and the 1/1023 dither is sub-LSB for an 8-bit link: ask
     // for a 10-bit link to match (the link bpc feedback reports what the
     // display actually negotiated)
-    if (!color.hdr() && scanFourcc == DRM_FORMAT_XRGB2101010 && connMaxBpc &&
-        !config.bpc) {
+    if (!color.hdr() && scanFourcc == DRM_FORMAT_XRGB2101010 && connMaxBpc && !config.bpc) {
         maxBpcValue = maxBpc < 10 ? maxBpc : 10;
         color.bpc = (u32)maxBpcValue;
-        *(c.log) << "imway: requesting "_sv << maxBpcValue
-             << " bpc link for the 10-bit framebuffer"_sv << endL;
+        *(c.log) << "imway: requesting "_sv << maxBpcValue << " bpc link for the 10-bit framebuffer"_sv << endL;
     }
 
     if (scanCount > 0) {
@@ -1597,11 +1573,25 @@ double KmsOutput::refresh() const {
     return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
 }
 
-StringView KmsOutput::outputName() const { return sv(connectorLabel); }
-StringView KmsOutput::make() const { return "DRM"_sv; }
-StringView KmsOutput::model() const { return sv(connectorLabel); }
-int KmsOutput::physicalWidthMm() const { return physicalWmm; }
-int KmsOutput::physicalHeightMm() const { return physicalHmm; }
+StringView KmsOutput::outputName() const {
+    return sv(connectorLabel);
+}
+
+StringView KmsOutput::make() const {
+    return "DRM"_sv;
+}
+
+StringView KmsOutput::model() const {
+    return sv(connectorLabel);
+}
+
+int KmsOutput::physicalWidthMm() const {
+    return physicalWmm;
+}
+
+int KmsOutput::physicalHeightMm() const {
+    return physicalHmm;
+}
 
 void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     drmModeRes* res = drmModeGetResources(fd);
@@ -1791,16 +1781,16 @@ bool KmsOutput::createHdrMetadataBlob(const HdrOutputMetadata& value, u32& blob)
     // CTA metadata uses chromaticity units of 0.00002 and minimum
     // luminance units of 0.0001 nit.
     const Chromaticities& p = value.primaries;
-    auto chroma = [](i32 v) { return (u16)((v + 10) / 20); };
+    auto chroma = [](i32 v) {
+        return (u16)((v + 10) / 20);
+    };
 
     meta.hdmi_metadata_type1.display_primaries[0] = {chroma(p.rx), chroma(p.ry)};
     meta.hdmi_metadata_type1.display_primaries[1] = {chroma(p.gx), chroma(p.gy)};
     meta.hdmi_metadata_type1.display_primaries[2] = {chroma(p.bx), chroma(p.by)};
     meta.hdmi_metadata_type1.white_point = {chroma(p.wx), chroma(p.wy)};
-    meta.hdmi_metadata_type1.max_display_mastering_luminance =
-        (u16)lround(fmin(value.maxNits, 65535.0));
-    meta.hdmi_metadata_type1.min_display_mastering_luminance =
-        (u16)lround(fmin(value.minNits * 10000.0, 65535.0));
+    meta.hdmi_metadata_type1.max_display_mastering_luminance = (u16)lround(fmin(value.maxNits, 65535.0));
+    meta.hdmi_metadata_type1.min_display_mastering_luminance = (u16)lround(fmin(value.minNits * 10000.0, 65535.0));
     meta.hdmi_metadata_type1.max_cll = (u16)(value.maxCll > 65535 ? 65535 : value.maxCll);
     meta.hdmi_metadata_type1.max_fall = (u16)(value.maxFall > 65535 ? 65535 : value.maxFall);
 
@@ -1920,8 +1910,7 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     STD_VERIFY(b.map != MAP_FAILED);
 }
 
-int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd,
-                         bool testOnly) {
+int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd, bool testOnly) {
     drmModeAtomicReq* req = drmModeAtomicAlloc();
 
     STD_VERIFY(req);
@@ -1941,11 +1930,16 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
 
         if (color.hdr()) {
             drmModeAtomicAddProperty(req, connectorId, connColorspace, colorspaceBt2020);
-            drmModeAtomicAddProperty(req, connectorId, connHdrMeta,
-                                     hdrMetaDirty ? pendingHdrMetaBlob : hdrMetaBlob);
-            if (crtcDegammaProp) drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
-            if (crtcCtmProp) drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
-            if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
+            drmModeAtomicAddProperty(req, connectorId, connHdrMeta, hdrMetaDirty ? pendingHdrMetaBlob : hdrMetaBlob);
+            if (crtcDegammaProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcDegammaProp, 0);
+            }
+            if (crtcCtmProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
+            }
+            if (crtcGammaProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
+            }
         } else {
             // scrub color state left over by a previous session: connector
             // and crtc props are not reset by anyone on restart
@@ -1965,7 +1959,9 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
                 drmModeAtomicAddProperty(req, crtcId, crtcCtmProp, 0);
             }
 
-            if (crtcGammaProp) drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
+            if (crtcGammaProp) {
+                drmModeAtomicAddProperty(req, crtcId, crtcGammaProp, 0);
+            }
         }
     }
 
@@ -2000,8 +1996,7 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
         }
     }
 
-    u32 flags = testOnly ? DRM_MODE_ATOMIC_TEST_ONLY :
-                           DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
+    u32 flags = testOnly ? DRM_MODE_ATOMIC_TEST_ONLY : DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_ATOMIC_NONBLOCK;
 
     if (doModeset) {
         flags |= DRM_MODE_ATOMIC_ALLOW_MODESET;
@@ -2036,8 +2031,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
             // the connector rejected the HDR color/link configuration:
             // degrade to SDR on the same framebuffer instead of never
             // lighting up
-            *(c->log) << "imway: HDR modeset rejected (errno "_sv << testErr
-                 << "), falling back to SDR"_sv << endL;
+            *(c->log) << "imway: HDR modeset rejected (errno "_sv << testErr << "), falling back to SDR"_sv << endL;
 
             OutputConfiguration sdrConfig = config;
 
@@ -2056,8 +2050,7 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
         }
 
         if (testErr != 0) {
-            *(c->log) << "imway: atomic test modeset rejected color/link configuration, errno "_sv
-                 << testErr << endL;
+            *(c->log) << "imway: atomic test modeset rejected color/link configuration, errno "_sv << testErr << endL;
             return false;
         }
 
@@ -2115,15 +2108,13 @@ void KmsOutput::updateSignalFeedback() {
     signalFeedbackLogged = true;
 
     if (connLinkBpc) {
-        u64 linkBpc = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
-                                   "link bpc", color.bpc);
+        u64 linkBpc = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "link bpc", color.bpc);
 
         if (linkBpc > 0) {
             color.bpc = (u32)linkBpc;
 
             if (color.hdr() && linkBpc < 10) {
-                *(c->log) << "imway: HDR link degraded to "_sv << linkBpc
-                     << " bpc; falling back to SDR"_sv << endL;
+                *(c->log) << "imway: HDR link degraded to "_sv << linkBpc << " bpc; falling back to SDR"_sv << endL;
                 OutputConfiguration sdrConfig = config;
 
                 sdrConfig.hdrSdrWhiteNits = 0;
@@ -2143,8 +2134,7 @@ void KmsOutput::updateSignalFeedback() {
     }
 
     if (rangeFullValue || rangeLimitedValue) {
-        u64 value = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR,
-                                 "Broadcast RGB", rangeValue);
+        u64 value = getPropValue(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", rangeValue);
 
         if (value == rangeFullValue) {
             color.range = OutputRange::full;
@@ -2286,7 +2276,6 @@ void KmsOutput::initBacklight() {
     *(c->log) << "imway: backlight "_sv << sv(blPath) << ", max "_sv << blMax << endL;
 }
 
-
 namespace {
     void ddcTimerCb(struct ev_loop*, ev_timer* w, int);
 }
@@ -2306,8 +2295,7 @@ void KmsOutput::initDdc(StringView connName) {
                 digits++;
             }
 
-            bool exact = item.startsWith("card"_sv) && digits > 4 && digits < item.length() &&
-                         item[digits] == '-' && StringView(item.begin() + digits + 1, item.end()) == connName;
+            bool exact = item.startsWith("card"_sv) && digits > 4 && digits < item.length() && item[digits] == '-' && StringView(item.begin() + digits + 1, item.end()) == connName;
 
             if (!busDev.empty() || !exact) {
                 return;
@@ -2667,9 +2655,7 @@ bool KmsOutput::prepareScreenshot(Listener& readyListener) {
     screenshotState = 1;
     stdAtomicStore(&screenshotResult, 0, MemoryOrder::Relaxed);
     c->offload->submit([this] {
-        bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay,
-                                scanMods, scanModCount, scanFormat,
-                                scanFourcc, screenshotReplacement);
+        bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, scanMods, scanModCount, scanFormat, scanFourcc, screenshotReplacement);
 
         stdAtomicStore(&screenshotResult, ok ? 1 : -1, MemoryOrder::Release);
         screenshotDone.signal();
@@ -2698,8 +2684,7 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
     }
 
     ScanBuf& sb = scan[i];
-    auto getMemoryFd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(
-        vk->device, "vkGetMemoryFdKHR");
+    auto getMemoryFd = (PFN_vkGetMemoryFdKHR)vkGetDeviceProcAddr(vk->device, "vkGetMemoryFdKHR");
     VkMemoryGetFdInfoKHR info{VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR};
 
     info.memory = sb.memory;
@@ -2707,8 +2692,7 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
 
     int dmaFd = -1;
 
-    if (!getMemoryFd || getMemoryFd(vk->device, &info, &dmaFd) != VK_SUCCESS ||
-        dmaFd < 0) {
+    if (!getMemoryFd || getMemoryFd(vk->device, &info, &dmaFd) != VK_SUCCESS || dmaFd < 0) {
         destroyScanBuf(*vk, fd, screenshotReplacement);
         screenshotState = 0;
 
@@ -2950,8 +2934,7 @@ void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
 void KmsOutput::scanoutFormatsImpl(stl::VisitorFace&& vis) {
     // the RGB formats the direct scanout policy accepts; YUV stays out
     // until the plane has a color pipeline for it
-    const u32 fourccs[] = {kFourccArgb, kFourccXrgb, kFourccAr30, kFourccXr30,
-                           kFourccAb30, kFourccXb30, kFourccAb4h, kFourccXb4h};
+    const u32 fourccs[] = {kFourccArgb, kFourccXrgb, kFourccAr30, kFourccXr30, kFourccAb30, kFourccXb30, kFourccAb4h, kFourccXb4h};
 
     for (u32 fourcc : fourccs) {
         u64 mods[64];

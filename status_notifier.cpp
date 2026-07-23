@@ -228,8 +228,7 @@ namespace {
 
             i64 pixels = (i64)w * h;
 
-            if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && pixels > (i64)bestW * bestH &&
-                dbus_message_iter_get_arg_type(&fields) == DBUS_TYPE_ARRAY) {
+            if (w > 0 && h > 0 && w <= 1024 && h <= 1024 && pixels > (i64)bestW * bestH && dbus_message_iter_get_arg_type(&fields) == DBUS_TYPE_ARRAY) {
                 DBusMessageIter bytes;
 
                 dbus_message_iter_recurse(&fields, &bytes);
@@ -278,8 +277,7 @@ namespace {
         for (size_t p = 0; p < (size_t)bestW * bestH; p++) {
             // SNI transports pixels as network-order ARGB bytes.  Icon stores
             // host u32 ARGB and the renderer performs the BGRA upload mapping.
-            u32 argb = ((u32)best[p * 4] << 24) | ((u32)best[p * 4 + 1] << 16) |
-                ((u32)best[p * 4 + 2] << 8) | best[p * 4 + 3];
+            u32 argb = ((u32)best[p * 4] << 24) | ((u32)best[p * 4 + 1] << 16) | ((u32)best[p * 4 + 2] << 8) | best[p * 4 + 3];
 
             target->argb.pushBack(argb);
         }
@@ -322,8 +320,7 @@ namespace {
         }
     }
 
-    StatusMenuItem* parseMenuNode(StatusNotifierImpl& impl, ItemBox& item, DBusMessageIter* node,
-        StatusMenuItem* parent, int depth, int& count) {
+    StatusMenuItem* parseMenuNode(StatusNotifierImpl& impl, ItemBox& item, DBusMessageIter* node, StatusMenuItem* parent, int depth, int& count) {
         if (depth > kMaxMenuDepth || count >= kMaxMenuItems || dbus_message_iter_get_arg_type(node) != DBUS_TYPE_STRUCT) {
             return nullptr;
         }
@@ -534,14 +531,13 @@ ItemBox* StatusNotifierImpl::find(Peer& peer, StringView service, StringView pat
     return nullptr;
 }
 
-    ItemBox* StatusNotifierImpl::findSignal(DBusMessage* msg) {
+ItemBox* StatusNotifierImpl::findSignal(DBusMessage* msg) {
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
     StringView path(dbus_message_get_path(msg) ? dbus_message_get_path(msg) : "");
 
     for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {
-            if ((text(item->path) == path || text(item->menuPath) == path) &&
-                (sv(peer->name) == sender || text(item->service) == sender)) {
+            if ((text(item->path) == path || text(item->menuPath) == path) && (sv(peer->name) == sender || text(item->service) == sender)) {
                 return item;
             }
         }
@@ -641,8 +637,7 @@ void StatusNotifierImpl::clearMenu(ItemBox& item) {
 void StatusNotifierImpl::readMenu(ItemBox& item, DBusMessage* reply) {
     DBusMessageIter it;
 
-    if (!reply || !dbus_message_iter_init(reply, &it) || dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_UINT32 ||
-        !dbus_message_iter_next(&it)) {
+    if (!reply || !dbus_message_iter_init(reply, &it) || dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_UINT32 || !dbus_message_iter_next(&it)) {
         return;
     }
 
@@ -782,30 +777,29 @@ void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
     }
 
     switch (action.kind) {
-    case StatusActionKind::primary:
-        sendSimple(*item, kItem, item->itemIsMenu ? "ContextMenu" : "Activate", x, y);
-        break;
-    case StatusActionKind::context:
-        if (!item->menuPath.empty()) {
-            aboutToShow(*item, 0);
-        } else {
-            sendSimple(*item, kItem, "ContextMenu", x, y);
-        }
-        break;
-    case StatusActionKind::menuOpen:
-        aboutToShow(*item, action.menuId);
-        break;
-    case StatusActionKind::menu:
-        sendMenuEvent(*item, action.menuId);
-        break;
+        case StatusActionKind::primary:
+            sendSimple(*item, kItem, item->itemIsMenu ? "ContextMenu" : "Activate", x, y);
+            break;
+        case StatusActionKind::context:
+            if (!item->menuPath.empty()) {
+                aboutToShow(*item, 0);
+            } else {
+                sendSimple(*item, kItem, "ContextMenu", x, y);
+            }
+            break;
+        case StatusActionKind::menuOpen:
+            aboutToShow(*item, action.menuId);
+            break;
+        case StatusActionKind::menu:
+            sendMenuEvent(*item, action.menuId);
+            break;
     }
 }
 
 void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
-    const char* iface = "", *property = "";
+    const char *iface = "", *property = "";
 
-    if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID) ||
-        StringView(iface) != kWatcher) {
+    if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID) || StringView(iface) != kWatcher) {
         return;
     }
 
@@ -948,8 +942,7 @@ namespace {
         if (dbus_message_is_signal(msg, "org.freedesktop.DBus", "NameOwnerChanged")) {
             const char *name = "", *oldOwner = "", *newOwner = "";
 
-            if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner,
-                    DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID) && oldOwner[0] && !newOwner[0]) {
+            if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID) && oldOwner[0] && !newOwner[0]) {
                 impl->unregisterOwner(StringView(name));
             }
 
@@ -965,8 +958,7 @@ namespace {
         if (dbus_message_is_signal(msg, kProps, "PropertiesChanged")) {
             DBusMessageIter it;
 
-            if (dbus_message_iter_init(msg, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_STRING &&
-                iterString(&it) == kItem && dbus_message_iter_next(&it)) {
+            if (dbus_message_iter_init(msg, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_STRING && iterString(&it) == kItem && dbus_message_iter_next(&it)) {
                 eachDict(&it, [&](StringView key, DBusMessageIter* value) {
                     readItemProperty(*impl, *item, key, value);
                 });

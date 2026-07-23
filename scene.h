@@ -72,11 +72,9 @@ inline void dmabufUnref(DmabufBuffer* b) noexcept {
 
 // tagged list memberships: one entity can sit in several intrusive lists
 // at once, the tag names which link to follow
-struct SceneNode: stl::IntrusiveNode {
-};
+struct SceneNode: stl::IntrusiveNode {};
 
-struct GrabNode: stl::IntrusiveNode {
-};
+struct GrabNode: stl::IntrusiveNode {};
 
 // SceneNode links it into Scene::surfaces, GrabNode into the seat's popup
 // grab stack (self-linked while not grabbed)

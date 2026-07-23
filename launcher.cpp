@@ -62,8 +62,7 @@ namespace {
 
         // pure drawing: state transitions stay in drawLauncher, the only
         // outward signs are run/action/picked and the open flag dropping
-        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
-                  bool& terminal, float anchorX, float anchorY);
+        bool draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, bool& terminal, float anchorX, float anchorY);
     };
 }
 
@@ -245,8 +244,7 @@ void Dialog::refilter() {
     }
 }
 
-bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
-                  bool& terminal, float anchorX, float anchorY) {
+bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, bool& terminal, float anchorX, float anchorY) {
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
     int screenH = c.scene->outH;
@@ -295,8 +293,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         };
 
         float wpx = st.WindowPadding.x * 2.f + (float)cc * cell + (float)(cc - 1) * gap;
-        float hpx = gh(apps) + gh(sys) + (apps && sys ? gap * 2.f + 1.f : 0.f) +
-            ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f;
+        float hpx = gh(apps) + gh(sys) + (apps && sys ? gap * 2.f + 1.f : 0.f) + ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f;
 
         return ImVec2(wpx, hpx);
     };
@@ -323,11 +320,9 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         cols--;
     }
 
-    float contentH = sizeFor(cols, appsTotal, sysTotal).y -
-        (ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f);
+    float contentH = sizeFor(cols, appsTotal, sysTotal).y - (ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f);
     float childH = fminf(contentH, (float)screenH * 0.55f);
-    float lw = st.WindowPadding.x * 2.f + (float)cols * cell + (float)(cols - 1) * gap +
-        (contentH > childH ? st.ScrollbarSize : 0.f);
+    float lw = st.WindowPadding.x * 2.f + (float)cols * cell + (float)(cols - 1) * gap + (contentH > childH ? st.ScrollbarSize : 0.f);
 
     if (anchorX >= 0.f) {
         // an anchor in the lower half (the dock's bottom launcher button)
@@ -501,8 +496,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
     return picked;
 }
 
-bool drawLauncher(Composer& c, bool toggle, DialogState** state, Buffer& run,
-                  LauncherAction& action, bool& terminal, float anchorX, float anchorY) {
+bool drawLauncher(Composer& c, bool toggle, DialogState** state, Buffer& run, LauncherAction& action, bool& terminal, float anchorX, float anchorY) {
     action = LauncherAction::none;
     terminal = false;
     bool picked = false;

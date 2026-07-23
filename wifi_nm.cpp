@@ -72,8 +72,8 @@ namespace {
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
-        Vector<WifiNetwork*> nets;      // committed, ui-facing
-        Vector<Known*> known;           // committed
+        Vector<WifiNetwork*> nets; // committed, ui-facing
+        Vector<Known*> known;      // committed
 
         // refresh epochs: everything a sequence builds — networks, known
         // connections, reply contexts, path scratch — lives in `building`;

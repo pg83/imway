@@ -63,7 +63,13 @@ namespace {
     };
 
     void usage(Log& log, const char* argv0) {
-        log << "usage: "_sv << argv0 << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]" " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]" " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]" " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]" " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv << endL;
+        log << "usage: "_sv << argv0
+            << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]"
+               " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]"
+               " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]"
+               " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]"
+               " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv
+            << endL;
     }
 
 }
@@ -172,15 +178,7 @@ int mainComposer(int argc, char** argv) {
 
     const OutputConfiguration& oc = cfg.outputColor;
 
-    if (oc.hdrSdrWhiteNits < 0 || oc.displayMinNits < 0 ||
-        oc.displayPeakNits < 0 || oc.displayMaxFallNits < 0 ||
-        (oc.bpc && oc.bpc != 8 && oc.bpc != 10 && oc.bpc != 12) ||
-        (!oc.hdrSdrWhiteNits &&
-         (oc.displayMinNits || oc.displayPeakNits || oc.displayMaxFallNits)) ||
-        (oc.displayMinNits && oc.displayPeakNits &&
-         oc.displayMinNits >= oc.displayPeakNits) ||
-        (oc.displayMaxFallNits && oc.displayPeakNits &&
-         oc.displayMaxFallNits > oc.displayPeakNits)) {
+    if (oc.hdrSdrWhiteNits < 0 || oc.displayMinNits < 0 || oc.displayPeakNits < 0 || oc.displayMaxFallNits < 0 || (oc.bpc && oc.bpc != 8 && oc.bpc != 10 && oc.bpc != 12) || (!oc.hdrSdrWhiteNits && (oc.displayMinNits || oc.displayPeakNits || oc.displayMaxFallNits)) || (oc.displayMinNits && oc.displayPeakNits && oc.displayMinNits >= oc.displayPeakNits) || (oc.displayMaxFallNits && oc.displayPeakNits && oc.displayMaxFallNits > oc.displayPeakNits)) {
         usage(*log, argv[0]);
         return 2;
     }

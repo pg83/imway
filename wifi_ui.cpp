@@ -24,11 +24,16 @@ namespace {
 
     const char* stateLabel(WifiState s) {
         switch (s) {
-            case WifiState::unavailable: return "no adapter";
-            case WifiState::disconnected: return "disconnected";
-            case WifiState::scanning: return "scanning";
-            case WifiState::connecting: return "connecting";
-            case WifiState::connected: return "connected";
+            case WifiState::unavailable:
+                return "no adapter";
+            case WifiState::disconnected:
+                return "disconnected";
+            case WifiState::scanning:
+                return "scanning";
+            case WifiState::connecting:
+                return "connecting";
+            case WifiState::connected:
+                return "connected";
         }
 
         return "";

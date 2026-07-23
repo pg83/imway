@@ -29,6 +29,4 @@ enum class LauncherAction {
 // is set to a compositor action, or the command line is appended to run and
 // `terminal` reflects its Desktop Entry Terminal key (caller memory, precisely
 // because the dialog dies with the pick)
-bool drawLauncher(Composer& c, bool toggle, DialogState** state, stl::Buffer& run,
-                  LauncherAction& action, bool& terminal, float anchorX = -1.f,
-                  float anchorY = -1.f);
+bool drawLauncher(Composer& c, bool toggle, DialogState** state, stl::Buffer& run, LauncherAction& action, bool& terminal, float anchorX = -1.f, float anchorY = -1.f);

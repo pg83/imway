@@ -17,14 +17,11 @@ namespace {
     struct VkTexturePoolImpl: public VkTexturePool {
         VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler);
 
-        VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout,
-                              VkDescriptorPool& outPool,
-                              VkImageView chromaView) override;
+        VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
 
         VkDescriptorPool grow();
-        void write(VkDescriptorSet set, VkImageView view, VkImageView chromaView,
-                   VkImageLayout imageLayout);
+        void write(VkDescriptorSet set, VkImageView view, VkImageView chromaView, VkImageLayout imageLayout);
 
         ObjPool& pool;
         VkDevice device;
@@ -84,9 +81,7 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
     return p;
 }
 
-void VkTexturePoolImpl::write(VkDescriptorSet set, VkImageView view,
-                              VkImageView chromaView,
-                              VkImageLayout imageLayout) {
+void VkTexturePoolImpl::write(VkDescriptorSet set, VkImageView view, VkImageView chromaView, VkImageLayout imageLayout) {
     VkDescriptorImageInfo images[2] = {
         {sampler, view, imageLayout},
         {sampler, chromaView ? chromaView : view, imageLayout},
@@ -104,10 +99,7 @@ void VkTexturePoolImpl::write(VkDescriptorSet set, VkImageView view,
     vkUpdateDescriptorSets(device, 2, writes, 0, nullptr);
 }
 
-VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view,
-                                         VkImageLayout imageLayout,
-                                         VkDescriptorPool& outPool,
-                                         VkImageView chromaView) {
+VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) {
     VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 
     ai.descriptorSetCount = 1;
