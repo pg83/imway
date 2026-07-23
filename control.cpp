@@ -15,6 +15,7 @@
 #include <ev.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -347,6 +348,11 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
+    } else if (verb == "gpu-fatal"_sv) {
+        // exercises the death policy end to end: the log line, the prompt
+        // exit, no hang
+        *(comp->log) << "imway: vulkan device lost, exiting"_sv << endL;
+        exit(1);
     } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
     } else {

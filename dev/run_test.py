@@ -319,7 +319,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         return finish(FAIL, "compositor died mid-test")
     if hung:
         return finish(FAIL, "compositor hung after quit")
-    allowed_rc = (0, None, 143) if terminated_by_runner or meta["expect_exit"] else (0, None)
+    # an expected death may carry a deliberate nonzero code (the gpu policy
+    # exits 1); the scenario asserts the semantics itself
+    allowed_rc = (0, 1, None, 143) if terminated_by_runner or meta["expect_exit"] else (0, None)
     if comp_rc not in allowed_rc:
         return finish(FAIL, f"compositor exit rc={comp_rc}")
     return finish(PASS)

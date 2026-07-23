@@ -132,6 +132,13 @@ namespace {
     // leave the descriptor set uninitialized, and segfault in the driver on
     // the next vkUpdateDescriptorSets. Abort at the failing call instead.
     void imguiVkCheck(VkResult err) {
+        if (err == VK_ERROR_DEVICE_LOST) {
+            // deliberate policy: no in-process recovery, no restart — the
+            // session dies with its reason on record
+            sysE << "imway: vulkan device lost, exiting"_sv << endL;
+            exit(1);
+        }
+
         if (err < 0) {
             sysE << "imway: fatal: imgui vulkan call failed ("_sv << (long)err << ")"_sv << endL;
             abort();
@@ -952,10 +959,16 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         return true;
     }
 
-    VkResult status = wait ? vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX) : vkGetFenceStatus(device, fence);
+    VkResult status = wait ? vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs) : vkGetFenceStatus(device, fence);
 
     if (status == VK_NOT_READY) {
         return false;
+    }
+
+    if (status == VK_TIMEOUT) {
+        // a frame fence that never signals is a hung gpu, not a slow one
+        *(comp->log) << "imway: gpu hang (frame fence timeout), exiting"_sv << endL;
+        exit(1);
     }
 
     if (status != VK_SUCCESS) {
@@ -2953,7 +2966,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
         return;
     }
 
-    vkWaitForFences(device, 1, &curFence, VK_TRUE, UINT64_MAX);
+    vkWaitOrDie(device, curFence, "cursor rasterize");
     vkResetFences(device, 1, &curFence);
 
     // B8G8R8A8 bytes match DRM ARGB8888, and rendering onto transparent
@@ -4599,7 +4612,7 @@ bool RendererImpl::readbackLastFrame() {
         return false;
     }
 
-    vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+    vkWaitOrDie(device, fence, "readback");
     vkResetFences(device, 1, &fence);
 
     return true;

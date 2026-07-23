@@ -86,6 +86,15 @@ namespace {
     }
 }
 
+void vkWaitOrDie(VkDevice device, VkFence fence, const char* what) {
+    VkResult res = vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs);
+
+    if (res != VK_SUCCESS) {
+        sysE << "imway: gpu fatal in "_sv << StringView(what) << " ("_sv << (long)res << "), exiting"_sv << endL;
+        exit(1);
+    }
+}
+
 DeviceVk::DeviceVk(Log& l, int drmFd)
     : log(&l)
 {

@@ -24,6 +24,13 @@ inline constexpr u32 kFourccP010 = 0x30313050;
 struct DmabufFormat;
 struct Log;
 
+// bounded gpu waits: a lost or hung device must not hang the compositor.
+// The policy is deliberate: no in-process recovery — log and die, the
+// session is over (see PLAN.md, GPU robustness)
+inline constexpr unsigned long long kGpuWaitNs = 5ull * 1000 * 1000 * 1000;
+
+void vkWaitOrDie(VkDevice device, VkFence fence, const char* what);
+
 struct DeviceVk {
     int drmFd = -1;
     VkInstance instance = VK_NULL_HANDLE;

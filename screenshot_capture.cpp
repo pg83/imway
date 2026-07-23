@@ -149,7 +149,7 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
     }
 
     if (fencePending) {
-        vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX);
+        vkWaitOrDie(device, fence, "screenshot capture teardown");
     }
     if (workerPending) {
         comp->offload->join();
