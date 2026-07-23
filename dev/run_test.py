@@ -34,6 +34,7 @@ def parse_header(path: str) -> dict:
     pre: list[str] = []
     expect_exit = False
     private_bus = False
+    wrap = None
     with open(path) as f:
         for line in f.read(2048).splitlines():
             m = re.match(r"\s*#\s*xfail:\s*(.*)", line)
@@ -55,12 +56,18 @@ def parse_header(path: str) -> dict:
                     if not sep or not key:
                         raise ValueError(f"{path}: bad imway-env item: {item}")
                     extra_env[key] = value
+            # a command prefix the whole run (bus, pre, compositor, scenario)
+            # re-executes under — for private namespaces around shared paths
+            # like /var/run (a scenario-local sndiod)
+            m = re.match(r"\s*#\s*imway-wrap:\s*(.*)", line)
+            if m and m.group(1).strip():
+                wrap = m.group(1).strip()
             if re.match(r"\s*#\s*expect-compositor-exit\s*$", line):
                 expect_exit = True
             if re.match(r"\s*#\s*private-session-bus\s*$", line):
                 private_bus = True
     return dict(xfail=xfail, args=args, env=extra_env, pre=pre,
-                expect_exit=expect_exit, private_bus=private_bus)
+                expect_exit=expect_exit, private_bus=private_bus, wrap=wrap)
 
 
 def is_sock(p: str) -> bool:
@@ -164,6 +171,10 @@ def run(imway: str, scenario: str, client: str, meta: dict,
             )
             lines = bus.stdout.strip().splitlines()
             env["DBUS_SESSION_BUS_ADDRESS"] = lines[0]
+            # the system bus aliases to the same private bus: hermetic (the
+            # host's real system bus never leaks in) and it lets a scenario
+            # fake system services like iwd
+            env["DBUS_SYSTEM_BUS_ADDRESS"] = lines[0]
             bus_pid = int(lines[1])
         except Exception as e:
             stderr = getattr(e, "stderr", "") or ""
@@ -342,6 +353,12 @@ def main() -> int:
 
     try:
         meta = parse_header(args.scenario)
+
+        if meta.get("wrap") and not os.environ.get("IMWAY_WRAPPED"):
+            os.environ["IMWAY_WRAPPED"] = "1"
+            os.execvp(shlex.split(meta["wrap"])[0],
+                      shlex.split(meta["wrap"]) + [sys.executable] + sys.argv)
+
         res = run(args.imway, args.scenario, client, meta, args.timeout)
     except Exception as e:  # never let a runner bug abort the graph
         meta = {"xfail": None}

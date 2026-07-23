@@ -278,6 +278,11 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         # the ring under test, linked standalone
         test_sources.append("$(S)/log.cpp")
 
+    if name == "client_reg_theme":
+        # the palette math under test; imgui only for ImGuiStyle's layout
+        test_sources.append("$(S)/theme.cpp")
+        test_deps.append(imgui)
+
     if name == "client_reg_scanout_opaque_policy":
         # scene.h pulls the weak ring in since Surface grew its anchor
         test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp", "$(S)/weak_ptr.cpp"]
