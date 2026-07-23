@@ -1633,7 +1633,11 @@ namespace {
         s.pending.inputRegion.append(box->rects.begin(), box->rects.length());
     }
 
-    void copyShmBufferTo(Log& log, wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
+    // false only when the pixel copy itself cannot be allocated: the caller
+    // disconnects the client (weston's rule — a client-sized allocation
+    // must not reach the top-level catch through a throwing macro)
+    bool copyShmBufferTo(WaylandImpl* srv, wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
+        Log& log = *srv->composer->log;
         i32 w = wl_shm_buffer_get_width(&shm);
         i32 h = wl_shm_buffer_get_height(&shm);
         i32 stride = wl_shm_buffer_get_stride(&shm);
@@ -1643,7 +1647,7 @@ namespace {
             log << "imway: unsupported shm format "_sv << fmt << endL;
             outW = outH = 0;
 
-            return;
+            return true;
         }
 
         // libwayland validates stride against the pixel width only; a client
@@ -1652,7 +1656,16 @@ namespace {
             log << "imway: shm stride "_sv << stride << " < width*4"_sv << endL;
             outW = outH = 0;
 
-            return;
+            return true;
+        }
+
+        // wl_shm has no dimension error: a buffer no texture can hold is
+        // capped here, before the pixel copy sizes an allocation by it
+        if (srv->maxImageDim && ((u32)w > srv->maxImageDim || (u32)h > srv->maxImageDim)) {
+            log << "imway: shm buffer "_sv << w << "x"_sv << h << " exceeds the device limit "_sv << srv->maxImageDim << endL;
+            outW = outH = 0;
+
+            return true;
         }
 
         bool incremental = rect && !rect->empty() && outW == w && outH == h && out.length() == (size_t)w * h * 4;
@@ -1669,11 +1682,20 @@ namespace {
                 memcpy(out.mutData() + ((size_t)y * w + rect->x) * 4, src + (size_t)y * stride + (size_t)rect->x * 4, (size_t)rect->w * 4);
             }
         } else {
-            out.clear();
-            out.grow((size_t)w * h * 4);
+            try {
+                out.clear();
+                out.grow((size_t)w * h * 4);
 
-            for (i32 y = 0; y < h; y++) {
-                out.append(src + (size_t)y * stride, (size_t)w * 4);
+                for (i32 y = 0; y < h; y++) {
+                    out.append(src + (size_t)y * stride, (size_t)w * 4);
+                }
+            } catch (...) {
+                wl_shm_buffer_end_access(&shm);
+                out.clear();
+                outW = outH = 0;
+                log << "imway: shm copy allocation failed ("_sv << w << "x"_sv << h << ")"_sv << endL;
+
+                return false;
             }
         }
 
@@ -1695,10 +1717,14 @@ namespace {
                 }
             }
         }
+
+        return true;
     }
 
     void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm, const RectI* rect) {
-        copyShmBufferTo(*s.srv->composer->log, *shm, s.width, s.height, s.pixels, rect);
+        if (!copyShmBufferTo(s.srv, *shm, s.width, s.height, s.pixels, rect)) {
+            wl_client_post_no_memory(wl_resource_get_client(s.res));
+        }
 
         if (s.width > 0) {
             s.dirty = true;
@@ -2133,7 +2159,10 @@ namespace {
                 clipRect(dmg, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm));
 
                 if (cache) {
-                    copyShmBufferTo(*s.srv->composer->log, *shm, cache->width, cache->height, cache->pixels, nullptr);
+                    if (!copyShmBufferTo(s.srv, *shm, cache->width, cache->height, cache->pixels, nullptr)) {
+                        wl_client_post_no_memory(wl_resource_get_client(s.res));
+                    }
+
                     cache->hasContent = cache->width > 0;
                     cache->valid = true;
                 } else {
@@ -12661,6 +12690,24 @@ void WaylandImpl::onListen(void* arg) {
             scene->needsFrame = true;
         }
     });
+
+    // render faults: the renderer could not build a texture for this
+    // client's content — the owner is disconnected with no_memory,
+    // weston-style, instead of failing again every frame
+    for (u64 faultId : scene->renderFaults) {
+        forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+            if (t.id != faultId || !t.surface) {
+                return;
+            }
+
+            auto& s = *(SurfaceImpl*)t.surface.get();
+
+            *(composer->log) << "imway: render fault, disconnecting "_sv << sv(t.title) << endL;
+            wl_client_post_no_memory(wl_resource_get_client(s.res));
+        });
+    }
+
+    scene->renderFaults.clear();
 
     seat.imUpdatePopup();
 

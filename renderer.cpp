@@ -486,6 +486,7 @@ namespace {
 
         bool importDmabuf(Surface& s);
         void uploadSurface(Surface& s);
+        void faultSurfaceOwner(Surface& s);
         void destroyTexture(SurfaceTexture* tex);
         SurfaceTexture* cacheFind(DmabufBuffer* b);
         bool cacheContainsTex(const SurfaceTexture* tex) const;
@@ -1811,6 +1812,18 @@ void RendererImpl::setup(int w, int h) {
     }
 }
 
+void RendererImpl::faultSurfaceOwner(Surface& s) {
+    // a client-sized allocation failed: hand the owner to wayland for a
+    // no_memory disconnect. An unowned surface (cursor, drag icon) just
+    // stays untextured
+    Surface* root = s.rootSurface();
+
+    if (root && root->toplevel) {
+        scene->renderFaults.pushBack(root->toplevel->id);
+        scene->needsFrame = true;
+    }
+}
+
 void RendererImpl::uploadSurface(Surface& s) {
     if (s.width <= 0 || s.height <= 0) {
         return;
@@ -1847,6 +1860,7 @@ void RendererImpl::uploadSurface(Surface& s) {
             *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
             s.frame = nullptr;
             frameUnref(frame);
+            faultSurfaceOwner(s);
 
             return;
         }

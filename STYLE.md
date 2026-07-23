@@ -125,6 +125,17 @@ functionCall(
   declarations live in the global namespace.
 - Avoid non-trivial global objects. Make ownership and lifetime explicit.
 
+## Errors and client input
+
+- `STD_VERIFY` and `VK_CHECK` throw, and the only catch is around the whole
+  event loop: a failure there ends the session. Use them for our own
+  invariants only — startup, compositor-sized resources, state we created.
+- An allocation or GPU object sized by client input never goes through a
+  throwing macro. Check the result in place and degrade: cap the size before
+  allocating, skip the content with a log line, or disconnect the offending
+  client (`wl_client_post_no_memory`). A client must not be able to reach the
+  top-level catch.
+
 ## Comments and formatting
 
 - Comments explain invariants, intent or a non-obvious constraint; they do not

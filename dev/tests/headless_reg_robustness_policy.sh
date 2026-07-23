@@ -4,4 +4,4 @@ set -euo pipefail
 
 "$IMWAY_CLIENT"
 expect_alive "compositor died during robustness policy test"
-echo "OK: restart backoff and scanout failure policy"
+echo "OK: scanout failure policy"

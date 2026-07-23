@@ -362,6 +362,10 @@ struct Scene {
     // toplevel id of the current direct scanout candidate (0 = none),
     // written by the renderer each frame; surfaced through the state dump
     u64 scanoutCandidateId = 0;
+    // render faults attributed to a toplevel (by id): written by the
+    // renderer when a client's texture cannot be built, drained by wayland
+    // into a no_memory disconnect of the owner
+    stl::Vector<u64> renderFaults;
     bool kbCaptured = false;
     bool ptrCaptured = false;
     bool shortcutsInhibited = false;

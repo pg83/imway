@@ -348,6 +348,11 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
+    } else if (verb == "render-fault"_sv) {
+        // injects a renderer-attributed client fault: the real producers
+        // (device OOM on a client-sized texture) cannot fire in a scenario
+        scene->renderFaults.pushBack(args.stou());
+        scene->needsFrame = true;
     } else if (verb == "gpu-fatal"_sv) {
         // exercises the death policy end to end: the log line, the prompt
         // exit, no hang
