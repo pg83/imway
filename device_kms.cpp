@@ -800,6 +800,7 @@ namespace {
         int drmFd() const override;
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
+        u32 maxImageSize() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
         void leaseConnectorsImpl(VisitorFace&& vis) override;
         int createLease(const u32* connectorIds, int count, u32& lesseeId) override;
@@ -916,6 +917,10 @@ bool KmsDevice::explicitSyncSupported() const {
 
 unsigned long long KmsDevice::renderDevice() const {
     return vk->renderDev;
+}
+
+u32 KmsDevice::maxImageSize() const {
+    return vk->maxImageDim;
 }
 
 void KmsDevice::dmabufFormatsImpl(VisitorFace&& vis) {

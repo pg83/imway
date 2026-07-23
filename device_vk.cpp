@@ -195,6 +195,7 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
 
     vkGetPhysicalDeviceProperties(this->phys, &props);
     *log << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
+    this->maxImageDim = props.limits.maxImageDimension2D;
 
     if (hasExt(this->phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
         VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};

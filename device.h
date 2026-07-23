@@ -31,6 +31,10 @@ struct LeaseConnector {
 
 struct Device {
     virtual unsigned long long renderDevice() const = 0;
+
+    // the render device's 2d image ceiling; client buffers beyond it are a
+    // protocol error, not a vulkan crash
+    virtual u32 maxImageSize() const = 0;
     virtual int drmFd() const = 0;
     virtual bool explicitSyncSupported() const = 0;
 

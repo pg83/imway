@@ -28,6 +28,8 @@ struct WaylandConfig {
     const DmabufFormat* scanoutFormats = nullptr;
     size_t scanoutFormatCount = 0;
     unsigned long long mainDevice = 0;
+    // the render device's 2d image ceiling for client buffers
+    u32 maxImageDim = 0;
     Output* output = nullptr;
     double dpmsSec = 0;
     int drmFd = -1;

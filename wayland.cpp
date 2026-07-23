@@ -1,6 +1,7 @@
 
 #include "composer.h"
 #include "device.h"
+#include "robustness.h"
 #include "wayland.h"
 #include "device_vk.h"
 #include "icon.h"
@@ -1050,6 +1051,7 @@ namespace {
 
         int drmFd = -1;
         bool explicitSyncSupported = false;
+        u32 maxImageDim = 0;
 
         struct IdleNotif: IntrusiveNode {
             WaylandImpl* srv = nullptr;
@@ -1244,6 +1246,12 @@ namespace {
     }
 
     void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
+        // a surface with no content was not presented, and neither was
+        // anything below it: the callbacks wait for the first real frame
+        if (!s.hasContent) {
+            return;
+        }
+
         Vector<wl_resource*> cbs;
 
         cbs.xchg(s.frameCbs);
@@ -1544,6 +1552,15 @@ namespace {
 
     void surfaceFrame(wl_client* client, wl_resource* res, u32 id) {
         SurfaceImpl& s = *surfaceFrom(res);
+
+        // a ceiling on queued frame callbacks per surface: a client looping
+        // wl_surface.frame without commits grows compositor memory forever
+        if (s.pending.frames.length() + s.frameCbs.length() >= maxPendingFrameCallbacks) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         wl_resource* cb = wl_resource_create(client, &wl_callback_interface, 1, id);
 
         if (!cb) {
@@ -8759,6 +8776,14 @@ namespace {
             return nullptr;
         }
 
+        // reject beyond the render device's image ceiling here, where it is
+        // a protocol error — vkCreateImage would take the session down
+        if (p->srv->maxImageDim && ((u32)width > p->srv->maxImageDim || (u32)height > p->srv->maxImageDim)) {
+            wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS, "%dx%d exceeds the renderer limit %u", width, height, p->srv->maxImageDim);
+
+            return nullptr;
+        }
+
         DmabufBuffer& b = *p->pending->buf;
 
         if (b.nplanes == 0 || b.fds[0] < 0) {
@@ -8780,6 +8805,21 @@ namespace {
                 wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_OUT_OF_BOUNDS, "plane %d offset/stride overflows", i);
 
                 return nullptr;
+            }
+
+            // the layout must fit the fd: plane 0 pays for every row, the
+            // subsampled others are only held to offset+stride to avoid
+            // guessing their real height. Non-seekable fds skip the check
+            off_t fdSize = lseek(b.fds[i], 0, SEEK_END);
+
+            if (fdSize >= 0) {
+                u64 need = i == 0 ? end : (u64)b.offsets[i] + (u64)b.strides[i];
+
+                if (need > (u64)fdSize) {
+                    wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_OUT_OF_BOUNDS, "plane %d needs %llu bytes, the fd has %llu", i, (unsigned long long)need, (unsigned long long)fdSize);
+
+                    return nullptr;
+                }
             }
         }
 
@@ -11199,6 +11239,9 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     }
 
     display = wl_display_create();
+    // cap per-connection event buffering: a client that stops reading its
+    // socket otherwise grows the compositor-side queue without bound
+    wl_display_set_default_max_buffer_size(display, maxWaylandClientBuffer);
     STD_VERIFY(display);
 
     wlLoop = wl_display_get_event_loop(display);
@@ -11215,6 +11258,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.inputSinks.pushBack((InputSink*)this);
     drmFd = cfg.drmFd;
     explicitSyncSupported = cfg.explicitSync;
+    maxImageDim = cfg.maxImageDim;
 
     if (output && dpmsSec > 0) {
         ev_timer_init(&dpmsTimer, dpmsTimerCb, dpmsSec, dpmsSec);

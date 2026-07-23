@@ -120,6 +120,7 @@ namespace {
         int drmFd() const override;
         bool explicitSyncSupported() const override;
         unsigned long long renderDevice() const override;
+        u32 maxImageSize() const override;
         void dmabufFormatsImpl(VisitorFace&& vis) override;
 
         void leaseConnectorsImpl(VisitorFace&&) override {
@@ -372,6 +373,10 @@ bool HeadlessDevice::explicitSyncSupported() const {
 
 unsigned long long HeadlessDevice::renderDevice() const {
     return vk->renderDev;
+}
+
+u32 HeadlessDevice::maxImageSize() const {
+    return vk->maxImageDim;
 }
 
 void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {

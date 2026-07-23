@@ -269,6 +269,7 @@ int mainComposer(int argc, char** argv) {
         wcfg.scanoutFormats = scanoutFormats.data();
         wcfg.scanoutFormatCount = scanoutFormats.length();
         wcfg.mainDevice = device->renderDevice();
+        wcfg.maxImageDim = device->maxImageSize();
         wcfg.output = output;
         wcfg.dpmsSec = kms ? cfg.dpmsSec : 0;
         wcfg.drmFd = device->drmFd();

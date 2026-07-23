@@ -336,8 +336,13 @@ static int wl_expect_error(const char* want_iface, uint32_t want_code) {
     const struct wl_interface* iface = NULL;
     uint32_t object_id = 0;
     uint32_t code = wl_display_get_protocol_error(wl_dpy, &iface, &object_id);
+    /* libwayland maps the display's no_memory error to ENOMEM, not EPROTO */
+    int want_errno = !strcmp(want_iface, "wl_display") &&
+                             want_code == WL_DISPLAY_ERROR_NO_MEMORY
+                         ? ENOMEM
+                         : EPROTO;
 
-    if (wl_display_get_error(wl_dpy) != EPROTO || !iface || strcmp(iface->name, want_iface) || code != want_code) {
+    if (wl_display_get_error(wl_dpy) != want_errno || !iface || strcmp(iface->name, want_iface) || code != want_code) {
         fprintf(stderr, "wrong/no error: %s code %u, want %s code %u (id=%u errno=%d)\n", iface ? iface->name : "?", code, want_iface, want_code, object_id, wl_display_get_error(wl_dpy));
         return 1;
     }

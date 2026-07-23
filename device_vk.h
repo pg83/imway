@@ -34,6 +34,7 @@ struct DeviceVk {
     bool hasDmabuf = false;
     bool hasSyncFd = false;
     u64 renderDev = 0;
+    u32 maxImageDim = 0; // limits.maxImageDimension2D, a client-buffer ceiling
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
     Log* log = nullptr;
     // VK_EXT_debug_utils: loader and validation messages into the log
