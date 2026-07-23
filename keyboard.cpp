@@ -1,5 +1,6 @@
 #include "keyboard.h"
 #include "log.h"
+#include "log_extern.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -18,6 +19,7 @@ using namespace stl;
 
 namespace {
     struct KeyboardImpl: public Keyboard {
+        Log* log = nullptr;
         xkb_context* ctx = nullptr;
         xkb_keymap* keymap = nullptr;
         xkb_state* state = nullptr;
@@ -39,21 +41,30 @@ namespace {
     };
 }
 
-KeyboardImpl::KeyboardImpl(Log& log, StringView layout, StringView options)
+namespace {
+    void xkbLog(struct xkb_context* ctx, enum xkb_log_level, const char* fmt, va_list args) {
+        externVLog(*((KeyboardImpl*)xkb_context_get_user_data(ctx))->log, "xkb"_sv, fmt, args);
+    }
+}
+
+KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
+    : log(&l)
 {
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(ctx);
+    xkb_context_set_user_data(ctx, this);
+    xkb_context_set_log_fn(ctx, xkbLog);
 
     // xkb wants NUL-terminated strings: materialize right at the call
-    Buffer l(layout), o(options);
+    Buffer lb(layout), o(options);
     xkb_rule_names names{};
 
-    names.layout = l.cStr();
+    names.layout = lb.cStr();
     names.options = o.cStr();
     keymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
     if (!keymap && (!layout.empty() || !options.empty())) {
-        log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
+        *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
         keymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
 

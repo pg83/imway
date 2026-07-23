@@ -60,6 +60,36 @@ bool ModeSpec::parse(StringView s) {
     return this->w > 0 && this->h > 0;
 }
 
+namespace {
+    VKAPI_ATTR VkBool32 VKAPI_CALL vkDebugLog(VkDebugUtilsMessageSeverityFlagBitsEXT,
+                                              VkDebugUtilsMessageTypeFlagsEXT,
+                                              const VkDebugUtilsMessengerCallbackDataEXT* data,
+                                              void* user) {
+        *(Log*)user << "vk: "_sv << stl::StringView(data->pMessage) << endL;
+
+        return VK_FALSE;
+    }
+
+    bool haveInstanceExt(const char* name) {
+        u32 n = 0;
+
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
+
+        stl::Vector<VkExtensionProperties> props;
+
+        props.zero(n);
+        vkEnumerateInstanceExtensionProperties(nullptr, &n, props.mutData());
+
+        for (const auto& e : props) {
+            if (stl::StringView(e.extensionName) == stl::StringView(name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+}
+
 DeviceVk::DeviceVk(Log& l, int drmFd)
     : log(&l)
 {
@@ -73,7 +103,31 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
     VkInstanceCreateInfo instInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
 
     instInfo.pApplicationInfo = &app;
+
+    // loader and validation warnings go through the log instead of stderr
+    const char* debugExt = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+    bool debugUtils = haveInstanceExt(debugExt);
+
+    if (debugUtils) {
+        instInfo.enabledExtensionCount = 1;
+        instInfo.ppEnabledExtensionNames = &debugExt;
+    }
+
     VK_CHECK(vkCreateInstance(&instInfo, nullptr, &this->instance));
+
+    if (debugUtils) {
+        auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkCreateDebugUtilsMessengerEXT");
+
+        if (create) {
+            VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+
+            dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+            dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+            dbg.pfnUserCallback = vkDebugLog;
+            dbg.pUserData = this->log;
+            create(this->instance, &dbg, nullptr, &this->debugMessenger);
+        }
+    }
 
     u32 n = 0;
 
@@ -249,6 +303,16 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
 DeviceVk::~DeviceVk() noexcept {
     if (this->device) {
         vkDestroyDevice(this->device, nullptr);
+    }
+
+    if (this->debugMessenger) {
+        auto destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkDestroyDebugUtilsMessengerEXT");
+
+        if (destroy) {
+            destroy(this->instance, this->debugMessenger, nullptr);
+        }
+
+        this->debugMessenger = VK_NULL_HANDLE;
     }
 
     if (this->instance) {

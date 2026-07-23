@@ -36,6 +36,8 @@ struct DeviceVk {
     u64 renderDev = 0;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
     Log* log = nullptr;
+    // VK_EXT_debug_utils: loader and validation messages into the log
+    VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 
     // drmFd < 0 picks any vulkan device (headless); otherwise the one that
     // drives that drm node. pool-owned, borrowed by const pointer elsewhere

@@ -14,6 +14,7 @@
 #include "input.h"
 #include "keyboard.h"
 #include "log.h"
+#include "log_extern.h"
 #include "main_supervisor.h"
 #include "mixer.h"
 #include "notifications.h"
@@ -198,6 +199,7 @@ int mainComposer(int argc, char** argv) {
     struct ev_loop* loop = ev_default_loop(0);
 
     c.log = log;
+    installExternLogHandlers(c);
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
     c.loop = loop;
     c.offload = ThreadPool::simple(c.pool, 1);

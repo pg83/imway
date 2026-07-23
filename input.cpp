@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log_extern.h"
 #include "log.h"
 #include "input.h"
 #include "pooled_ev.h"
@@ -125,6 +126,14 @@ namespace {
 
 // path backend only: the udev one needs a running udevd for enumeration AND
 // hotplug; a direct /dev/input scan plus inotify behaves the same either way
+namespace {
+    void libinputLog(struct libinput* li, enum libinput_log_priority, const char* fmt, va_list args) {
+        auto* source = (LibinputSource*)libinput_get_user_data(li);
+
+        externVLog(*source->comp->log, "libinput"_sv, fmt, args);
+    }
+}
+
 LibinputSource::LibinputSource(Composer& c)
     : comp(&c)
     , loop(c.loop)
@@ -132,6 +141,7 @@ LibinputSource::LibinputSource(Composer& c)
 {
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
+    libinput_log_set_handler(li, libinputLog);
 
     int devices = 0;
 
