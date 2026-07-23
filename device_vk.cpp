@@ -2,6 +2,7 @@
 #include "device.h"
 
 #include "device_vk.h"
+#include "log.h"
 #include "output.h"
 #include "renderer.h"
 #include "scene.h"
@@ -59,7 +60,9 @@ bool ModeSpec::parse(StringView s) {
     return this->w > 0 && this->h > 0;
 }
 
-DeviceVk::DeviceVk(int drmFd) {
+DeviceVk::DeviceVk(Log& l, int drmFd)
+    : log(&l)
+{
     this->drmFd = drmFd;
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -134,14 +137,14 @@ DeviceVk::DeviceVk(int drmFd) {
         this->phys = devs[0];
 
         if (drmFd >= 0) {
-            sysO << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
+            *log << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
         }
     }
 
     VkPhysicalDeviceProperties props{};
 
     vkGetPhysicalDeviceProperties(this->phys, &props);
-    sysO << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
+    *log << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
 
     if (hasExt(this->phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
         VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
@@ -185,7 +188,7 @@ DeviceVk::DeviceVk(int drmFd) {
     for (const char* name : need) {
         if (!hasExt(this->phys, name)) {
             this->hasDmabuf = false;
-            sysE << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
+            *log << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
         }
     }
 
@@ -214,7 +217,7 @@ DeviceVk::DeviceVk(int drmFd) {
         }
 
         if (!this->hasSyncFd) {
-            sysO << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
+            *log << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
         }
     }
 
@@ -346,5 +349,5 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
     addFormat(VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
               kFourccP010, 0, true);
 
-    sysO << "imway: dmabuf formats: "_sv << n << endL;
+    *log << "imway: dmabuf formats: "_sv << n << endL;
 }

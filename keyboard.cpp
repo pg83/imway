@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "log.h"
 #include "util.h"
 
 #include <fcntl.h>
@@ -23,7 +24,7 @@ namespace {
         int fd = -1;
         u32 size = 0;
 
-        KeyboardImpl(StringView layout, StringView options);
+        KeyboardImpl(Log& log, StringView layout, StringView options);
         ~KeyboardImpl() noexcept;
 
         void updateKey(u32 evdevCode, bool pressed) override;
@@ -38,7 +39,7 @@ namespace {
     };
 }
 
-KeyboardImpl::KeyboardImpl(StringView layout, StringView options)
+KeyboardImpl::KeyboardImpl(Log& log, StringView layout, StringView options)
 {
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(ctx);
@@ -52,7 +53,7 @@ KeyboardImpl::KeyboardImpl(StringView layout, StringView options)
     keymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
     if (!keymap && (!layout.empty() || !options.empty())) {
-        sysE << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
+        log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
         keymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
 
@@ -177,6 +178,6 @@ void KeyboardImpl::layoutShort(char out[4]) const {
     out[2] = 0;
 }
 
-Keyboard* Keyboard::create(ObjPool* pool, StringView layout, StringView options) {
-    return pool->make<KeyboardImpl>(layout, options);
+Keyboard* Keyboard::create(ObjPool* pool, Log& log, StringView layout, StringView options) {
+    return pool->make<KeyboardImpl>(log, layout, options);
 }

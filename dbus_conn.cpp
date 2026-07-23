@@ -1,4 +1,5 @@
 #include "dbus_conn.h"
+#include "log.h"
 #include "pooled_ev.h"
 #include "small_obj_allocator.h"
 #include "util.h"
@@ -237,7 +238,7 @@ namespace {
     }
 }
 
-DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, bool system) {
+DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, Log& log, bool system) {
     DBusError err;
 
     dbus_error_init(&err);
@@ -245,7 +246,7 @@ DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_lo
     DBusConnection* conn = dbus_bus_get_private(system ? DBUS_BUS_SYSTEM : DBUS_BUS_SESSION, &err);
 
     if (!conn) {
-        sysE << "imway: no "_sv << (system ? "system"_sv : "session"_sv) << " bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
+        log << "imway: no "_sv << (system ? "system"_sv : "session"_sv) << " bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
         dbus_error_free(&err);
 
         return nullptr;

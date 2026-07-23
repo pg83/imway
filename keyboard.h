@@ -8,6 +8,8 @@ namespace stl {
     class ObjPool;
 }
 
+struct Log;
+
 // modifier mask for key bindings, resolved from the real xkb state
 inline constexpr u32 kModShift = 1u << 0;
 inline constexpr u32 kModCtrl = 1u << 1;
@@ -41,5 +43,5 @@ struct Keyboard {
     // two-letter uppercase name of the active layout, e.g. EN / RU
     virtual void layoutShort(char out[4]) const = 0;
 
-    static Keyboard* create(stl::ObjPool* pool, stl::StringView layout, stl::StringView options);
+    static Keyboard* create(stl::ObjPool* pool, Log& log, stl::StringView layout, stl::StringView options);
 };

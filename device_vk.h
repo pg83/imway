@@ -22,6 +22,7 @@ inline constexpr u32 kFourccNv12 = 0x3231564e;
 inline constexpr u32 kFourccP010 = 0x30313050;
 
 struct DmabufFormat;
+struct Log;
 
 struct DeviceVk {
     int drmFd = -1;
@@ -34,10 +35,11 @@ struct DeviceVk {
     bool hasSyncFd = false;
     u64 renderDev = 0;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
+    Log* log = nullptr;
 
     // drmFd < 0 picks any vulkan device (headless); otherwise the one that
     // drives that drm node. pool-owned, borrowed by const pointer elsewhere
-    DeviceVk(int drmFd);
+    DeviceVk(Log& log, int drmFd);
     ~DeviceVk() noexcept;
 
     DeviceVk(const DeviceVk&) = delete;

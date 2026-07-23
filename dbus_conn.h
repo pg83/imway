@@ -8,6 +8,7 @@ namespace stl {
 
 struct ev_loop;
 struct DBusConnection;
+struct Log;
 struct SmallObjAllocator;
 
 // session bus connection glued onto the libev loop: libdbus watches ride
@@ -24,5 +25,5 @@ struct DBusConn {
 
     // nullptr when the bus is unreachable; the desktop just runs without
     // the services that ride it
-    static DBusConn* create(stl::ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, bool system);
+    static DBusConn* create(stl::ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, Log& log, bool system);
 };

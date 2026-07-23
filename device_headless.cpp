@@ -1,4 +1,5 @@
 #include "composer.h"
+#include "log.h"
 #include "device.h"
 
 #include "device_vk.h"
@@ -189,7 +190,7 @@ void HeadlessOutput::setCursorImage(const u32* argb) {
             alphaOr |= argb[i] >> 24;
         }
 
-        sysE << "cursor image: visible "_sv << visible << ", rgb "_sv << rgbOr << ", alpha "_sv << alphaOr << endL;
+        *(c->log) << "cursor image: visible "_sv << visible << ", rgb "_sv << rgbOr << ", alpha "_sv << alphaOr << endL;
     }
 #else
     (void)argb;
@@ -308,7 +309,7 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
     , pool(comp.pool)
     , loop(comp.loop)
 {
-    vk = pool->make<DeviceVk>(-1);
+    vk = pool->make<DeviceVk>(*c->log, -1);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) { formats.pushBack(f); });

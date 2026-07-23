@@ -257,7 +257,7 @@ int mainComposer(int argc, char** argv) {
             scanoutFormats.pushBack(f);
         });
 
-        Keyboard* kb = Keyboard::create(pool.mutPtr(), cfg.xkbLayout, cfg.xkbOptions);
+        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, cfg.xkbLayout, cfg.xkbOptions);
 
         c.kb = kb;
 
@@ -281,7 +281,7 @@ int mainComposer(int argc, char** argv) {
         // post to it regardless of a bus); the dbus service is layered on
         // top only when the session bus is reachable
         c.notifier = Notifier::create(c);
-        c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, false);
+        c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, false);
 
         if (c.bus) {
             c.notes = Notifications::create(c);
@@ -290,7 +290,7 @@ int mainComposer(int argc, char** argv) {
 
         c.mixer = Mixer::create(c);
 
-        c.sysbus = DBusConn::create(pool.mutPtr(), c.alloc, loop, true);
+        c.sysbus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, true);
         c.wifi = c.sysbus ? Wifi::create(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);

@@ -172,6 +172,7 @@ namespace {
 
     struct Dialog {
         LockFilter filter;
+        Log* log = nullptr;
         char password[256] = "";
         bool focusField = true;
         bool failed = false;
@@ -181,7 +182,7 @@ namespace {
             filter.unlink();
             wipe(password, sizeof(password));
             wipeImGuiPasswordState();
-            sysO << StringView("imway: lockscreen closed") << endL;
+            *log << StringView("imway: lockscreen closed") << endL;
         }
 
         void draw(Composer& c, bool& open);
@@ -633,6 +634,7 @@ void openLockOverlay(Composer& c, DialogState** state) {
 
     created->pool = pool;
     created->opaque = pool->make<Dialog>();
+    ((Dialog*)created->opaque)->log = c.log;
     *state = created;
     c.filters.pushBack(&((Dialog*)created->opaque)->filter);
 
