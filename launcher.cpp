@@ -44,6 +44,7 @@ namespace {
         // split point keeps the two grid groups addressable by one index
         Vector<u32> vis;
         long appsVis = 0;
+        long sysTotal = 0;
 
         // case-folding scratch for refilter; a .desktop Name can be longer
         // than any fixed buffer, so grow instead of overflowing the stack
@@ -115,6 +116,7 @@ void Dialog::rescan() {
     addAction("inspector"_sv, "utilities-system-monitor"_sv, LauncherAction::inspector);
     addAction("color picker"_sv, "color-select"_sv, LauncherAction::colorPicker);
     addAction("log"_sv, "utilities-terminal"_sv, LauncherAction::logView);
+    sysTotal = (long)rows.length();
 
     forEachXdgDataDir([this](StringView base) {
         StringBuilder dir;
@@ -276,21 +278,47 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
 
     const ImGuiStyle& st = ImGui::GetStyle();
     // the grid reuses the dock's icon metrics: the same button side, the
-    // same slot-to-icon breathing room as the gap; the window is sized for
-    // exactly four columns
+    // same slot-to-icon breathing room as the gap
     float cell = dockIconSize();
     float gap = dockBarWidth() - dockIconSize();
-    long cols = 4;
 
     long appsN = appsVis;
     long sysN = n - appsN;
+    // the window keeps the unfiltered shape: typing thins the grids out
+    // without the frame jumping around
+    long appsTotal = (long)rows.length() - sysTotal;
 
-    auto groupH = [&](long count) {
-        return count ? (float)((count + cols - 1) / cols) * (cell + gap) + ImGui::GetFontSize() + gap : 0.f;
+    // per-cols window size, the same math the drawing below uses
+    auto sizeFor = [&](long cc, long apps, long sys) {
+        auto gh = [&](long count) {
+            return count ? (float)((count + cc - 1) / cc) * (cell + gap) + ImGui::GetFontSize() + gap : 0.f;
+        };
+
+        float wpx = st.WindowPadding.x * 2.f + (float)cc * cell + (float)(cc - 1) * gap;
+        float hpx = gh(apps) + gh(sys) + (apps && sys ? gap * 2.f + 1.f : 0.f) +
+            ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f;
+
+        return ImVec2(wpx, hpx);
     };
 
-    float contentH = groupH(appsN) + groupH(sysN) +
-        (appsN && sysN ? gap * 2.f + 1.f : 0.f);
+    // pick the column count whose window shape lands closest to the
+    // monitor's aspect; the log keeps too-wide and too-tall symmetric
+    float target = logf((float)screenW / (float)screenH);
+    long cols = 1;
+    float best = 3.4e38f;
+
+    for (long cc = 1; cc == 1 || (float)cc * (cell + gap) <= (float)screenW * 0.9f; cc++) {
+        ImVec2 sz = sizeFor(cc, appsTotal, sysTotal);
+        float miss = fabsf(logf(sz.x / sz.y) - target);
+
+        if (miss < best) {
+            best = miss;
+            cols = cc;
+        }
+    }
+
+    float contentH = sizeFor(cols, appsTotal, sysTotal).y -
+        (ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f);
     float childH = fminf(contentH, (float)screenH * 0.55f);
     float lw = st.WindowPadding.x * 2.f + (float)cols * cell + (float)(cols - 1) * gap +
         (contentH > childH ? st.ScrollbarSize : 0.f);
@@ -409,7 +437,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         // bottom-up: the input line, then (group name, group content,
         // delimiter) per group — so top-down each grid carries its header
         // underneath, and the topmost group has no leading delimiter
-        if (n) {
+        if (!rows.empty()) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
             ImGui::BeginChild("##groups", ImVec2(0.f, childH));
 
