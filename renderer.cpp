@@ -8,6 +8,7 @@
 #include "dialog.h"
 #include "tex_pool.h"
 #include "frame_listener.h"
+#include "input.h"
 #include "input_sink.h"
 #include "keyboard.h"
 #include "icon.h"
@@ -29,6 +30,7 @@
 #include "render_filter.h"
 #include "settings.h"
 #include "small_obj_allocator.h"
+#include "wayland.h"
 #include "wifi.h"
 #include "wifi_ui.h"
 #include "output.h"
@@ -320,6 +322,8 @@ namespace {
         Settings settings;
         DialogState* settingsState = nullptr;
         bool settingsToggle = false;
+        // the keys page rows: the chord table plus the non-chord bindings
+        Vector<KeyBinding> bindingsView;
         ShadowSprite shadow;       // window drop shadows, see window_shadow.h
 
         // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
@@ -599,6 +603,37 @@ void RenderContext::finish() {
     handled = true;
 }
 
+namespace {
+    enum class Chord {
+        screenshot,
+        lock,
+        launcher,
+        inspector,
+        altTabNext,
+        altTabPrev,
+    };
+
+    struct ChordDef {
+        u32 mask; // exact modifier state to match; kChordAnyMods matches any
+        u32 sym;
+        Chord id;
+        StringView chord;
+        StringView action;
+    };
+
+    constexpr u32 kChordAnyMods = ~0u;
+
+    // the one table behind both chord dispatch and the settings keys page
+    const ChordDef kChords[] = {
+        {kChordAnyMods, XKB_KEY_Print, Chord::screenshot, "PrtSc"_sv, "save a screenshot"_sv},
+        {kModLogo, XKB_KEY_l, Chord::lock, "Super+L"_sv, "lock the screen"_sv},
+        {kModLogo, XKB_KEY_F2, Chord::launcher, "Super+F2"_sv, "application launcher"_sv},
+        {kModLogo, XKB_KEY_F12, Chord::inspector, "Super+F12"_sv, "inspector"_sv},
+        {kModAlt, XKB_KEY_Tab, Chord::altTabNext, "Alt+Tab"_sv, "next window"_sv},
+        {kModAlt | kModShift, XKB_KEY_Tab, Chord::altTabPrev, "Alt+Shift+Tab"_sv, "previous window"_sv},
+    };
+}
+
 RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
     : comp(&comp)
     , loop(comp.loop)
@@ -628,6 +663,15 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     comp.inputSinks.pushFront((InputSink*)this);
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
+
+    for (const ChordDef& d : kChords) {
+        bindingsView.pushBack({d.chord, d.action});
+    }
+
+    bindingsView.pushBack({"Alt release"_sv, "commit the window switch"_sv});
+    bindingsView.pushBack({"Esc"_sv, "cancel the window switch"_sv});
+    bindingsView.pushBack({"XF86 volume keys"_sv, "volume up/down 5%, mute"_sv});
+    bindingsView.pushBack({"XF86 brightness keys"_sv, "backlight 5% or sdr white 10 nits"_sv});
     setup(scene->outW, scene->outH);
     shotCapture = ScreenshotCapture::create(
         comp, vk, width, height, fmt, uiScale,
@@ -1158,41 +1202,34 @@ void RendererImpl::volumeChanged() {
 }
 
 bool RendererImpl::chordAction(u32 mask, u32 sym) {
-    if (sym == XKB_KEY_Print) {
-        captureScreenshot();
+    for (const ChordDef& d : kChords) {
+        if (d.sym != sym || (d.mask != kChordAnyMods && d.mask != mask)) {
+            continue;
+        }
 
-        return true;
-    }
-
-    if (mask == kModLogo && sym == XKB_KEY_l) {
-        openLockOverlay(*comp, &lockState);
-
-        return true;
-    }
-
-    if (mask == kModLogo && sym == XKB_KEY_F2) {
-        launcherX = launcherY = -1.f;
-        launcherToggle = true;
-        scene->needsFrame = true;
-
-        return true;
-    }
-
-    if (mask == kModLogo && sym == XKB_KEY_F12) {
-        inspectorToggle = true;
-        scene->needsFrame = true;
-
-        return true;
-    }
-
-    if (mask == kModAlt && sym == XKB_KEY_Tab) {
-        altTabStep(1);
-
-        return true;
-    }
-
-    if (mask == (kModAlt | kModShift) && sym == XKB_KEY_Tab) {
-        altTabStep(-1);
+        switch (d.id) {
+            case Chord::screenshot:
+                captureScreenshot();
+                break;
+            case Chord::lock:
+                openLockOverlay(*comp, &lockState);
+                break;
+            case Chord::launcher:
+                launcherX = launcherY = -1.f;
+                launcherToggle = true;
+                scene->needsFrame = true;
+                break;
+            case Chord::inspector:
+                inspectorToggle = true;
+                scene->needsFrame = true;
+                break;
+            case Chord::altTabNext:
+                altTabStep(1);
+                break;
+            case Chord::altTabPrev:
+                altTabStep(-1);
+                break;
+        }
 
         return true;
     }
@@ -3266,6 +3303,30 @@ void RendererImpl::buildUi(Scene& scene) {
         settings.dnd = notifier->dnd();
     }
 
+    if (keyboard) {
+        u32 n = keyboard->layoutCount();
+
+        settings.layoutCount = n < Settings::kMaxLayouts ? n : Settings::kMaxLayouts;
+
+        for (u32 i = 0; i < settings.layoutCount; i++) {
+            settings.layouts[i] = keyboard->layoutName(i);
+        }
+
+        settings.layoutActive = keyboard->activeLayout();
+        settings.xkbOptions = keyboard->options();
+    } else {
+        settings.layoutCount = 0;
+    }
+
+    settings.hasPointer = comp->input != nullptr;
+
+    if (comp->input) {
+        settings.pointerSpeed = (float)comp->input->pointerSpeed();
+    }
+
+    settings.bindings = bindingsView.data();
+    settings.bindingCount = bindingsView.length();
+
     drawSettings(*comp, settings, settingsToggle, &settingsState);
     settingsToggle = false;
 
@@ -3299,6 +3360,14 @@ void RendererImpl::buildUi(Scene& scene) {
 
     if (settings.themeChanged) {
         comp->theme.setSeeds(settings.neutral, settings.selection);
+    }
+
+    if (settings.layoutChanged && comp->wayland) {
+        comp->wayland->setLayout(settings.layoutSel);
+    }
+
+    if (settings.pointerChanged && comp->input) {
+        comp->input->setPointerSpeed(settings.pointerSpeed);
     }
 
     if (settings.changed()) {

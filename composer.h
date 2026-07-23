@@ -35,6 +35,7 @@ struct StatusNotifier;
 struct Supervisor;
 struct Wayland;
 struct InputSink;
+struct InputSource;
 
 // the wiring board: main creates one as the first object of the root pool
 // (so it dies after every subsystem holding the reference) and fills the
@@ -78,6 +79,8 @@ struct Composer {
     // the renderer registers itself here; wayland's copy-capture reads it
     FrameCapture* frameCapture = nullptr;
     Mixer* mixer = nullptr;
+    // nullable: headless runs and dead-input kms runs have no libinput
+    InputSource* input = nullptr;
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;
     InputSink* entry = nullptr;

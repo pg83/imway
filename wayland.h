@@ -3,6 +3,7 @@
 #include <stddef.h>
 
 #include <std/str/view.h>
+#include <std/sys/types.h>
 
 namespace stl {
     class ObjPool;
@@ -35,5 +36,10 @@ struct WaylandConfig {
 
 struct Wayland {
     virtual void run() = 0;
+
+    // switch the active xkb group and broadcast the modifier change to the
+    // focused client, exactly as a layout hotkey would
+    virtual void setLayout(u32 group) = 0;
+
     static Wayland* create(Composer& c, const WaylandConfig&);
 };

@@ -25,6 +25,7 @@ namespace {
         xkb_state* state = nullptr;
         int fd = -1;
         u32 size = 0;
+        Buffer opts;
 
         KeyboardImpl(Log& log, StringView layout, StringView options);
         ~KeyboardImpl() noexcept;
@@ -38,6 +39,10 @@ namespace {
         int keymapFd() const override;
         u32 keymapSize() const override;
         void layoutShort(char out[4]) const override;
+        u32 layoutCount() const override;
+        StringView layoutName(u32 group) const override;
+        u32 activeLayout() const override;
+        StringView options() const override;
     };
 }
 
@@ -49,6 +54,7 @@ namespace {
 
 KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
     : log(&l)
+    , opts(options)
 {
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(ctx);
@@ -187,6 +193,24 @@ void KeyboardImpl::layoutShort(char out[4]) const {
     }
 
     out[2] = 0;
+}
+
+u32 KeyboardImpl::layoutCount() const {
+    return xkb_keymap_num_layouts(keymap);
+}
+
+StringView KeyboardImpl::layoutName(u32 group) const {
+    const char* name = xkb_keymap_layout_get_name(keymap, group);
+
+    return name ? StringView(name) : "?"_sv;
+}
+
+u32 KeyboardImpl::activeLayout() const {
+    return xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
+}
+
+StringView KeyboardImpl::options() const {
+    return sv(opts);
 }
 
 Keyboard* Keyboard::create(ObjPool* pool, Log& log, StringView layout, StringView options) {

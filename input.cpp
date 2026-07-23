@@ -62,8 +62,13 @@ namespace {
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
 
+        double speed = 0.;
+
         LibinputSource(Composer& c);
         ~LibinputSource() noexcept;
+
+        void setPointerSpeed(double s) override;
+        double pointerSpeed() const override;
 
         bool pathAdd(int n);
 
@@ -117,9 +122,13 @@ namespace {
     }
 
     // libinput ships touchpads with tap-to-click off, the compositor opts in
-    void configureDevice(libinput_device* dev) {
+    void configureDevice(libinput_device* dev, double speed) {
         if (libinput_device_config_tap_get_finger_count(dev) > 0) {
             libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
+        }
+
+        if (libinput_device_config_accel_is_available(dev)) {
+            libinput_device_config_accel_set_speed(dev, speed);
         }
     }
 }
@@ -206,6 +215,20 @@ void LibinputSource::pathDrop(int n) {
     }
 
     pathBits &= ~(1ull << n);
+}
+
+void LibinputSource::setPointerSpeed(double s) {
+    speed = s < -1. ? -1. : s > 1. ? 1. : s;
+
+    for (libinput_device* d : pathDevs) {
+        if (d && libinput_device_config_accel_is_available(d)) {
+            libinput_device_config_accel_set_speed(d, speed);
+        }
+    }
+}
+
+double LibinputSource::pointerSpeed() const {
+    return speed;
 }
 
 int LibinputSource::sysnameIndex(libinput_device* dev) {
@@ -441,7 +464,7 @@ void LibinputSource::dispatch() {
             case LIBINPUT_EVENT_DEVICE_ADDED: {
                 libinput_device* dev = libinput_event_get_device(ev);
 
-                configureDevice(dev);
+                configureDevice(dev, speed);
 
                 int idx = sysnameIndex(dev);
 

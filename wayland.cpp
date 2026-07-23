@@ -1084,6 +1084,7 @@ namespace {
         ~WaylandImpl() noexcept;
 
         void run() override;
+        void setLayout(u32 group) override;
 
         Icon* findIcon(u64 sym, StringView id) override;
         void syncKeyboardCapture();
@@ -12812,6 +12813,15 @@ void WaylandImpl::run() {
     wl_display_destroy_clients(display);
     wl_display_destroy(display);
     display = nullptr;
+}
+
+void WaylandImpl::setLayout(u32 group) {
+    if (group >= keyboard->layoutCount()) {
+        return;
+    }
+
+    keyboard->setGroup(group);
+    seat.updateModifiers();
 }
 
 // icon store reload: re-resolve every window still on a .desktop

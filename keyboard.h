@@ -43,5 +43,13 @@ struct Keyboard {
     // two-letter uppercase name of the active layout, e.g. EN / RU
     virtual void layoutShort(char out[4]) const = 0;
 
+    // configured layout groups, for the settings input page
+    virtual u32 layoutCount() const = 0;
+    virtual stl::StringView layoutName(u32 group) const = 0;
+    virtual u32 activeLayout() const = 0;
+
+    // the xkb options string the keymap was compiled with, verbatim
+    virtual stl::StringView options() const = 0;
+
     static Keyboard* create(stl::ObjPool* pool, Log& log, stl::StringView layout, stl::StringView options);
 };

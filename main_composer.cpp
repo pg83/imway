@@ -312,7 +312,7 @@ int mainComposer(int argc, char** argv) {
 
         if (kms) {
             try {
-                InputSource::createLibinput(c);
+                c.input = InputSource::createLibinput(c);
             } catch (...) {
                 *log << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
             }
