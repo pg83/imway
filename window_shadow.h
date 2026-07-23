@@ -18,3 +18,8 @@ void bakeWindowShadow(ImFontAtlas* atlas, ShadowSprite& s);
 
 // the ImGuiWindowShadowCallback: 9-slices the sprite around the window
 void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, ImGuiWindowFlags flags, void* user);
+
+// a soft tinted halo from the same baked blob, stretched over the box plus
+// reach on every side; resolves the sprite through the installed shadow
+// callback state, no-op when shadows are not set up
+void drawGlow(ImDrawList* dl, ImVec2 min, ImVec2 max, float reach, ImU32 color);

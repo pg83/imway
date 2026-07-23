@@ -3160,21 +3160,15 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
-    // last frame's focus feeds the bar: the toplevels draw after the chrome,
-    // so the live value is not known yet
-    StringView focusedAppId;
-
-    if (Toplevel* ft = scene.focusedToplevel.get()) {
-        focusedAppId = sv(ft->appId);
-    }
-
-    scene.focusedToplevel.reset();
-
     sampleStats();
 
     DesktopChromeInfo chromeInfo;
 
-    chromeInfo.focusedAppId = focusedAppId;
+    // last frame's truth: the reset happens right before the toplevels draw
+    if (Toplevel* ft = scene.focusedToplevel.get()) {
+        chromeInfo.focusedAppId = sv(ft->appId);
+    }
+
     chromeInfo.layout = StringView(scene.layout);
     chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
     chromeInfo.batteryPct = batDischarging ? batPct : -1;
@@ -3383,6 +3377,11 @@ void RendererImpl::buildUi(Scene& scene) {
         ImGui::End();
         scene.needsFrame = true;
     }
+
+    // the focus truth resets right before the windows rebind it, so
+    // everything drawn earlier in the frame (the chrome, the dock) reads
+    // last frame's value instead of an always-empty mid-frame one
+    scene.focusedToplevel.reset();
 
     // client frames are half-width
     const ImVec2 fullPad = ImGui::GetStyle().WindowPadding;

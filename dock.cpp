@@ -6,6 +6,7 @@
 #include "scene.h"
 #include "status_notifier.h"
 #include "util.h"
+#include "window_shadow.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -23,6 +24,10 @@ namespace {
         StatusNotifierItem* tray = nullptr;
         Icon* icon = nullptr;
         int windows = 0;
+        // the ImGui focus truth, same source the bar's app_id uses — the
+        // sticky xdg activated flag would keep the slot lit when nothing
+        // is focused at all
+        bool focused = false;
         // sort keys: the group's freshest focus stamp, collection index as
         // the tiebreak (never-focused and tray-only slots keep their order)
         u64 seq = 0;
@@ -92,11 +97,17 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
     ImDrawList* draw = ImGui::GetWindowDrawList();
     ImVec2 max(p.x + size, p.y + size);
 
+    // the focused window: an accent glow behind, and half the inner
+    // padding so the icon reads bigger than its neighbours
+    if (active) {
+        drawGlow(draw, p, max, size * 0.1f, themeColorU32(themeAlpha(theme.accent, 0.45f)));
+    }
+
     if (ImGui::IsItemHovered()) {
         draw->AddRectFilled(p, max, themeColorU32(themeAlpha(theme.neutral[10], 0.08f)), 6.f);
     }
 
-    float pad = size * 0.12f;
+    float pad = size * (active ? 0.06f : 0.12f);
 
     if (texture) {
         draw->AddImage((ImTextureID)texture, ImVec2(p.x + pad, p.y + pad), ImVec2(max.x - pad, max.y - pad));
@@ -119,10 +130,6 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
         draw->AddText(ImGui::GetFont(), fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), themeColorU32(theme.neutral[9]), s);
     } else {
         drawLauncherGlyph(draw, p, max, themeColorU32(theme.neutral[9]));
-    }
-
-    if (active) {
-        draw->AddRectFilled(ImVec2(p.x, p.y + size * 0.25f), ImVec2(p.x + 3.f, p.y + size * 0.75f), themeColorU32(theme.accent), 1.5f);
     }
 
     if (attention) {
@@ -242,6 +249,7 @@ void drawDock(Composer& c, DockResult& result) {
             }
 
             group->windows++;
+            group->focused = group->focused || scene.focusedToplevel.get() == &t;
 
             if (group->seq < t.focusedAt) {
                 group->seq = t.focusedAt;
@@ -307,7 +315,7 @@ void drawDock(Composer& c, DockResult& result) {
             ImGui::PushID(t ? (void*)t : (void*)tray);
 
             u64 texture = c.iconResolver ? c.iconResolver->iconTexture(icon) : 0;
-            bool clicked = dockIconButton(c.theme, "##icon", texture, iconSize, t && t->activated && !t->minimized, attention, group.appId);
+            bool clicked = dockIconButton(c.theme, "##icon", texture, iconSize, group.focused, attention, group.appId);
 
             if (clicked) {
                 if (t) {
