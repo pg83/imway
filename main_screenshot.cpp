@@ -3,7 +3,9 @@
 #include "pooled.h"
 #include "util.h"
 
+#include <errno.h>
 #include <fcntl.h>
+#include <string.h>
 #include <time.h>
 #include <float.h>
 #include <math.h>
@@ -176,10 +178,13 @@ namespace {
                 fail("bad shared screenshot metadata"_sv);
             }
 
-            img.dmaFd = open(p.cStr(), O_RDWR | O_CLOEXEC);
+            // read-only is all the vulkan import needs; a write reopen of a
+            // foreign dma-buf through /proc is exactly what kernels refuse
+            img.dmaFd = open(p.cStr(), O_RDONLY | O_CLOEXEC);
 
             if (img.dmaFd < 0) {
-                fail("cannot open shared screenshot"_sv);
+                fail(sv(StringBuilder() << "cannot open shared screenshot: "_sv
+                                        << StringView(strerror(errno))));
             }
 
             img.dmabuf = true;
