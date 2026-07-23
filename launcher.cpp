@@ -275,20 +275,25 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
     }
 
     const ImGuiStyle& st = ImGui::GetStyle();
-    float lw = fminf((float)screenW * 0.4f, 560.f * uiScale);
     // the grid reuses the dock's icon metrics: the same button side, the
-    // same slot-to-icon breathing room as the gap
+    // same slot-to-icon breathing room as the gap; the window is sized for
+    // exactly four columns
     float cell = dockIconSize();
     float gap = dockBarWidth() - dockIconSize();
-    float contentW = lw - st.WindowPadding.x * 2.f;
-    long cols = (long)((contentW + gap) / (cell + gap));
-
-    if (cols < 1) {
-        cols = 1;
-    }
+    long cols = 4;
 
     long appsN = appsVis;
     long sysN = n - appsN;
+
+    auto groupH = [&](long count) {
+        return count ? (float)((count + cols - 1) / cols) * (cell + gap) + ImGui::GetFontSize() + gap : 0.f;
+    };
+
+    float contentH = groupH(appsN) + groupH(sysN) +
+        (appsN && sysN ? gap * 2.f + 1.f : 0.f);
+    float childH = fminf(contentH, (float)screenH * 0.55f);
+    float lw = st.WindowPadding.x * 2.f + (float)cols * cell + (float)(cols - 1) * gap +
+        (contentH > childH ? st.ScrollbarSize : 0.f);
 
     if (anchorX >= 0.f) {
         // an anchor in the lower half (the dock's bottom launcher button)
@@ -404,14 +409,6 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         // bottom-up: the input line, then (group name, group content,
         // delimiter) per group — so top-down each grid carries its header
         // underneath, and the topmost group has no leading delimiter
-        auto groupH = [&](long count) {
-            return count ? (float)((count + cols - 1) / cols) * (cell + gap) + ImGui::GetFontSize() + gap : 0.f;
-        };
-
-        float contentH = groupH(appsN) + groupH(sysN) +
-            (appsN && sysN ? gap * 2.f + 1.f : 0.f);
-        float childH = fminf(contentH, (float)screenH * 0.55f);
-
         if (n) {
             ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
             ImGui::BeginChild("##groups", ImVec2(0.f, childH));

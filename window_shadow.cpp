@@ -60,7 +60,9 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
 
     auto& s = *(ShadowSprite*)user;
 
-    if (s.rectId < 0 || (flags & ImGuiWindowFlags_NoBackground)) {
+    // child windows live inside an already-shadowed root; their own ring
+    // would darken the parent's interior around them
+    if (s.rectId < 0 || (flags & (ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_ChildWindow))) {
         return;
     }
 
