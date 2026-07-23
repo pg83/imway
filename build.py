@@ -358,6 +358,10 @@ if test_nodes:
         outputs=["$(B)/test-results/verdict.txt"],
         deps=test_nodes,
         cmd=verdict_cmd,
+        # the aggregator reads the whole results directory, so the current
+        # selection is an execution input beyond the declared files: bake it
+        # into the node key via the env
+        env={"IMWAY_TEST_SELECTION": f"filter={test_filter};runs={runs};allow_flaky={bool(flags.allow_flaky)}"},
         descr="VERDICT",
         color="light-green",
     )
