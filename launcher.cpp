@@ -262,7 +262,11 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
     float lw = (float)screenW / 4.f < 320.f ? 320.f : (float)screenW / 4.f;
 
     if (anchorX >= 0.f) {
-        ImGui::SetNextWindowPos(ImVec2(anchorX, anchorY), ImGuiCond_Always);
+        // an anchor in the lower half (the dock's bottom launcher button)
+        // grows the list upward, bottom-aligned to the anchor
+        ImVec2 pivot(0.f, anchorY > (float)screenH * 0.5f ? 1.f : 0.f);
+
+        ImGui::SetNextWindowPos(ImVec2(anchorX, anchorY), ImGuiCond_Always, pivot);
     } else {
         ImGui::SetNextWindowPos(ImVec2((float)screenW / 2.f, (float)screenH / 4.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
     }

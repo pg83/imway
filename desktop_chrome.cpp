@@ -75,6 +75,10 @@ namespace {
             return;
         }
 
+        if (!info.focusedAppId.empty()) {
+            ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
+        }
+
         time_t now = time(nullptr);
         tm local{};
 

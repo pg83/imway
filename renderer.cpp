@@ -3160,12 +3160,21 @@ void RendererImpl::buildUi(Scene& scene) {
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
 
+    // last frame's focus feeds the bar: the toplevels draw after the chrome,
+    // so the live value is not known yet
+    StringView focusedAppId;
+
+    if (Toplevel* ft = scene.focusedToplevel.get()) {
+        focusedAppId = sv(ft->appId);
+    }
+
     scene.focusedToplevel.reset();
 
     sampleStats();
 
     DesktopChromeInfo chromeInfo;
 
+    chromeInfo.focusedAppId = focusedAppId;
     chromeInfo.layout = StringView(scene.layout);
     chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
     chromeInfo.batteryPct = batDischarging ? batPct : -1;
@@ -3524,6 +3533,15 @@ void RendererImpl::buildUi(Scene& scene) {
 
             if (ImGui::IsWindowFocused()) {
                 scene.focusedToplevel.bind(t->weak);
+
+                // gaining focus promotes the window in the dock MRU order;
+                // losing it changes nothing. Bump only when the latest
+                // holder actually changes, not every frame — the holder is
+                // the one whose stamp equals the counter (0 = nobody yet)
+                if (t->focusedAt != scene.focusSeq || !scene.focusSeq) {
+                    t->focusedAt = ++scene.focusSeq;
+                    scene.needsFrame = true;
+                }
             }
 
             if (t->raiseRequested) {

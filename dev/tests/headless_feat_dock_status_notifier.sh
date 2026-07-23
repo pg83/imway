@@ -11,7 +11,8 @@ wait_client "layout requested"
 
 point_at_color 255 0 255 || { echo "tray pixmap did not appear"; exit 1; }
 read -r x y < <(centroid "$XDG_RUNTIME_DIR/_pt.ppm" 255 0 255)
-[[ "$x" -lt 58 && "$y" -gt 50 ]] || {
+# groups start at the dock top; the tray-only item is the sole group
+[[ "$x" -lt 58 && "$y" -lt 58 ]] || {
     echo "tray icon is outside dock: $x $y"
     exit 1
 }

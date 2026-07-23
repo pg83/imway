@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <std/alg/qsort.h>
 #include <std/lib/vector.h>
 #include <std/str/view.h>
 
@@ -22,6 +23,10 @@ namespace {
         StatusNotifierItem* tray = nullptr;
         Icon* icon = nullptr;
         int windows = 0;
+        // sort keys: the group's freshest focus stamp, collection index as
+        // the tiebreak (never-focused and tray-only slots keep their order)
+        u64 seq = 0;
+        size_t idx = 0;
     };
 
     StringView normalizedAppId(StringView id) {
@@ -184,24 +189,6 @@ void drawDock(Composer& c, DockResult& result) {
     io.WindowShadowCallback = shadow;
 
     if (open) {
-        ImGui::PushID("launcher");
-
-        if (iconButton(c.theme, "##icon", 0, iconSize, false)) {
-            ImVec2 min = ImGui::GetItemRectMin();
-            ImVec2 max = ImGui::GetItemRectMax();
-
-            result.launcher = true;
-            result.launcherX = max.x + 8.f * scale;
-            result.launcherY = min.y;
-        }
-
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("launcher");
-        }
-
-        ImGui::PopID();
-        ImGui::Separator();
-
         Vector<Group> groups;
 
         forEach<Toplevel>(scene.toplevels, [&](Toplevel& t) {
@@ -226,9 +213,14 @@ void drawDock(Composer& c, DockResult& result) {
             if (!group) {
                 groups.pushBack({sv(t.appId), &t, nullptr, t.icon(c), 0});
                 group = &groups.mutBack();
+                group->idx = groups.length() - 1;
             }
 
             group->windows++;
+
+            if (group->seq < t.focusedAt) {
+                group->seq = t.focusedAt;
+            }
 
             if (t.activated) {
                 group->active = &t;
@@ -263,11 +255,18 @@ void drawDock(Composer& c, DockResult& result) {
 
                     groups.pushBack({app, nullptr, &item, nullptr, 0});
                     group = &groups.mutBack();
+                    group->idx = groups.length() - 1;
                 }
 
                 group->tray = &item;
             });
         }
+
+        // focus-MRU: the freshest stamp first; never-focused windows and
+        // tray-only slots fall to the bottom in collection order
+        quickSort(groups.mutBegin(), groups.mutEnd(), [](const Group& a, const Group& b) {
+            return a.seq != b.seq ? a.seq > b.seq : a.idx < b.idx;
+        });
 
         for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
             Group& group = *it;
@@ -374,6 +373,30 @@ void drawDock(Composer& c, DockResult& result) {
 
             ImGui::PopID();
         }
+
+        // the launcher is pinned to the dock's bottom edge
+        float bottomY = ImGui::GetWindowHeight() - iconSize - ImGui::GetStyle().WindowPadding.y;
+
+        if (ImGui::GetCursorPosY() < bottomY) {
+            ImGui::SetCursorPosY(bottomY);
+        }
+
+        ImGui::PushID("launcher");
+
+        if (iconButton(c.theme, "##icon", 0, iconSize, false)) {
+            ImVec2 min = ImGui::GetItemRectMin();
+            ImVec2 max = ImGui::GetItemRectMax();
+
+            result.launcher = true;
+            result.launcherX = max.x + 8.f * scale;
+            result.launcherY = max.y;
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("launcher");
+        }
+
+        ImGui::PopID();
     }
 
     ImGui::End();

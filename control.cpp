@@ -324,6 +324,7 @@ void ControlImpl::dumpState(StringView outPath) {
             << " docked="_sv << (int)t.docked
             << " modal="_sv << (int)t.modal
             << " focused="_sv << (int)(scene->focusedToplevel.get() == &t)
+            << " focus_seq="_sv << t.focusedAt
             << " x="_sv << (int)t.curX
             << " y="_sv << (int)t.curY
             << " w="_sv << (int)t.applyW

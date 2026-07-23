@@ -207,6 +207,11 @@ struct Toplevel: stl::IntrusiveNode {
     Weak<Toplevel> parent;
     bool mapped = false;
 
+    // dock MRU stamp from Scene::focusSeq, written where the renderer
+    // already writes the focus truth; 0 = never focused, sorts to the
+    // bottom in creation order
+    u64 focusedAt = 0;
+
     // per-window keyboard layout, restored on focus
     u32 xkbGroup = 0;
 
@@ -345,6 +350,8 @@ struct Scene {
     // wayland; weak because the client can destroy the toplevel between
     // buildUi and the frame event (KMS: render -> page flip)
     Weak<Toplevel> focusedToplevel;
+    // monotonic focus counter behind Toplevel::focusedAt
+    u64 focusSeq = 0;
     // toplevel id of the current direct scanout candidate (0 = none),
     // written by the renderer each frame; surfaced through the state dump
     u64 scanoutCandidateId = 0;
