@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "log.h"
 #include "device.h"
+#include "robustness.h"
 
 #include "device_vk.h"
 #include "frame_listener.h"
@@ -670,7 +671,7 @@ namespace {
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1, bool testOnly = false);
         void drainPendingFlip();
-        bool commit(u32 fbId, bool doModeset, int inFenceFd = -1);
+        bool commit(u32 fbId, bool doModeset, int inFenceFd = -1, int* commitErr = nullptr);
         void updateSignalFeedback();
         void addCursorProps(drmModeAtomicReq* req);
 
@@ -2021,7 +2022,7 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
     return ret == 0 ? 0 : -ret;
 }
 
-bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
+bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) {
     bool withCursor = true;
 
     if (doModeset) {
@@ -2056,6 +2057,11 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
 
         if (testErr != 0) {
             *(c->log) << "imway: atomic test modeset rejected color/link configuration, errno "_sv << testErr << endL;
+
+            if (commitErr) {
+                *commitErr = testErr;
+            }
+
             return false;
         }
 
@@ -2070,6 +2076,10 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
     int err = tryCommit(fbId, doModeset, withCursor, inFenceFd);
 
     if (err == EBUSY) {
+        if (commitErr) {
+            *commitErr = err;
+        }
+
         return false;
     }
 
@@ -2095,6 +2105,10 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd) {
 
     if (err != 0) {
         *(c->log) << "imway: kms atomic commit failed, errno "_sv << err << (doModeset ? " (modeset)"_sv : ""_sv) << endL;
+
+        if (commitErr) {
+            *commitErr = err;
+        }
 
         return false;
     }
@@ -2834,6 +2848,11 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
     for (int i = 0; i < buf->nplanes; i++) {
         if (drmPrimeFDToHandle(fd, buf->fds[i], &handles[i]) != 0) {
+            if (!transientScanoutError(errno)) {
+                *(c->log) << "imway: scanout prime import rejected (errno "_sv << errno << "), buffer tainted"_sv << endL;
+                buf->scanoutTainted = true;
+            }
+
             closeImported();
 
             return 0;
@@ -2858,6 +2877,11 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     u32 fbId = 0;
 
     if (drmModeAddFB2WithModifiers(fd, buf->width, buf->height, buf->format, handles, pitches, offs, mods, &fbId, DRM_MODE_FB_MODIFIERS) != 0) {
+        if (!transientScanoutError(errno)) {
+            *(c->log) << "imway: scanout AddFB2 rejected (errno "_sv << errno << "), buffer tainted"_sv << endL;
+            buf->scanoutTainted = true;
+        }
+
         closeImported();
 
         return 0;
@@ -2884,6 +2908,11 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
         return false;
     }
 
+    // a buffer KMS already rejected for good is not retried every frame
+    if (buf->scanoutTainted) {
+        return false;
+    }
+
     // only a buffer that already matches the mode goes straight to the plane
     if (buf->width != mode.hdisplay || buf->height != mode.vdisplay) {
         return false;
@@ -2895,7 +2924,9 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
         return false;
     }
 
-    if (commit(fbId, false)) {
+    int err = 0;
+
+    if (commit(fbId, false, -1, &err)) {
         // our own composition swapchain is now stale; the next non-direct
         // frame re-acquires and modesets nothing, just flips back
         frameRef(frame);
@@ -2904,6 +2935,11 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
         queuedScan = -1;
 
         return true;
+    }
+
+    if (!transientScanoutError(err)) {
+        *(c->log) << "imway: scanout flip rejected (errno "_sv << err << "), buffer tainted"_sv << endL;
+        buf->scanoutTainted = true;
     }
 
     return false;

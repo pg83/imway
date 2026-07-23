@@ -45,6 +45,9 @@ struct DmabufBuffer {
     int fds[kDmabufMaxPlanes] = {-1, -1, -1, -1};
     u32 offsets[kDmabufMaxPlanes] = {};
     u32 strides[kDmabufMaxPlanes] = {};
+    // KMS rejected this buffer for direct scanout for a permanent reason:
+    // never retry the flip, composition carries it (mutter's taint)
+    bool scanoutTainted = false;
 
     ~DmabufBuffer() noexcept;
 };
