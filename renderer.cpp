@@ -326,14 +326,12 @@ namespace {
         Vector<KeyBinding> bindingsView;
         ShadowSprite shadow;       // window drop shadows, see window_shadow.h
 
-        // bar widgets: /proc-fed cpu, meminfo, battery; sampled at most
-        // once per ~2s, the clock timer keeps frames coming
+        // bar battery widget, /sys-fed; sampled at most once per ~2s, the
+        // clock timer keeps frames coming. Shown only while discharging: on
+        // mains the number is noise
         u64 statMs = 0;
-        u64 cpuPrevBusy = 0, cpuPrevTotal = 0;
-        int cpuPct = 0;
-        long memUsedMb = 0;
         long batPct = -1;          // -1 no battery
-        bool batCharging = false;
+        bool batDischarging = false;
         StringBuilder batPath;
 
         // calendar: self-owned opaque handle; non-null = open
@@ -2911,35 +2909,6 @@ namespace {
         return sv(out);
     }
 
-    // "MemAvailable:    1234 kB" -> 1234
-    long meminfoKb(StringView text, StringView key) {
-        StringView rest = text;
-
-        while (!rest.empty()) {
-            StringView line, tail;
-
-            if (!rest.split('\n', line, tail)) {
-                line = rest;
-                tail = {};
-            }
-
-            rest = tail;
-
-            if (line.startsWith(key)) {
-                long v = 0;
-
-                for (u8 c : line) {
-                    if (c >= '0' && c <= '9') {
-                        v = v * 10 + (c - '0');
-                    }
-                }
-
-                return v;
-            }
-        }
-
-        return 0;
-    }
 }
 
 void RendererImpl::sampleStats() {
@@ -2952,55 +2921,6 @@ void RendererImpl::sampleStats() {
     statMs = now;
 
     Buffer content;
-
-    // cpu: busy/total delta over the first /proc/stat line
-    if (Buffer path("/proc/stat"_sv); !readSmallFile(path, content).empty()) {
-        StringView st = sv(content);
-        u64 vals[8] = {};
-        int n = 0;
-        u64 cur = 0;
-        bool in = false;
-
-        for (u8 c : st) {
-            if (c == '\n') {
-                break;
-            }
-
-            if (c >= '0' && c <= '9') {
-                cur = cur * 10 + (c - '0');
-                in = true;
-            } else if (in) {
-                if (n < 8) {
-                    vals[n++] = cur;
-                }
-
-                cur = 0;
-                in = false;
-            }
-        }
-
-        u64 total = 0;
-
-        for (int i = 0; i < n; i++) {
-            total += vals[i];
-        }
-
-        u64 busy = total - vals[3] - vals[4]; // minus idle, iowait
-
-        if (cpuPrevTotal && total > cpuPrevTotal) {
-            cpuPct = (int)((busy - cpuPrevBusy) * 100 / (total - cpuPrevTotal));
-        }
-
-        cpuPrevBusy = busy;
-        cpuPrevTotal = total;
-    }
-
-    if (Buffer path("/proc/meminfo"_sv); !readSmallFile(path, content).empty()) {
-        long total = meminfoKb(sv(content), "MemTotal:"_sv);
-        long avail = meminfoKb(sv(content), "MemAvailable:"_sv);
-
-        memUsedMb = (total - avail) / 1024;
-    }
 
     // no battery picked (startup, or the last one vanished): re-enumerate.
     // system batteries win over scope=Device ones (hid keyboards/mice) —
@@ -3058,7 +2978,7 @@ void RendererImpl::sampleStats() {
             batPct = (long)readSmallFile(p, content).stou();
             p.reset();
             p << sv(batPath) << "/status"_sv;
-            batCharging = readSmallFile(p, content).startsWith("Charging"_sv);
+            batDischarging = readSmallFile(p, content).startsWith("Discharging"_sv);
         } catch (...) {
             // the supply vanished under us (hub unplugged): forget it, the
             // next tick re-enumerates — and finds it again on replug
@@ -3248,10 +3168,7 @@ void RendererImpl::buildUi(Scene& scene) {
 
     chromeInfo.layout = StringView(scene.layout);
     chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
-    chromeInfo.cpuPct = cpuPct;
-    chromeInfo.memUsedMb = memUsedMb;
-    chromeInfo.batteryPct = batPct;
-    chromeInfo.batteryCharging = batCharging;
+    chromeInfo.batteryPct = batDischarging ? batPct : -1;
 
     DesktopChromeResult chromeResult;
 

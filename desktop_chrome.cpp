@@ -106,24 +106,21 @@ namespace {
             ImGui::TextUnformatted((const char*)info.layout.begin(), (const char*)info.layout.end());
         }
 
-        char stats[128];
-        int used = snprintf(stats, sizeof(stats), "cpu %d%%  %ld.%ldG", info.cpuPct,
-            info.memUsedMb / 1024, info.memUsedMb % 1024 * 10 / 1024);
+        if (info.batteryPct >= 0) {
+            char stats[32];
 
-        if (info.batteryPct >= 0 && used > 0 && (size_t)used < sizeof(stats)) {
-            snprintf(stats + used, sizeof(stats) - (size_t)used, "  bat %ld%%%s",
-                info.batteryPct, info.batteryCharging ? "+" : "");
+            snprintf(stats, sizeof(stats), "bat %ld%%", info.batteryPct);
+
+            float statsW = ImGui::CalcTextSize(stats).x;
+
+            left -= statsW + style.ItemSpacing.x * 2.f;
+            ImGui::SameLine(left);
+            ImGui::TextUnformatted(stats);
         }
-
-        float statsW = ImGui::CalcTextSize(stats).x;
-        float statsX = left - statsW - style.ItemSpacing.x * 2.f;
-
-        ImGui::SameLine(statsX);
-        ImGui::TextUnformatted(stats);
 
         if (!info.wifi.empty()) {
             float wifiW = ImGui::CalcTextSize((const char*)info.wifi.begin(), (const char*)info.wifi.end()).x;
-            float wifiX = statsX - wifiW - style.ItemSpacing.x * 2.f;
+            float wifiX = left - wifiW - style.ItemSpacing.x * 2.f;
 
             ImGui::SameLine(wifiX);
             ImGui::TextUnformatted((const char*)info.wifi.begin(), (const char*)info.wifi.end());

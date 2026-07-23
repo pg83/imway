@@ -7,10 +7,8 @@ struct Composer;
 struct DesktopChromeInfo {
     stl::StringView layout;
     stl::StringView wifi;
-    int cpuPct = 0;
-    long memUsedMb = 0;
+    // < 0 hides the widget: no battery, or the machine runs on mains
     long batteryPct = -1;
-    bool batteryCharging = false;
 };
 
 struct DesktopChromeResult {
