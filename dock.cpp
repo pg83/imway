@@ -4,7 +4,6 @@
 #include "icon.h"
 #include "intr_list.h"
 #include "scene.h"
-#include "glow.h"
 #include "status_notifier.h"
 #include "util.h"
 
@@ -97,24 +96,12 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
     ImDrawList* draw = ImGui::GetWindowDrawList();
     ImVec2 max(p.x + size, p.y + size);
 
-    // the focused window: an accent glow behind, and half the inner
-    // padding so the icon reads bigger than its neighbours. The negative
-    // reach pulls the rim in, so it starts right at the icon edge. The
-    // tint is the accent driven toward its pure chroma: the hdr pipeline's
-    // linear blend and tone mapping wash the ratio out, an emission-deep
-    // source is what still lands as the accent hue on screen
-    if (active) {
-        ThemeColor ember = theme.accent;
-
-        ember.g *= 0.5f;
-        ember.b *= 0.25f;
-        drawGlow(draw, p, max, size * -0.06f, themeColorU32(themeAlpha(ember, 0.5f)));
-    }
-
     if (ImGui::IsItemHovered()) {
         draw->AddRectFilled(p, max, themeColorU32(themeAlpha(theme.neutral[10], 0.08f)), 6.f);
     }
 
+    // the focused window draws with half the inner padding, so its icon
+    // reads bigger than the neighbours
     float pad = size * (active ? 0.06f : 0.12f);
 
     if (texture) {

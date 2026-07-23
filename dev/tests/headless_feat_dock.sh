@@ -39,33 +39,16 @@ await 50 field_is activated 1 || {
     exit 1
 }
 
-# the focused window's slot (always the top one) carries an accent glow:
-# orange-tinted pixels around the icon, red channel well above blue
-glow_in_top_slot() { # <ppm>
-    python3 - "$1" <<'PY'
-import sys
-f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
-w, h = map(int, f.readline().split()); f.readline(); data = f.read(w*h*3)
-hits = 0
-for y in range(0, 58):
-    for x in range(0, 58):
-        i = (y*w+x)*3
-        if data[i] > 60 and data[i] > data[i+2] + 30:
-            hits += 1
-sys.exit(0 if hits > 40 else 1)
-PY
-}
-
 screenshot "$XDG_RUNTIME_DIR/focused.ppm"
-glow_in_top_slot "$XDG_RUNTIME_DIR/focused.ppm" || {
-    echo "no accent glow on the focused dock slot"; exit 1; }
 
-# click the empty desktop: nothing is focused now, and the dock must not
-# keep the slot lit off the sticky xdg activated flag
+# click the empty desktop: nothing is focused now, and the top slot must
+# change — the focused window draws its icon bigger, and the sticky xdg
+# activated flag must not keep the indication alive
 click_at 700 400
 screenshot "$XDG_RUNTIME_DIR/before-launcher.ppm"
-glow_in_top_slot "$XDG_RUNTIME_DIR/before-launcher.ppm" && {
-    echo "dock glow survived losing the focus to the desktop"; exit 1; }
+slot_diff=$(region_diff "$XDG_RUNTIME_DIR/focused.ppm" "$XDG_RUNTIME_DIR/before-launcher.ppm" 0 0 58 58)
+[[ "$slot_diff" -gt 100 ]] || {
+    echo "focus indication did not follow the focus ($slot_diff)"; exit 1; }
 
 python3 - "$XDG_RUNTIME_DIR/before-launcher.ppm" <<'PY'
 import sys
