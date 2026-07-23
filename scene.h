@@ -213,6 +213,15 @@ struct Toplevel: stl::IntrusiveNode {
     // per-window keyboard layout, restored on focus
     u32 xkbGroup = 0;
 
+    // ANR: the client misses two xdg pings — set by wayland, cleared by the
+    // exact pong of the latest ping; the ui tints the title bar and turns
+    // the close cross into a Terminate/Wait dialog
+    bool unresponsive = false;
+
+    // set by the ui (the Terminate choice); wayland kills the client by the
+    // pid from wl_client_get_credentials on the next shown frame
+    bool terminateRequested = false;
+
     // true until the client accepts server-side decorations over
     // xdg-decoration; csd windows draw their own bar, we draw none
     bool csd = true;

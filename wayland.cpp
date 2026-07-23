@@ -30,6 +30,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <ev.h>
@@ -1014,6 +1015,9 @@ namespace {
         struct WmBasePing: IntrusiveNode {
             wl_resource* res = nullptr;
             bool acked = true;
+            // the serial of the outstanding ping: only its exact pong counts
+            u32 serial = 0;
+            int missed = 0;
         };
 
         IntrusiveList wmBases;
@@ -1173,12 +1177,28 @@ namespace {
         return serial;
     }
 
-    void wmBasePong(wl_client*, wl_resource* res, u32) {
+    // flip the ANR state of every toplevel owned by the wm_base's client
+    void anrMark(WaylandImpl* srv, wl_resource* wmBase, bool unresponsive) {
+        wl_client* client = wl_resource_get_client(wmBase);
+
+        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+            auto& ti = (ToplevelImpl&)t;
+
+            if (ti.res && wl_resource_get_client(ti.res) == client && t.unresponsive != unresponsive) {
+                t.unresponsive = unresponsive;
+                srv->scene->needsFrame = true;
+            }
+        });
+    }
+
+    void wmBasePong(wl_client*, wl_resource* res, u32 serial) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
         for (WaylandImpl::WmBasePing* ping : each<WaylandImpl::WmBasePing>(srv->wmBases)) {
-            if (ping->res == res) {
+            if (ping->res == res && ping->serial == serial) {
                 ping->acked = true;
+                ping->missed = 0;
+                anrMark(srv, res, false);
             }
         }
     }
@@ -1207,11 +1227,19 @@ namespace {
 
         for (WaylandImpl::WmBasePing* ping : each<WaylandImpl::WmBasePing>(srv->wmBases)) {
             if (!ping->acked) {
-                *(srv->composer->log) << "imway: client is not answering ping"_sv << endL;
+                ping->missed++;
+
+                // two missed pings promote the client to unresponsive; only
+                // the exact pong of the latest ping clears the state
+                if (ping->missed == 2) {
+                    *(srv->composer->log) << "imway: client is not answering ping"_sv << endL;
+                    anrMark(srv, ping->res, true);
+                }
             }
 
             ping->acked = false;
-            xdg_wm_base_send_ping(ping->res, ++srv->pingSerial);
+            ping->serial = ++srv->pingSerial;
+            xdg_wm_base_send_ping(ping->res, ping->serial);
         }
     }
 
@@ -11215,7 +11243,16 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
-    ev_timer_init(&pingTimer, pingTimerCb, 5., 5.);
+    double pingSec = 5.;
+
+#ifdef IMWAY_FOR_TESTS
+    // the ANR scenario cannot wait out two real ping periods
+    if (getenv("IMWAY_FAST_PING")) {
+        pingSec = 0.2;
+    }
+#endif
+
+    ev_timer_init(&pingTimer, pingTimerCb, pingSec, pingSec);
     pingTimer.data = this;
     ev_timer_start(loop, &pingTimer);
 
@@ -12385,6 +12422,33 @@ void WaylandImpl::onListen(void* arg) {
 
     syncColorState();
     syncKeyboardCapture();
+
+    // the Terminate choice of the ANR dialog: the client cannot answer a
+    // close event, so the pid from its socket credentials gets SIGKILL
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+        if (!t.terminateRequested) {
+            return;
+        }
+
+        t.terminateRequested = false;
+
+        auto& ti = (ToplevelImpl&)t;
+
+        if (!ti.res) {
+            return;
+        }
+
+        pid_t pid = 0;
+        uid_t uid = 0;
+        gid_t gid = 0;
+
+        wl_client_get_credentials(wl_resource_get_client(ti.res), &pid, &uid, &gid);
+
+        if (pid > 0) {
+            *(composer->log) << "imway: terminating unresponsive client, pid "_sv << (long)pid << endL;
+            kill(pid, SIGKILL);
+        }
+    });
 
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
         seat.focusToplevel(nullptr);

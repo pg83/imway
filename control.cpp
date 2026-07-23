@@ -364,7 +364,7 @@ void ControlImpl::dumpState(StringView outPath) {
         Surface* s = t.surface.get();
         Icon* icon = t.icon(*comp);
 
-        out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(scene->focusedToplevel.get() == &t) << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
+        out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(scene->focusedToplevel.get() == &t) << " unresponsive="_sv << (int)t.unresponsive << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
 
         if (s) {
             out << " imgx="_sv << (int)s->imgX << " imgy="_sv << (int)s->imgY << " client_w="_sv << s->geomW() << " client_h="_sv << s->geomH() << " content_type="_sv << s->contentType << " tearing="_sv << (int)s->tearingAsync;

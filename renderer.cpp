@@ -22,6 +22,7 @@
 #include "history.h"
 #include "notifier.h"
 #include "lock_screen.h"
+#include "anr_dialog.h"
 #include "log_view.h"
 #include "osd.h"
 #include "pooled_ev.h"
@@ -301,6 +302,10 @@ namespace {
         // settings: renderer-owned values plus a self-owned dialog handle
         Settings settings;
         DialogState* settingsState = nullptr;
+        // ANR escalation: the close cross of an unresponsive window opens it
+        DialogState* anrState = nullptr;
+        bool anrToggle = false;
+        Weak<Toplevel> anrTarget;
         bool settingsToggle = false;
         // the keys page rows: the chord table plus the non-chord bindings
         Vector<KeyBinding> bindingsView;
@@ -694,6 +699,7 @@ RendererImpl::~RendererImpl() noexcept {
     }
 
     dialog(settingsState);
+    dialog(anrState);
     dialog(calendarState);
     dialog(wifiState);
     dialog(inspectorState);
@@ -1935,7 +1941,7 @@ Surface* RendererImpl::scanoutCandidate() {
     }
 
     // any open compositor ui needs composition
-    if (launcherState || calendarState || wifiState || inspectorState || historyState || logState || pickShow || pickArmed || pickPending || settingsState || altTabActive || osdMs) {
+    if (launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || pickShow || pickArmed || pickPending || settingsState || altTabActive || osdMs) {
         return nullptr;
     }
 
@@ -3324,6 +3330,8 @@ void RendererImpl::buildUi(Scene& scene) {
     settings.bindingCount = bindingsView.length();
 
     drawSettings(*comp, settings, settingsToggle, &settingsState);
+    drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
+    anrToggle = false;
     settingsToggle = false;
 
     if (settings.dndChanged && notifier) {
@@ -3483,7 +3491,13 @@ void RendererImpl::buildUi(Scene& scene) {
 
         auto& label = sb();
 
-        label << title << "###toplevel"_sv << (u64)t->id;
+        label << title;
+
+        if (t->unresponsive) {
+            label << " (not responding)"_sv;
+        }
+
+        label << "###toplevel"_sv << (u64)t->id;
         ImGuiViewport* viewport = ImGui::GetMainViewport();
 
         ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 40.f + 30.f * i, viewport->WorkPos.y + 30.f + 30.f * i), ImGuiCond_FirstUseEver);
@@ -3587,6 +3601,13 @@ void RendererImpl::buildUi(Scene& scene) {
             // would carve an 8px gutter and shrink the configured size
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+        }
+
+        // the ANR state must be visible before any interaction: a red title
+        // bar plus the label suffix
+        if (t->unresponsive) {
+            ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.42f, 0.11f, 0.09f, 1.f));
+            ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.55f, 0.14f, 0.11f, 1.f));
         }
 
         bool stayOpen = true;
@@ -3735,7 +3756,20 @@ void RendererImpl::buildUi(Scene& scene) {
         }
 
         if (!stayOpen) {
-            t->closeRequested = true;
+            // an unresponsive window cannot answer xdg close: escalate to
+            // the Terminate/Wait dialog instead of a dead-letter event
+            if (t->unresponsive) {
+                anrToggle = true;
+                anrTarget.bind(t->weak);
+            } else {
+                t->closeRequested = true;
+            }
+
+            scene.needsFrame = true;
+        }
+
+        if (t->unresponsive) {
+            ImGui::PopStyleColor(2);
         }
     });
 
