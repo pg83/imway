@@ -4229,12 +4229,17 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
             if (s->explicitSync) {
                 if (s->syncAcquireWait) {
-                    // the protocol lets the client commit before attaching a
-                    // fence to the acquire point; WAIT_FOR_SUBMIT makes the
-                    // transfer wait for materialization instead of failing
+                    // commits park in wayland.cpp until the acquire point
+                    // materializes, so a real fence is normally here and the
+                    // GPU waits on it; without eventfd support an
+                    // unmaterialized point can still arrive — sample
+                    // unsynchronized rather than stall the frame loop
+                    u32 handle = s->syncAcquireHandle;
+                    u64 point = s->syncAcquirePoint;
+                    bool ready = drmSyncobjTimelineWait(drmFd, &handle, &point, 1, 0, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, nullptr) == 0;
                     u32 binary = 0;
                     int syncFd = -1;
-                    bool exported = drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
+                    bool exported = ready && drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
 
                     if (binary) {
                         drmSyncobjDestroy(drmFd, binary);
@@ -4246,23 +4251,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
                     }
 
                     if (!exported || !waitOnSyncFile(syncFd)) {
-                        // no GPU wait available, but the surface is still
-                        // drawn below: block briefly on the CPU instead of
-                        // sampling a buffer whose acquire point has not
-                        // signaled
-                        struct timespec now{};
-
-                        clock_gettime(CLOCK_MONOTONIC, &now);
-
-                        u32 handle = s->syncAcquireHandle;
-                        u64 point = s->syncAcquirePoint;
-                        i64 deadline = (i64)now.tv_sec * 1000000000ll + now.tv_nsec + 100000000ll;
-
-                        if (drmSyncobjTimelineWait(drmFd, &handle, &point, 1, deadline, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT, nullptr) != 0) {
-                            // the point never signaled: give up on this
-                            // acquire once instead of stalling every frame
-                            *(comp->log) << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
-                        }
+                        *(comp->log) << "imway: acquire point unavailable, sampling unsynchronized"_sv << endL;
                     }
 
                     explicitSurfaces.pushBack(s);

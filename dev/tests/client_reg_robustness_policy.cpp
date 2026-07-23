@@ -6,8 +6,20 @@
 int main() {
     RestartBackoff backoff;
     const unsigned expected[] = {
-        100, 150, 225, 338, 507, 761, 1142, 1713, 2570, 3855, 5783,
-        8675, 10000, 10000,
+        100,
+        150,
+        225,
+        338,
+        507,
+        761,
+        1142,
+        1713,
+        2570,
+        3855,
+        5783,
+        8675,
+        10000,
+        10000,
     };
 
     for (unsigned value : expected) {
@@ -33,9 +45,7 @@ int main() {
         }
     }
 
-    if (transientScanoutError(EINVAL) ||
-        transientScanoutError(ENOSPC) ||
-        transientScanoutError(0)) {
+    if (transientScanoutError(EINVAL) || transientScanoutError(ENOSPC) || transientScanoutError(0)) {
         fprintf(stderr, "permanent KMS failure classified as transient\n");
         return 1;
     }

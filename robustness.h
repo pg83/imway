@@ -24,6 +24,5 @@ struct RestartBackoff {
 };
 
 inline bool transientScanoutError(int error) {
-    return error == EBUSY || error == EAGAIN || error == EINTR ||
-           error == ENOMEM;
+    return error == EBUSY || error == EAGAIN || error == EINTR || error == ENOMEM;
 }

@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/eventfd.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -397,6 +398,9 @@ namespace {
         // wp-commit-timing: do not admit before this CLOCK_MONOTONIC instant
         bool hasTime = false;
         u64 timeNs = 0;
+        // linux-drm-syncobj: do not admit before the acquire point
+        // materializes; an armed DRM eventfd wakes the loop for it
+        bool waitAcquire = false;
     };
 
     // ext-image-copy-capture: every box is wire-owned. A session owns at
@@ -1053,6 +1057,12 @@ namespace {
         bool explicitSyncSupported = false;
         u32 maxImageDim = 0;
 
+        // linux-drm-syncobj acquire parking: the kernel pokes this eventfd
+        // when a parked commit's acquire point materializes
+        int syncEvFd = -1;
+        ev_io syncEvIo{};
+        bool syncEventfdOk = false;
+
         struct IdleNotif: IntrusiveNode {
             WaylandImpl* srv = nullptr;
             wl_resource* res = nullptr;
@@ -1165,6 +1175,18 @@ namespace {
 
     void signalCb(struct ev_loop* loop, ev_signal*, int) {
         ev_break(loop, EVBREAK_ALL);
+    }
+
+    void syncEvCb(struct ev_loop*, ev_io* w, int) {
+        auto* srv = (WaylandImpl*)w->data;
+        u64 n = 0;
+
+        // one read clears the counter however many registrations fired
+        while (read(w->fd, &n, sizeof(n)) == (ssize_t)sizeof(n)) {
+        }
+
+        // the parked commit is admitted by the next frame's fifo drain
+        srv->scene->needsFrame = true;
     }
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h);
@@ -1864,6 +1886,25 @@ namespace {
         return (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
     }
 
+    bool acquireMaterialized(WaylandImpl* srv, u32 handle, u64 point) {
+        u32 h = handle;
+        u64 p = point;
+
+        return drmSyncobjTimelineWait(srv->drmFd, &h, &p, 1, 0, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, nullptr) == 0;
+    }
+
+    // the head of a fifo queue parked on an unmaterialized acquire point:
+    // the armed DRM eventfd wakes the loop for it, no frame polling needed
+    bool fifoHeldOnAcquire(SurfaceImpl& s) {
+        if (s.fifo->queue.empty()) {
+            return false;
+        }
+
+        FifoEntry* e = (FifoEntry*)s.fifo->queue.mutFront();
+
+        return e->waitAcquire && e->cache.acq && !acquireMaterialized(s.srv, e->cache.acq->handle, e->cache.acquirePoint);
+    }
+
     void drainFifo(SurfaceImpl& s, bool presented) {
         if (presented) {
             // this surface's content was just shown: its barrier is satisfied
@@ -1877,8 +1918,10 @@ namespace {
 
             // an invisible surface cannot hold a barrier (the spec's escape
             // hatch against stalled clients): ignore barriers entirely. A
-            // commit-timing target holds either way: it expires by itself
-            if ((presented && e->waitBarrier && s.fifo->barrier) || (e->hasTime && e->timeNs > now)) {
+            // commit-timing target holds either way: it expires by itself,
+            // and so does an unmaterialized acquire point: its eventfd
+            // registration wakes the loop when the fence shows up
+            if ((presented && e->waitBarrier && s.fifo->barrier) || (e->hasTime && e->timeNs > now) || fifoHeldOnAcquire(s)) {
                 break;
             }
 
@@ -1992,13 +2035,25 @@ namespace {
         s.pending.timeSet = false;
         s.pending.timeNs = 0;
 
-        if (!cache && s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) || (timeSet && timeNs > nowNs()))) {
+        // linux-drm-syncobj: a commit whose acquire point has not
+        // materialized parks in the same queue, with a DRM eventfd
+        // registration to wake the loop when the fence shows up. No
+        // timeout — a client that never signals just never presents this
+        // surface (spec-correct, mirrors wlroots)
+        bool acquireWait = !cache && s.srv->syncEventfdOk && s.pendAcqTl && s.pending.newlyAttached && s.pending.buffer && !acquireMaterialized(s.srv, s.pendAcqTl->handle, s.pendAcqPt) && drmSyncobjEventfd(s.srv->drmFd, s.pendAcqTl->handle, s.pendAcqPt, s.srv->syncEvFd, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) == 0;
+
+        if (!cache && (acquireWait || (s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) || (timeSet && timeNs > nowNs()))))) {
+            if (!s.fifo) {
+                s.fifo = s.srv->alloc->make<FifoState>();
+            }
+
             FifoEntry* entry = s.srv->alloc->make<FifoEntry>();
 
             entry->setBarrier = fifoSet;
             entry->waitBarrier = fifoWait;
             entry->hasTime = timeSet;
             entry->timeNs = timeNs;
+            entry->waitAcquire = acquireWait;
             s.fifo->queue.pushBack(entry);
             cache = &entry->cache;
         } else if (fifoSet && s.fifo) {
@@ -11300,11 +11355,31 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     pingTimer.data = this;
     ev_timer_start(loop, &pingTimer);
 
+    syncEvFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+
+    if (syncEvFd >= 0 && drmFd >= 0) {
+        // probe like wlroots: ENOENT on an invalid handle proves the ioctl
+        // exists, anything else means no eventfd parking on this kernel
+        syncEventfdOk = drmSyncobjEventfd(drmFd, 0, 0, syncEvFd, 0) != 0 && errno == ENOENT;
+    }
+
+    if (syncEvFd >= 0) {
+        ev_io_init(&syncEvIo, syncEvCb, syncEvFd, EV_READ);
+        syncEvIo.data = this;
+        ev_io_start(loop, &syncEvIo);
+    }
+
     *(composer->log) << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
 }
 
 WaylandImpl::~WaylandImpl() noexcept {
     ev_timer_stop(loop, &pingTimer);
+
+    if (syncEvFd >= 0) {
+        ev_io_stop(loop, &syncEvIo);
+        close(syncEvFd);
+        syncEvFd = -1;
+    }
 
     if (watchersStarted) {
         ev_io_stop(loop, &wlIo);
@@ -12580,8 +12655,9 @@ void WaylandImpl::onListen(void* arg) {
 
         drainFifo(s, shown);
 
-        if (!s.fifo->queue.empty()) {
-            // a held entry needs future presentations to expire against
+        if (!s.fifo->queue.empty() && !fifoHeldOnAcquire(s)) {
+            // a barrier- or time-held entry needs future presentations to
+            // expire against; an acquire-held one is woken by its eventfd
             scene->needsFrame = true;
         }
     });
