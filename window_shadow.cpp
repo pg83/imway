@@ -55,30 +55,6 @@ void bakeWindowShadow(ImFontAtlas* atlas, ShadowSprite& s) {
     s.rectId = id;
 }
 
-void drawGlow(ImDrawList* dl, ImVec2 min, ImVec2 max, float reach, ImU32 color) {
-    ImGuiIO& io = ImGui::GetIO();
-
-    if (!io.WindowShadowCallback) {
-        return;
-    }
-
-    auto& s = *(ShadowSprite*)io.WindowShadowCallbackUserData;
-
-    if (s.rectId < 0) {
-        return;
-    }
-
-    ImFontAtlasRect r;
-
-    if (!s.atlas->GetCustomRect(s.rectId, &r)) {
-        return;
-    }
-
-    // one stretched quad: at icon scale the blob's rounded core plus its
-    // gaussian skirt reads as a glow plate, no slicing needed
-    dl->AddImage(s.atlas->TexRef, ImVec2(min.x - reach, min.y - reach), ImVec2(max.x + reach, max.y + reach), r.uv0, r.uv1, color);
-}
-
 void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, ImGuiWindowFlags flags, void* user) {
     (void)rounding;
 

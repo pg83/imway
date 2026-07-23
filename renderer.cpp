@@ -27,6 +27,7 @@
 #include "pooled_ev.h"
 #include "pooled_vk.h"
 #include "frame_capture.h"
+#include "glow.h"
 #include "render_filter.h"
 #include "settings.h"
 #include "small_obj_allocator.h"
@@ -1550,6 +1551,8 @@ void RendererImpl::setup(int w, int h) {
     shadow.scale = uiScale;
     io.WindowShadowCallback = drawWindowShadow;
     io.WindowShadowCallbackUserData = &shadow;
+    // the dock's focus halo, same atlas mechanics, its own sprite
+    bakeGlow(io.Fonts);
 
     // clients are imgui windows: docking gives tabs and splits of wayland
     // windows for free

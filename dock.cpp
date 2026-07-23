@@ -4,9 +4,9 @@
 #include "icon.h"
 #include "intr_list.h"
 #include "scene.h"
+#include "glow.h"
 #include "status_notifier.h"
 #include "util.h"
-#include "window_shadow.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -98,9 +98,10 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
     ImVec2 max(p.x + size, p.y + size);
 
     // the focused window: an accent glow behind, and half the inner
-    // padding so the icon reads bigger than its neighbours
+    // padding so the icon reads bigger than its neighbours. The negative
+    // reach pulls the rim in, so it starts right at the icon edge
     if (active) {
-        drawGlow(draw, p, max, size * 0.1f, themeColorU32(themeAlpha(theme.accent, 0.45f)));
+        drawGlow(draw, p, max, size * -0.06f, themeColorU32(themeAlpha(theme.accent, 0.38f)));
     }
 
     if (ImGui::IsItemHovered()) {
