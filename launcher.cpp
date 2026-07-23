@@ -317,6 +317,12 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         }
     }
 
+    // dense packing: shed the columns that only added width — narrower is
+    // free while the construction keeps the same height
+    while (cols > 1 && sizeFor(cols - 1, appsTotal, sysTotal).y == sizeFor(cols, appsTotal, sysTotal).y) {
+        cols--;
+    }
+
     float contentH = sizeFor(cols, appsTotal, sysTotal).y -
         (ImGui::GetFrameHeight() + st.ItemSpacing.y + st.WindowPadding.y * 2.f);
     float childH = fminf(contentH, (float)screenH * 0.55f);
