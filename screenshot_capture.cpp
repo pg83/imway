@@ -33,11 +33,6 @@ using namespace stl;
 
 namespace {
     struct ScreenshotCaptureImpl: ScreenshotCapture, Listener {
-        struct Retained {
-            int fd;
-            ev_tstamp until;
-        };
-
         Composer* comp = nullptr;
         ::Output* output = nullptr;
         Listener* renderReady = nullptr;
@@ -58,7 +53,6 @@ namespace {
         VkFence fence = VK_NULL_HANDLE;
 
         ev_timer* fenceTimer = nullptr;
-        ev_timer* retentionTimer = nullptr;
         EventFD done;
         ev_io* doneIo = nullptr;
         bool busy_ = false;
@@ -68,7 +62,6 @@ namespace {
         bool waitingRetire = false;
         int resultFd = -1;
         SharedScanout shared;
-        Vector<Retained> retained;
 
         ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h,
                               VkFormat fmt, float scale, Listener& ready);
@@ -84,8 +77,6 @@ namespace {
         int buildFile();
         void ready();
         void spawn(int fd, const SharedScanout* image);
-        void retain(int mfd);
-        void releaseExpired();
     };
 
     void fenceTimerCb(struct ev_loop*, ev_timer* w, int) {
@@ -94,10 +85,6 @@ namespace {
 
     void doneIoCb(struct ev_loop*, ev_io* w, int) {
         ((ScreenshotCaptureImpl*)w->data)->ready();
-    }
-
-    void retentionTimerCb(struct ev_loop*, ev_timer* w, int) {
-        ((ScreenshotCaptureImpl*)w->data)->releaseExpired();
     }
 
     u32 findMemoryType(VkPhysicalDevice phys, u32 typeBits, VkMemoryPropertyFlags props) {
@@ -152,10 +139,6 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk,
     ev_timer_init(fenceTimer, fenceTimerCb, 0., 0.);
     fenceTimer->data = this;
 
-    retentionTimer = createEvTimer(*c.pool, c.loop);
-    ev_timer_init(retentionTimer, retentionTimerCb, 0., 0.);
-    retentionTimer->data = this;
-
     doneIo = createEvIo(*c.pool, c.loop);
     ev_io_init(doneIo, doneIoCb, done.fd(), EV_READ);
     doneIo->data = this;
@@ -168,9 +151,6 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
     }
     if (ev_is_active(doneIo)) {
         ev_io_stop(comp->loop, doneIo);
-    }
-    if (ev_is_active(retentionTimer)) {
-        ev_timer_stop(comp->loop, retentionTimer);
     }
 
     if (fencePending) {
@@ -188,10 +168,6 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
 
     if (shared.fd >= 0) {
         close(shared.fd);
-    }
-
-    for (const Retained& item : retained) {
-        close(item.fd);
     }
 
     if (readbackMap) {
@@ -500,11 +476,10 @@ void ScreenshotCaptureImpl::ready() {
 }
 
 void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
-    StringBuilder source;
-
-    source << "/proc/"_sv << (long)getpid() << "/fd/"_sv << fd;
-
-    StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, sv(source)};
+    // the buffer travels as an fd over the spawn socket and lands in the
+    // viewer as fd 3 — a /proc/pid/fd reopen would need write access and
+    // dies with ENXIO on dma-bufs anyway
+    StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, "fd:3"_sv};
     StringBuilder display;
 
     display << "WAYLAND_DISPLAY="_sv << comp->scene->socketName;
@@ -545,40 +520,10 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     spec.env = env;
     spec.envCount = image ? 4 : 3;
 
+    spec.fd = fd;
     comp->supervisor->spawn(spec);
-    retain(fd);
-}
-
-void ScreenshotCaptureImpl::retain(int mfd) {
-    retained.pushBack({mfd, ev_now(comp->loop) + 10.});
-
-    if (!ev_is_active(retentionTimer)) {
-        ev_timer_set(retentionTimer, 10., 0.);
-        ev_timer_start(comp->loop, retentionTimer);
-    }
-}
-
-void ScreenshotCaptureImpl::releaseExpired() {
-    ev_tstamp now = ev_now(comp->loop);
-    ev_tstamp next = 0.;
-
-    for (size_t i = 0; i < retained.length();) {
-        if (retained[i].until <= now) {
-            close(retained[i].fd);
-            retained.mut(i) = retained.back();
-            retained.popBack();
-        } else {
-            if (!next || retained[i].until < next) {
-                next = retained[i].until;
-            }
-            i++;
-        }
-    }
-
-    if (next) {
-        ev_timer_set(retentionTimer, next - now, 0.);
-        ev_timer_start(comp->loop, retentionTimer);
-    }
+    // the socket queue holds its own reference now
+    close(fd);
 }
 
 ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk,

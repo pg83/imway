@@ -7,6 +7,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
 #include <std/lib/buffer.h>
@@ -107,8 +108,14 @@ namespace {
         _exit(127);
     }
 
-    void spawnApp(char** args, char** env) {
-        if (fork() != 0) {
+    void spawnApp(char** args, char** env, int passFd) {
+        pid_t pid = fork();
+
+        if (pid != 0) {
+            if (passFd >= 0) {
+                close(passFd);
+            }
+
             return;
         }
 
@@ -118,6 +125,15 @@ namespace {
 
         if (nullFd < 0 || dup2(nullFd, STDIN_FILENO) < 0 ||
             dup2(nullFd, STDOUT_FILENO) < 0 || dup2(nullFd, STDERR_FILENO) < 0) {
+            _exit(126);
+        }
+
+        // the attached fd becomes fd 3 in the child, cloexec cleared by dup2
+        if (passFd >= 0 && passFd != 3 && dup2(passFd, 3) < 0) {
+            _exit(126);
+        }
+
+        if (passFd == 3 && fcntl(3, F_SETFD, 0) < 0) {
             _exit(126);
         }
 
@@ -177,37 +193,65 @@ namespace {
         return true;
     }
 
-    size_t readAll(int fd, void* data, size_t size) {
-        size_t done = 0;
+    // one seqpacket datagram = one request; an attached SCM_RIGHTS fd (if
+    // any) lands in *fd. Returns the packet size, 0 on EOF or a dead peer.
+    size_t recvPacket(int sock, void* data, size_t cap, int* fd) {
+        *fd = -1;
 
-        while (done < size) {
-            ssize_t count = read(fd, (u8*)data + done, size - done);
+        iovec io = {data, cap};
+        alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))];
+        msghdr msg{};
 
-            if (count > 0) {
-                done += (size_t)count;
-            } else if (count == 0) {
-                break;
-            } else if (errno != EINTR) {
-                return 0;
+        msg.msg_iov = &io;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control;
+        msg.msg_controllen = sizeof(control);
+
+        ssize_t count;
+
+        do {
+            count = recvmsg(sock, &msg, MSG_CMSG_CLOEXEC);
+        } while (count < 0 && errno == EINTR);
+
+        if (count <= 0) {
+            return 0;
+        }
+
+        for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
+            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS &&
+                c->cmsg_len == CMSG_LEN(sizeof(int))) {
+                memcpy(fd, CMSG_DATA(c), sizeof(int));
             }
         }
 
-        return done;
+        return (size_t)count;
     }
 
-    void writeAll(int fd, const void* data, size_t size) {
-        const u8* cursor = (const u8*)data;
+    void sendPacket(int sock, const void* data, size_t size, int fd) {
+        iovec io = {(void*)data, size};
+        alignas(cmsghdr) char control[CMSG_SPACE(sizeof(int))];
+        msghdr msg{};
 
-        while (size) {
-            ssize_t count = write(fd, cursor, size);
+        msg.msg_iov = &io;
+        msg.msg_iovlen = 1;
 
-            if (count > 0) {
-                cursor += count;
-                size -= (size_t)count;
-            } else if (count < 0 && errno != EINTR) {
-                return;
-            }
+        if (fd >= 0) {
+            msg.msg_control = control;
+            msg.msg_controllen = CMSG_SPACE(sizeof(int));
+
+            cmsghdr* c = CMSG_FIRSTHDR(&msg);
+
+            c->cmsg_level = SOL_SOCKET;
+            c->cmsg_type = SCM_RIGHTS;
+            c->cmsg_len = CMSG_LEN(sizeof(int));
+            memcpy(CMSG_DATA(c), &fd, sizeof(int));
         }
+
+        ssize_t count;
+
+        do {
+            count = sendmsg(sock, &msg, 0);
+        } while (count < 0 && errno == EINTR);
     }
 }
 
@@ -243,7 +287,7 @@ void SupervisorImpl::spawn(const SupervisorSpawn& spec) {
     }
 
     ((SpawnRequest*)packet.mutData())->size = (u32)packet.used();
-    writeAll(3, packet.data(), packet.used());
+    sendPacket(3, packet.data(), packet.used(), spec.fd);
 }
 
 Supervisor* Supervisor::create(Composer& c) {
@@ -261,9 +305,11 @@ int mainSupervisor(int argc, char** argv) {
         return 1;
     }
 
+    // seqpacket keeps request boundaries and carries SCM_RIGHTS atomically
+    // with its packet
     int pipes[2];
 
-    if (pipe2(pipes, O_CLOEXEC) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, pipes) != 0) {
         return 1;
     }
 
@@ -277,21 +323,22 @@ int mainSupervisor(int argc, char** argv) {
 
     for (;;) {
         u8 packet[maxPacket];
-        SpawnRequest request;
-        size_t got = readAll(pipes[0], &request, sizeof(request));
+        int fd = -1;
+        size_t got = recvPacket(pipes[0], packet, sizeof(packet), &fd);
 
         if (!got) {
             finish(0);
         }
-        if (got != sizeof(request) || request.size < sizeof(request) ||
-            request.size > sizeof(packet)) {
+
+        SpawnRequest request;
+
+        if (got < sizeof(request)) {
             finish(1);
         }
 
-        memcpy(packet, &request, sizeof(request));
+        memcpy(&request, packet, sizeof(request));
 
-        if (readAll(pipes[0], packet + sizeof(request),
-                    request.size - sizeof(request)) != request.size - sizeof(request)) {
+        if (request.size != got) {
             finish(1);
         }
 
@@ -299,7 +346,9 @@ int mainSupervisor(int argc, char** argv) {
         char* env[1025];
 
         if (parseRequest(packet, request.size, args, env)) {
-            spawnApp(args, env);
+            spawnApp(args, env, fd);
+        } else if (fd >= 0) {
+            close(fd);
         }
     }
 }

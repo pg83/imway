@@ -71,8 +71,10 @@ namespace {
         }
     };
 
-    [[noreturn]] void fail(StringView m) {
-        throw ShotError(Buffer(m));
+    [[noreturn]] void fail(StringView m, const char* file = __builtin_FILE(), int line = __builtin_LINE()) {
+        const char* base = strrchr(file, '/');
+
+        throw ShotError(Buffer(sv(StringBuilder() << StringView(base ? base + 1 : file) << ":"_sv << (long)line << ": "_sv << m)));
     }
 
     // ---- decoded source image ----
@@ -146,9 +148,12 @@ namespace {
         return img.w && img.h && img.stride && img.allocationSize;
     }
 
-    // throws (ShotError, or the Errno readFileContent raises) on any failure
+    // throws (ShotError, or the Errno readFileContent raises) on any failure.
+    // "fd:3" names the buffer handed over the spawn socket: dma-bufs cannot
+    // be reopened through /proc at all (ENXIO), so the fd itself travels
     void loadImage(StringView path, Image& img) {
-        Buffer p(path);
+        bool inherited = path == "fd:3"_sv;
+        Buffer p(inherited ? "/proc/self/fd/3"_sv : path);
 
         if (const char* color = getenv("IMWAY_SHOT_COLOR")) {
             StringView value(color), hs, rest;
@@ -178,12 +183,11 @@ namespace {
                 fail("bad shared screenshot metadata"_sv);
             }
 
-            // read-only is all the vulkan import needs; a write reopen of a
-            // foreign dma-buf through /proc is exactly what kernels refuse
-            img.dmaFd = open(p.cStr(), O_RDONLY | O_CLOEXEC);
+            img.dmaFd = inherited ? fcntl(3, F_DUPFD_CLOEXEC, 0)
+                                  : open(p.cStr(), O_RDONLY | O_CLOEXEC);
 
             if (img.dmaFd < 0) {
-                fail(sv(StringBuilder() << "cannot open shared screenshot: "_sv
+                fail(sv(StringBuilder() << "cannot take the shared screenshot fd: "_sv
                                         << StringView(strerror(errno))));
             }
 
