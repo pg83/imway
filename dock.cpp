@@ -82,36 +82,57 @@ namespace {
         }
     }
 
-    bool iconButton(const Theme& theme, const char* id, u64 texture, float size, bool active, bool attention = false) {
-        ImVec2 p = ImGui::GetCursorScreenPos();
+}
 
-        ImGui::InvisibleButton(id, ImVec2(size, size));
+bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size, bool active, bool attention, StringView fallbackName) {
+    ImVec2 p = ImGui::GetCursorScreenPos();
 
-        ImDrawList* draw = ImGui::GetWindowDrawList();
-        ImVec2 max(p.x + size, p.y + size);
+    ImGui::InvisibleButton(id, ImVec2(size, size));
 
-        if (ImGui::IsItemHovered()) {
-            draw->AddRectFilled(p, max, themeColorU32(themeAlpha(theme.neutral[10], 0.08f)), 6.f);
-        }
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    ImVec2 max(p.x + size, p.y + size);
 
-        if (texture) {
-            float pad = size * 0.12f;
-
-            draw->AddImage((ImTextureID)texture, ImVec2(p.x + pad, p.y + pad), ImVec2(max.x - pad, max.y - pad));
-        } else {
-            drawLauncherGlyph(draw, p, max, themeColorU32(theme.neutral[9]));
-        }
-
-        if (active) {
-            draw->AddRectFilled(ImVec2(p.x, p.y + size * 0.25f), ImVec2(p.x + 3.f, p.y + size * 0.75f), themeColorU32(theme.accent), 1.5f);
-        }
-
-        if (attention) {
-            draw->AddCircleFilled(ImVec2(max.x - 5.f, p.y + 5.f), 4.f, IM_COL32(255, 90, 70, 255));
-        }
-
-        return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+    if (ImGui::IsItemHovered()) {
+        draw->AddRectFilled(p, max, themeColorU32(themeAlpha(theme.neutral[10], 0.08f)), 6.f);
     }
+
+    float pad = size * 0.12f;
+
+    if (texture) {
+        draw->AddImage((ImTextureID)texture, ImVec2(p.x + pad, p.y + pad), ImVec2(max.x - pad, max.y - pad));
+    } else if (!fallbackName.empty()) {
+        // no icon anywhere: a rounded plate with the name's initial
+        ImVec2 a(p.x + pad, p.y + pad), b(max.x - pad, max.y - pad);
+
+        draw->AddRectFilled(a, b, themeColorU32(themeAlpha(theme.neutral[10], 0.12f)), size * 0.12f);
+
+        char ch = (char)fallbackName[0];
+
+        if (ch >= 'a' && ch <= 'z') {
+            ch = (char)(ch - 'a' + 'A');
+        }
+
+        char s[2] = {ch, 0};
+        float fs = ImGui::GetFontSize() * 2.f;
+        ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, 3.4e38f, 0.f, s);
+
+        draw->AddText(ImGui::GetFont(), fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), themeColorU32(theme.neutral[9]), s);
+    } else {
+        drawLauncherGlyph(draw, p, max, themeColorU32(theme.neutral[9]));
+    }
+
+    if (active) {
+        draw->AddRectFilled(ImVec2(p.x, p.y + size * 0.25f), ImVec2(p.x + 3.f, p.y + size * 0.75f), themeColorU32(theme.accent), 1.5f);
+    }
+
+    if (attention) {
+        draw->AddCircleFilled(ImVec2(max.x - 5.f, p.y + 5.f), 4.f, IM_COL32(255, 90, 70, 255));
+    }
+
+    return ImGui::IsItemClicked(ImGuiMouseButton_Left);
+}
+
+namespace {
 
     Icon* trayIcon(Composer& c, StatusNotifierItem& item, bool attention) {
         if (attention) {
@@ -171,11 +192,15 @@ float dockBarWidth() {
     return 58.f * ImGui::GetStyle().FontScaleMain;
 }
 
+float dockIconSize() {
+    return 48.f * ImGui::GetStyle().FontScaleMain;
+}
+
 void drawDock(Composer& c, DockResult& result) {
     Scene& scene = *c.scene;
     float scale = ImGui::GetStyle().FontScaleMain;
     float width = dockBarWidth();
-    float iconSize = 48.f * scale;
+    float iconSize = dockIconSize();
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse |
         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
@@ -282,7 +307,7 @@ void drawDock(Composer& c, DockResult& result) {
             ImGui::PushID(t ? (void*)t : (void*)tray);
 
             u64 texture = c.iconResolver ? c.iconResolver->iconTexture(icon) : 0;
-            bool clicked = iconButton(c.theme, "##icon", texture, iconSize, t && t->activated && !t->minimized, attention);
+            bool clicked = dockIconButton(c.theme, "##icon", texture, iconSize, t && t->activated && !t->minimized, attention, group.appId);
 
             if (clicked) {
                 if (t) {
@@ -383,13 +408,13 @@ void drawDock(Composer& c, DockResult& result) {
 
         ImGui::PushID("launcher");
 
-        if (iconButton(c.theme, "##icon", 0, iconSize, false)) {
-            ImVec2 min = ImGui::GetItemRectMin();
+        if (dockIconButton(c.theme, "##icon", 0, iconSize, false, false, {})) {
             ImVec2 max = ImGui::GetItemRectMax();
 
             result.launcher = true;
             result.launcherX = max.x + 8.f * scale;
-            result.launcherY = max.y;
+            // the launcher window bottom-aligns to the dock's bottom edge
+            result.launcherY = ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
         }
 
         if (ImGui::IsItemHovered()) {

@@ -1,6 +1,7 @@
 #include "launcher.h"
 #include "composer.h"
 #include "dialog.h"
+#include "dock.h"
 #include "icon.h"
 #include "icon_store.h"
 #include "scene.h"
@@ -275,9 +276,12 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
 
     const ImGuiStyle& st = ImGui::GetStyle();
     float lw = fminf((float)screenW * 0.4f, 560.f * uiScale);
-    float cell = 88.f * uiScale;
+    // the grid reuses the dock's icon metrics: the same button side, the
+    // same slot-to-icon breathing room as the gap
+    float cell = dockIconSize();
+    float gap = dockBarWidth() - dockIconSize();
     float contentW = lw - st.WindowPadding.x * 2.f;
-    long cols = (long)((contentW + st.ItemSpacing.x) / (cell + st.ItemSpacing.x));
+    long cols = (long)((contentW + gap) / (cell + gap));
 
     if (cols < 1) {
         cols = 1;
@@ -357,17 +361,18 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
             }
         }
 
-        // one grid cell: a big icon, tooltip text on hover, accent frame on
-        // the keyboard selection; missing icons render an initial plate
+        // one grid cell: the dock's icon button plus a tooltip on hover and
+        // an accent frame on the keyboard selection
         auto cellItem = [&](long flat) {
             const Row& r = rows[vis[(size_t)flat]];
             bool selected = sel == flat + 1;
 
             ImGui::PushID((int)vis[(size_t)flat]);
 
-            ImVec2 p = ImGui::GetCursorScreenPos();
+            u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)));
+            StringView name = view(r.name, r.nameLen);
 
-            if (ImGui::InvisibleButton("##cell", ImVec2(cell, cell))) {
+            if (dockIconButton(c.theme, "##cell", tex, cell, false, false, name)) {
                 pick(r);
             }
 
@@ -375,39 +380,12 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
                 ImGui::SetScrollHereY(0.5f);
             }
 
-            ImDrawList* dl = ImGui::GetWindowDrawList();
-            ImVec2 pmax(p.x + cell, p.y + cell);
-            StringView name = view(r.name, r.nameLen);
-
             if (ImGui::IsItemHovered()) {
-                dl->AddRectFilled(p, pmax, themeColorU32(themeAlpha(c.theme.neutral[10], 0.08f)), 8.f);
                 ImGui::SetTooltip("%.*s", (int)name.length(), (const char*)name.begin());
             }
 
             if (selected) {
-                dl->AddRect(p, pmax, themeColorU32(c.theme.accent), 8.f, 0, 2.f);
-            }
-
-            float pad = cell * 0.15f;
-
-            if (u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)))) {
-                dl->AddImage((ImTextureID)tex, ImVec2(p.x + pad, p.y + pad), ImVec2(pmax.x - pad, pmax.y - pad));
-            } else {
-                ImVec2 a(p.x + pad, p.y + pad), b(pmax.x - pad, pmax.y - pad);
-
-                dl->AddRectFilled(a, b, themeColorU32(themeAlpha(c.theme.neutral[10], 0.12f)), 10.f);
-
-                char ch = name.empty() ? '?' : (char)name[0];
-
-                if (ch >= 'a' && ch <= 'z') {
-                    ch = (char)(ch - 'a' + 'A');
-                }
-
-                char s[2] = {ch, 0};
-                float fs = ImGui::GetFontSize() * 2.f;
-                ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, 0.f, s);
-
-                dl->AddText(ImGui::GetFont(), fs, ImVec2((a.x + b.x - ts.x) * 0.5f, (a.y + b.y - ts.y) * 0.5f), themeColorU32(c.theme.neutral[9]), s);
+                ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), themeColorU32(c.theme.accent), 6.f, 0, 2.f);
             }
 
             ImGui::PopID();
@@ -427,14 +405,15 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
         // delimiter) per group — so top-down each grid carries its header
         // underneath, and the topmost group has no leading delimiter
         auto groupH = [&](long count) {
-            return count ? (float)((count + cols - 1) / cols) * (cell + st.ItemSpacing.y) + ImGui::GetFontSize() + st.ItemSpacing.y : 0.f;
+            return count ? (float)((count + cols - 1) / cols) * (cell + gap) + ImGui::GetFontSize() + gap : 0.f;
         };
 
         float contentH = groupH(appsN) + groupH(sysN) +
-            (appsN && sysN ? st.ItemSpacing.y * 2.f + 1.f : 0.f);
+            (appsN && sysN ? gap * 2.f + 1.f : 0.f);
         float childH = fminf(contentH, (float)screenH * 0.55f);
 
         if (n) {
+            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
             ImGui::BeginChild("##groups", ImVec2(0.f, childH));
 
             if (appsN) {
@@ -452,6 +431,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action,
             }
 
             ImGui::EndChild();
+            ImGui::PopStyleVar();
         }
 
         ImGui::SetNextItemWidth(-1.f);
