@@ -383,8 +383,8 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "kms-reject-cursor"_sv && fakeKmsActive()) {
         fakeKmsRejectCursor((int)args.stou());
         comp->scene->needsFrame = true;
-    } else if (verb == "kms-tv-modes"_sv && fakeKmsActive()) {
-        fakeKmsSetTvModes(args.stou() != 0);
+    } else if (verb == "kms-modes"_sv && fakeKmsActive()) {
+        fakeKmsSetModes((int)args.stou());
     } else if (verb == "session"_sv) {
         // fires the same listener lists a libseat VT switch would
         if (args.stou() != 0) {

@@ -10,9 +10,10 @@ int fakeKmsOpenDevice();
 bool fakeKmsActive();
 void fakeKmsSetConnected(bool connected);
 // swap the connector's mode list, modeling a different display being
-// plugged in: the tv set offers only 1920x1080, and commits with a mode
-// the current list does not carry are refused
-void fakeKmsSetTvModes(bool tv);
+// plugged in: 0 is the default pair, 1 (tv) offers only 1920x1080, 2
+// (small) only 1280x800. Commits with a mode the current list does not
+// carry are refused.
+void fakeKmsSetModes(int set);
 // the next atomic commits fail with err until count runs out
 void fakeKmsFailCommits(int err, int count);
 // commits flipping a framebuffer never flipped before fail with err: the

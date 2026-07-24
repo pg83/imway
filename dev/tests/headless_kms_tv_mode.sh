@@ -12,7 +12,7 @@ in_log "kms output: 1280x800@60" || { echo "no kms boot"; cat "$IMWAY_LOG"; exit
 ctl "kms-connector 0"
 await 50 in_log "connector disconnected" || { echo "disconnect unnoticed"; exit 1; }
 
-ctl "kms-tv-modes 1"
+ctl "kms-modes 1"
 ctl "kms-connector 1"
 
 await 100 in_log "kms output: 1920x1080@60" || {

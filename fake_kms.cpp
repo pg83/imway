@@ -159,7 +159,7 @@ namespace {
         pthread_t flipThread{};
 
         bool connected = true;
-        bool tvModes = false;
+        int modeSet = 0; // 0 default, 1 tv (1080p only), 2 small (800p only)
         bool noPrime = false;
         bool asyncFlipLogged = false;
         Vector<PropDef> props;
@@ -502,11 +502,17 @@ namespace {
         return 0;
     }
 
-    // the connector's current mode list; the tv set models replugging a
-    // different display that only does 1080p
+    // the connector's current mode list; the tv and small sets model
+    // replugging displays that only do one size
     u32 currentModes(drm_mode_modeinfo* modes) {
-        if (g->tvModes) {
+        if (g->modeSet == 1) {
             fillMode(modes[0], 1920, 1080, 60, true);
+
+            return 1;
+        }
+
+        if (g->modeSet == 2) {
+            fillMode(modes[0], 1280, 800, 60, true);
 
             return 1;
         }
@@ -1249,9 +1255,9 @@ void fakeKmsSetConnected(bool connected) {
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsSetTvModes(bool tv) {
+void fakeKmsSetModes(int set) {
     pthread_mutex_lock(&g->mu);
-    g->tvModes = tv;
+    g->modeSet = set;
     pthread_mutex_unlock(&g->mu);
 }
 

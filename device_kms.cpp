@@ -676,6 +676,7 @@ namespace {
         void freeDumb(DumbBuffer& b);
         bool rebuildScanout();
         bool switchMode(const drmModeModeInfo& next);
+        void remodeset(stl::StringView why);
         void announceMode() override;
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1, bool testOnly = false);
         void drainPendingFlip();
@@ -1218,9 +1219,10 @@ void KmsOutput::hotplug() {
     // what the display on the wire wants now: the current mode when still
     // offered, else its preferred one — a swapped display (the TV case)
     bool offered = false;
+    bool haveModes = connected && conn->count_modes > 0;
     drmModeModeInfo want{};
 
-    if (connected && conn->count_modes > 0) {
+    if (haveModes) {
         want = conn->modes[0];
 
         for (int i = 0; i < conn->count_modes; i++) {
@@ -1242,6 +1244,12 @@ void KmsOutput::hotplug() {
         if (connected) {
             signalFeedbackLogged = false;
             updateSignalFeedback();
+
+            // the mode list changed without the link dropping (a dock
+            // re-reading EDID): follow it like a replug would
+            if (!offered && haveModes && switchMode(want)) {
+                remodeset("mode list changed, remodeset"_sv);
+            }
         }
         return;
     }
@@ -1256,17 +1264,25 @@ void KmsOutput::hotplug() {
 
     drainPendingFlip();
 
-    if (!offered && !switchMode(want)) {
+    if (!offered && haveModes && !switchMode(want)) {
         // committing the old mode anyway is honest: the display refuses it
         // and the failure lands in the log instead of a silent dark screen
         *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
     }
 
+    remodeset("connector reconnected, remodeset"_sv);
+}
+
+// full modeset on the freshest rendered framebuffer, after a hotplug-class
+// disruption
+void KmsOutput::remodeset(StringView why) {
+    drainPendingFlip();
+
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
     if (modesetDone && commit(lastFb, true)) {
         queuedScan = scanCount > 0 ? scanNext ^ 1 : -1;
-        *(c->log) << "imway: connector reconnected, remodeset"_sv << endL;
+        *(c->log) << "imway: "_sv << why << endL;
     }
 }
 
