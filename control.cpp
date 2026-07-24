@@ -419,6 +419,12 @@ void ControlImpl::handleLine(StringView cmd) {
 // written to <path>.tmp and renamed so the scenario can poll for the final
 // path and read a complete file
 void ControlImpl::dumpState(StringView outPath) {
+    if (outPath.empty()) {
+        *(comp->log) << "imway: dump: no path"_sv << endL;
+
+        return;
+    }
+
     StringBuilder out;
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
@@ -482,7 +488,13 @@ void ControlImpl::dumpState(StringView outPath) {
 
     w.write(out.data(), out.used());
     w.finish();
-    STD_VERIFY(rename(tmpPath.cStr(), Buffer(outPath).cStr()) == 0);
+
+    // the path came over the control FIFO — external input never gets to
+    // take the session down
+    if (rename(tmpPath.cStr(), Buffer(outPath).cStr()) != 0) {
+        *(comp->log) << "imway: dump: cannot rename "_sv << sv(tmpPath) << " to "_sv << outPath << endL;
+        unlink(tmpPath.cStr());
+    }
 }
 
 void ControlImpl::handleInput() {
