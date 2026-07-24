@@ -296,6 +296,11 @@ struct Toplevel: stl::IntrusiveNode {
     // fill its size exactly — wayland turns this into TILED states
     bool docked = false;
 
+    // written by the desktop: the window exists but its imgui window was not
+    // drawn this frame (an unselected dock tab, a collapsed window) — wayland
+    // suspends its frame callbacks like a minimized window's
+    bool tabHidden = false;
+
     // xdg-dialog: the client marked this toplevel as a modal dialog
     bool modal = false;
 };

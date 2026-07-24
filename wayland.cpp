@@ -3823,9 +3823,9 @@ namespace {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_MAXIMIZED;
         }
 
-        // a minimized window is not visible: tell the client (v6) so it can
-        // throttle or stop rendering
-        if (t.minimized && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
+        // a minimized window or an unselected dock tab is not visible: tell
+        // the client (v6) so it can throttle or stop rendering
+        if ((t.minimized || t.tabHidden) && wl_resource_get_version(t.res) >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE_VERSION) {
             *(u32*)wl_array_add(&states, sizeof(u32)) = XDG_TOPLEVEL_STATE_SUSPENDED;
         }
 
@@ -12747,7 +12747,7 @@ void WaylandImpl::onListen(void* arg) {
     });
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
-        if (tl.mapped && !tl.minimized && tl.surface) {
+        if (tl.mapped && !tl.minimized && !tl.tabHidden && tl.surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl.surface.get(), msec);
         }
     });
@@ -12779,7 +12779,7 @@ void WaylandImpl::onListen(void* arg) {
         bool shown = root == scene->dragIcon.get() || root == scene->cursorSurface;
 
         if (!shown && root->toplevel) {
-            shown = root->toplevel->mapped && !root->toplevel->minimized;
+            shown = root->toplevel->mapped && !root->toplevel->minimized && !root->toplevel->tabHidden;
         } else if (!shown) {
             auto* rootImpl = (SurfaceImpl*)root;
 

@@ -1484,6 +1484,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
         if (ImGui::Begin(label.cStr(), t->csd ? nullptr : &stayOpen, flags)) {
             t->docked = ImGui::IsWindowDocked();
+            t->tabHidden = false;
 
             // remember imgui's truth of the position, the base for next frame's
             // left/top resize compensation
@@ -1616,6 +1617,7 @@ void DesktopImpl::buildUi(Scene& scene) {
             renderer->drawSurfaceTree(*root, origin.x, origin.y);
 
         } else {
+            t->tabHidden = true;
             markTreeUnhovered(*root);
         }
 
