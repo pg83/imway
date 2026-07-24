@@ -10,7 +10,7 @@
 #include "device_kms.h"
 
 #ifdef IMWAY_FOR_TESTS
-    #include "fake_kms.h"
+    #include "kms_fake.h"
 #endif
 #include "icon_pool.h"
 #include "icon_provider.h"
