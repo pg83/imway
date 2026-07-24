@@ -2,6 +2,7 @@
 
 #include "device.h"
 #include "control.h"
+#include "desktop.h"
 #include "composer.h"
 #include "dbus_conn.h"
 #include "device_kms.h"
@@ -311,6 +312,7 @@ int mainComposer(int argc, char** argv) {
         Renderer* renderer = device->createRenderer(c, cfg.fontPath, cfg.uiScale, cfg.framesLimit);
 
         c.renderer = renderer;
+        c.desktop = Desktop::create(c, cfg.uiScale);
 
         if (kms) {
             try {

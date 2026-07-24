@@ -3,9 +3,9 @@
 #include "listener.h"
 #include "pooled_ev.h"
 
-#include <ev.h>
-
 #include <std/mem/obj_pool.h>
+
+#include <ev.h>
 
 using namespace stl;
 

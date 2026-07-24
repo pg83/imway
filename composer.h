@@ -29,6 +29,7 @@ struct Notifier;
 struct Output;
 struct Device;
 struct Renderer;
+struct Desktop;
 struct Scene;
 struct Session;
 struct SmallObjAllocator;
@@ -77,6 +78,7 @@ struct Composer {
     StatusNotifier* statusNotifier = nullptr;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
+    Desktop* desktop = nullptr;
     // the renderer registers itself here; wayland's copy-capture reads it
     FrameCapture* frameCapture = nullptr;
     Mixer* mixer = nullptr;

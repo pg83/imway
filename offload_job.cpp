@@ -4,11 +4,11 @@
 #include "listener.h"
 #include "pooled_ev.h"
 
-#include <ev.h>
-
+#include <std/thr/pool.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/event_fd.h>
-#include <std/thr/pool.h>
+
+#include <ev.h>
 
 using namespace stl;
 
