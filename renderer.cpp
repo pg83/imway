@@ -18,6 +18,7 @@
 #include "wifi_ui.h"
 #include "calendar.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "keyboard.h"
 #include "launcher.h"
 #include "listener.h"
@@ -31,6 +32,7 @@
 #include "intr_list.h"
 #include "pooled_ev.h"
 #include "anr_dialog.h"
+#include "fence_poll.h"
 #include "input_sink.h"
 #include "lock_screen.h"
 #include "frame_capture.h"
@@ -57,7 +59,6 @@
 #include <math.h>
 #include <time.h>
 #include <fcntl.h>
-#include <imgui.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -68,7 +69,6 @@
 #include <linux/dma-buf.h>
 #include <vulkan/vulkan.h>
 #include <fullscreen.spv.h>
-#include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
 #include <renderer_scene.spv.h>
 #include <renderer_cursor.spv.h>
@@ -186,7 +186,6 @@ namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
-    void captureTimerCb(struct ev_loop*, ev_timer* w, int);
 
     // the scene composes in linear half-float; the output pass maps it to
     // the scanout format
@@ -213,6 +212,13 @@ namespace {
 
         CallOutputResized(RendererImpl* p);
         void onListen(void*) override;
+    };
+
+    struct CallCaptureRetired: Listener {
+        RendererImpl* parent;
+
+        CallCaptureRetired(RendererImpl* p);
+        void onListen(void* status) override;
     };
 
     struct CallScreenshotReady: Listener {
@@ -266,7 +272,7 @@ namespace {
         void* readbackMap = nullptr;
 
         // async screencopy readback: one GPU copy per frame serves every
-        // registered consumer, a 1ms timer polls the fence; the loop never
+        // registered consumer, the fence poll retires it; the loop never
         // waits the GPU for a capture
         struct CaptureWant {
             Listener* done = nullptr;
@@ -281,9 +287,8 @@ namespace {
         void* captureMap = nullptr;
         int captureW = 0;
         int captureH = 0;
-        bool captureInFlight = false;
         int captureSeq = -1;
-        ev_timer* captureTimer = nullptr;
+        FencePoll* captureFencePoll = nullptr;
 
         ScreenshotCapture* shotCapture = nullptr;
         bool shotRequested = false;
@@ -532,7 +537,7 @@ namespace {
         bool captureSubmit(int x, int y, int w, int h, Listener& done) override;
         void captureCancel(Listener& done) override;
         bool captureRecord();
-        void capturePoll();
+        void captureRetired(VkResult status);
         void captureDropAll();
         u64 colorIntermediateBytes() override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
@@ -557,6 +562,15 @@ namespace {
 
     void CallOutputResized::onListen(void*) {
         parent->applyOutputSize();
+    }
+
+    CallCaptureRetired::CallCaptureRetired(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallCaptureRetired::onListen(void* status) {
+        parent->captureRetired(*(VkResult*)status);
     }
 
     CallWifiChanged::CallWifiChanged(RendererImpl* p)
@@ -592,10 +606,6 @@ namespace {
     // the desktop renders on demand, wake it up so the clock stays fresh
     void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
-    }
-
-    void captureTimerCb(struct ev_loop*, ev_timer* w, int) {
-        ((RendererImpl*)w->data)->capturePoll();
     }
 
 }
@@ -1570,10 +1580,7 @@ void RendererImpl::setup() {
 
     VK_CHECK(vkCreateFence(device, &fenci, nullptr, &fence));
     VK_CHECK(vkCreateFence(device, &fenci, nullptr, &captureFence));
-
-    captureTimer = createEvTimer(*pool, loop);
-    ev_timer_init(captureTimer, captureTimerCb, 0., 0.);
-    captureTimer->data = this;
+    captureFencePoll = FencePoll::create(*pool, loop, device, captureFence, *pool->make<CallCaptureRetired>(this));
 
     if (hasSyncFd) {
         importSemFd = (PFN_vkImportSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
@@ -4875,14 +4882,14 @@ bool RendererImpl::captureSubmit(int rx, int ry, int rw, int rh, Listener& done)
         return false;
     }
 
-    if (captureInFlight && captureSeq != scene->framesDone) {
+    if (captureFencePoll->armed() && captureSeq != scene->framesDone) {
         // an older frame's copy is still on the GPU: retry on the next one
         scene->needsFrame = true;
 
         return false;
     }
 
-    if (!captureInFlight && !captureRecord()) {
+    if (!captureFencePoll->armed() && !captureRecord()) {
         return false;
     }
 
@@ -4941,31 +4948,21 @@ bool RendererImpl::captureRecord() {
     si.commandBufferCount = 1;
     si.pCommandBuffers = &captureCmd;
 
+    vkResetFences(device, 1, &captureFence);
+
     if (VkResult res = vkQueueSubmit(queue, 1, &si, captureFence); res != VK_SUCCESS) {
         *(comp->log) << "imway: capture submit failed ("_sv << (long)res << ")"_sv << endL;
 
         return false;
     }
 
-    captureInFlight = true;
     captureSeq = scene->framesDone;
-    ev_timer_set(captureTimer, 0.001, 0.001);
-    ev_timer_start(loop, captureTimer);
+    captureFencePoll->arm();
 
     return true;
 }
 
-void RendererImpl::capturePoll() {
-    VkResult status = vkGetFenceStatus(device, captureFence);
-
-    if (status == VK_NOT_READY) {
-        return;
-    }
-
-    ev_timer_stop(loop, captureTimer);
-    vkResetFences(device, 1, &captureFence);
-    captureInFlight = false;
-
+void RendererImpl::captureRetired(VkResult status) {
     if (status != VK_SUCCESS) {
         *(comp->log) << "imway: capture fence failed ("_sv << (long)status << ")"_sv << endL;
     } else if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
@@ -5015,12 +5012,9 @@ void RendererImpl::captureCancel(Listener& done) {
 
 // the mode changed under the consumers: fail them, drop the sized buffer
 void RendererImpl::captureDropAll() {
-    if (captureInFlight) {
-        // the backend idled the GPU before the rebuild: the fence is done
-        ev_timer_stop(loop, captureTimer);
-        vkResetFences(device, 1, &captureFence);
-        captureInFlight = false;
-    }
+    // the backend idled the GPU before the rebuild: the fence is done and
+    // the next record resets it
+    captureFencePoll->cancel();
 
     for (size_t i = 0; i < captureWants.length(); i++) {
         captureWants[i].done->onListen(nullptr);

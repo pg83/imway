@@ -4,8 +4,7 @@
 #include "scene.h"
 #include "dialog.h"
 #include "composer.h"
-
-#include <imgui.h>
+#include "imgui_wm.h"
 
 using namespace stl;
 

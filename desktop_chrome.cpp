@@ -3,9 +3,9 @@
 #include "dock.h"
 #include "scene.h"
 #include "composer.h"
+#include "imgui_wm.h"
 
 #include <time.h>
-#include <imgui.h>
 #include <stdio.h>
 
 using namespace stl;

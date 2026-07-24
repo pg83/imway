@@ -4,6 +4,7 @@
 #include "scene.h"
 #include "dialog.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "tex_pool.h"
 #include "device_vk.h"
 #include "render_filter.h"
@@ -17,11 +18,9 @@
 
 #include <pwd.h>
 #include <crypt.h>
-#include <imgui.h>
 #include <shadow.h>
 #include <string.h>
 #include <unistd.h>
-#include <imgui_internal.h>
 #include <imgui_impl_vulkan.h>
 #include <lock_screen_blur.spv.h>
 

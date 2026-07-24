@@ -5,10 +5,9 @@
 #include "scene.h"
 #include "dialog.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "notifier.h"
 #include "icon_store.h"
-
-#include <imgui.h>
 
 using namespace stl;
 

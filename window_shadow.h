@@ -1,6 +1,6 @@
 #pragma once
 
-#include <imgui.h>
+#include "imgui_wm.h"
 
 // drop shadows under imgui windows, fed into the imway imgui fork hook
 // (ImGuiIO::WindowShadowCallback). the sprite is a gaussian rounded blob

@@ -2,9 +2,9 @@
 
 #include "dialog.h"
 #include "composer.h"
+#include "imgui_wm.h"
 
 #include <math.h>
-#include <imgui.h>
 #include <string.h>
 
 using namespace stl;

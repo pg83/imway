@@ -4,9 +4,9 @@
 #include "scene.h"
 #include "dialog.h"
 #include "composer.h"
+#include "imgui_wm.h"
 
 #include <time.h>
-#include <imgui.h>
 
 using namespace stl;
 

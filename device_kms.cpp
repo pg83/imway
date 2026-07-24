@@ -15,6 +15,7 @@
 #include "pooled_ev.h"
 #include "pooled_fd.h"
 #include "robustness.h"
+#include "offload_job.h"
 #include "kms_intercept.h"
 #include "frame_listener.h"
 
@@ -546,22 +547,19 @@ namespace {
         int screenshotIndex = -1;
         bool screenshotWasPresented = false;
         Listener* screenshotReady = nullptr;
-        EventFD screenshotDone;
-        ev_io* screenshotIo = nullptr;
+        OffloadJob* screenshotJob = nullptr;
 
         // the hotplug probe re-reads EDID over DDC in the kernel — tens to
-        // hundreds of milliseconds on a real link — so it runs on the
-        // offload thread; the results land here and hotplugDone wakes the
-        // loop to apply them
-        EventFD hotplugDone;
-        ev_io* hotplugIo = nullptr;
-        bool probeInFlight = false;
-        bool probeAgain = false;
+        // hundreds of milliseconds on a real link — so it runs as an
+        // offload job; the worker copies the raw connector state here and
+        // the loop derives what to do with it, so a coalesced re-probe
+        // never compares against a stale mode
+        OffloadJob* hotplugJob = nullptr;
         bool probeValid = false;
         bool probeConnected = false;
-        bool probeOffered = false;
-        bool probeHaveModes = false;
-        drmModeModeInfo probeWant{};
+        int probeModeCount = 0;
+        int probePreferred = -1;
+        drmModeModeInfo probeModes[32] = {};
 
         u32 connectorId = 0;
         StringBuilder connectorLabel;
@@ -714,6 +712,7 @@ namespace {
 
         bool ready() const override;
         void hotplug() override;
+        void hotplugProbe();
         void hotplugProbed();
         bool vsynced() const override;
         int scanoutCount() const override;
@@ -722,6 +721,7 @@ namespace {
         bool supportsRenderFence() const override;
         bool presentImage(int i, int renderFenceFd) override;
         bool prepareScreenshot(Listener& ready) override;
+        void screenshotPrepare();
         bool takeScreenshot(int i, SharedScanout& image) override;
         bool screenshotPending() const override;
         void screenshotPrepared();
@@ -760,6 +760,22 @@ namespace {
         parent->sessionDisabled();
     }
 
+    struct CallHotplugProbed: Listener {
+        KmsOutput* parent;
+
+        CallHotplugProbed(KmsOutput* p);
+        void onListen(void*) override;
+    };
+
+    CallHotplugProbed::CallHotplugProbed(KmsOutput* p)
+        : parent(p)
+    {
+    }
+
+    void CallHotplugProbed::onListen(void*) {
+        parent->hotplugProbed();
+    }
+
     void pageFlipHandler(int, unsigned seq, unsigned sec, unsigned usec, void* data) {
         auto* out = (KmsOutput*)data;
 
@@ -795,12 +811,20 @@ namespace {
 
     void udevIoCb(struct ev_loop*, ev_io* w, int);
 
-    void screenshotDoneCb(struct ev_loop*, ev_io* w, int) {
-        ((KmsOutput*)w->data)->screenshotPrepared();
+    struct CallScreenshotPrepared: Listener {
+        KmsOutput* parent;
+
+        CallScreenshotPrepared(KmsOutput* p);
+        void onListen(void*) override;
+    };
+
+    CallScreenshotPrepared::CallScreenshotPrepared(KmsOutput* p)
+        : parent(p)
+    {
     }
 
-    void hotplugDoneCb(struct ev_loop*, ev_io* w, int) {
-        ((KmsOutput*)w->data)->hotplugProbed();
+    void CallScreenshotPrepared::onListen(void*) {
+        parent->screenshotPrepared();
     }
 
     struct KmsDevice: public Device {
@@ -1221,96 +1245,91 @@ void KmsOutput::drainPendingFlip() {
 }
 
 void KmsOutput::hotplug() {
-    if (probeInFlight) {
-        // events burst during link training: one probe runs, the last
-        // request wins a re-probe when it retires
-        probeAgain = true;
+    hotplugJob->run();
+}
 
-        return;
-    }
+// offload worker: only the blocking connector read lives here
+void KmsOutput::hotplugProbe() {
+    drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
 
-    probeInFlight = true;
+    probeValid = conn != nullptr;
+    probeConnected = false;
+    probeModeCount = 0;
+    probePreferred = -1;
 
-    drmModeModeInfo current = mode;
+    if (conn) {
+        probeConnected = conn->connection == DRM_MODE_CONNECTED;
 
-    // the connected probe re-reads EDID over DDC in the kernel — tens to
-    // hundreds of milliseconds on a real link; the state machine stays on
-    // the loop, only the blocking read runs on the offload thread
-    c->offload->submit([this, current] {
-        drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
+        if (probeConnected) {
+            probeModeCount = conn->count_modes < 32 ? conn->count_modes : 32;
 
-        probeValid = conn != nullptr;
-        probeConnected = false;
-        probeOffered = false;
-        probeHaveModes = false;
+            for (int i = 0; i < probeModeCount; i++) {
+                probeModes[i] = conn->modes[i];
 
-        if (conn) {
-            probeConnected = conn->connection == DRM_MODE_CONNECTED;
-            probeHaveModes = probeConnected && conn->count_modes > 0;
-
-            // what the display on the wire wants now: the current mode when
-            // still offered, else its preferred one (a swapped display)
-            if (probeHaveModes) {
-                probeWant = conn->modes[0];
-
-                for (int i = 0; i < conn->count_modes; i++) {
-                    const drmModeModeInfo& m = conn->modes[i];
-
-                    if (m.hdisplay == current.hdisplay && m.vdisplay == current.vdisplay && m.vrefresh == current.vrefresh) {
-                        probeOffered = true;
-                    }
-
-                    if (m.type & DRM_MODE_TYPE_PREFERRED) {
-                        probeWant = conn->modes[i];
-                    }
+                if (conn->modes[i].type & DRM_MODE_TYPE_PREFERRED) {
+                    probePreferred = i;
                 }
             }
-
-            drmModeFreeConnector(conn);
         }
 
-        hotplugDone.signal();
-    });
+        drmModeFreeConnector(conn);
+    }
 }
 
 void KmsOutput::hotplugProbed() {
-    hotplugDone.drain();
-    probeInFlight = false;
+    if (!probeValid) {
+        return;
+    }
 
-    if (probeValid && probeConnected == connectorConnected) {
+    // what the display on the wire wants now: the current mode when still
+    // offered, else its preferred one — a swapped display (the TV case)
+    bool haveModes = probeConnected && probeModeCount > 0;
+    bool offered = false;
+    drmModeModeInfo want{};
+
+    if (haveModes) {
+        want = probeModes[probePreferred >= 0 ? probePreferred : 0];
+
+        for (int i = 0; i < probeModeCount; i++) {
+            const drmModeModeInfo& m = probeModes[i];
+
+            if (m.hdisplay == mode.hdisplay && m.vdisplay == mode.vdisplay && m.vrefresh == mode.vrefresh) {
+                offered = true;
+            }
+        }
+    }
+
+    if (probeConnected == connectorConnected) {
         if (probeConnected) {
             signalFeedbackLogged = false;
             updateSignalFeedback();
 
             // the mode list changed without the link dropping (a dock
             // re-reading EDID): follow it like a replug would
-            if (!probeOffered && probeHaveModes && switchMode(probeWant)) {
+            if (!offered && haveModes && switchMode(want)) {
                 remodeset("mode list changed, remodeset"_sv);
             }
         }
-    } else if (probeValid) {
-        connectorConnected = probeConnected;
-
-        if (!probeConnected) {
-            *(c->log) << "imway: connector disconnected"_sv << endL;
-        } else {
-            drainPendingFlip();
-
-            if (!probeOffered && probeHaveModes && !switchMode(probeWant)) {
-                // committing the old mode anyway is honest: the display
-                // refuses it and the failure lands in the log instead of a
-                // silent dark screen
-                *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
-            }
-
-            remodeset("connector reconnected, remodeset"_sv);
-        }
+        return;
     }
 
-    if (probeAgain) {
-        probeAgain = false;
-        hotplug();
+    connectorConnected = probeConnected;
+
+    if (!probeConnected) {
+        *(c->log) << "imway: connector disconnected"_sv << endL;
+
+        return;
     }
+
+    drainPendingFlip();
+
+    if (!offered && haveModes && !switchMode(want)) {
+        // committing the old mode anyway is honest: the display refuses it
+        // and the failure lands in the log instead of a silent dark screen
+        *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
+    }
+
+    remodeset("connector reconnected, remodeset"_sv);
 }
 
 // full modeset on the freshest rendered framebuffer, after a hotplug-class
@@ -1337,14 +1356,12 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 {
     c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
-    screenshotIo = createEvIo(*c.pool, c.loop);
-    ev_io_init(screenshotIo, screenshotDoneCb, screenshotDone.fd(), EV_READ);
-    screenshotIo->data = this;
-    ev_io_start(c.loop, screenshotIo);
-    hotplugIo = createEvIo(*c.pool, c.loop);
-    ev_io_init(hotplugIo, hotplugDoneCb, hotplugDone.fd(), EV_READ);
-    hotplugIo->data = this;
-    ev_io_start(c.loop, hotplugIo);
+    screenshotJob = OffloadJob::create(c, [](void* self) {
+        ((KmsOutput*)self)->screenshotPrepare();
+    }, this, *c.pool->make<CallScreenshotPrepared>(this));
+    hotplugJob = OffloadJob::create(c, [](void* self) {
+        ((KmsOutput*)self)->hotplugProbe();
+    }, this, *c.pool->make<CallHotplugProbed>(this));
     pickPipe(connector, modeStr);
 
     if (!readEdidColorCapabilities(fd, connectorId, displayCapabilities)) {
@@ -1586,17 +1603,8 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 }
 
 KmsOutput::~KmsOutput() noexcept {
-    if (screenshotState == 1 || probeInFlight) {
-        c->offload->join();
-    }
-
-    if (ev_is_active(screenshotIo)) {
-        ev_io_stop(loop, screenshotIo);
-    }
-
-    if (ev_is_active(hotplugIo)) {
-        ev_io_stop(loop, hotplugIo);
-    }
+    screenshotJob->join();
+    hotplugJob->join();
 
     releaseDirectUse(queuedDirect, queuedDirectFrame);
     releaseDirectUse(currentDirect, currentDirectFrame);
@@ -2923,19 +2931,19 @@ bool KmsOutput::prepareScreenshot(Listener& readyListener) {
     screenshotReady = &readyListener;
     screenshotState = 1;
     stdAtomicStore(&screenshotResult, 0, MemoryOrder::Relaxed);
-    c->offload->submit([this] {
-        bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, scanMods, scanModCount, scanFormat, scanFourcc, screenshotReplacement);
-
-        stdAtomicStore(&screenshotResult, ok ? 1 : -1, MemoryOrder::Release);
-        screenshotDone.signal();
-    });
+    screenshotJob->run();
 
     return true;
 }
 
-void KmsOutput::screenshotPrepared() {
-    screenshotDone.drain();
+// offload worker: the replacement scanout builds away from the loop
+void KmsOutput::screenshotPrepare() {
+    bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, scanMods, scanModCount, scanFormat, scanFourcc, screenshotReplacement);
 
+    stdAtomicStore(&screenshotResult, ok ? 1 : -1, MemoryOrder::Release);
+}
+
+void KmsOutput::screenshotPrepared() {
     int result = stdAtomicFetch(&screenshotResult, MemoryOrder::Acquire);
     Listener* listener = screenshotReady;
 

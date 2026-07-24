@@ -4,15 +4,13 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "intr_list.h"
 #include "status_notifier.h"
 
 #include <std/str/view.h>
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
-
-#include <imgui.h>
-#include <imgui_internal.h>
 
 using namespace stl;
 

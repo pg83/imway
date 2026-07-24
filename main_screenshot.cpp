@@ -30,7 +30,7 @@
 #include <GLFW/glfw3native.h>
 #include <wayland-client.h>
 
-#include <imgui.h>
+#include "imgui_wm.h"
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 

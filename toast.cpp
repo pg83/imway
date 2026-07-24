@@ -3,9 +3,8 @@
 #include "icon.h"
 #include "util.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "notifier.h"
-
-#include <imgui.h>
 
 using namespace stl;
 

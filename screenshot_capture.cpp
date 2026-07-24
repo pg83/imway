@@ -8,6 +8,8 @@
 #include "listener.h"
 #include "device_vk.h"
 #include "pooled_ev.h"
+#include "fence_poll.h"
+#include "offload_job.h"
 #include "main_supervisor.h"
 
 #include <std/ios/sys.h>
@@ -57,12 +59,12 @@ namespace {
         VkCommandBuffer command = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
 
-        ev_timer* fenceTimer = nullptr;
-        EventFD done;
-        ev_io* doneIo = nullptr;
+        FencePoll* fencePoll = nullptr;
+        OffloadJob* fileJob = nullptr;
+        // the handed-off scanout stays referenced until KMS flips away from
+        // it; this timer polls that retirement
+        ev_timer* retireTimer = nullptr;
         bool busy_ = false;
-        bool fencePending = false;
-        bool workerPending = false;
         bool handoff = false;
         bool waitingRetire = false;
         int resultFd = -1;
@@ -77,18 +79,48 @@ namespace {
         void resize(int w, int h) override;
         void onListen(void* data) override;
         void ensureReadback();
-        void pollFence();
+        void fenceDone(VkResult status);
+        void pollRetire();
+        void buildFileWork();
         int buildFile();
         void ready();
         void spawn(int fd, const SharedScanout* image);
     };
 
-    void fenceTimerCb(struct ev_loop*, ev_timer* w, int) {
-        ((ScreenshotCaptureImpl*)w->data)->pollFence();
+    void retireTimerCb(struct ev_loop*, ev_timer* w, int) {
+        ((ScreenshotCaptureImpl*)w->data)->pollRetire();
     }
 
-    void doneIoCb(struct ev_loop*, ev_io* w, int) {
-        ((ScreenshotCaptureImpl*)w->data)->ready();
+    struct CallShotFenceDone: Listener {
+        ScreenshotCaptureImpl* parent;
+
+        CallShotFenceDone(ScreenshotCaptureImpl* p);
+        void onListen(void* status) override;
+    };
+
+    struct CallShotFileDone: Listener {
+        ScreenshotCaptureImpl* parent;
+
+        CallShotFileDone(ScreenshotCaptureImpl* p);
+        void onListen(void*) override;
+    };
+
+    CallShotFenceDone::CallShotFenceDone(ScreenshotCaptureImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallShotFenceDone::onListen(void* status) {
+        parent->fenceDone(*(VkResult*)status);
+    }
+
+    CallShotFileDone::CallShotFileDone(ScreenshotCaptureImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallShotFileDone::onListen(void*) {
+        parent->ready();
     }
 
     u32 findMemoryType(VkPhysicalDevice phys, u32 typeBits, VkMemoryPropertyFlags props) {
@@ -136,30 +168,26 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
 
     VK_CHECK(vkCreateFence(device, &fci, nullptr, &fence));
 
-    fenceTimer = createEvTimer(*c.pool, c.loop);
-    ev_timer_init(fenceTimer, fenceTimerCb, 0., 0.);
-    fenceTimer->data = this;
-
-    doneIo = createEvIo(*c.pool, c.loop);
-    ev_io_init(doneIo, doneIoCb, done.fd(), EV_READ);
-    doneIo->data = this;
-    ev_io_start(c.loop, doneIo);
+    fencePoll = FencePoll::create(*c.pool, c.loop, device, fence, *c.pool->make<CallShotFenceDone>(this));
+    fileJob = OffloadJob::create(c, [](void* self) {
+        ((ScreenshotCaptureImpl*)self)->buildFileWork();
+    }, this, *c.pool->make<CallShotFileDone>(this));
+    retireTimer = createEvTimer(*c.pool, c.loop);
+    ev_timer_init(retireTimer, retireTimerCb, 0.001, 0.001);
+    retireTimer->data = this;
 }
 
 ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
-    if (ev_is_active(fenceTimer)) {
-        ev_timer_stop(comp->loop, fenceTimer);
-    }
-    if (ev_is_active(doneIo)) {
-        ev_io_stop(comp->loop, doneIo);
+    if (ev_is_active(retireTimer)) {
+        ev_timer_stop(comp->loop, retireTimer);
     }
 
-    if (fencePending) {
+    if (fencePoll->armed()) {
+        fencePoll->cancel();
         vkWaitOrDie(device, fence, "screenshot capture teardown");
     }
-    if (workerPending) {
-        comp->offload->join();
-    }
+
+    fileJob->join();
 
     int mfd = stdAtomicFetch(&resultFd, MemoryOrder::Acquire);
 
@@ -254,7 +282,7 @@ void ScreenshotCaptureImpl::ensureReadback() {
 }
 
 bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayout layout) {
-    if (!busy_ || fencePending || workerPending || waitingRetire) {
+    if (!busy_ || fencePoll->armed() || fileJob->inFlight() || waitingRetire) {
         return false;
     }
 
@@ -312,37 +340,24 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
         return false;
     }
 
-    fencePending = true;
     comp->scene->needsFrame = handoff;
-    ev_timer_set(fenceTimer, 0.001, 0.001);
-    ev_timer_start(comp->loop, fenceTimer);
+    fencePoll->arm();
 
     return true;
 }
 
-void ScreenshotCaptureImpl::pollFence() {
-    if (waitingRetire) {
-        if (output->screenshotPending()) {
-            return;
-        }
-
-        ev_timer_stop(comp->loop, fenceTimer);
-        waitingRetire = false;
-        handoff = false;
-        busy_ = false;
-
+void ScreenshotCaptureImpl::pollRetire() {
+    if (output->screenshotPending()) {
         return;
     }
 
-    VkResult status = vkGetFenceStatus(device, fence);
+    ev_timer_stop(comp->loop, retireTimer);
+    waitingRetire = false;
+    handoff = false;
+    busy_ = false;
+}
 
-    if (status == VK_NOT_READY) {
-        return;
-    }
-
-    ev_timer_stop(comp->loop, fenceTimer);
-    fencePending = false;
-
+void ScreenshotCaptureImpl::fenceDone(VkResult status) {
     if (status != VK_SUCCESS) {
         busy_ = false;
         *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status << ")"_sv << endL;
@@ -358,8 +373,7 @@ void ScreenshotCaptureImpl::pollFence() {
         waitingRetire = output->screenshotPending();
 
         if (waitingRetire) {
-            ev_timer_set(fenceTimer, 0.001, 0.001);
-            ev_timer_start(comp->loop, fenceTimer);
+            ev_timer_again(comp->loop, retireTimer);
         } else {
             busy_ = false;
             handoff = false;
@@ -368,13 +382,14 @@ void ScreenshotCaptureImpl::pollFence() {
         return;
     }
 
-    workerPending = true;
-    comp->offload->submit([this] {
-        int mfd = buildFile();
+    fileJob->run();
+}
 
-        stdAtomicStore(&resultFd, mfd, MemoryOrder::Release);
-        done.signal();
-    });
+// offload worker: the file assembles away from the loop
+void ScreenshotCaptureImpl::buildFileWork() {
+    int mfd = buildFile();
+
+    stdAtomicStore(&resultFd, mfd, MemoryOrder::Release);
 }
 
 int ScreenshotCaptureImpl::buildFile() {
@@ -465,12 +480,9 @@ int ScreenshotCaptureImpl::buildFile() {
 }
 
 void ScreenshotCaptureImpl::ready() {
-    done.drain();
-
     int mfd = stdAtomicFetch(&resultFd, MemoryOrder::Acquire);
 
     stdAtomicStore(&resultFd, -1, MemoryOrder::Relaxed);
-    workerPending = false;
     busy_ = false;
 
     if (mfd < 0) {
