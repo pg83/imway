@@ -20,6 +20,7 @@
 #include <std/rng/split_mix_64.h>
 
 #include <ev.h>
+#include <png.h>
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
@@ -49,6 +50,37 @@ namespace {
         return sym ^ splitMix64(bucket);
     }
 
+    // "48x48" -> 48; 0 for anything that is not a plain square size dir
+    // (scalable, and @2-scaled dirs like "256x256@2", are handled elsewhere
+    // or skipped)
+    u32 parseSizeDir(StringView name) {
+        StringView a, b;
+
+        if (!name.split('x', a, b) || a.empty() || a != b) {
+            return 0;
+        }
+
+        for (size_t i = 0; i < a.length(); i++) {
+            if (a[i] < '0' || a[i] > '9') {
+                return 0;
+            }
+        }
+
+        return (u32)a.stou();
+    }
+
+    // one icon name across the hicolor theme: the fixed-size png rasters plus
+    // the scalable svg. Rasterization stays lazy; this only holds paths.
+    struct IconSource {
+        StringBuilder* path = nullptr;
+        u32 size = 0;
+    };
+
+    struct IconName {
+        stl::Vector<IconSource> pngs;
+        StringBuilder* svg = nullptr;
+    };
+
     void inoCb(struct ev_loop*, ev_io* w, int);
     void reloadCb(struct ev_loop*, ev_timer* w, int);
 
@@ -64,9 +96,9 @@ namespace {
 
         // eager indexes, so a cold precomputed-symbol lookup can still
         // materialize: hash(lower(fileId)) -> the .desktop Icon= value, and
-        // hash(svg basename) -> its full path. Rasterization stays lazy.
+        // hash(icon basename) -> its png sizes and svg. Rasterization stays lazy.
         IntMap<StringBuilder*>* desktop = nullptr;
-        IntMap<StringBuilder*>* names = nullptr;
+        IntMap<IconName*>* names = nullptr;
 
         // query symbol -> resolved icon, misses cached as nullptr
         IntMap<Icon*>* cache = nullptr;
@@ -81,11 +113,15 @@ namespace {
         IconStoreImpl(Composer& comp);
         ~IconStoreImpl() noexcept;
 
+        void addWatches();
         void buildIndex();
         void addDesktop(StringBuilder& file, StringView fileId);
+        IconName& nameEntry(u64 sym);
         void drainInotify();
         void reload();
         Icon* loadSvgFile(StringView path, u32 bucket);
+        Icon* loadPngFile(StringView path);
+        Icon* resolveName(IconName& n, u32 bucket);
         Icon* valueIcon(StringView v, u32 bucket);
         Icon* resolveSym(u64 sym, u32 bucket);
         Icon* findIcon(u64 sym, u32 desired, StringView id) override;
@@ -107,7 +143,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
 {
     gen = ObjPool::fromMemoryRaw();
     desktop = gen->make<IntMap<StringBuilder*>>(gen);
-    names = gen->make<IntMap<StringBuilder*>>(gen);
+    names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
 
@@ -117,17 +153,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
         return;
     }
 
-    u32 mask = IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM | IN_CLOSE_WRITE | IN_ATTRIB;
-
-    forEachXdgDataDir([this, mask](StringView base) {
-        StringBuilder p;
-
-        p << base << "/applications"_sv;
-        inotify_add_watch(inoFd, p.cStr(), mask);
-        p.reset();
-        p << base << "/icons/hicolor/scalable/apps"_sv;
-        inotify_add_watch(inoFd, p.cStr(), mask);
-    });
+    addWatches();
 
     pooledFD(*c->pool, inoFd);
     ev_io* ino = createEvIo(*c->pool, loop);
@@ -138,6 +164,47 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     reloadTimer = createEvTimer(*c->pool, loop);
     ev_timer_init(reloadTimer, reloadCb, 0.5, 0.5);
     reloadTimer->data = this;
+}
+
+// idempotent (inotify_add_watch returns the existing wd for a known path):
+// the constructor arms the watches, and every reload re-arms them so a
+// size dir that appeared since last time gets covered. Watches only
+// accumulate; a removed dir leaves an inert wd. The png sizes live in many
+// hicolor/<NxN>/apps leaves, and inotify is not recursive, so the hicolor
+// parent is watched too — a brand-new size dir fires there and the debounced
+// reload re-enumerates and arms its leaf. The one gap (a png dropped into a
+// just-created size dir before its leaf is watched) resolves on the next
+// change or restart, the same best-effort the store already relies on.
+void IconStoreImpl::addWatches() {
+    u32 mask = IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM | IN_CLOSE_WRITE | IN_ATTRIB;
+
+    forEachXdgDataDir([this, mask](StringView base) {
+        StringBuilder p;
+
+        p << base << "/applications"_sv;
+        inotify_add_watch(inoFd, p.cStr(), mask);
+        p.reset();
+        p << base << "/icons/hicolor"_sv;
+        inotify_add_watch(inoFd, p.cStr(), mask);
+
+        StringBuilder hicolor;
+
+        hicolor << sv(p);
+
+        try {
+            listDir(sv(hicolor), [this, mask, &hicolor](const TPathInfo& e) {
+                if (!e.isDir || (e.item != "scalable"_sv && !parseSizeDir(e.item))) {
+                    return;
+                }
+
+                StringBuilder apps;
+
+                apps << sv(hicolor) << "/"_sv << e.item << "/apps"_sv;
+                inotify_add_watch(inoFd, apps.cStr(), mask);
+            });
+        } catch (...) {
+        }
+    });
 }
 
 // the generation arena releases the icon leases into a pool that outlives
@@ -177,19 +244,72 @@ void IconStoreImpl::buildIndex() {
                     return;
                 }
 
-                u64 sym = e.item.prefix(e.item.length() - 4).hash64();
+                IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
 
                 // first hit wins: XDG_DATA_HOME precedes XDG_DATA_DIRS
-                if (!names->find(sym)) {
-                    StringBuilder* p = gen->make<StringBuilder>();
+                if (!n.svg) {
+                    n.svg = gen->make<StringBuilder>();
+                    *n.svg << sv(dir) << "/"_sv << e.item;
+                }
+            });
+        } catch (...) {
+        }
 
-                    *p << sv(dir) << "/"_sv << e.item;
-                    names->insert(sym, p);
+        // the fixed-size png rasters: icons/hicolor/<NxN>/apps/*.png
+        StringBuilder hicolor;
+
+        hicolor << base << "/icons/hicolor"_sv;
+
+        try {
+            listDir(sv(hicolor), [this, &hicolor](const TPathInfo& sizeDir) {
+                u32 size = sizeDir.isDir ? parseSizeDir(sizeDir.item) : 0;
+
+                if (!size) {
+                    return;
+                }
+
+                StringBuilder apps;
+
+                apps << sv(hicolor) << "/"_sv << sizeDir.item << "/apps"_sv;
+
+                try {
+                    listDir(sv(apps), [this, &apps, size](const TPathInfo& e) {
+                        if (e.isDir || !e.item.endsWith(".png"_sv)) {
+                            return;
+                        }
+
+                        IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
+
+                        // first base dir wins per size, matching the svg rule
+                        for (const IconSource& s : n.pngs) {
+                            if (s.size == size) {
+                                return;
+                            }
+                        }
+
+                        StringBuilder* p = gen->make<StringBuilder>();
+
+                        *p << sv(apps) << "/"_sv << e.item;
+                        n.pngs.pushBack({p, size});
+                    });
+                } catch (...) {
                 }
             });
         } catch (...) {
         }
     });
+}
+
+IconName& IconStoreImpl::nameEntry(u64 sym) {
+    if (IconName** hit = names->find(sym)) {
+        return **hit;
+    }
+
+    IconName* n = gen->make<IconName>();
+
+    names->insert(sym, n);
+
+    return *n;
 }
 
 void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
@@ -266,10 +386,15 @@ void IconStoreImpl::reload() {
 
     gen = ObjPool::fromMemoryRaw();
     desktop = gen->make<IntMap<StringBuilder*>>(gen);
-    names = gen->make<IntMap<StringBuilder*>>(gen);
+    names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
     delete old;
+
+    // a newly installed theme may have added size dirs; arm their leaves
+    if (inoFd >= 0) {
+        addWatches();
+    }
 
     c->scene->needsFrame = true;
     *(c->log) << "imway: icon store reloaded, "_sv << (u64)desktop->size() << " entries"_sv << endL;
@@ -298,6 +423,86 @@ Icon* IconStoreImpl::loadSvgFile(StringView path, u32 bucket) {
     return ic;
 }
 
+Icon* IconStoreImpl::loadPngFile(StringView path) {
+    png_image image;
+
+    memset(&image, 0, sizeof(image));
+    image.version = PNG_IMAGE_VERSION;
+
+    if (!png_image_begin_read_from_file(&image, Buffer(path).cStr())) {
+        return nullptr;
+    }
+
+    image.format = PNG_FORMAT_BGRA;
+
+    if (image.width == 0 || image.height == 0 || image.width > 1024 || image.height > 1024) {
+        png_image_free(&image);
+
+        return nullptr;
+    }
+
+    u32 w = image.width, h = image.height;
+    Buffer px;
+
+    px.grow((size_t)w * h * 4);
+
+    if (!png_image_finish_read(&image, nullptr, px.mutData(), 0, nullptr)) {
+        png_image_free(&image);
+
+        return nullptr;
+    }
+
+    // PNG_FORMAT_BGRA is the icon's byte order but straight-alpha; the
+    // renderer blends premultiplied (as lunasvg hands us), so premultiply
+    u8* b = (u8*)px.mutData();
+
+    for (size_t i = 0; i < (size_t)w * h; i++) {
+        u8* p = b + i * 4;
+        u32 a = p[3];
+
+        p[0] = (u8)(p[0] * a / 255);
+        p[1] = (u8)(p[1] * a / 255);
+        p[2] = (u8)(p[2] * a / 255);
+    }
+
+    Icon* ic = icons->acquire(*gen);
+
+    ic->width = (int)w;
+    ic->height = (int)h;
+    ic->argb.append((const u32*)px.data(), (size_t)w * h);
+
+    return ic;
+}
+
+// prefer png: the smallest raster that still covers the bucket wins. svg
+// only fills the gap above the largest png; failing that, the largest png
+// is the best-effort answer. Selection is a pure function of the bucket, so
+// the bucket-keyed cache stays coherent.
+Icon* IconStoreImpl::resolveName(IconName& n, u32 bucket) {
+    const IconSource* cover = nullptr;
+    const IconSource* largest = nullptr;
+
+    for (const IconSource& s : n.pngs) {
+        if (s.size >= bucket && (!cover || s.size < cover->size)) {
+            cover = &s;
+        }
+
+        if (!largest || s.size > largest->size) {
+            largest = &s;
+        }
+    }
+
+    if (cover) {
+        return loadPngFile(sv(*cover->path));
+    }
+
+    if (n.svg) {
+        return loadSvgFile(sv(*n.svg), bucket);
+    }
+
+    return largest ? loadPngFile(sv(*largest->path)) : nullptr;
+}
+
 // a name-or-path Icon= value, cached under its own symbol so an app_id
 // lookup and a direct name lookup landing on the same value share one icon
 Icon* IconStoreImpl::valueIcon(StringView v, u32 bucket) {
@@ -312,9 +517,11 @@ Icon* IconStoreImpl::valueIcon(StringView v, u32 bucket) {
     if (!v.empty() && v[0] == '/') {
         if (v.endsWith(".svg"_sv)) {
             icon = loadSvgFile(v, bucket);
+        } else if (v.endsWith(".png"_sv)) {
+            icon = loadPngFile(v);
         }
-    } else if (StringBuilder** path = names->find(sym)) {
-        icon = loadSvgFile(sv(**path), bucket);
+    } else if (IconName** n = names->find(sym)) {
+        icon = resolveName(**n, bucket);
     }
 
     cache->insert(bucketSym(sym, bucket), icon);
@@ -329,8 +536,8 @@ Icon* IconStoreImpl::resolveSym(u64 sym, u32 bucket) {
         return valueIcon(sv(**value), bucket);
     }
 
-    if (StringBuilder** path = names->find(sym)) {
-        return loadSvgFile(sv(**path), bucket);
+    if (IconName** n = names->find(sym)) {
+        return resolveName(**n, bucket);
     }
 
     return nullptr;
@@ -354,8 +561,12 @@ Icon* IconStoreImpl::findIcon(u64 sym, u32 desired, StringView id) {
             icon = resolveSym(lsym, bucket);
         }
 
-        if (!icon && id[0] == '/' && id.endsWith(".svg"_sv)) {
-            icon = loadSvgFile(id, bucket);
+        if (!icon && id[0] == '/') {
+            if (id.endsWith(".svg"_sv)) {
+                icon = loadSvgFile(id, bucket);
+            } else if (id.endsWith(".png"_sv)) {
+                icon = loadPngFile(id);
+            }
         }
     }
 
