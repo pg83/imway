@@ -39,6 +39,7 @@ vulkan = pkg_config("vulkan")
 lunasvg = pkg_config("lunasvg")
 sndio = pkg_config("sndio", required=False)
 pulse = pkg_config("libpulse", required=False)
+pam = pkg_config("pam", required=False)
 
 system = dependency(ldflags=["-lev", "-lstd", "-lcrypt"])
 
@@ -172,7 +173,7 @@ prod_sources = [s for s in imway_sources
 imway_deps = [
     imgui, protocols,
     wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
-    png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse,
+    png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse, pam,
 ]
 
 imway = program(

@@ -5,6 +5,7 @@
 #include "dialog.h"
 #include "composer.h"
 #include "imgui_wm.h"
+#include "listener.h"
 #include "tex_pool.h"
 #include "device_vk.h"
 #include "render_filter.h"
@@ -16,9 +17,15 @@
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
 
+#if __has_include(<security/pam_appl.h>)
+    #include <security/pam_appl.h>
+#else
+    #include <crypt.h>
+    #include <shadow.h>
+#endif
+
 #include <pwd.h>
-#include <crypt.h>
-#include <shadow.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <imgui_impl_vulkan.h>
@@ -78,27 +85,113 @@ namespace {
         return diff == 0;
     }
 
-    bool authenticate(StringView password) {
-        // Temporary development escape hatch. PAM replaces the shadow path,
-        // not this deliberately conspicuous first-stage exception.
-        if (secureEqual(password, StringView("xxx"))) {
-            return true;
+#if __has_include(<security/pam_appl.h>)
+    struct PamInput {
+        const char* user = nullptr;
+        const char* password = nullptr;
+    };
+
+    void freePamResponses(pam_response* responses, int count) noexcept {
+        if (!responses) {
+            return;
         }
 
-        if (password.empty()) {
+        for (int i = 0; i < count; i++) {
+            if (responses[i].resp) {
+                wipe(responses[i].resp, strlen(responses[i].resp));
+                free(responses[i].resp);
+            }
+        }
+
+        free(responses);
+    }
+
+    int pamConversation(int count, const pam_message** messages, pam_response** out, void* data) {
+        if (count <= 0 || !messages || !out || !data) {
+            return PAM_CONV_ERR;
+        }
+
+        auto& input = *(PamInput*)data;
+        auto* responses = (pam_response*)calloc((size_t)count, sizeof(pam_response));
+
+        if (!responses) {
+            return PAM_BUF_ERR;
+        }
+
+        for (int i = 0; i < count; i++) {
+            const char* answer = nullptr;
+
+            if (!messages[i]) {
+                freePamResponses(responses, count);
+
+                return PAM_CONV_ERR;
+            }
+
+            switch (messages[i]->msg_style) {
+                case PAM_PROMPT_ECHO_OFF:
+                    answer = input.password;
+                    break;
+                case PAM_PROMPT_ECHO_ON:
+                    answer = input.user;
+                    break;
+                case PAM_ERROR_MSG:
+                case PAM_TEXT_INFO:
+                    break;
+                default:
+                    freePamResponses(responses, count);
+
+                    return PAM_CONV_ERR;
+            }
+
+            if (answer) {
+                responses[i].resp = strdup(answer);
+
+                if (!responses[i].resp) {
+                    freePamResponses(responses, count);
+
+                    return PAM_BUF_ERR;
+                }
+            }
+        }
+
+        *out = responses;
+
+        return PAM_SUCCESS;
+    }
+
+    bool authenticateSystem(passwd& account, StringView password) {
+        Buffer input(password);
+        PamInput conversationInput = {account.pw_name, input.cStr()};
+        pam_conv conversation = {pamConversation, &conversationInput};
+        pam_handle_t* handle = nullptr;
+        int status = pam_start("login", account.pw_name, &conversation, &handle);
+
+        if (status == PAM_SUCCESS) {
+            status = pam_authenticate(handle, PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK);
+        }
+
+        if (status == PAM_SUCCESS) {
+            status = pam_acct_mgmt(handle, PAM_SILENT);
+        }
+
+        if (handle) {
+            pam_end(handle, status);
+        }
+
+        wipe((char*)input.data(), input.length());
+
+        return status == PAM_SUCCESS;
+    }
+#else
+    bool authenticateSystem(passwd& account, StringView password) {
+        if (!account.pw_passwd) {
             return false;
         }
 
-        passwd* account = getpwuid(getuid());
-
-        if (!account || !account->pw_name || !account->pw_passwd) {
-            return false;
-        }
-
-        const char* hash = account->pw_passwd;
+        const char* hash = account.pw_passwd;
 
         if (!strcmp(hash, "x")) {
-            spwd* shadow = getspnam(account->pw_name);
+            spwd* shadow = getspnam(account.pw_name);
 
             if (!shadow || !shadow->sp_pwdp) {
                 return false;
@@ -119,6 +212,27 @@ namespace {
 
         return ok;
     }
+#endif
+
+    bool authenticate(StringView password) {
+        // Temporary development escape hatch, deliberately before either
+        // system authentication backend.
+        if (secureEqual(password, StringView("xxx"))) {
+            return true;
+        }
+
+        if (password.empty()) {
+            return false;
+        }
+
+        passwd* account = getpwuid(getuid());
+
+        if (!account || !account->pw_name) {
+            return false;
+        }
+
+        return authenticateSystem(*account, password);
+    }
 
     void initDrawData(ImDrawData& out, const ImDrawData& src) {
         out.Valid = src.Valid;
@@ -129,7 +243,7 @@ namespace {
         out.Textures = src.Textures;
     }
 
-    struct LockFilter: Filter {
+    struct LockFilter: Filter, Listener {
         ImDrawList* overlayDrawList = nullptr;
         ImDrawList* foregroundDrawList = nullptr; // software/client cursor, drawn after the dialog
 
@@ -164,8 +278,10 @@ namespace {
             return (ImTextureID)(uintptr_t)blurUi;
         }
 
+        void onListen(void*) override;
         void apply(RenderContext& ctx) override;
         void setup(RenderContext& ctx);
+        void destroyResources() noexcept;
         void recordBlur(VkCommandBuffer commands);
         u32 findMemoryType(u32 bits, VkMemoryPropertyFlags flags) const;
         void createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory);
@@ -180,7 +296,6 @@ namespace {
         bool closeRequested = false;
 
         ~Dialog() noexcept {
-            filter.unlink();
             wipe(password, sizeof(password));
             wipeImGuiPasswordState();
             *log << StringView("imway: lockscreen closed") << endL;
@@ -377,8 +492,11 @@ void LockFilter::setup(RenderContext& ctx) {
 }
 
 LockFilter::~LockFilter() noexcept {
-    unlink();
+    ((Filter*)this)->unlink();
+    destroyResources();
+}
 
+void LockFilter::destroyResources() noexcept {
     if (!device) {
         return;
     }
@@ -424,6 +542,38 @@ LockFilter::~LockFilter() noexcept {
     if (baseMemory) {
         vkFreeMemory(device, baseMemory, nullptr);
     }
+
+    physicalDevice = VK_NULL_HANDLE;
+    device = VK_NULL_HANDLE;
+    sampler = VK_NULL_HANDLE;
+    textures = nullptr;
+    format = VK_FORMAT_UNDEFINED;
+    width = height = 0;
+    blurW = blurH = 0;
+    baseImage = VK_NULL_HANDLE;
+    baseMemory = VK_NULL_HANDLE;
+    baseView = VK_NULL_HANDLE;
+    basePass = VK_NULL_HANDLE;
+    baseFramebuffer = VK_NULL_HANDLE;
+    blurImages[0] = blurImages[1] = VK_NULL_HANDLE;
+    blurMemory[0] = blurMemory[1] = VK_NULL_HANDLE;
+    blurViews[0] = blurViews[1] = VK_NULL_HANDLE;
+    blurUi = VK_NULL_HANDLE;
+    blurUiPool = VK_NULL_HANDLE;
+    setLayout = VK_NULL_HANDLE;
+    pipeLayout = VK_NULL_HANDLE;
+    pipeline = VK_NULL_HANDLE;
+    descriptorPool = VK_NULL_HANDLE;
+    descriptorSets[0] = descriptorSets[1] = VK_NULL_HANDLE;
+    fresh = true;
+}
+
+void LockFilter::onListen(void*) {
+    // Output::announceMode fires only after scene has the new dimensions and
+    // the GPU is idle. Drop every output-sized object before the next ImGui
+    // frame can put its descriptor into a draw list; apply() rebuilds the
+    // resources from that frame's RenderContext.
+    destroyResources();
 }
 
 void LockFilter::recordBlur(VkCommandBuffer commands) {
@@ -644,7 +794,10 @@ void openLockOverlay(Composer& c, DialogState** state) {
     created->opaque = pool->make<Dialog>();
     ((Dialog*)created->opaque)->log = c.log;
     *state = created;
-    c.filters.pushBack(&((Dialog*)created->opaque)->filter);
+    auto& filter = ((Dialog*)created->opaque)->filter;
+
+    c.filters.pushBack((Filter*)&filter);
+    c.outputResizedListeners.pushBack((Listener*)&filter);
 
     c.scene->needsFrame = true;
 }
