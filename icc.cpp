@@ -1,7 +1,7 @@
 #include "icc.h"
 
-#include <lcms2.h>
 #include <math.h>
+#include <lcms2.h>
 
 namespace {
     bool curveMatches(const cmsToneCurve& curve, double (*fn)(double)) {

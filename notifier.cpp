@@ -1,11 +1,11 @@
 #include "notifier.h"
 
-#include "composer.h"
-#include "intr_list.h"
-#include "listener.h"
-#include "scene.h"
-#include "small_obj_allocator.h"
 #include "util.h"
+#include "scene.h"
+#include "composer.h"
+#include "listener.h"
+#include "intr_list.h"
+#include "small_obj_allocator.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>

@@ -1,13 +1,13 @@
 #include "session.h"
 
-#include "composer.h"
-#include "intr_list.h"
-#include "listener.h"
 #include "log.h"
 #include "util.h"
+#include "composer.h"
+#include "listener.h"
+#include "intr_list.h"
 
-#include <errno.h>
 #include <ev.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 

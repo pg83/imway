@@ -3,9 +3,9 @@
 #include "visitor.h"
 
 #include <std/lib/list.h>
-#include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
+#include <std/str/builder.h>
 
 struct Composer;
 

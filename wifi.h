@@ -2,9 +2,9 @@
 
 #include "visitor.h"
 
+#include <std/sys/types.h>
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
-#include <std/sys/types.h>
 
 struct Composer;
 

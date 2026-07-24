@@ -1,7 +1,7 @@
 #include "icon_provider.h"
 
-#include "composer.h"
 #include "scene.h"
+#include "composer.h"
 
 IconProvider::~IconProvider() noexcept {
     unlink();

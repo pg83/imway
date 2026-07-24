@@ -1,10 +1,10 @@
 #include "settings.h"
 
-#include "composer.h"
 #include "dialog.h"
+#include "composer.h"
 
-#include <imgui.h>
 #include <math.h>
+#include <imgui.h>
 #include <string.h>
 
 using namespace stl;

@@ -2,10 +2,10 @@
 
 #include "util.h"
 
-#include <std/dbg/verify.h>
 #include <std/ios/sys.h>
-#include <std/mem/free_list.h>
+#include <std/dbg/verify.h>
 #include <std/mem/obj_pool.h>
+#include <std/mem/free_list.h>
 
 #include <stdlib.h>
 #include <string.h>

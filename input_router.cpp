@@ -1,8 +1,8 @@
 #include "input_router.h"
 
 #include "composer.h"
-#include "input_sink.h"
 #include "intr_list.h"
+#include "input_sink.h"
 
 #include <std/mem/obj_pool.h>
 

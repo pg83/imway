@@ -1,12 +1,12 @@
 #include "main_composer.h"
 
-#include "composer.h"
-#include "control.h"
-#include "crash_trace.h"
-#include "dbus_conn.h"
 #include "device.h"
-#include "device_headless.h"
+#include "control.h"
+#include "composer.h"
+#include "dbus_conn.h"
 #include "device_kms.h"
+#include "crash_trace.h"
+#include "device_headless.h"
 
 #ifdef IMWAY_FOR_TESTS
     #include "kms_fake.h"

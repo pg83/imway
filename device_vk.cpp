@@ -1,41 +1,41 @@
 #include "device_vk.h"
 
-#include "composer.h"
-#include "device.h"
 #include "log.h"
-#include "output.h"
-#include "renderer.h"
-#include "scene.h"
-#include "session.h"
 #include "util.h"
+#include "scene.h"
+#include "device.h"
+#include "output.h"
+#include "session.h"
+#include "composer.h"
+#include "renderer.h"
 
-#include <std/dbg/verify.h>
-#include <std/ios/fs_utils.h>
-#include <std/ios/out_fd.h>
-#include <std/ios/sys.h>
-#include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
-#include <std/str/builder.h>
-#include <std/str/view.h>
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
+#include <std/ios/sys.h>
+#include <std/str/view.h>
 #include <std/sys/throw.h>
+#include <std/dbg/verify.h>
+#include <std/ios/out_fd.h>
+#include <std/lib/vector.h>
+#include <std/str/builder.h>
+#include <std/ios/fs_utils.h>
+#include <std/mem/obj_pool.h>
 
-#include <drm_fourcc.h>
-#include <errno.h>
 #include <ev.h>
-#include <fcntl.h>
-#include <libudev.h>
-#include <linux/kd.h>
 #include <math.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
-#include <sys/ioctl.h>
+#include <unistd.h>
+#include <libudev.h>
+#include <xf86drm.h>
+#include <linux/kd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
-#include <unistd.h>
-#include <xf86drm.h>
+#include <sys/ioctl.h>
+#include <drm_fourcc.h>
 #include <xf86drmMode.h>
+#include <sys/sysmacros.h>
 
 using namespace stl;
 

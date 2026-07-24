@@ -1,7 +1,7 @@
 #include "weak_ptr.h"
 
-#include <std/dbg/verify.h>
 #include <std/lib/list.h>
+#include <std/dbg/verify.h>
 
 // The ring is a circular IntrusiveNode list. stl gives us everything: unlink()
 // is idempotent (no-op when already singular, and leaves the node singular),

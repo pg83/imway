@@ -1,8 +1,8 @@
 #include "log_extern.h"
 
-#include "composer.h"
 #include "log.h"
 #include "util.h"
+#include "composer.h"
 
 #include <std/ios/manip.h>
 

@@ -1,15 +1,15 @@
 #include "dbus_conn.h"
 
 #include "log.h"
+#include "util.h"
 #include "pooled_ev.h"
 #include "small_obj_allocator.h"
-#include "util.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 
-#include <dbus/dbus.h>
 #include <ev.h>
+#include <dbus/dbus.h>
 
 using namespace stl;
 

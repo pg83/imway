@@ -1,9 +1,9 @@
 #pragma once
 
-#include <std/alg/destruct.h>
-#include <std/mem/embed.h>
 #include <std/mem/new.h>
+#include <std/mem/embed.h>
 #include <std/sys/types.h>
+#include <std/alg/destruct.h>
 
 namespace stl {
     class ObjPool;

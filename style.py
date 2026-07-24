@@ -188,7 +188,8 @@ def reorder_includes(path):
     parts = []
     for group in groups:
         if group:
-            parts.append(newline.join(line for _, line in sorted(group)) + newline)
+            ordered = sorted(group, key=lambda entry: (len(entry[0]), entry[0]))
+            parts.append(newline.join(line for _, line in ordered) + newline)
     block += newline.join(parts)
 
     rest = "".join(lines[end:])

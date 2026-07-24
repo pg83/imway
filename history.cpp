@@ -1,12 +1,12 @@
 #include "history.h"
 
-#include "composer.h"
-#include "dialog.h"
 #include "icon.h"
-#include "icon_store.h"
-#include "notifier.h"
-#include "scene.h"
 #include "util.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
+#include "notifier.h"
+#include "icon_store.h"
 
 #include <imgui.h>
 

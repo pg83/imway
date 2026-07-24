@@ -1,11 +1,11 @@
 #pragma once
 
+#include <std/str/view.h>
+#include <std/sys/types.h>
 #include <std/dbg/verify.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
-#include <std/str/view.h>
-#include <std/sys/types.h>
 
 #include <string.h>
 

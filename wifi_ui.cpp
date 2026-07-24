@@ -1,10 +1,10 @@
 #include "wifi_ui.h"
 
-#include "composer.h"
-#include "dialog.h"
-#include "scene.h"
 #include "util.h"
 #include "wifi.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
 
 #include <imgui.h>
 

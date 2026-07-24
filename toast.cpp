@@ -1,9 +1,9 @@
 #include "toast.h"
 
-#include "composer.h"
 #include "icon.h"
-#include "notifier.h"
 #include "util.h"
+#include "composer.h"
+#include "notifier.h"
 
 #include <imgui.h>
 

@@ -1,18 +1,18 @@
 #include "status_notifier.h"
 
+#include "log.h"
+#include "icon.h"
+#include "util.h"
+#include "scene.h"
 #include "composer.h"
 #include "dbus_conn.h"
-#include "icon.h"
 #include "icon_pool.h"
-#include "icon_provider.h"
 #include "intr_list.h"
-#include "log.h"
-#include "scene.h"
-#include "util.h"
+#include "icon_provider.h"
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_pool.h>
 #include <std/sym/i_map.h>
+#include <std/mem/obj_pool.h>
 
 #include <dbus/dbus.h>
 

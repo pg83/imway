@@ -1,10 +1,10 @@
 #include "log_view.h"
 
-#include "composer.h"
-#include "dialog.h"
 #include "log.h"
-#include "scene.h"
 #include "util.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
 
 #include <imgui.h>
 

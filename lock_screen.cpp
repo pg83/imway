@@ -1,29 +1,29 @@
 #include "lock_screen.h"
 
-#include "composer.h"
-#include "device_vk.h"
-#include "dialog.h"
 #include "log.h"
-#include "render_filter.h"
 #include "scene.h"
+#include "dialog.h"
+#include "composer.h"
 #include "tex_pool.h"
+#include "device_vk.h"
+#include "render_filter.h"
 
-#include <std/dbg/verify.h>
 #include <std/ios/sys.h>
+#include <std/str/view.h>
+#include <std/dbg/verify.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
-#include <std/str/view.h>
 
+#include <pwd.h>
 #include <crypt.h>
 #include <imgui.h>
-#include <imgui_impl_vulkan.h>
-#include <imgui_internal.h>
-#include <lock_screen_blur.spv.h>
-#include <pwd.h>
 #include <shadow.h>
 #include <string.h>
 #include <unistd.h>
+#include <imgui_internal.h>
+#include <imgui_impl_vulkan.h>
+#include <lock_screen_blur.spv.h>
 
 using namespace stl;
 

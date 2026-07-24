@@ -1,11 +1,11 @@
 #include "notifications.h"
 
-#include "composer.h"
-#include "dbus_conn.h"
-#include "listener.h"
 #include "log.h"
-#include "notifier.h"
 #include "util.h"
+#include "composer.h"
+#include "listener.h"
+#include "notifier.h"
+#include "dbus_conn.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>

@@ -1,7 +1,7 @@
 #include "tex_pool.h"
 
-#include "pooled_vk.h"
 #include "util.h"
+#include "pooled_vk.h"
 
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>

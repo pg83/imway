@@ -1,10 +1,10 @@
 #include "inspector.h"
 
-#include "composer.h"
-#include "dialog.h"
-#include "intr_list.h"
-#include "scene.h"
 #include "util.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
+#include "intr_list.h"
 
 #include <imgui.h>
 

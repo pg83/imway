@@ -1,7 +1,7 @@
 #include "theme.h"
 
-#include <imgui.h>
 #include <math.h>
+#include <imgui.h>
 
 namespace {
     struct Lch {

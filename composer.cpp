@@ -1,8 +1,8 @@
 #include "composer.h"
 
-#include "icon_provider.h"
-#include "input_router.h"
 #include "intr_list.h"
+#include "input_router.h"
+#include "icon_provider.h"
 
 using namespace stl;
 

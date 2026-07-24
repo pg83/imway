@@ -1,7 +1,7 @@
 #pragma once
 
-#include <std/lib/vector.h>
 #include <std/sys/types.h>
+#include <std/lib/vector.h>
 
 struct Icon {
     u64 gen = 0;

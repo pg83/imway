@@ -1,12 +1,12 @@
 #include "calendar.h"
 
-#include "composer.h"
-#include "dialog.h"
-#include "scene.h"
 #include "util.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
 
-#include <imgui.h>
 #include <time.h>
+#include <imgui.h>
 
 using namespace stl;
 

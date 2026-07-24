@@ -119,10 +119,10 @@ functionCall(
   before its qualified method definitions.
 - Avoid heavyweight includes in headers when a forward declaration suffices.
 - Includes go from the least general to the most general, one blank line
-  between groups, each group sorted: the paired header first, then project
-  headers, then `<std/...>`, then third-party and system headers. `style.py`
-  rewrites the leading include block into this order; includes behind
-  preprocessor conditionals stay where they are.
+  between groups: the paired header first, then project headers, then
+  `<std/...>`, then third-party and system headers. Within a group, shorter
+  paths come first. `style.py` rewrites the leading include block into this
+  order; includes behind preprocessor conditionals stay where they are.
 - File-local declarations belong in an anonymous namespace. Shared program
   declarations live in the global namespace.
 - Avoid non-trivial global objects. Make ownership and lifetime explicit.

@@ -1,22 +1,22 @@
 #include "launcher.h"
 
-#include "composer.h"
-#include "dialog.h"
 #include "dock.h"
 #include "icon.h"
-#include "icon_store.h"
-#include "scene.h"
 #include "util.h"
+#include "scene.h"
+#include "dialog.h"
+#include "composer.h"
 #include "xdg_utils.h"
+#include "icon_store.h"
 
+#include <std/sys/fs.h>
 #include <std/alg/qsort.h>
-#include <std/ios/fs_utils.h>
 #include <std/lib/vector.h>
 #include <std/str/builder.h>
-#include <std/sys/fs.h>
+#include <std/ios/fs_utils.h>
 
-#include <imgui.h>
 #include <math.h>
+#include <imgui.h>
 
 using namespace stl;
 

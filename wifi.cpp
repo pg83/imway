@@ -1,10 +1,10 @@
 #include "wifi.h"
 
+#include "util.h"
+#include "wifi_nm.h"
 #include "composer.h"
 #include "notifier.h"
-#include "util.h"
 #include "wifi_iwd.h"
-#include "wifi_nm.h"
 
 using namespace stl;
 

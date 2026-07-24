@@ -1,13 +1,13 @@
 #include "wifi_nm.h"
 
-#include "composer.h"
-#include "dbus_conn.h"
-#include "intr_list.h"
-#include "listener.h"
 #include "log.h"
-#include "scene.h"
 #include "util.h"
 #include "wifi.h"
+#include "scene.h"
+#include "composer.h"
+#include "listener.h"
+#include "dbus_conn.h"
+#include "intr_list.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>

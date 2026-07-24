@@ -1,28 +1,28 @@
 #include "kms_fake.h"
 
-#include "kms_intercept.h"
 #include "log.h"
 #include "util.h"
+#include "kms_intercept.h"
 
 #include <std/ios/sys.h>
-#include <std/lib/vector.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
+#include <std/lib/vector.h>
 
-#include <drm_fourcc.h>
+#include <time.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <pthread.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <xf86drm.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
+#include <drm_fourcc.h>
 #include <sys/syscall.h>
-#include <time.h>
-#include <unistd.h>
-#include <xf86drm.h>
 #include <xf86drmMode.h>
 
 // Everything KMS that device_kms.cpp needs, modeled in userspace: the

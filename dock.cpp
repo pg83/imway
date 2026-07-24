@@ -1,15 +1,15 @@
 #include "dock.h"
 
-#include "composer.h"
 #include "icon.h"
-#include "intr_list.h"
-#include "scene.h"
-#include "status_notifier.h"
 #include "util.h"
+#include "scene.h"
+#include "composer.h"
+#include "intr_list.h"
+#include "status_notifier.h"
 
+#include <std/str/view.h>
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
-#include <std/str/view.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>

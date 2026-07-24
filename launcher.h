@@ -1,7 +1,7 @@
 #pragma once
 
-#include <std/lib/buffer.h>
 #include <std/sys/types.h>
+#include <std/lib/buffer.h>
 
 struct Composer;
 struct DialogState;
