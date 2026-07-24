@@ -149,7 +149,7 @@ namespace {
         u64 dumbSize = 0; // nonzero marks a dumb buffer
     };
 
-    struct FakeKms {
+    struct FakeKms: KmsIntercept {
         int clientFd = -1; // handed to the compositor; events are read here
         int eventFd = -1;  // emulator's write end
         int renderFd = -1; // companion real node: syncobjs, identity
@@ -189,7 +189,47 @@ namespace {
         int rejectCursorErr = 0;
         bool rejectColor = false;
 
-        u64 flips = 0;
+        u64 flipsDone = 0;
+
+        int openDevice() override;
+        void setConnected(bool connected) override;
+        void setModes(int set) override;
+        void failCommits(int err, int count) override;
+        void failNewFb(int err) override;
+        void failPrime(int err, int count, int skip) override;
+        void failAddFb(int err, int count) override;
+        void rejectCursor(int err) override;
+        unsigned long long flips() override;
+
+        PropDef* findProp(u32 id);
+        FakeBlob* findBlob(u32 id);
+        void addProp(u32 obj, u32 id, const char* name, u32 flags, const PropEnum* enums, int enumCount, u64 mn, u64 mx, u64 value);
+        u32 makeEdidBlob();
+        void buildProps();
+        u32 currentModes(drm_mode_modeinfo* modes);
+        int emuVersion(drm_version* v);
+        int emuGetCap(drm_get_cap* c);
+        int emuGetResources(drm_mode_card_res* r);
+        int emuGetConnector(drm_mode_get_connector* c);
+        int emuGetEncoder(drm_mode_get_encoder* e);
+        int emuGetPlaneResources(drm_mode_get_plane_res* r);
+        int emuGetPlane(drm_mode_get_plane* p);
+        int emuObjGetProperties(drm_mode_obj_get_properties* o);
+        int emuGetProperty(drm_mode_get_property* q);
+        int emuGetPropBlob(drm_mode_get_blob* b);
+        int emuCreateBlob(drm_mode_create_blob* b);
+        int emuDestroyBlob(drm_mode_destroy_blob* b);
+        int emuPrimeFdToHandle(drm_prime_handle* p);
+        int emuGemClose(drm_gem_close* c);
+        int emuCreateDumb(drm_mode_create_dumb* c);
+        int emuMapDumb(drm_mode_map_dumb* m);
+        int emuDestroyDumb(drm_mode_destroy_dumb* d);
+        int emuAddFb2(drm_mode_fb_cmd2* f);
+        int emuRmFb(u32* id);
+        int emuAtomic(drm_mode_atomic* a);
+        long fakeIoctl(unsigned long req, void* arg);
+        int dumbMemFd(unsigned long long off);
+        void flipLoop();
     };
 
     FakeKms* g = nullptr;
@@ -208,18 +248,16 @@ namespace {
         return rc;
     }
 
-    PropDef* findProp(u32 id) {
-        for (size_t i = 0; i < g->props.length(); i++) {
-            if (g->props[i].id == id) {
-                return &g->props.mut(i);
+    PropDef* FakeKms::findProp(u32 id) {
+        for (size_t i = 0; i < props.length(); i++) {
+            if (props[i].id == id) {
+                return &props.mut(i);
             }
         }
-
-        return nullptr;
     }
 
-    FakeBlob* findBlob(u32 id) {
-        for (FakeBlob* b : g->blobs) {
+    FakeBlob* FakeKms::findBlob(u32 id) {
+        for (FakeBlob* b : blobs) {
             if (b->id == id) {
                 return b;
             }
@@ -228,7 +266,7 @@ namespace {
         return nullptr;
     }
 
-    void addProp(u32 obj, u32 id, const char* name, u32 flags, const PropEnum* enums, int enumCount, u64 mn, u64 mx, u64 value) {
+    void FakeKms::addProp(u32 obj, u32 id, const char* name, u32 flags, const PropEnum* enums, int enumCount, u64 mn, u64 mx, u64 value) {
         PropDef p;
 
         p.id = id;
@@ -240,7 +278,7 @@ namespace {
         p.rangeMin = mn;
         p.rangeMax = mx;
         p.value = value;
-        g->props.pushBack(p);
+        props.pushBack(p);
     }
 
     // A minimal but structurally valid EDID 1.4 with one CTA-861 extension:
@@ -248,7 +286,7 @@ namespace {
     // colorimetry and PQ HDR static metadata (~1000 nit peak, 400 nit
     // maxFALL, 0.1 nit floor). libdisplay-info reads it like a real HDR
     // panel's, which opens the compositor's positive HDR path.
-    u32 makeEdidBlob() {
+    u32 FakeKms::makeEdidBlob() {
         u8 e[256];
 
         memset(e, 0, 256);
@@ -327,14 +365,14 @@ namespace {
 
         auto* blob = new FakeBlob();
 
-        blob->id = g->nextBlob++;
+        blob->id = nextBlob++;
         blob->data.append(e, 256);
-        g->blobs.pushBack(blob);
+        blobs.pushBack(blob);
 
         return blob->id;
     }
 
-    void buildProps() {
+    void FakeKms::buildProps() {
         addProp(kConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
         addProp(kConnectorId, pConnColorspace, "Colorspace", DRM_MODE_PROP_ENUM, kColorspaceEnums, 3, 0, 0, 0);
         addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, 6, 16, 10);
@@ -439,7 +477,7 @@ namespace {
         count = n;
     }
 
-    int emuVersion(drm_version* v) {
+    int FakeKms::emuVersion(drm_version* v) {
         static const char kName[] = "fakekms";
         static const char kDate[] = "2026";
         static const char kDesc[] = "imway userspace kms emulator";
@@ -466,7 +504,7 @@ namespace {
         return 0;
     }
 
-    int emuGetCap(drm_get_cap* c) {
+    int FakeKms::emuGetCap(drm_get_cap* c) {
         switch (c->capability) {
             case DRM_CAP_CURSOR_WIDTH:
             case DRM_CAP_CURSOR_HEIGHT:
@@ -482,11 +520,11 @@ namespace {
                 return 0;
             default:
                 // syncobj and friends: the companion node answers truthfully
-                return rawIoctl(g->renderFd, DRM_IOCTL_GET_CAP, c) == 0 ? 0 : -EINVAL;
+                return rawIoctl(renderFd, DRM_IOCTL_GET_CAP, c) == 0 ? 0 : -EINVAL;
         }
     }
 
-    int emuGetResources(drm_mode_card_res* r) {
+    int FakeKms::emuGetResources(drm_mode_card_res* r) {
         static const u32 crtcs[] = {kCrtcId};
         static const u32 conns[] = {kConnectorId};
         static const u32 encs[] = {kEncoderId};
@@ -505,14 +543,14 @@ namespace {
 
     // the connector's current mode list; the tv and small sets model
     // replugging displays that only do one size
-    u32 currentModes(drm_mode_modeinfo* modes) {
-        if (g->modeSet == 1) {
+    u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
+        if (modeSet == 1) {
             fillMode(modes[0], 1920, 1080, 60, true);
 
             return 1;
         }
 
-        if (g->modeSet == 2) {
+        if (modeSet == 2) {
             fillMode(modes[0], 1280, 800, 60, true);
 
             return 1;
@@ -524,13 +562,13 @@ namespace {
         return 2;
     }
 
-    int emuGetConnector(drm_mode_get_connector* c) {
+    int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
         if (c->connector_id != kConnectorId) {
             return -ENOENT;
         }
 
         drm_mode_modeinfo modes[2];
-        u32 nModes = g->connected ? currentModes(modes) : 0;
+        u32 nModes = connected ? currentModes(modes) : 0;
 
         if (c->modes_ptr && c->count_modes >= nModes) {
             memcpy((void*)(uintptr_t)c->modes_ptr, modes, sizeof(drm_mode_modeinfo) * nModes);
@@ -541,7 +579,7 @@ namespace {
         Vector<u32> propIds;
         Vector<u64> propValues;
 
-        for (const PropDef& p : g->props) {
+        for (const PropDef& p : props) {
             if (p.obj == kConnectorId) {
                 propIds.pushBack(p.id);
                 propValues.pushBack(p.value);
@@ -560,7 +598,7 @@ namespace {
         c->encoder_id = kEncoderId;
         c->connector_type = DRM_MODE_CONNECTOR_HDMIA;
         c->connector_type_id = 1;
-        c->connection = g->connected ? 1 : 2; // connected : disconnected
+        c->connection = connected ? 1 : 2; // connected : disconnected
         c->mm_width = 340;
         c->mm_height = 210;
         c->subpixel = 0;
@@ -568,7 +606,7 @@ namespace {
         return 0;
     }
 
-    int emuGetEncoder(drm_mode_get_encoder* e) {
+    int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
         if (e->encoder_id != kEncoderId) {
             return -ENOENT;
         }
@@ -581,7 +619,7 @@ namespace {
         return 0;
     }
 
-    int emuGetPlaneResources(drm_mode_get_plane_res* r) {
+    int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
         static const u32 planes[] = {kPlaneId, kCursorPlaneId};
 
         fillArray(r->plane_id_ptr, r->count_planes, planes, 2);
@@ -589,7 +627,7 @@ namespace {
         return 0;
     }
 
-    int emuGetPlane(drm_mode_get_plane* p) {
+    int FakeKms::emuGetPlane(drm_mode_get_plane* p) {
         if (p->plane_id != kPlaneId && p->plane_id != kCursorPlaneId) {
             return -ENOENT;
         }
@@ -603,11 +641,11 @@ namespace {
         return 0;
     }
 
-    int emuObjGetProperties(drm_mode_obj_get_properties* o) {
+    int FakeKms::emuObjGetProperties(drm_mode_obj_get_properties* o) {
         Vector<u32> ids;
         Vector<u64> values;
 
-        for (const PropDef& p : g->props) {
+        for (const PropDef& p : props) {
             if (p.obj == o->obj_id) {
                 ids.pushBack(p.id);
                 values.pushBack(p.value);
@@ -627,7 +665,7 @@ namespace {
         return 0;
     }
 
-    int emuGetProperty(drm_mode_get_property* q) {
+    int FakeKms::emuGetProperty(drm_mode_get_property* q) {
         PropDef* p = findProp(q->prop_id);
 
         if (!p) {
@@ -693,7 +731,7 @@ namespace {
         out.append((const u8*)&mod, sizeof(mod));
     }
 
-    int emuGetPropBlob(drm_mode_get_blob* b) {
+    int FakeKms::emuGetPropBlob(drm_mode_get_blob* b) {
         if (b->blob_id == pPlaneInFormats) {
             Vector<u8> data;
 
@@ -723,23 +761,23 @@ namespace {
         return 0;
     }
 
-    int emuCreateBlob(drm_mode_create_blob* b) {
+    int FakeKms::emuCreateBlob(drm_mode_create_blob* b) {
         auto* blob = new FakeBlob();
 
-        blob->id = g->nextBlob++;
+        blob->id = nextBlob++;
         blob->data.append((const u8*)(uintptr_t)b->data, b->length);
-        g->blobs.pushBack(blob);
+        blobs.pushBack(blob);
         b->blob_id = blob->id;
 
         return 0;
     }
 
-    int emuDestroyBlob(drm_mode_destroy_blob* b) {
-        for (size_t i = 0; i < g->blobs.length(); i++) {
-            if (g->blobs[i]->id == b->blob_id) {
-                delete g->blobs[i];
-                g->blobs.mut(i) = g->blobs[g->blobs.length() - 1];
-                g->blobs.popBack();
+    int FakeKms::emuDestroyBlob(drm_mode_destroy_blob* b) {
+        for (size_t i = 0; i < blobs.length(); i++) {
+            if (blobs[i]->id == b->blob_id) {
+                delete blobs[i];
+                blobs.mut(i) = blobs[blobs.length() - 1];
+                blobs.popBack();
 
                 return 0;
             }
@@ -748,17 +786,17 @@ namespace {
         return -ENOENT;
     }
 
-    int emuPrimeFdToHandle(drm_prime_handle* p) {
-        if (g->noPrime) {
+    int FakeKms::emuPrimeFdToHandle(drm_prime_handle* p) {
+        if (noPrime) {
             return -ENOTSUP;
         }
 
-        if (g->failPrimeSkip > 0) {
-            g->failPrimeSkip--;
-        } else if (g->failPrimeCount > 0) {
-            g->failPrimeCount--;
+        if (failPrimeSkip > 0) {
+            failPrimeSkip--;
+        } else if (failPrimeCount > 0) {
+            failPrimeCount--;
 
-            return -g->failPrimeErr;
+            return -failPrimeErr;
         }
 
         int dup = fcntl(p->fd, F_DUPFD_CLOEXEC, 0);
@@ -769,21 +807,21 @@ namespace {
 
         FakeGem gem;
 
-        gem.handle = g->nextHandle++;
+        gem.handle = nextHandle++;
         gem.fd = dup;
         gem.refs = 1;
-        g->gems.pushBack(gem);
+        gems.pushBack(gem);
         p->handle = gem.handle;
 
         return 0;
     }
 
-    int emuGemClose(drm_gem_close* c) {
-        for (size_t i = 0; i < g->gems.length(); i++) {
-            if (g->gems[i].handle == c->handle) {
-                close(g->gems[i].fd);
-                g->gems.mut(i) = g->gems[g->gems.length() - 1];
-                g->gems.popBack();
+    int FakeKms::emuGemClose(drm_gem_close* c) {
+        for (size_t i = 0; i < gems.length(); i++) {
+            if (gems[i].handle == c->handle) {
+                close(gems[i].fd);
+                gems.mut(i) = gems[gems.length() - 1];
+                gems.popBack();
 
                 return 0;
             }
@@ -798,7 +836,7 @@ namespace {
     // starts at the memfd's origin.
     constexpr int kDumbOffsetShift = 20;
 
-    int emuCreateDumb(drm_mode_create_dumb* c) {
+    int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
         if (!c->width || !c->height || c->bpp != 32) {
             return -EINVAL;
         }
@@ -820,9 +858,9 @@ namespace {
             return -err;
         }
 
-        gem.handle = g->nextHandle++;
+        gem.handle = nextHandle++;
         gem.refs = 1;
-        g->gems.pushBack(gem);
+        gems.pushBack(gem);
         c->handle = gem.handle;
         c->pitch = c->width * 4;
         c->size = gem.dumbSize;
@@ -830,8 +868,8 @@ namespace {
         return 0;
     }
 
-    int emuMapDumb(drm_mode_map_dumb* m) {
-        for (const FakeGem& gem : g->gems) {
+    int FakeKms::emuMapDumb(drm_mode_map_dumb* m) {
+        for (const FakeGem& gem : gems) {
             if (gem.handle == m->handle && gem.dumbSize) {
                 m->offset = (u64)gem.handle << kDumbOffsetShift;
 
@@ -842,7 +880,7 @@ namespace {
         return -EINVAL;
     }
 
-    int emuDestroyDumb(drm_mode_destroy_dumb* d) {
+    int FakeKms::emuDestroyDumb(drm_mode_destroy_dumb* d) {
         drm_gem_close c{};
 
         c.handle = d->handle;
@@ -850,23 +888,23 @@ namespace {
         return emuGemClose(&c);
     }
 
-    int emuAddFb2(drm_mode_fb_cmd2* f) {
-        if (g->failAddFbCount > 0) {
-            g->failAddFbCount--;
+    int FakeKms::emuAddFb2(drm_mode_fb_cmd2* f) {
+        if (failAddFbCount > 0) {
+            failAddFbCount--;
 
-            return -g->failAddFbErr;
+            return -failAddFbErr;
         }
 
-        for (size_t i = 0; i < g->gems.length(); i++) {
-            if (g->gems[i].handle == f->handles[0]) {
+        for (size_t i = 0; i < gems.length(); i++) {
+            if (gems[i].handle == f->handles[0]) {
                 FakeFb fb;
 
-                fb.id = g->nextFb++;
+                fb.id = nextFb++;
                 fb.width = f->width;
                 fb.height = f->height;
                 fb.format = f->pixel_format;
                 fb.modifier = f->modifier[0];
-                g->fbs.pushBack(fb);
+                fbs.pushBack(fb);
                 f->fb_id = fb.id;
 
                 return 0;
@@ -876,11 +914,11 @@ namespace {
         return -EINVAL;
     }
 
-    int emuRmFb(u32* id) {
-        for (size_t i = 0; i < g->fbs.length(); i++) {
-            if (g->fbs[i].id == *id) {
-                g->fbs.mut(i) = g->fbs[g->fbs.length() - 1];
-                g->fbs.popBack();
+    int FakeKms::emuRmFb(u32* id) {
+        for (size_t i = 0; i < fbs.length(); i++) {
+            if (fbs[i].id == *id) {
+                fbs.mut(i) = fbs[fbs.length() - 1];
+                fbs.popBack();
 
                 return 0;
             }
@@ -889,14 +927,14 @@ namespace {
         return -ENOENT;
     }
 
-    int emuAtomic(drm_mode_atomic* a) {
+    int FakeKms::emuAtomic(drm_mode_atomic* a) {
         if (a->flags & ~(u32)(DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_PAGE_FLIP_ASYNC)) {
             return -EINVAL;
         }
 
         bool test = a->flags & DRM_MODE_ATOMIC_TEST_ONLY;
 
-        if (!test && g->flipPending) {
+        if (!test && flipPending) {
             return -EBUSY;
         }
 
@@ -918,22 +956,22 @@ namespace {
 
                 // a connector that refuses the HDR color configuration
                 // (wide-gamut colorspace or HDR metadata): the SDR fallback
-                if (g->rejectColor && values[k] && (propIds[k] == pConnColorspace || propIds[k] == pConnHdrMeta)) {
+                if (rejectColor && values[k] && (propIds[k] == pConnColorspace || propIds[k] == pConnHdrMeta)) {
                     return -EINVAL;
                 }
 
                 // a plane that rejects framebuffers created after arming:
                 // the compositor swapchain exists from boot, so this hits
                 // exactly the direct-scanout import of a client fb
-                if (g->failNewFbErr && !test && (propIds[k] == pPlaneFbId || propIds[k] == pCursorFbId) && (u32)values[k] >= g->failNewFbSince) {
-                    return -g->failNewFbErr;
+                if (failNewFbErr && !test && (propIds[k] == pPlaneFbId || propIds[k] == pCursorFbId) && (u32)values[k] >= failNewFbSince) {
+                    return -failNewFbErr;
                 }
 
                 // a display that cannot do hardware cursors: enabling the
                 // cursor plane fails, shutting it off is fine — the shape
                 // the compositor's cursor bisect is built for
-                if (g->rejectCursorErr && propIds[k] == pCursorFbId && values[k]) {
-                    return -g->rejectCursorErr;
+                if (rejectCursorErr && propIds[k] == pCursorFbId && values[k]) {
+                    return -rejectCursorErr;
                 }
 
                 // a mode the connector does not currently offer is refused,
@@ -961,10 +999,10 @@ namespace {
             }
         }
 
-        if (!test && g->failCount > 0) {
-            g->failCount--;
+        if (!test && failCount > 0) {
+            failCount--;
 
-            return -g->failErr;
+            return -failErr;
         }
 
         if (test) {
@@ -981,40 +1019,40 @@ namespace {
             }
         }
 
-        if ((a->flags & DRM_MODE_PAGE_FLIP_ASYNC) && !g->asyncFlipLogged) {
+        if ((a->flags & DRM_MODE_PAGE_FLIP_ASYNC) && !asyncFlipLogged) {
             // scenarios assert tearing engaged by this one-shot marker
             sysE << "fake-kms: async page flip"_sv << endL;
-            g->asyncFlipLogged = true;
+            asyncFlipLogged = true;
         }
 
         if (a->flags & DRM_MODE_PAGE_FLIP_EVENT) {
-            g->flipPending = true;
-            g->flipUserData = a->user_data;
-            g->flipDueNs = nowNs() + 16666667ull;
-            pthread_cond_signal(&g->cv);
+            flipPending = true;
+            flipUserData = a->user_data;
+            flipDueNs = nowNs() + 16666667ull;
+            pthread_cond_signal(&cv);
         }
 
         return 0;
     }
 
-    void* flipThreadMain(void*) {
-        pthread_mutex_lock(&g->mu);
+    void FakeKms::flipLoop() {
+        pthread_mutex_lock(&mu);
 
         for (;;) {
-            if (!g->flipPending) {
-                pthread_cond_wait(&g->cv, &g->mu);
+            if (!flipPending) {
+                pthread_cond_wait(&cv, &mu);
 
                 continue;
             }
 
             u64 now = nowNs();
 
-            if (now < g->flipDueNs) {
+            if (now < flipDueNs) {
                 timespec until{};
 
-                until.tv_sec = (time_t)(g->flipDueNs / 1000000000ull);
-                until.tv_nsec = (long)(g->flipDueNs % 1000000000ull);
-                pthread_cond_timedwait(&g->cv, &g->mu, &until);
+                until.tv_sec = (time_t)(flipDueNs / 1000000000ull);
+                until.tv_nsec = (long)(flipDueNs % 1000000000ull);
+                pthread_cond_timedwait(&cv, &mu, &until);
 
                 continue;
             }
@@ -1027,24 +1065,22 @@ namespace {
 
             ev.base.type = DRM_EVENT_FLIP_COMPLETE;
             ev.base.length = sizeof(ev);
-            ev.user_data = g->flipUserData;
+            ev.user_data = flipUserData;
             ev.tv_sec = (u32)(now / 1000000000ull);
             ev.tv_usec = (u32)(now % 1000000000ull / 1000);
-            ev.sequence = ++g->flipSeq;
+            ev.sequence = ++flipSeq;
             ev.crtc_id = kCrtcId;
-            g->flipPending = false;
-            g->flips++;
+            flipPending = false;
+            flipsDone++;
 
-            ssize_t n = write(g->eventFd, &ev, sizeof(ev));
+            ssize_t n = write(eventFd, &ev, sizeof(ev));
 
             (void)n;
         }
-
-        return nullptr;
     }
 
-    long fakeIoctl(unsigned long req, void* arg) {
-        pthread_mutex_lock(&g->mu);
+    long FakeKms::fakeIoctl(unsigned long req, void* arg) {
+        pthread_mutex_lock(&mu);
 
         long rc;
 
@@ -1120,7 +1156,7 @@ namespace {
                     // the syncobj family (create..eventfd, minus GETFB2 at
                     // 0xCE): real kernel objects on the companion render
                     // node back explicit sync for real
-                    rc = rawIoctl(g->renderFd, req, arg);
+                    rc = rawIoctl(renderFd, req, arg);
                     rc = rc == 0 ? 0 : -errno;
                 } else {
                     sysE << "fake-kms: unhandled drm ioctl nr "_sv << (i64)_IOC_NR(req) << endL;
@@ -1130,7 +1166,7 @@ namespace {
                 break;
         }
 
-        pthread_mutex_unlock(&g->mu);
+        pthread_mutex_unlock(&mu);
 
         if (rc < 0) {
             errno = (int)-rc;
@@ -1139,6 +1175,29 @@ namespace {
         }
 
         return 0;
+    }
+
+    int FakeKms::dumbMemFd(unsigned long long off) {
+        u32 handle = (u32)(off >> kDumbOffsetShift);
+        int memFd = -1;
+
+        pthread_mutex_lock(&mu);
+
+        for (const FakeGem& gem : gems) {
+            if (gem.handle == handle && gem.dumbSize) {
+                memFd = gem.fd;
+            }
+        }
+
+        pthread_mutex_unlock(&mu);
+
+        return memFd;
+    }
+
+    void* flipThreadTrampoline(void* self) {
+        ((FakeKms*)self)->flipLoop();
+
+        return nullptr;
     }
 }
 
@@ -1156,8 +1215,8 @@ extern "C" int ioctl(int fd, int req, ...) {
 
     va_end(ap);
 
-    if (g && fd == g->clientFd) {
-        return (int)fakeIoctl((unsigned long)(unsigned int)req, arg);
+    if (g && g->clientFd >= 0 && fd == g->clientFd) {
+        return (int)g->fakeIoctl((unsigned long)(unsigned int)req, arg);
     }
 
     long rc = syscall(SYS_ioctl, fd, (unsigned long)(unsigned int)req, arg);
@@ -1168,7 +1227,7 @@ extern "C" int ioctl(int fd, int req, ...) {
 extern "C" int fstat(int fd, struct stat* st) {
     // the fake fd claims the companion render node's identity so DeviceVk
     // pairs the real GPU with it and keeps the zero-copy scanout path
-    long rc = syscall(SYS_fstat, g && fd == g->clientFd ? g->renderFd : fd, st);
+    long rc = syscall(SYS_fstat, g && g->clientFd >= 0 && fd == g->clientFd ? g->renderFd : fd, st);
 
     return (int)rc;
 }
@@ -1176,19 +1235,8 @@ extern "C" int fstat(int fd, struct stat* st) {
 extern "C" void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t off) {
     // a dumb-buffer mapping resolves through the handle tagged into the
     // MAP_DUMB offset token; everything else passes through untouched
-    if (g && fd == g->clientFd) {
-        u32 handle = (u32)((u64)off >> kDumbOffsetShift);
-        int memFd = -1;
-
-        pthread_mutex_lock(&g->mu);
-
-        for (const FakeGem& gem : g->gems) {
-            if (gem.handle == handle && gem.dumbSize) {
-                memFd = gem.fd;
-            }
-        }
-
-        pthread_mutex_unlock(&g->mu);
+    if (g && g->clientFd >= 0 && fd == g->clientFd) {
+        int memFd = g->dumbMemFd((unsigned long long)off);
 
         if (memFd < 0) {
             errno = EINVAL;
@@ -1203,30 +1251,16 @@ extern "C" void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t
     return (void*)syscall(SYS_mmap, addr, len, prot, flags, fd, off);
 }
 
-namespace {
-    // the emulator's scripting face; state lives in g, created lazily by
-    // openDevice so the libc overrides stay transparent until then
-    struct FakeKmsIntercept: KmsIntercept {
-        int openDevice() override;
-        void setConnected(bool connected) override;
-        void setModes(int set) override;
-        void failCommits(int err, int count) override;
-        void failNewFb(int err) override;
-        void failPrime(int err, int count, int skip) override;
-        void failAddFb(int err, int count) override;
-        void rejectCursor(int err) override;
-        unsigned long long flips() override;
-    };
-
-    FakeKmsIntercept interceptor;
-}
-
 KmsIntercept* installInterceptor() {
-    return &interceptor;
+    if (!g) {
+        g = new FakeKms();
+    }
+
+    return g;
 }
 
-int FakeKmsIntercept::openDevice() {
-    if (g) {
+int FakeKms::openDevice() {
+    if (clientFd >= 0) {
         return -EBUSY;
     }
 
@@ -1255,72 +1289,73 @@ int FakeKmsIntercept::openDevice() {
         return -ENODEV;
     }
 
-    g = new FakeKms();
-    g->clientFd = pipeFds[0];
-    g->eventFd = pipeFds[1];
-    g->renderFd = render;
-    g->rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
-    g->rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
-    g->noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
+    eventFd = pipeFds[1];
+    renderFd = render;
+    rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
+    rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
+    noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
     buildProps();
-    pthread_create(&g->flipThread, nullptr, flipThreadMain, nullptr);
+    pthread_create(&flipThread, nullptr, flipThreadTrampoline, this);
+    // published last: the libc overrides start matching this fd only once
+    // the emulator is fully assembled
+    clientFd = pipeFds[0];
 
-    return g->clientFd;
+    return clientFd;
 }
 
-void FakeKmsIntercept::setConnected(bool connected) {
-    pthread_mutex_lock(&g->mu);
-    g->connected = connected;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::setConnected(bool value) {
+    pthread_mutex_lock(&mu);
+    connected = value;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::setModes(int set) {
-    pthread_mutex_lock(&g->mu);
-    g->modeSet = set;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::setModes(int set) {
+    pthread_mutex_lock(&mu);
+    modeSet = set;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::failCommits(int err, int count) {
-    pthread_mutex_lock(&g->mu);
-    g->failErr = err;
-    g->failCount = count;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::failCommits(int err, int count) {
+    pthread_mutex_lock(&mu);
+    failErr = err;
+    failCount = count;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::failNewFb(int err) {
-    pthread_mutex_lock(&g->mu);
-    g->failNewFbErr = err;
-    g->failNewFbSince = g->nextFb;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::failNewFb(int err) {
+    pthread_mutex_lock(&mu);
+    failNewFbErr = err;
+    failNewFbSince = nextFb;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::failPrime(int err, int count, int skip) {
-    pthread_mutex_lock(&g->mu);
-    g->failPrimeErr = err;
-    g->failPrimeCount = count;
-    g->failPrimeSkip = skip;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::failPrime(int err, int count, int skip) {
+    pthread_mutex_lock(&mu);
+    failPrimeErr = err;
+    failPrimeCount = count;
+    failPrimeSkip = skip;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::failAddFb(int err, int count) {
-    pthread_mutex_lock(&g->mu);
-    g->failAddFbErr = err;
-    g->failAddFbCount = count;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::failAddFb(int err, int count) {
+    pthread_mutex_lock(&mu);
+    failAddFbErr = err;
+    failAddFbCount = count;
+    pthread_mutex_unlock(&mu);
 }
 
-void FakeKmsIntercept::rejectCursor(int err) {
-    pthread_mutex_lock(&g->mu);
-    g->rejectCursorErr = err;
-    pthread_mutex_unlock(&g->mu);
+void FakeKms::rejectCursor(int err) {
+    pthread_mutex_lock(&mu);
+    rejectCursorErr = err;
+    pthread_mutex_unlock(&mu);
 }
 
-unsigned long long FakeKmsIntercept::flips() {
-    pthread_mutex_lock(&g->mu);
+unsigned long long FakeKms::flips() {
+    pthread_mutex_lock(&mu);
 
-    unsigned long long n = g->flips;
+    unsigned long long n = flipsDone;
 
-    pthread_mutex_unlock(&g->mu);
+    pthread_mutex_unlock(&mu);
 
     return n;
 }
