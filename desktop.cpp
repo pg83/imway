@@ -1345,10 +1345,29 @@ void DesktopImpl::buildUi(Scene& scene) {
         Toplevel* t = &value;
         Surface* root = t->surface.get();
 
-        if (!t->mapped || t->minimized || !root || !root->texture) {
+        if (!t->mapped || !root || !root->texture) {
             if (root) {
                 markTreeUnhovered(*root);
             }
+
+            return;
+        }
+
+        // a raise (alt-tab, taskbar click, xdg-activation) must surface the
+        // window wherever it hides. Consume it before Begin: for an
+        // unselected dock tab Begin returns false, so an inside-Begin
+        // SetWindowFocus would never run — SetNextWindowFocus lands the nav
+        // focus and the dock node selects the tab off it; a minimized
+        // window is restored first for the same reason
+        if (t->raiseRequested) {
+            t->raiseRequested = false;
+            t->minimized = false;
+            ImGui::SetNextWindowFocus();
+            scene.needsFrame = true;
+        }
+
+        if (t->minimized) {
+            markTreeUnhovered(*root);
 
             return;
         }
@@ -1504,11 +1523,6 @@ void DesktopImpl::buildUi(Scene& scene) {
                     t->focusedAt = ++scene.focusSeq;
                     scene.needsFrame = true;
                 }
-            }
-
-            if (t->raiseRequested) {
-                t->raiseRequested = false;
-                ImGui::SetWindowFocus();
             }
 
             if (t->moveRequested) {
