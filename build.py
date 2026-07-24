@@ -164,9 +164,10 @@ imgui = library(
 
 imway_sources = build.glob("$(S)/*.cpp")
 
-# the control FIFO harness is test tooling: the production binary does not
-# even link it
-prod_sources = [s for s in imway_sources if not s.endswith("/control.cpp")]
+# the control FIFO harness and the userspace KMS emulator are test tooling:
+# the production binary does not even link them
+prod_sources = [s for s in imway_sources
+                if not s.endswith("/control.cpp") and not s.endswith("/fake_kms.cpp")]
 
 imway_deps = [
     imgui, protocols,

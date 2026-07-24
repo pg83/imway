@@ -1955,9 +1955,10 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
 // a fullscreen client whose dmabuf can go straight to the plane, with no
 // compositor chrome that would need composition over it
 Surface* RendererImpl::scanoutCandidate() {
-    // The fixed Unity-style dock reserves and paints the left edge, so a
-    // client can never own the complete scanout while it is visible.
-    if (scene->dockVisible || forceComposition || lockState || !scene->popups.empty() || scene->dragIcon) {
+    // The dock and the top bar need no gate of their own: the candidate
+    // below is a lone fullscreen toplevel, drawn output-sized at the origin
+    // above the chrome, so the chrome is occluded whenever one exists.
+    if (forceComposition || lockState || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
 

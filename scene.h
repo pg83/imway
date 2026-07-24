@@ -342,7 +342,6 @@ struct Scene {
 
     bool needsFrame = true;
     bool drawCursor = false;
-    bool dockVisible = true;
 
     // xdg-system-bell: CLOCK_MONOTONIC ms of the last ring; the renderer
     // flashes the screen briefly while it is recent (0 = never rung).

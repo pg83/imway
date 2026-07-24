@@ -1,6 +1,7 @@
 #include "composer.h"
 #include "log.h"
 #include "control.h"
+#include "fake_kms.h"
 #include "icon.h"
 #include "input_sink.h"
 #include "pooled.h"
@@ -348,6 +349,19 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
+    } else if (verb == "kms-connector"_sv && fakeKmsActive()) {
+        // flip the fake connector and re-probe, like a udev hotplug would
+        fakeKmsSetConnected(args.stou() != 0);
+        comp->output->hotplug();
+        comp->scene->needsFrame = true;
+    } else if (verb == "kms-fail-commit"_sv && fakeKmsActive()) {
+        StringView err, count;
+
+        if (args.split(' ', err, count)) {
+            fakeKmsFailCommits((int)err.stou(), (int)count.stou());
+        }
+    } else if (verb == "kms-fail-new-fb"_sv && fakeKmsActive()) {
+        fakeKmsFailNewFb((int)args.stou());
     } else if (verb == "render-fault"_sv) {
         // injects a renderer-attributed client fault: the real producers
         // (device OOM on a client-sized texture) cannot fire in a scenario
@@ -401,6 +415,7 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
+    out << "frames done="_sv << scene->framesDone << "\n"_sv;
     out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
     out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;
 

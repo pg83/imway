@@ -3,6 +3,10 @@
 #include "device.h"
 #include "robustness.h"
 
+#ifdef IMWAY_FOR_TESTS
+    #include "fake_kms.h"
+#endif
+
 #include "device_vk.h"
 #include "frame_listener.h"
 #include "listener.h"
@@ -694,7 +698,7 @@ namespace {
         bool start() override;
 
         bool ready() const override;
-        void hotplug();
+        void hotplug() override;
         bool vsynced() const override;
         int scanoutCount() const override;
         ScanoutBuffer* scanoutBuffer(int i) override;
@@ -811,6 +815,22 @@ namespace {
     };
 
     int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath) {
+#ifdef IMWAY_FOR_TESTS
+        // scenarios drive the KMS state machine without hardware: the fd
+        // comes from the userspace emulator instead of a card node
+        if (getenv("IMWAY_FAKE_KMS")) {
+            int fd = fakeKmsOpenDevice();
+
+            if (fd < 0) {
+                Errno(-fd).raise("kms: fake device"_sv);
+            }
+
+            outPath << "fake-kms"_sv;
+
+            return fd;
+        }
+#endif
+
         if (!devPath.empty()) {
             int fd = session.openDevice(Buffer(devPath).cStr());
 

@@ -86,6 +86,7 @@ namespace {
         void setHdrMetadata(const HdrOutputMetadata&) override;
         void setColorTemp(double) override;
         double colorTemp() const override;
+        void hotplug() override;
         bool lastFlip(u64&, u32&) const override;
         bool start() override;
         bool ready() const override;
@@ -262,6 +263,9 @@ void HeadlessOutput::setColorTemp(double kelvin) {
 
 double HeadlessOutput::colorTemp() const {
     return tempK;
+}
+
+void HeadlessOutput::hotplug() {
 }
 
 bool HeadlessOutput::lastFlip(u64&, u32&) const {
