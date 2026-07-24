@@ -134,26 +134,26 @@ bool dockIconButton(const Theme& theme, const char* id, u64 texture, float size,
 
 namespace {
 
-    Icon* trayIcon(Composer& c, StatusNotifierItem& item, bool attention) {
+    Icon* trayIcon(Composer& c, StatusNotifierItem& item, bool attention, u32 desired) {
         if (attention) {
             if (!item.attentionIconName.empty()) {
-                if (Icon* icon = c.findIcon(sv(item.attentionIconName))) {
+                if (Icon* icon = c.findIcon(sv(item.attentionIconName), desired)) {
                     return icon;
                 }
             }
 
-            if (Icon* icon = c.findIcon(item.attentionIconSym)) {
+            if (Icon* icon = c.findIcon(item.attentionIconSym, desired)) {
                 return icon;
             }
         }
 
         if (!item.iconName.empty()) {
-            if (Icon* icon = c.findIcon(sv(item.iconName))) {
+            if (Icon* icon = c.findIcon(sv(item.iconName), desired)) {
                 return icon;
             }
         }
 
-        return c.findIcon(item.iconSym);
+        return c.findIcon(item.iconSym, desired);
     }
 
     void drawTrayMenu(StatusNotifier& notifier, Vector<StatusMenuItem*>& entries, int x, int y) {
@@ -213,6 +213,7 @@ void drawDock(Composer& c, DockResult& result) {
     io.WindowShadowCallback = shadow;
 
     if (open) {
+        u32 iconPx = (u32)iconSize;
         Vector<Group> groups;
 
         forEach<Toplevel>(scene.toplevels, [&](Toplevel& t) {
@@ -235,7 +236,7 @@ void drawDock(Composer& c, DockResult& result) {
             }
 
             if (!group) {
-                groups.pushBack({sv(t.appId), &t, nullptr, t.icon(c), 0});
+                groups.pushBack({sv(t.appId), &t, nullptr, t.icon(c, iconPx), 0});
                 group = &groups.mutBack();
                 group->idx = groups.length() - 1;
             }
@@ -254,7 +255,7 @@ void drawDock(Composer& c, DockResult& result) {
             }
 
             if (!group->icon) {
-                group->icon = t.icon(c);
+                group->icon = t.icon(c, iconPx);
             }
         });
 
@@ -298,7 +299,7 @@ void drawDock(Composer& c, DockResult& result) {
             Toplevel* t = group.active;
             StatusNotifierItem* tray = group.tray;
             bool attention = tray && sv(tray->status) == "NeedsAttention"_sv;
-            Icon* icon = tray ? trayIcon(c, *tray, attention) : nullptr;
+            Icon* icon = tray ? trayIcon(c, *tray, attention, iconPx) : nullptr;
 
             if (!icon) {
                 icon = group.icon;

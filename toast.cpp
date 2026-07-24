@@ -28,7 +28,7 @@ void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, 
         if (ImGui::Begin(label.cStr(), nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
             float iconSz = ImGui::GetFontSize() * 2.f;
 
-            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon)))) {
+            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon), (u32)iconSz))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(iconSz, iconSz));
                 ImGui::SameLine();
             }

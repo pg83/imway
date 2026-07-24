@@ -240,7 +240,7 @@ struct Toplevel: stl::IntrusiveNode {
     u64 appIdSym = 0;
 
     // client pixels, then the chosen name, then the app_id .desktop match
-    Icon* icon(Composer& c) const;
+    Icon* icon(Composer& c, u32 desired) const;
 
     int desiredW = 0, desiredH = 0;
     // the geometry snapshot desiredW/H was derived from. On KMS the frame

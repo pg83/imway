@@ -143,6 +143,9 @@ namespace {
         StringBuilder path;
         char line[1024] = "";
         size_t lineLen = 0;
+        // the desired size the dump resolves toplevel icons at; the icon-size
+        // verb drives it so a scenario can probe the size-bucket curve
+        u32 dumpIconSize = 48;
 
         ControlImpl(Composer& c, StringView fifoPath);
 
@@ -350,6 +353,8 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
+    } else if (verb == "icon-size"_sv) {
+        dumpIconSize = (u32)args.stou();
     } else if (verb == "kms-connector"_sv && comp->kmsIntercept) {
         // flip the fake connector and re-probe, like a udev hotplug would
         comp->kmsIntercept->setConnected(args.stou() != 0);
@@ -434,7 +439,7 @@ void ControlImpl::dumpState(StringView outPath) {
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
         Surface* s = t.surface.get();
-        Icon* icon = t.icon(*comp);
+        Icon* icon = t.icon(*comp, dumpIconSize);
 
         out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(scene->focusedToplevel.get() == &t) << " unresponsive="_sv << (int)t.unresponsive << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
 
@@ -442,7 +447,7 @@ void ControlImpl::dumpState(StringView outPath) {
             out << " imgx="_sv << (int)s->imgX << " imgy="_sv << (int)s->imgY << " client_w="_sv << s->geomW() << " client_h="_sv << s->geomH() << " content_type="_sv << s->contentType << " tearing="_sv << (int)s->tearingAsync;
         }
 
-        out << " parent="_sv << (t.parent ? t.parent->id : 0) << " icon_gen="_sv << (icon ? icon->gen : 0) << " tag="_sv << sv(t.tag) << " app_id="_sv << sv(t.appId) << " title="_sv << sv(t.title) << "\n"_sv;
+        out << " parent="_sv << (t.parent ? t.parent->id : 0) << " icon_gen="_sv << (icon ? icon->gen : 0) << " icon_w="_sv << (icon ? icon->width : 0) << " tag="_sv << sv(t.tag) << " app_id="_sv << sv(t.appId) << " title="_sv << sv(t.title) << "\n"_sv;
     });
 
     forEach<Popup>(scene->popups, [&](Popup& p) {

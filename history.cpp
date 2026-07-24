@@ -57,7 +57,7 @@ void Dialog::draw(Composer& c, bool& open) {
 
             float iconSz = ImGui::GetFontSize() * 1.6f;
 
-            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon)))) {
+            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon), (u32)iconSz))) {
                 ImGui::Image((ImTextureID)tex, ImVec2(iconSz, iconSz));
                 ImGui::SameLine();
             }

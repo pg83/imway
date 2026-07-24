@@ -10,13 +10,15 @@ struct Icon;
 // provider: use the result before returning to the event loop, or copy the
 // pixels out — nobody stores an Icon* across frames. Lookup is by the 64-bit
 // symbol of the id; ids never collide across providers (icon names, app ids,
-// paths and the synthetic per-window keys are disjoint by construction), and
-// equal ids within one namespace are arbitrated by registry order. The id
-// string itself is only load material for a cold cache miss, and is empty
-// when the caller resolved a precomputed symbol.
+// paths and the synthetic per-window keys are disjoint by construction). The
+// id string itself is only load material for a cold cache miss, and is empty
+// when the caller resolved a precomputed symbol. desired is the edge the
+// caller will draw at, in output pixels: a provider answers with its best
+// candidate for that size, and the registry walk compares the answers of
+// every provider by size fit.
 // the node links it into Composer::iconProviders
 struct IconProvider: stl::IntrusiveNode {
-    virtual Icon* findIcon(u64 sym, stl::StringView id) = 0;
+    virtual Icon* findIcon(u64 sym, u32 desired, stl::StringView id) = 0;
 
     ~IconProvider() noexcept;
 };

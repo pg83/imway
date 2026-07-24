@@ -49,11 +49,12 @@ struct InputSource;
 struct Composer {
     Composer(stl::ObjPool* pool);
 
-    // walk iconProviders, first non-null answer wins; the string form hashes
-    // once for the whole registry walk, the symbol form is for callers with
-    // a precomputed key (see IconProvider in icon.h for the contract)
-    Icon* findIcon(stl::StringView id);
-    Icon* findIcon(u64 sym, stl::StringView id = {});
+    // walk every iconProvider and keep the best size fit for desired (the
+    // draw edge in output pixels); the string form hashes once for the whole
+    // registry walk, the symbol form is for callers with a precomputed key
+    // (see IconProvider in icon_provider.h for the contract)
+    Icon* findIcon(stl::StringView id, u32 desired);
+    Icon* findIcon(u64 sym, u32 desired, stl::StringView id = {});
 
     Theme theme;
     // created right after the pool, before everything else: every subsystem

@@ -1799,9 +1799,9 @@ void DesktopImpl::buildUi(Scene& scene) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
                 }
 
-                if (u64 tabIcon = comp->iconResolver->iconTexture(t->icon(*comp))) {
-                    float isz = 20.f * uiScale;
+                float isz = 20.f * uiScale;
 
+                if (u64 tabIcon = comp->iconResolver->iconTexture(t->icon(*comp, (u32)isz))) {
                     dl->AddImage((ImTextureID)tabIcon, ImVec2(x + 3.f, y + 3.f), ImVec2(x + 3.f + isz, y + 3.f + isz));
                 }
 

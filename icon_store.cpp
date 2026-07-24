@@ -17,6 +17,7 @@
 #include <std/lib/vector.h>
 #include <std/ios/fs_utils.h>
 #include <std/mem/obj_pool.h>
+#include <std/rng/split_mix_64.h>
 
 #include <ev.h>
 #include <fcntl.h>
@@ -28,7 +29,25 @@
 using namespace stl;
 
 namespace {
-    constexpr int kIconPx = 48;
+    // svg rasterization edge: the desired size rounded up to a power of two,
+    // so nearby ui sizes share one raster instead of one raster each
+    constexpr u32 kIconMinPx = 16;
+    constexpr u32 kIconMaxPx = 512;
+
+    u32 iconBucket(u32 desired) {
+        u32 b = kIconMinPx;
+
+        while (b < desired && b < kIconMaxPx) {
+            b *= 2;
+        }
+
+        return b;
+    }
+
+    // per-bucket cache key: mix the bucket into the query symbol
+    u64 bucketSym(u64 sym, u32 bucket) {
+        return sym ^ splitMix64(bucket);
+    }
 
     void inoCb(struct ev_loop*, ev_io* w, int);
     void reloadCb(struct ev_loop*, ev_timer* w, int);
@@ -66,10 +85,10 @@ namespace {
         void addDesktop(StringBuilder& file, StringView fileId);
         void drainInotify();
         void reload();
-        Icon* loadSvgFile(StringView path);
-        Icon* valueIcon(StringView v);
-        Icon* resolveSym(u64 sym);
-        Icon* findIcon(u64 sym, StringView id) override;
+        Icon* loadSvgFile(StringView path, u32 bucket);
+        Icon* valueIcon(StringView v, u32 bucket);
+        Icon* resolveSym(u64 sym, u32 bucket);
+        Icon* findIcon(u64 sym, u32 desired, StringView id) override;
     };
 
     void inoCb(struct ev_loop*, ev_io* w, int) {
@@ -256,14 +275,14 @@ void IconStoreImpl::reload() {
     *(c->log) << "imway: icon store reloaded, "_sv << (u64)desktop->size() << " entries"_sv << endL;
 }
 
-Icon* IconStoreImpl::loadSvgFile(StringView path) {
+Icon* IconStoreImpl::loadSvgFile(StringView path, u32 bucket) {
     auto doc = lunasvg::Document::loadFromFile(Buffer(path).cStr());
 
     if (!doc) {
         return nullptr;
     }
 
-    lunasvg::Bitmap bmp = doc->renderToBitmap(kIconPx, kIconPx);
+    lunasvg::Bitmap bmp = doc->renderToBitmap((int)bucket, (int)bucket);
 
     if (bmp.isNull()) {
         return nullptr;
@@ -272,19 +291,19 @@ Icon* IconStoreImpl::loadSvgFile(StringView path) {
     // lunasvg bitmaps are premultiplied ARGB32, same as Icon wants
     Icon* ic = icons->acquire(*gen);
 
-    ic->width = kIconPx;
-    ic->height = kIconPx;
-    ic->argb.append((const u32*)bmp.data(), (size_t)kIconPx * kIconPx);
+    ic->width = (int)bucket;
+    ic->height = (int)bucket;
+    ic->argb.append((const u32*)bmp.data(), (size_t)bucket * bucket);
 
     return ic;
 }
 
 // a name-or-path Icon= value, cached under its own symbol so an app_id
 // lookup and a direct name lookup landing on the same value share one icon
-Icon* IconStoreImpl::valueIcon(StringView v) {
+Icon* IconStoreImpl::valueIcon(StringView v, u32 bucket) {
     u64 sym = v.hash64();
 
-    if (Icon** hit = cache->find(sym)) {
+    if (Icon** hit = cache->find(bucketSym(sym, bucket))) {
         return *hit;
     }
 
@@ -292,37 +311,39 @@ Icon* IconStoreImpl::valueIcon(StringView v) {
 
     if (!v.empty() && v[0] == '/') {
         if (v.endsWith(".svg"_sv)) {
-            icon = loadSvgFile(v);
+            icon = loadSvgFile(v, bucket);
         }
     } else if (StringBuilder** path = names->find(sym)) {
-        icon = loadSvgFile(sv(**path));
+        icon = loadSvgFile(sv(**path), bucket);
     }
 
-    cache->insert(sym, icon);
+    cache->insert(bucketSym(sym, bucket), icon);
 
     return icon;
 }
 
 // the indexed namespaces: a case-folded app_id symbol or an icon name
 // symbol. The .desktop mapping wins when a string is both.
-Icon* IconStoreImpl::resolveSym(u64 sym) {
+Icon* IconStoreImpl::resolveSym(u64 sym, u32 bucket) {
     if (StringBuilder** value = desktop->find(sym)) {
-        return valueIcon(sv(**value));
+        return valueIcon(sv(**value), bucket);
     }
 
     if (StringBuilder** path = names->find(sym)) {
-        return loadSvgFile(sv(**path));
+        return loadSvgFile(sv(**path), bucket);
     }
 
     return nullptr;
 }
 
-Icon* IconStoreImpl::findIcon(u64 sym, StringView id) {
-    if (Icon** hit = cache->find(sym)) {
+Icon* IconStoreImpl::findIcon(u64 sym, u32 desired, StringView id) {
+    u32 bucket = iconBucket(desired);
+
+    if (Icon** hit = cache->find(bucketSym(sym, bucket))) {
         return *hit;
     }
 
-    Icon* icon = resolveSym(sym);
+    Icon* icon = resolveSym(sym, bucket);
 
     if (!icon && !id.empty()) {
         // string-form extras the indexes cannot serve: a not-yet-folded
@@ -330,15 +351,15 @@ Icon* IconStoreImpl::findIcon(u64 sym, StringView id) {
         u64 lsym = id.lower(lowerScratch).hash64();
 
         if (lsym != sym) {
-            icon = resolveSym(lsym);
+            icon = resolveSym(lsym, bucket);
         }
 
         if (!icon && id[0] == '/' && id.endsWith(".svg"_sv)) {
-            icon = loadSvgFile(id);
+            icon = loadSvgFile(id, bucket);
         }
     }
 
-    cache->insert(sym, icon);
+    cache->insert(bucketSym(sym, bucket), icon);
 
     return icon;
 }

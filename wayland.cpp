@@ -1123,7 +1123,7 @@ namespace {
         void run() override;
         void setLayout(u32 group) override;
 
-        Icon* findIcon(u64 sym, StringView id) override;
+        Icon* findIcon(u64 sym, u32 desired, StringView id) override;
         void syncKeyboardCapture();
         void sessionEnabled();
         void sessionDisabled();
@@ -12908,9 +12908,9 @@ void WaylandImpl::setLayout(u32 group) {
     seat.updateModifiers();
 }
 
-// icon store reload: re-resolve every window still on a .desktop
-// match; client-set icons are not ours to touch
-Icon* WaylandImpl::findIcon(u64 sym, StringView) {
+// the client committed one icon at whatever size it chose: that is the
+// answer for any desired size, the registry weighs it against the rest
+Icon* WaylandImpl::findIcon(u64 sym, u32, StringView) {
     Icon** hit = windowIcons.find(sym);
 
     return hit ? *hit : nullptr;

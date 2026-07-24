@@ -79,7 +79,7 @@ namespace {
         StatusNotifierImpl(Composer& comp);
         ~StatusNotifierImpl() noexcept;
 
-        Icon* findIcon(u64 sym, StringView id) override;
+        Icon* findIcon(u64 sym, u32 desired, StringView id) override;
         void itemsImpl(VisitorFace&& vis) override;
         void activate(const StatusAction& action, int x, int y) override;
 
@@ -444,7 +444,9 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     *(c->log) << "imway: StatusNotifierWatcher on the session bus"_sv << endL;
 }
 
-Icon* StatusNotifierImpl::findIcon(u64 sym, StringView) {
+// the stored pixmap is the largest the item offered — the best this
+// provider can do for any desired size
+Icon* StatusNotifierImpl::findIcon(u64 sym, u32, StringView) {
     ItemBox** entry = pixmaps.find(sym);
 
     if (!entry) {

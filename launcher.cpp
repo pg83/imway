@@ -404,7 +404,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
 
             ImGui::PushID((int)vis[(size_t)flat]);
 
-            u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen)));
+            u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen), (u32)cell));
             StringView name = view(r.name, r.nameLen);
 
             if (dockIconButton(c.theme, "##cell", tex, cell, false, false, name)) {

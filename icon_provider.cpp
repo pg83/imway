@@ -9,16 +9,16 @@ IconProvider::~IconProvider() noexcept {
 
 // lives here rather than in scene.cpp so the scene stays linkable without
 // the Composer registry (pixel tests link scene.cpp standalone)
-Icon* Toplevel::icon(Composer& c) const {
-    if (Icon* found = c.findIcon(iconSym)) {
+Icon* Toplevel::icon(Composer& c, u32 desired) const {
+    if (Icon* found = c.findIcon(iconSym, desired)) {
         return found;
     }
 
     if (iconNameSym) {
-        if (Icon* found = c.findIcon(iconNameSym)) {
+        if (Icon* found = c.findIcon(iconNameSym, desired)) {
             return found;
         }
     }
 
-    return c.findIcon(appIdSym);
+    return c.findIcon(appIdSym, desired);
 }
