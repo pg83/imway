@@ -183,9 +183,9 @@ imway = program(
 
 # same compositor, rebuilt for the tests (IMWAY_FOR_TESTS): the small-object
 # allocator poisons memory on alloc/free, the test-only env knobs compile in,
-# and frame pointers are kept so the crash handler can walk the stack. The
+# and frame pointers are kept so gdb can walk a hung compositor's stack. The
 # integration tests run against this binary so a use-after-free or
-# use-before-init surfaces as a crash with a stack
+# use-before-init surfaces as a crash
 imway_test = program(
     name="imway_test",
     output="$(B)/imway_test",
