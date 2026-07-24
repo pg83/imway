@@ -86,7 +86,7 @@ int mainComposer(int argc, char** argv) {
     ObjPool::Ref pool = ObjPool::fromMemory();
     // the log is the pool's very first object: it outlives everything else,
     // and every line from here on goes through it (teeing to the IX log)
-    Log* log = Log::create(pool.mutPtr(), &stderrStream());
+    Log* log = Log::create(pool.mutPtr(), nonblockStderr(pool.mutPtr()));
 
     Config cfg;
 

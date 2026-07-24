@@ -24,3 +24,8 @@ struct Log: stl::ZeroCopyOutput {
     // tee may be null (unit tests): the ring is then the only destination
     static Log* create(stl::ObjPool* pool, stl::Output* tee);
 };
+
+// stderr through its own non-blocking descriptor: a stalled reader on the
+// other end of the pipe must not stall the compositor. Whatever does not
+// fit is dropped — the ring above keeps the full history.
+stl::Output* nonblockStderr(stl::ObjPool* pool);

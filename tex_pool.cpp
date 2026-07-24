@@ -1,7 +1,7 @@
 #include "tex_pool.h"
 
 #include "util.h"
-#include "pooled_vk.h"
+#include "pooled.h"
 
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
@@ -52,7 +52,9 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s)
     dlci.bindingCount = 2;
     dlci.pBindings = bindings;
     STD_VERIFY(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout) == VK_SUCCESS);
-    pooledVk(pool, device, layout);
+    pooledGuard(pool, [this] {
+        vkDestroyDescriptorSetLayout(device, layout, nullptr);
+    });
 
     grow();
 }
@@ -75,7 +77,9 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
         return VK_NULL_HANDLE;
     }
 
-    pooledVk(pool, device, p);
+    pooledGuard(pool, [this, p] {
+        vkDestroyDescriptorPool(device, p, nullptr);
+    });
     chunks.pushBack(p);
 
     return p;

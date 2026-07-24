@@ -549,6 +549,20 @@ namespace {
         EventFD screenshotDone;
         ev_io* screenshotIo = nullptr;
 
+        // the hotplug probe re-reads EDID over DDC in the kernel — tens to
+        // hundreds of milliseconds on a real link — so it runs on the
+        // offload thread; the results land here and hotplugDone wakes the
+        // loop to apply them
+        EventFD hotplugDone;
+        ev_io* hotplugIo = nullptr;
+        bool probeInFlight = false;
+        bool probeAgain = false;
+        bool probeValid = false;
+        bool probeConnected = false;
+        bool probeOffered = false;
+        bool probeHaveModes = false;
+        drmModeModeInfo probeWant{};
+
         u32 connectorId = 0;
         StringBuilder connectorLabel;
         int physicalWmm = 0, physicalHmm = 0;
@@ -700,6 +714,7 @@ namespace {
 
         bool ready() const override;
         void hotplug() override;
+        void hotplugProbed();
         bool vsynced() const override;
         int scanoutCount() const override;
         ScanoutBuffer* scanoutBuffer(int i) override;
@@ -782,6 +797,10 @@ namespace {
 
     void screenshotDoneCb(struct ev_loop*, ev_io* w, int) {
         ((KmsOutput*)w->data)->screenshotPrepared();
+    }
+
+    void hotplugDoneCb(struct ev_loop*, ev_io* w, int) {
+        ((KmsOutput*)w->data)->hotplugProbed();
     }
 
     struct KmsDevice: public Device {
@@ -1202,69 +1221,96 @@ void KmsOutput::drainPendingFlip() {
 }
 
 void KmsOutput::hotplug() {
-    drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
+    if (probeInFlight) {
+        // events burst during link training: one probe runs, the last
+        // request wins a re-probe when it retires
+        probeAgain = true;
 
-    if (!conn) {
         return;
     }
 
-    bool connected = conn->connection == DRM_MODE_CONNECTED;
+    probeInFlight = true;
 
-    // what the display on the wire wants now: the current mode when still
-    // offered, else its preferred one — a swapped display (the TV case)
-    bool offered = false;
-    bool haveModes = connected && conn->count_modes > 0;
-    drmModeModeInfo want{};
+    drmModeModeInfo current = mode;
 
-    if (haveModes) {
-        want = conn->modes[0];
+    // the connected probe re-reads EDID over DDC in the kernel — tens to
+    // hundreds of milliseconds on a real link; the state machine stays on
+    // the loop, only the blocking read runs on the offload thread
+    c->offload->submit([this, current] {
+        drmModeConnector* conn = drmModeGetConnector(fd, connectorId);
 
-        for (int i = 0; i < conn->count_modes; i++) {
-            const drmModeModeInfo& m = conn->modes[i];
+        probeValid = conn != nullptr;
+        probeConnected = false;
+        probeOffered = false;
+        probeHaveModes = false;
 
-            if (m.hdisplay == mode.hdisplay && m.vdisplay == mode.vdisplay && m.vrefresh == mode.vrefresh) {
-                offered = true;
+        if (conn) {
+            probeConnected = conn->connection == DRM_MODE_CONNECTED;
+            probeHaveModes = probeConnected && conn->count_modes > 0;
+
+            // what the display on the wire wants now: the current mode when
+            // still offered, else its preferred one (a swapped display)
+            if (probeHaveModes) {
+                probeWant = conn->modes[0];
+
+                for (int i = 0; i < conn->count_modes; i++) {
+                    const drmModeModeInfo& m = conn->modes[i];
+
+                    if (m.hdisplay == current.hdisplay && m.vdisplay == current.vdisplay && m.vrefresh == current.vrefresh) {
+                        probeOffered = true;
+                    }
+
+                    if (m.type & DRM_MODE_TYPE_PREFERRED) {
+                        probeWant = conn->modes[i];
+                    }
+                }
             }
 
-            if (m.type & DRM_MODE_TYPE_PREFERRED) {
-                want = conn->modes[i];
-            }
+            drmModeFreeConnector(conn);
         }
-    }
 
-    drmModeFreeConnector(conn);
+        hotplugDone.signal();
+    });
+}
 
-    if (connected == connectorConnected) {
-        if (connected) {
+void KmsOutput::hotplugProbed() {
+    hotplugDone.drain();
+    probeInFlight = false;
+
+    if (probeValid && probeConnected == connectorConnected) {
+        if (probeConnected) {
             signalFeedbackLogged = false;
             updateSignalFeedback();
 
             // the mode list changed without the link dropping (a dock
             // re-reading EDID): follow it like a replug would
-            if (!offered && haveModes && switchMode(want)) {
+            if (!probeOffered && probeHaveModes && switchMode(probeWant)) {
                 remodeset("mode list changed, remodeset"_sv);
             }
         }
-        return;
+    } else if (probeValid) {
+        connectorConnected = probeConnected;
+
+        if (!probeConnected) {
+            *(c->log) << "imway: connector disconnected"_sv << endL;
+        } else {
+            drainPendingFlip();
+
+            if (!probeOffered && probeHaveModes && !switchMode(probeWant)) {
+                // committing the old mode anyway is honest: the display
+                // refuses it and the failure lands in the log instead of a
+                // silent dark screen
+                *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
+            }
+
+            remodeset("connector reconnected, remodeset"_sv);
+        }
     }
 
-    connectorConnected = connected;
-
-    if (!connected) {
-        *(c->log) << "imway: connector disconnected"_sv << endL;
-
-        return;
+    if (probeAgain) {
+        probeAgain = false;
+        hotplug();
     }
-
-    drainPendingFlip();
-
-    if (!offered && haveModes && !switchMode(want)) {
-        // committing the old mode anyway is honest: the display refuses it
-        // and the failure lands in the log instead of a silent dark screen
-        *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
-    }
-
-    remodeset("connector reconnected, remodeset"_sv);
 }
 
 // full modeset on the freshest rendered framebuffer, after a hotplug-class
@@ -1295,6 +1341,10 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     ev_io_init(screenshotIo, screenshotDoneCb, screenshotDone.fd(), EV_READ);
     screenshotIo->data = this;
     ev_io_start(c.loop, screenshotIo);
+    hotplugIo = createEvIo(*c.pool, c.loop);
+    ev_io_init(hotplugIo, hotplugDoneCb, hotplugDone.fd(), EV_READ);
+    hotplugIo->data = this;
+    ev_io_start(c.loop, hotplugIo);
     pickPipe(connector, modeStr);
 
     if (!readEdidColorCapabilities(fd, connectorId, displayCapabilities)) {
@@ -1536,12 +1586,16 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 }
 
 KmsOutput::~KmsOutput() noexcept {
-    if (screenshotState == 1) {
+    if (screenshotState == 1 || probeInFlight) {
         c->offload->join();
     }
 
     if (ev_is_active(screenshotIo)) {
         ev_io_stop(loop, screenshotIo);
+    }
+
+    if (ev_is_active(hotplugIo)) {
+        ev_io_stop(loop, hotplugIo);
     }
 
     releaseDirectUse(queuedDirect, queuedDirectFrame);
@@ -2575,27 +2629,29 @@ bool KmsOutput::ddcGet(u8 vcp, int& cur, int& max) {
 
     req[4] ^= 0x6E;
 
-    if (write(ddcFd, req, 5) != 5) {
-        return false;
+    // most monitors answer within a few milliseconds: back off toward the
+    // spec's worst case instead of always sleeping it out
+    for (useconds_t delay = 1000;; delay = delay * 3 / 2 > 50000 ? 50000 : delay * 3 / 2) {
+        if (write(ddcFd, req, 5) != 5) {
+            return false;
+        }
+
+        usleep(delay);
+
+        u8 rep[11] = {};
+
+        // rep: xx 88 02 result vcp type maxH maxL curH curL cs
+        if (read(ddcFd, rep, 11) == 11 && rep[2] == 0x02 && rep[4] == vcp) {
+            max = (rep[6] << 8) | rep[7];
+            cur = (rep[8] << 8) | rep[9];
+
+            return true;
+        }
+
+        if (delay >= 50000) {
+            return false;
+        }
     }
-
-    usleep(50000);
-
-    u8 rep[11] = {};
-
-    if (read(ddcFd, rep, 11) != 11) {
-        return false;
-    }
-
-    // rep: xx 88 02 result vcp type maxH maxL curH curL cs
-    if (rep[2] != 0x02 || rep[4] != vcp) {
-        return false;
-    }
-
-    max = (rep[6] << 8) | rep[7];
-    cur = (rep[8] << 8) | rep[9];
-
-    return true;
 }
 
 void KmsOutput::ddcSet(u8 vcp, int val) {

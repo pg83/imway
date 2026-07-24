@@ -30,7 +30,6 @@
 #include "inspector.h"
 #include "intr_list.h"
 #include "pooled_ev.h"
-#include "pooled_vk.h"
 #include "anr_dialog.h"
 #include "input_sink.h"
 #include "lock_screen.h"
@@ -187,6 +186,7 @@ namespace {
     void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
+    void captureTimerCb(struct ev_loop*, ev_timer* w, int);
 
     // the scene composes in linear half-float; the output pass maps it to
     // the scanout format
@@ -264,6 +264,26 @@ namespace {
         VkBuffer readback = VK_NULL_HANDLE;
         VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
         void* readbackMap = nullptr;
+
+        // async screencopy readback: one GPU copy per frame serves every
+        // registered consumer, a 1ms timer polls the fence; the loop never
+        // waits the GPU for a capture
+        struct CaptureWant {
+            Listener* done = nullptr;
+            int x = 0, y = 0, w = 0, h = 0;
+        };
+
+        Vector<CaptureWant> captureWants;
+        VkCommandBuffer captureCmd = VK_NULL_HANDLE;
+        VkFence captureFence = VK_NULL_HANDLE;
+        VkBuffer captureBuf = VK_NULL_HANDLE;
+        VkDeviceMemory captureMem = VK_NULL_HANDLE;
+        void* captureMap = nullptr;
+        int captureW = 0;
+        int captureH = 0;
+        bool captureInFlight = false;
+        int captureSeq = -1;
+        ev_timer* captureTimer = nullptr;
 
         ScreenshotCapture* shotCapture = nullptr;
         bool shotRequested = false;
@@ -509,7 +529,11 @@ namespace {
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
-        bool captureFrame(unsigned char* dst, size_t stride, int x, int y, int w, int h) override;
+        bool captureSubmit(int x, int y, int w, int h, Listener& done) override;
+        void captureCancel(Listener& done) override;
+        bool captureRecord();
+        void capturePoll();
+        void captureDropAll();
         u64 colorIntermediateBytes() override;
         bool readPixel(int x, int y, u8& r, u8& g, u8& b);
         void captureScreenshot();
@@ -568,6 +592,10 @@ namespace {
     // the desktop renders on demand, wake it up so the clock stays fresh
     void clockTimerCb(struct ev_loop*, ev_timer* w, int) {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
+    }
+
+    void captureTimerCb(struct ev_loop*, ev_timer* w, int) {
+        ((RendererImpl*)w->data)->capturePoll();
     }
 
 }
@@ -1536,10 +1564,16 @@ void RendererImpl::setup() {
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
     VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &cmd));
+    VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &captureCmd));
 
     VkFenceCreateInfo fenci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
     VK_CHECK(vkCreateFence(device, &fenci, nullptr, &fence));
+    VK_CHECK(vkCreateFence(device, &fenci, nullptr, &captureFence));
+
+    captureTimer = createEvTimer(*pool, loop);
+    ev_timer_init(captureTimer, captureTimerCb, 0., 0.);
+    captureTimer->data = this;
 
     if (hasSyncFd) {
         importSemFd = (PFN_vkImportSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
@@ -1712,7 +1746,9 @@ void RendererImpl::setup() {
     // and before DeviceVk dies. LIFO — dependents last. The sized targets
     // are guarded through lambdas reading the members, because a mode
     // announcement replaces the handles mid-life.
-    pooledVk(*pool, device, renderPass);
+    pooledGuard(*pool, [this] {
+        vkDestroyRenderPass(device, renderPass, nullptr);
+    });
     pooledGuard(*pool, [this] {
         vkFreeMemory(device, sceneMemory, nullptr);
     });
@@ -1737,13 +1773,27 @@ void RendererImpl::setup() {
     pooledGuard(*pool, [this] {
         vkDestroyFramebuffer(device, framebuffer, nullptr);
     });
-    pooledVk(*pool, device, outputPass);
-    pooledVk(*pool, device, outputSetLayout);
-    pooledVk(*pool, device, outputPipeLayout);
-    pooledVk(*pool, device, outputPipeline);
-    pooledVk(*pool, device, cursorPipeLayout);
-    pooledVk(*pool, device, cursorPipeline);
-    pooledVk(*pool, device, outputDescPool);
+    pooledGuard(*pool, [this] {
+        vkDestroyRenderPass(device, outputPass, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyDescriptorSetLayout(device, outputSetLayout, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyPipelineLayout(device, outputPipeLayout, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyPipeline(device, outputPipeline, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyPipelineLayout(device, cursorPipeLayout, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyPipeline(device, cursorPipeline, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyDescriptorPool(device, outputDescPool, nullptr);
+    });
 
     pooledGuard(*pool, [this] {
         vkFreeMemory(device, readbackMemory, nullptr);
@@ -1751,29 +1801,67 @@ void RendererImpl::setup() {
     pooledGuard(*pool, [this] {
         vkDestroyBuffer(device, readback, nullptr);
     });
-    pooledVk(*pool, device, cmdPool);
-    pooledVk(*pool, device, fence);
-    pooledVk(*pool, device, sampler);
-
-    for (VkSemaphore sem : syncWaitPool) {
-        if (sem) {
-            pooledVk(*pool, device, sem);
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, captureMem, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyBuffer(device, captureBuf, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyCommandPool(device, cmdPool, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFence(device, fence, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFence(device, captureFence, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroySampler(device, sampler, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        for (VkSemaphore sem : syncWaitPool) {
+            if (sem) {
+                vkDestroySemaphore(device, sem, nullptr);
+            }
         }
-    }
+    });
 
-    if (curImg) {
-        pooledVk(*pool, device, curSceneMem);
-        pooledVk(*pool, device, curScene);
-        pooledVk(*pool, device, curSceneView);
-        pooledVk(*pool, device, curSceneFb);
-        pooledVk(*pool, device, curImgMem);
-        pooledVk(*pool, device, curImg);
-        pooledVk(*pool, device, curView);
-        pooledVk(*pool, device, curFb);
-        pooledVk(*pool, device, curReadbackMem);
-        pooledVk(*pool, device, curReadback);
-        pooledVk(*pool, device, curFence);
-    }
+    // the hardware-cursor objects are created at most once; destroying a
+    // null handle is a no-op on the paths without a cursor plane
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, curSceneMem, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImage(device, curScene, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImageView(device, curSceneView, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFramebuffer(device, curSceneFb, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, curImgMem, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImage(device, curImg, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImageView(device, curView, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFramebuffer(device, curFb, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, curReadbackMem, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyBuffer(device, curReadback, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFence(device, curFence, nullptr);
+    });
 }
 
 // Every target sized by the output mode, built on the mode announcement:
@@ -1809,6 +1897,7 @@ void RendererImpl::applyOutputSize() {
         readback = VK_NULL_HANDLE;
         readbackMemory = VK_NULL_HANDLE;
         readbackMap = nullptr;
+        captureDropAll();
 
         for (VkFramebuffer fb : scanFbs) {
             vkDestroyFramebuffer(device, fb, nullptr);
@@ -3023,7 +3112,9 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     // buffers; the hand-built draw data must point at the main one
     dd.OwnerViewport = ImGui::GetMainViewport();
 
-    // the imgui backend cycles shared vertex buffers; make sure no frame is in flight
+    // the imgui backend cycles shared vertex buffers; the caller runs this
+    // at the start of a frame, after the previous frame's fence retired, so
+    // the queue is already empty and this wait is a cheap guard
     vkQueueWaitIdle(queue);
 
     VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -3351,6 +3442,7 @@ void RendererImpl::buildUi(Scene& scene) {
         if (hwKind >= 0) {
             pendingShape = hwKind;
             hwKind = -2;
+            scene.needsFrame = true;
         }
     }
 
@@ -4232,8 +4324,9 @@ void RendererImpl::cursorUi(Scene& scene, bool overClient) {
             // rasterizing goes through the imgui vulkan backend, which must
             // not run mid-frame (on the very first frame it is not even
             // initialized yet and produces an empty image): defer to the
-            // end of renderFrame
+            // start of the next frame, when the queue has drained
             pendingShape = kind;
+            scene.needsFrame = true;
         } else {
             output->setCursorImage(img.data());
             hwKind = kind;
@@ -4659,26 +4752,6 @@ bool RendererImpl::renderFrame(int scanIdx) {
         finishGpuFrame(true);
     }
 
-    if (pendingShape >= 0) {
-        int kind = pendingShape;
-
-        pendingShape = -1;
-
-        if (hwCursorReady && output->cursorCapW() > 0) {
-            Vector<u32>& img = hwShapeCache[kind];
-
-            if (!img.length()) {
-                img.zero((size_t)hwCapW * hwCapH);
-                rasterizeShape(kind, img.mutData());
-            }
-
-            output->setCursorImage(img.data());
-            hwKind = kind;
-            hwSurf.reset();
-            scene->needsFrame = true;
-        }
-    }
-
     return true;
 }
 
@@ -4790,7 +4863,7 @@ u64 RendererImpl::colorIntermediateBytes() {
 // the copy-capture path: same readback as screenshot, but into caller
 // memory as XRGB8888 rows. A direct-scanout frame has no composed image to
 // read: arm composition for the next frame and report "not this one"
-bool RendererImpl::captureFrame(unsigned char* dst, size_t stride, int rx, int ry, int rw, int rh) {
+bool RendererImpl::captureSubmit(int rx, int ry, int rw, int rh, Listener& done) {
     if (lastFrameDirect) {
         forceComposition = true;
         scene->needsFrame = true;
@@ -4798,45 +4871,169 @@ bool RendererImpl::captureFrame(unsigned char* dst, size_t stride, int rx, int r
         return false;
     }
 
-    if (!haveFrame) {
+    if (!haveFrame || rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > width || ry + rh > height) {
         return false;
     }
 
-    finishGpuFrame(true);
+    if (captureInFlight && captureSeq != scene->framesDone) {
+        // an older frame's copy is still on the GPU: retry on the next one
+        scene->needsFrame = true;
 
-    if (!readbackLastFrame()) {
         return false;
     }
 
-    // composition was only forced for this capture; give scanout back
+    if (!captureInFlight && !captureRecord()) {
+        return false;
+    }
+
+    captureWants.pushBack({&done, rx, ry, rw, rh});
+
+    return true;
+}
+
+// one full-frame GPU copy of the last presented image, retired by the
+// capture timer; every consumer registered this frame reads from it
+bool RendererImpl::captureRecord() {
+    if (captureBuf && (captureW != width || captureH != height)) {
+        vkDestroyBuffer(device, captureBuf, nullptr);
+        vkFreeMemory(device, captureMem, nullptr);
+        captureBuf = VK_NULL_HANDLE;
+        captureMem = VK_NULL_HANDLE;
+        captureMap = nullptr;
+    }
+
+    if (!captureBuf) {
+        createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, captureBuf, captureMem, &captureMap);
+        captureW = width;
+        captureH = height;
+    }
+
+    vkResetCommandBuffer(captureCmd, 0);
+
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(captureCmd, &bi);
+
+    // the copy trails the frame on the same queue; the barrier makes the
+    // rendered pixels visible to the transfer without a host wait
+    VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+
+    bar.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    bar.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    bar.oldLayout = lastLayout;
+    bar.newLayout = lastLayout;
+    bar.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    bar.image = lastImage;
+    bar.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(captureCmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+
+    VkBufferImageCopy region{};
+
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {(u32)width, (u32)height, 1};
+    vkCmdCopyImageToBuffer(captureCmd, lastImage, lastLayout, captureBuf, 1, &region);
+    vkEndCommandBuffer(captureCmd);
+
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+
+    si.commandBufferCount = 1;
+    si.pCommandBuffers = &captureCmd;
+
+    if (VkResult res = vkQueueSubmit(queue, 1, &si, captureFence); res != VK_SUCCESS) {
+        *(comp->log) << "imway: capture submit failed ("_sv << (long)res << ")"_sv << endL;
+
+        return false;
+    }
+
+    captureInFlight = true;
+    captureSeq = scene->framesDone;
+    ev_timer_set(captureTimer, 0.001, 0.001);
+    ev_timer_start(loop, captureTimer);
+
+    return true;
+}
+
+void RendererImpl::capturePoll() {
+    VkResult status = vkGetFenceStatus(device, captureFence);
+
+    if (status == VK_NOT_READY) {
+        return;
+    }
+
+    ev_timer_stop(loop, captureTimer);
+    vkResetFences(device, 1, &captureFence);
+    captureInFlight = false;
+
+    if (status != VK_SUCCESS) {
+        *(comp->log) << "imway: capture fence failed ("_sv << (long)status << ")"_sv << endL;
+    } else if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        // consumers get XRGB8888: collapse the 10-bit scanout in place
+        u32* px = (u32*)captureMap;
+
+        for (size_t i = 0; i < (size_t)captureW * captureH; i++) {
+            u32 p = px[i];
+
+            px[i] = (((p >> 22) & 0xffu) << 16) | (((p >> 12) & 0xffu) << 8) | ((p >> 2) & 0xffu) | 0xff000000u;
+        }
+    }
+
+    // composition was only forced for the capture; give scanout back
     // unless the interactive screenshot still needs it
     if (!shotRequested) {
         forceComposition = false;
     }
 
-    if (rx < 0 || ry < 0 || rw <= 0 || rh <= 0 || rx + rw > width || ry + rh > height) {
-        return false;
-    }
+    for (size_t i = 0; i < captureWants.length(); i++) {
+        const CaptureWant& want = captureWants[i];
 
-    auto* px = (const unsigned char*)readbackMap;
+        if (status == VK_SUCCESS) {
+            CaptureRows rows;
 
-    for (int y = 0; y < rh; y++) {
-        const unsigned char* src = px + ((size_t)(ry + y) * width + rx) * 4;
-        unsigned char* out = dst + (size_t)y * stride;
-
-        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
-            const u32* p = (const u32*)src;
-            u32* o = (u32*)out;
-
-            for (int x = 0; x < rw; x++) {
-                o[x] = ((((p[x] >> 22) & 0xffu)) << 16) | ((((p[x] >> 12) & 0xffu)) << 8) | ((p[x] >> 2) & 0xffu) | 0xff000000u;
-            }
+            rows.base = (const unsigned char*)captureMap + ((size_t)want.y * captureW + want.x) * 4;
+            rows.stride = (size_t)captureW * 4;
+            want.done->onListen(&rows);
         } else {
-            memcpy(out, src, (size_t)rw * 4);
+            want.done->onListen(nullptr);
         }
     }
 
-    return true;
+    captureWants.clear();
+}
+
+void RendererImpl::captureCancel(Listener& done) {
+    for (size_t i = 0; i < captureWants.length(); i++) {
+        if (captureWants[i].done == &done) {
+            captureWants.mut(i) = captureWants.back();
+            captureWants.popBack();
+
+            return;
+        }
+    }
+}
+
+// the mode changed under the consumers: fail them, drop the sized buffer
+void RendererImpl::captureDropAll() {
+    if (captureInFlight) {
+        // the backend idled the GPU before the rebuild: the fence is done
+        ev_timer_stop(loop, captureTimer);
+        vkResetFences(device, 1, &captureFence);
+        captureInFlight = false;
+    }
+
+    for (size_t i = 0; i < captureWants.length(); i++) {
+        captureWants[i].done->onListen(nullptr);
+    }
+
+    captureWants.clear();
+    vkDestroyBuffer(device, captureBuf, nullptr);
+    vkFreeMemory(device, captureMem, nullptr);
+    captureBuf = VK_NULL_HANDLE;
+    captureMem = VK_NULL_HANDLE;
+    captureMap = nullptr;
+    captureW = 0;
+    captureH = 0;
 }
 
 // one-pixel eyedropper: reuse the screenshot readback of the last frame,
@@ -4893,6 +5090,29 @@ void RendererImpl::frameNow() {
         scene->needsFrame = true;
 
         return;
+    }
+
+    // deferred cursor rasterization: the previous frame's fence has
+    // retired, so the queue is idle and the imgui backend's shared vertex
+    // buffers are free — the queue wait inside rasterizeShape is a no-op
+    // here, where mid-frame it would drain the whole pipeline
+    if (pendingShape >= 0) {
+        int kind = pendingShape;
+
+        pendingShape = -1;
+
+        if (hwCursorReady && output->cursorCapW() > 0) {
+            Vector<u32>& img = hwShapeCache[kind];
+
+            if (!img.length()) {
+                img.zero((size_t)hwCapW * hwCapH);
+                rasterizeShape(kind, img.mutData());
+            }
+
+            output->setCursorImage(img.data());
+            hwKind = kind;
+            hwSurf.reset();
+        }
     }
 
     timespec ft0{};

@@ -1,9 +1,13 @@
 #include "log.h"
 
 #include <std/dbg/verify.h>
+#include <std/ios/output.h>
 #include <std/mem/obj_pool.h>
 
+#include <errno.h>
+#include <fcntl.h>
 #include <string.h>
+#include <unistd.h>
 
 using namespace stl;
 
@@ -164,4 +168,57 @@ StringView LogImpl::histElem(size_t n) {
 
 Log* Log::create(ObjPool* pool, Output* tee) {
     return pool->make<LogImpl>(tee);
+}
+
+namespace {
+    struct NonblockOut: Output {
+        int fd = -1;
+
+        NonblockOut(int f);
+
+        size_t writeImpl(const void* data, size_t len) override;
+    };
+}
+
+NonblockOut::NonblockOut(int f)
+    : fd(f)
+{
+}
+
+size_t NonblockOut::writeImpl(const void* data, size_t len) {
+    const char* p = (const char*)data;
+    size_t left = len;
+
+    while (left) {
+        ssize_t n = ::write(fd, p, left);
+
+        if (n < 0 && errno == EINTR) {
+            continue;
+        }
+
+        if (n <= 0) {
+            // a full pipe or a dead reader: the tail is dropped, the log
+            // ring keeps the line
+            break;
+        }
+
+        p += (size_t)n;
+        left -= (size_t)n;
+    }
+
+    return len;
+}
+
+Output* nonblockStderr(ObjPool* pool) {
+    // a reopen makes an independent file description on the same pipe, so
+    // stray direct stderr writers keep their blocking semantics
+    int fd = open("/proc/self/fd/2", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+
+    if (fd < 0) {
+        // no /proc: flip stderr itself and share the lossy policy
+        fcntl(2, F_SETFL, fcntl(2, F_GETFL, 0) | O_NONBLOCK);
+        fd = 2;
+    }
+
+    return pool->make<NonblockOut>(fd);
 }

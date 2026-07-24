@@ -426,6 +426,14 @@ namespace {
         CaptureFrame* frame = nullptr;
     };
 
+    // completion hook for the renderer's async readback: fires on the loop
+    // with CaptureRows*, or nullptr when the copy failed
+    struct CaptureReadbackDone: Listener {
+        CaptureFrame* frame = nullptr;
+
+        void onListen(void* rows) override;
+    };
+
     struct CaptureFrame {
         WaylandImpl* srv = nullptr;
         // anchor + weak back-pointer, mirroring CaptureSession
@@ -437,6 +445,11 @@ namespace {
         bool bufferDestroyArmed = false;
         bool captured = false;
         bool armed = false;
+        // the readback for this request is on the GPU; the armed frame is
+        // skipped until the completion hook fires
+        bool inFlight = false;
+        u32 grabW = 0, grabH = 0;
+        CaptureReadbackDone capDone;
         int attempts = 0;
     };
 
@@ -446,6 +459,12 @@ namespace {
     struct WlrCopyBufferDestroyListener {
         wl_listener listener{};
         WlrCopyFrame* frame = nullptr;
+    };
+
+    struct WlrReadbackDone: Listener {
+        WlrCopyFrame* frame = nullptr;
+
+        void onListen(void* rows) override;
     };
 
     // the node links it into WaylandImpl::screencopyFrames
@@ -458,6 +477,8 @@ namespace {
         int x = 0, y = 0, w = 0, h = 0;
         bool used = false;
         bool armed = false;
+        bool inFlight = false;
+        WlrReadbackDone capDone;
         bool withDamage = false;
         int attempts = 0;
     };
@@ -6842,6 +6863,10 @@ namespace {
     void captureFrameResourceDestroyed(wl_resource* res) {
         auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
 
+        if (f->inFlight && f->srv->composer->frameCapture) {
+            f->srv->composer->frameCapture->captureCancel(f->capDone);
+        }
+
         // the weak ring nulls the session's frame pointer
         f->weak.invalidate();
         captureFrameDrop(f);
@@ -7182,15 +7207,17 @@ namespace {
             return;
         }
 
-        wl_shm_buffer_begin_access(shm);
+        if (f.inFlight) {
+            return;
+        }
 
-        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride, regionX, regionY, (int)wantW, (int)wantH);
+        (void)stride;
+        f.grabW = wantW;
+        f.grabH = wantH;
+        f.capDone.frame = &f;
 
-        wl_shm_buffer_end_access(shm);
-
-        if (ok) {
-            f.armed = false;
-            captureSendReady(f, wantW, wantH);
+        if (cap->captureSubmit(regionX, regionY, (int)wantW, (int)wantH, f.capDone)) {
+            f.inFlight = true;
         } else if (++f.attempts >= 3) {
             // stays armed once or twice while a direct-scanout frame forces
             // composition; three misses means it is not coming
@@ -7198,6 +7225,35 @@ namespace {
         } else {
             srv->scene->needsFrame = true;
         }
+    }
+
+    void CaptureReadbackDone::onListen(void* arg) {
+        CaptureFrame& f = *frame;
+
+        f.inFlight = false;
+
+        auto* rows = (const CaptureRows*)arg;
+        wl_shm_buffer* shm = f.buffer ? wl_shm_buffer_get(f.buffer) : nullptr;
+
+        if (!rows || !shm) {
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+            return;
+        }
+
+        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+
+        wl_shm_buffer_begin_access(shm);
+
+        auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+
+        for (u32 y = 0; y < f.grabH; y++) {
+            memcpy(dst + (size_t)y * stride, rows->base + (size_t)y * rows->stride, (size_t)f.grabW * 4);
+        }
+
+        wl_shm_buffer_end_access(shm);
+        f.armed = false;
+        captureSendReady(f, f.grabW, f.grabH);
     }
 
     // ---- zwlr-screencopy (compat) ----
@@ -7220,6 +7276,10 @@ namespace {
 
     void wlrCopyFrameResourceDestroyed(wl_resource* res) {
         auto* f = (WlrCopyFrame*)wl_resource_get_user_data(res);
+
+        if (f->inFlight && f->srv->composer->frameCapture) {
+            f->srv->composer->frameCapture->captureCancel(f->capDone);
+        }
 
         wlrCopyDrop(f);
         f->unlink();
@@ -7352,25 +7412,48 @@ namespace {
             return;
         }
 
-        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+        if (f.inFlight) {
+            return;
+        }
 
-        wl_shm_buffer_begin_access(shm);
+        f.capDone.frame = &f;
 
-        bool ok = cap->captureFrame((unsigned char*)wl_shm_buffer_get_data(shm), stride, f.x, f.y, f.w, f.h);
+        if (cap->captureSubmit(f.x, f.y, f.w, f.h, f.capDone)) {
+            f.inFlight = true;
+        } else if (++f.attempts >= 3) {
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
+        } else {
+            srv->scene->needsFrame = true;
+        }
+    }
 
-        wl_shm_buffer_end_access(shm);
+    void WlrReadbackDone::onListen(void* arg) {
+        WlrCopyFrame& f = *frame;
 
-        if (!ok) {
-            if (++f.attempts >= 3) {
-                f.armed = false;
-                zwlr_screencopy_frame_v1_send_failed(f.res);
-            } else {
-                srv->scene->needsFrame = true;
-            }
+        f.inFlight = false;
+
+        auto* rows = (const CaptureRows*)arg;
+        wl_shm_buffer* shm = f.buffer ? wl_shm_buffer_get(f.buffer) : nullptr;
+
+        if (!rows || !shm) {
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
 
             return;
         }
 
+        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+
+        wl_shm_buffer_begin_access(shm);
+
+        auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+
+        for (int y = 0; y < f.h; y++) {
+            memcpy(dst + (size_t)y * stride, rows->base + (size_t)y * rows->stride, (size_t)f.w * 4);
+        }
+
+        wl_shm_buffer_end_access(shm);
         f.armed = false;
         zwlr_screencopy_frame_v1_send_flags(f.res, 0);
 
