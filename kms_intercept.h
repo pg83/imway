@@ -13,8 +13,10 @@ struct KmsIntercept {
     // the connector's mode list: 0 default, 1 tv (1080p only), 2 small
     // (800p only) — a swapped display without touching the link
     virtual void setModes(int set) = 0;
-    // the next atomic commits fail with err until count runs out
-    virtual void failCommits(int err, int count) = 0;
+    // the next atomic commits fail with err until count runs out; testToo
+    // extends that to TEST_ONLY commits — the shape of losing drm master
+    // (vt switch away), where every atomic ioctl bounces, not just flips
+    virtual void failCommits(int err, int count, bool testToo) = 0;
     // commits flipping a framebuffer created after this call fail with err:
     // the compositor's swapchain predates it, so this hits exactly the next
     // direct-scanout attempt of a client buffer

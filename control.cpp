@@ -356,10 +356,15 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->hotplug();
         comp->scene->needsFrame = true;
     } else if (verb == "kms-fail-commit"_sv && comp->kmsIntercept) {
-        StringView err, count;
+        StringView err, rest, count, testToo;
 
-        if (args.split(' ', err, count)) {
-            comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou());
+        if (args.split(' ', err, rest)) {
+            if (!rest.split(' ', count, testToo)) {
+                count = rest;
+                testToo = "0"_sv;
+            }
+
+            comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou(), testToo.stou() != 0);
         }
     } else if (verb == "kms-fail-new-fb"_sv && comp->kmsIntercept) {
         comp->kmsIntercept->failNewFb((int)args.stou());

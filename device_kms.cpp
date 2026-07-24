@@ -2284,6 +2284,19 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
     if (doModeset) {
         int testErr = tryCommit(fbId, true, true, inFenceFd, true);
 
+        // EACCES/EPERM (no drm master, vt switched away) and EBUSY say
+        // nothing about the configuration: degrading HDR or the cursor
+        // plane off them would outlive the transient cause by a session
+        if (testErr == EACCES || testErr == EPERM || testErr == EBUSY) {
+            *(c->log) << "imway: modeset commit unavailable, errno "_sv << testErr << endL;
+
+            if (commitErr) {
+                *commitErr = testErr;
+            }
+
+            return false;
+        }
+
         if (testErr != 0 && cursorPlaneId && cursorEnabled) {
             testErr = tryCommit(fbId, true, false, inFenceFd, true);
             withCursor = false;

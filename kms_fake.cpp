@@ -178,6 +178,7 @@ namespace {
         // fault injection
         int failErr = 0;
         int failCount = 0;
+        bool failTestToo = false;
         int failNewFbErr = 0;
         u32 failNewFbSince = 0;
         int failPrimeErr = 0;
@@ -193,7 +194,7 @@ namespace {
         int openDevice() override;
         void setConnected(bool connected) override;
         void setModes(int set) override;
-        void failCommits(int err, int count) override;
+        void failCommits(int err, int count, bool testToo) override;
         void failNewFb(int err) override;
         void failPrime(int err, int count, int skip) override;
         void failAddFb(int err, int count) override;
@@ -1005,7 +1006,7 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
         }
     }
 
-    if (!test && failCount > 0) {
+    if ((!test || failTestToo) && failCount > 0) {
         failCount--;
 
         return -failErr;
@@ -1314,10 +1315,11 @@ void FakeKms::setModes(int set) {
     pthread_mutex_unlock(&mu);
 }
 
-void FakeKms::failCommits(int err, int count) {
+void FakeKms::failCommits(int err, int count, bool testToo) {
     pthread_mutex_lock(&mu);
     failErr = err;
     failCount = count;
+    failTestToo = testToo;
     pthread_mutex_unlock(&mu);
 }
 
