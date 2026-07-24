@@ -18,6 +18,7 @@ struct Icon;
 struct IconPool;
 struct IconResolver;
 struct Filter;
+struct KmsIntercept;
 struct FrameCapture;
 struct Wifi;
 struct Keyboard;
@@ -84,6 +85,9 @@ struct Composer {
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;
     InputSink* entry = nullptr;
+    // non-null when the KMS backend drives the userspace emulator instead
+    // of a card node; control verbs script its faults through this
+    KmsIntercept* kmsIntercept = nullptr;
 
     // listener slots solve the creation order: subscribers link themselves
     // whenever they come up, producers walk the intrusive lists at event time

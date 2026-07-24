@@ -8,6 +8,10 @@
 #include "device.h"
 #include "device_headless.h"
 #include "device_kms.h"
+
+#ifdef IMWAY_FOR_TESTS
+    #include "fake_kms.h"
+#endif
 #include "icon_pool.h"
 #include "icon_provider.h"
 #include "icon_store.h"
@@ -221,6 +225,14 @@ int mainComposer(int argc, char** argv) {
         }
 
         c.session = session;
+
+#ifdef IMWAY_FOR_TESTS
+        // scenarios swap the card node for the userspace KMS emulator; the
+        // rest of the stack only ever sees Composer::kmsIntercept
+        if (kms && getenv("IMWAY_FAKE_KMS")) {
+            c.kmsIntercept = installInterceptor();
+        }
+#endif
 
         Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(c);
 

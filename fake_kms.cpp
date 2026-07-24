@@ -1,5 +1,6 @@
 #include "fake_kms.h"
 
+#include "kms_intercept.h"
 #include "log.h"
 #include "util.h"
 
@@ -1202,7 +1203,29 @@ extern "C" void* mmap(void* addr, size_t len, int prot, int flags, int fd, off_t
     return (void*)syscall(SYS_mmap, addr, len, prot, flags, fd, off);
 }
 
-int fakeKmsOpenDevice() {
+namespace {
+    // the emulator's scripting face; state lives in g, created lazily by
+    // openDevice so the libc overrides stay transparent until then
+    struct FakeKmsIntercept: KmsIntercept {
+        int openDevice() override;
+        void setConnected(bool connected) override;
+        void setModes(int set) override;
+        void failCommits(int err, int count) override;
+        void failNewFb(int err) override;
+        void failPrime(int err, int count, int skip) override;
+        void failAddFb(int err, int count) override;
+        void rejectCursor(int err) override;
+        unsigned long long flips() override;
+    };
+
+    FakeKmsIntercept interceptor;
+}
+
+KmsIntercept* installInterceptor() {
+    return &interceptor;
+}
+
+int FakeKmsIntercept::openDevice() {
     if (g) {
         return -EBUSY;
     }
@@ -1245,37 +1268,33 @@ int fakeKmsOpenDevice() {
     return g->clientFd;
 }
 
-bool fakeKmsActive() {
-    return g != nullptr;
-}
-
-void fakeKmsSetConnected(bool connected) {
+void FakeKmsIntercept::setConnected(bool connected) {
     pthread_mutex_lock(&g->mu);
     g->connected = connected;
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsSetModes(int set) {
+void FakeKmsIntercept::setModes(int set) {
     pthread_mutex_lock(&g->mu);
     g->modeSet = set;
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsFailCommits(int err, int count) {
+void FakeKmsIntercept::failCommits(int err, int count) {
     pthread_mutex_lock(&g->mu);
     g->failErr = err;
     g->failCount = count;
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsFailNewFb(int err) {
+void FakeKmsIntercept::failNewFb(int err) {
     pthread_mutex_lock(&g->mu);
     g->failNewFbErr = err;
     g->failNewFbSince = g->nextFb;
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsFailPrime(int err, int count, int skip) {
+void FakeKmsIntercept::failPrime(int err, int count, int skip) {
     pthread_mutex_lock(&g->mu);
     g->failPrimeErr = err;
     g->failPrimeCount = count;
@@ -1283,20 +1302,20 @@ void fakeKmsFailPrime(int err, int count, int skip) {
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsFailAddFb(int err, int count) {
+void FakeKmsIntercept::failAddFb(int err, int count) {
     pthread_mutex_lock(&g->mu);
     g->failAddFbErr = err;
     g->failAddFbCount = count;
     pthread_mutex_unlock(&g->mu);
 }
 
-void fakeKmsRejectCursor(int err) {
+void FakeKmsIntercept::rejectCursor(int err) {
     pthread_mutex_lock(&g->mu);
     g->rejectCursorErr = err;
     pthread_mutex_unlock(&g->mu);
 }
 
-unsigned long long fakeKmsFlips() {
+unsigned long long FakeKmsIntercept::flips() {
     pthread_mutex_lock(&g->mu);
 
     unsigned long long n = g->flips;

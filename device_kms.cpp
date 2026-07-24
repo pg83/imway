@@ -1,11 +1,8 @@
 #include "composer.h"
 #include "log.h"
 #include "device.h"
+#include "kms_intercept.h"
 #include "robustness.h"
-
-#ifdef IMWAY_FOR_TESTS
-    #include "fake_kms.h"
-#endif
 
 #include "device_vk.h"
 #include "frame_listener.h"
@@ -819,12 +816,11 @@ namespace {
         Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
     };
 
-    int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath) {
-#ifdef IMWAY_FOR_TESTS
-        // scenarios drive the KMS state machine without hardware: the fd
-        // comes from the userspace emulator instead of a card node
-        if (getenv("IMWAY_FAKE_KMS")) {
-            int fd = fakeKmsOpenDevice();
+    int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath, KmsIntercept* intercept) {
+        // an interceptor replaces the card node: scenarios drive the KMS
+        // state machine without hardware
+        if (intercept) {
+            int fd = intercept->openDevice();
 
             if (fd < 0) {
                 Errno(-fd).raise("kms: fake device"_sv);
@@ -834,7 +830,6 @@ namespace {
 
             return fd;
         }
-#endif
 
         if (!devPath.empty()) {
             int fd = session.openDevice(Buffer(devPath).cStr());
@@ -882,7 +877,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     , loop(comp.loop)
     , session(comp.session)
 {
-    fd = openKmsNode(*session, devPath, path);
+    fd = openKmsNode(*session, devPath, path, comp.kmsIntercept);
     pooledSessionFD(*pool, *session, fd);
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);

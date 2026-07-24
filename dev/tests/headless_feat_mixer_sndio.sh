@@ -21,8 +21,9 @@ level() { sndioctl -n output.level; }
 
 v0=$(level)
 
-# XF86AudioLowerVolume: 5% down through the compositor
-ctl "key 114 press"; ctl "key 114 release"
+# XF86AudioLowerVolume: one 5% step through the compositor. One press
+# only — a second write still in flight when the await fires would race
+# the external set below and overwrite it.
 ctl "key 114 press"; ctl "key 114 release"
 
 changed() { [[ "$(level)" != "$v0" ]]; }
@@ -30,14 +31,22 @@ changed() { [[ "$(level)" != "$v0" ]]; }
 if ! await 30 changed; then
     # the level may have started at the bottom rail: go up instead
     ctl "key 115 press"; ctl "key 115 release"
-    ctl "key 115 press"; ctl "key 115 release"
     await 30 changed || { echo "volume keys never reached sndiod ($v0)"; exit 1; }
 fi
 
 # external change: the compositor must adopt it, not overwrite it with its
 # own stale idea of the level on the next step
 sndioctl output.level=0.30 >/dev/null
-sleep 0.5
+
+ext_landed() {
+    python3 - "$(level)" <<'PY'
+import sys
+v = float(sys.argv[1])
+sys.exit(0 if 0.25 <= v <= 0.35 else 1)
+PY
+}
+
+await 30 ext_landed || { echo "external set did not land (level $(level))"; exit 1; }
 
 ctl "key 114 press"; ctl "key 114 release"
 
@@ -45,7 +54,7 @@ stepped_from_external() {
     python3 - "$(level)" <<'PY'
 import sys
 v = float(sys.argv[1])
-sys.exit(0 if 0.2 <= v <= 0.45 else 1)
+sys.exit(0 if 0.2 <= v <= 0.32 else 1)
 PY
 }
 

@@ -1,7 +1,7 @@
 #include "composer.h"
 #include "log.h"
 #include "control.h"
-#include "fake_kms.h"
+#include "kms_intercept.h"
 #include "icon.h"
 #include "input_sink.h"
 #include "listener.h"
@@ -350,20 +350,20 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->output->setColorTemp(parseFloat(args));
     } else if (verb == "dump"_sv) {
         dumpState(args);
-    } else if (verb == "kms-connector"_sv && fakeKmsActive()) {
+    } else if (verb == "kms-connector"_sv && comp->kmsIntercept) {
         // flip the fake connector and re-probe, like a udev hotplug would
-        fakeKmsSetConnected(args.stou() != 0);
+        comp->kmsIntercept->setConnected(args.stou() != 0);
         comp->output->hotplug();
         comp->scene->needsFrame = true;
-    } else if (verb == "kms-fail-commit"_sv && fakeKmsActive()) {
+    } else if (verb == "kms-fail-commit"_sv && comp->kmsIntercept) {
         StringView err, count;
 
         if (args.split(' ', err, count)) {
-            fakeKmsFailCommits((int)err.stou(), (int)count.stou());
+            comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou());
         }
-    } else if (verb == "kms-fail-new-fb"_sv && fakeKmsActive()) {
-        fakeKmsFailNewFb((int)args.stou());
-    } else if (verb == "kms-fail-prime"_sv && fakeKmsActive()) {
+    } else if (verb == "kms-fail-new-fb"_sv && comp->kmsIntercept) {
+        comp->kmsIntercept->failNewFb((int)args.stou());
+    } else if (verb == "kms-fail-prime"_sv && comp->kmsIntercept) {
         StringView err, rest, count, skip;
 
         if (args.split(' ', err, rest)) {
@@ -372,19 +372,19 @@ void ControlImpl::handleLine(StringView cmd) {
                 skip = "0"_sv;
             }
 
-            fakeKmsFailPrime((int)err.stou(), (int)count.stou(), (int)skip.stou());
+            comp->kmsIntercept->failPrime((int)err.stou(), (int)count.stou(), (int)skip.stou());
         }
-    } else if (verb == "kms-fail-addfb"_sv && fakeKmsActive()) {
+    } else if (verb == "kms-fail-addfb"_sv && comp->kmsIntercept) {
         StringView err, count;
 
         if (args.split(' ', err, count)) {
-            fakeKmsFailAddFb((int)err.stou(), (int)count.stou());
+            comp->kmsIntercept->failAddFb((int)err.stou(), (int)count.stou());
         }
-    } else if (verb == "kms-reject-cursor"_sv && fakeKmsActive()) {
-        fakeKmsRejectCursor((int)args.stou());
+    } else if (verb == "kms-reject-cursor"_sv && comp->kmsIntercept) {
+        comp->kmsIntercept->rejectCursor((int)args.stou());
         comp->scene->needsFrame = true;
-    } else if (verb == "kms-modes"_sv && fakeKmsActive()) {
-        fakeKmsSetModes((int)args.stou());
+    } else if (verb == "kms-modes"_sv && comp->kmsIntercept) {
+        comp->kmsIntercept->setModes((int)args.stou());
     } else if (verb == "session"_sv) {
         // fires the same listener lists a libseat VT switch would
         if (args.stou() != 0) {
@@ -453,10 +453,10 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
     out << "frames done="_sv << scene->framesDone << "\n"_sv;
 
-    if (fakeKmsActive()) {
+    if (comp->kmsIntercept) {
         // delivered page-flip events: the fake device's ground truth for
         // frames that actually reached the screen
-        out << "kms flips="_sv << fakeKmsFlips() << "\n"_sv;
+        out << "kms flips="_sv << comp->kmsIntercept->flips() << "\n"_sv;
     }
     out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
     out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;
