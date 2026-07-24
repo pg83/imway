@@ -95,6 +95,12 @@ struct Composer {
     stl::IntrusiveList sessionEnabledListeners;
     stl::IntrusiveList sessionDisabledListeners;
     stl::IntrusiveList frameListeners;
+    // the output announced its mode: scene->outW/outH/hz are already the
+    // new values, the GPU is idle and the scanout buffers exist at that
+    // size. Fired once at boot after everything is wired — the first frame
+    // takes the same path as a hotplug mode change, so this path cannot
+    // silently rot — and again whenever a swapped display remodesets.
+    stl::IntrusiveList outputResizedListeners;
     // input producers call entry; it walks this list in order and stops at
     // the first sink which returns true
     stl::IntrusiveList inputSinks;

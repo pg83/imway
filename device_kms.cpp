@@ -673,6 +673,10 @@ namespace {
         double colorTemp() const override;
         bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
+        void freeDumb(DumbBuffer& b);
+        bool rebuildScanout();
+        bool switchMode(const drmModeModeInfo& next);
+        void announceMode() override;
         int tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd = -1, bool testOnly = false);
         void drainPendingFlip();
         bool commit(u32 fbId, bool doModeset, int inFenceFd = -1, int* commitErr = nullptr);
@@ -1211,6 +1215,27 @@ void KmsOutput::hotplug() {
 
     bool connected = conn->connection == DRM_MODE_CONNECTED;
 
+    // what the display on the wire wants now: the current mode when still
+    // offered, else its preferred one — a swapped display (the TV case)
+    bool offered = false;
+    drmModeModeInfo want{};
+
+    if (connected && conn->count_modes > 0) {
+        want = conn->modes[0];
+
+        for (int i = 0; i < conn->count_modes; i++) {
+            const drmModeModeInfo& m = conn->modes[i];
+
+            if (m.hdisplay == mode.hdisplay && m.vdisplay == mode.vdisplay && m.vrefresh == mode.vrefresh) {
+                offered = true;
+            }
+
+            if (m.type & DRM_MODE_TYPE_PREFERRED) {
+                want = conn->modes[i];
+            }
+        }
+    }
+
     drmModeFreeConnector(conn);
 
     if (connected == connectorConnected) {
@@ -1230,6 +1255,12 @@ void KmsOutput::hotplug() {
     }
 
     drainPendingFlip();
+
+    if (!offered && !switchMode(want)) {
+        // committing the old mode anyway is honest: the display refuses it
+        // and the failure lands in the log instead of a silent dark screen
+        *(c->log) << "imway: reconnected display refuses the current mode"_sv << endL;
+    }
 
     u32 lastFb = scanCount > 0 ? scan[scanNext ^ 1].fbId : bufs[nextBuf ^ 1].fbId;
 
@@ -1544,23 +1575,6 @@ KmsOutput::~KmsOutput() noexcept {
 
     // the link arena unwinds the scanout slots and the screenshot spare
     delete link;
-
-    auto freeDumb = [&](DumbBuffer& b) {
-        if (b.map && b.map != MAP_FAILED) {
-            munmap(b.map, b.size);
-        }
-
-        if (b.fbId) {
-            drmModeRmFB(fd, b.fbId);
-        }
-
-        if (b.handle) {
-            drm_mode_destroy_dumb d{};
-
-            d.handle = b.handle;
-            drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d);
-        }
-    };
 
     for (auto& b : bufs) {
         freeDumb(b);
@@ -1934,6 +1948,156 @@ void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
 
     b.map = (u8*)mmap(nullptr, b.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)mapReq.offset);
     STD_VERIFY(b.map != MAP_FAILED);
+}
+
+void KmsOutput::freeDumb(DumbBuffer& b) {
+    if (b.map && b.map != MAP_FAILED) {
+        munmap(b.map, b.size);
+    }
+
+    if (b.fbId) {
+        drmModeRmFB(fd, b.fbId);
+    }
+
+    if (b.handle) {
+        drm_mode_destroy_dumb d{};
+
+        d.handle = b.handle;
+        drmIoctl(fd, DRM_IOCTL_MODE_DESTROY_DUMB, &d);
+    }
+
+    b = DumbBuffer{};
+}
+
+// The scanout buffers, rebuilt at the current mode on the format the boot
+// ladder negotiated: a plane's format support does not depend on the mode,
+// so only the sizes change and the renderer keeps its pipelines. On
+// failure everything at the old size is gone — the caller restores the
+// old mode and rebuilds again.
+bool KmsOutput::rebuildScanout() {
+    if (scanCount > 0) {
+        delete link;
+        link = nullptr;
+        scanCount = 0;
+
+        for (auto& sb : scan) {
+            sb = ScanBuf{};
+        }
+
+        screenshotReplacement = ScanBuf{};
+
+        u64 mods[64];
+        u32 nmods = planeModifiers(fd, planeId, scanFourcc, mods, 64);
+        ObjPool* trial = ObjPool::fromMemoryRaw();
+
+        for (auto& sb : scan) {
+            if (createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
+                scanCount++;
+
+                ScanBuf* slot = &sb;
+
+                pooledGuard(*trial, [this, slot] {
+                    destroyScanBuf(*vk, fd, *slot);
+                });
+            } else {
+                break;
+            }
+        }
+
+        if (scanCount < 2) {
+            delete trial;
+            scanCount = 0;
+
+            return false;
+        }
+
+        pooledGuard(*trial, [this] {
+            destroyScanBuf(*vk, fd, screenshotReplacement);
+        });
+        link = trial;
+        scanModCount = planeModifiers(fd, planeId, scanFourcc, scanMods, 64);
+    } else {
+        for (auto& b : bufs) {
+            freeDumb(b);
+            createDumb(b, mode.hdisplay, mode.vdisplay, DRM_FORMAT_XRGB8888);
+        }
+    }
+
+    scanNext = 0;
+    currentScan = -1;
+    queuedScan = -1;
+    nextBuf = 0;
+
+    return true;
+}
+
+// A different display appeared on the connector and the old mode is not in
+// its list: remodeset at the mode it wants, resize everything above.
+bool KmsOutput::switchMode(const drmModeModeInfo& next) {
+    if (screenshotState != 0) {
+        // the offload thread is writing into a scan buffer; replugs are
+        // human-speed, screenshots are not — refuse this probe, the next
+        // hotplug event retries
+        *(c->log) << "imway: mode switch deferred, screenshot in flight"_sv << endL;
+
+        return false;
+    }
+
+    drainPendingFlip();
+    releaseDirectUse(queuedDirect, queuedDirectFrame);
+    releaseDirectUse(currentDirect, currentDirectFrame);
+    queuedDirect = currentDirect = nullptr;
+    queuedDirectFrame = currentDirectFrame = nullptr;
+
+    // frames in flight may still sample the buffers about to die
+    vkDeviceWaitIdle(vk->device);
+
+    drmModeModeInfo old = mode;
+
+    mode = next;
+
+    if (!rebuildScanout()) {
+        *(c->log) << "imway: scanout rebuild failed at "_sv << next.hdisplay << "x"_sv << next.vdisplay << ", staying at "_sv << old.hdisplay << "x"_sv << old.vdisplay << endL;
+        mode = old;
+        STD_VERIFY(rebuildScanout());
+
+        return false;
+    }
+
+    if (modeBlob) {
+        drmModeDestroyPropertyBlob(fd, modeBlob);
+    }
+
+    STD_VERIFY(drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob) == 0);
+
+    // client framebuffers imported for direct scanout are sized for the old
+    // mode and can never fly again
+    while (!directFbs.empty()) {
+        dropScanoutFb(directFbs.back().buf);
+    }
+
+    announceMode();
+
+    *(c->log) << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
+
+    return true;
+}
+
+void KmsOutput::announceMode() {
+    Scene* scene = c->scene;
+
+    scene->outW = mode.hdisplay;
+    scene->outH = mode.vdisplay;
+    // the chrome refines the work area on the next frame; until then the
+    // full output is the honest answer
+    scene->workW = scene->outW;
+    scene->workH = scene->outH;
+    scene->hz = mode.vrefresh > 0 ? (double)mode.vrefresh : 60.0;
+    scene->needsFrame = true;
+
+    forEach<Listener>(c->outputResizedListeners, [](Listener& listener) {
+        listener.onListen();
+    });
 }
 
 int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd, bool testOnly) {

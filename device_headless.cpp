@@ -87,6 +87,7 @@ namespace {
         void setColorTemp(double) override;
         double colorTemp() const override;
         void hotplug() override;
+        void announceMode() override;
         bool lastFlip(u64&, u32&) const override;
         bool start() override;
         bool ready() const override;
@@ -266,6 +267,23 @@ double HeadlessOutput::colorTemp() const {
 }
 
 void HeadlessOutput::hotplug() {
+}
+
+void HeadlessOutput::announceMode() {
+    Scene* scene = c->scene;
+
+    scene->outW = w;
+    scene->outH = h;
+    // the chrome refines the work area on the next frame; until then the
+    // full output is the honest answer
+    scene->workW = scene->outW;
+    scene->workH = scene->outH;
+    scene->hz = hz;
+    scene->needsFrame = true;
+
+    forEach<Listener>(c->outputResizedListeners, [](Listener& listener) {
+        listener.onListen();
+    });
 }
 
 bool HeadlessOutput::lastFlip(u64&, u32&) const {

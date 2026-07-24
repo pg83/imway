@@ -42,6 +42,12 @@ namespace {
         u32 queueFamily = 0;
         int width = 0;
         int height = 0;
+        // the size a capture in flight was submitted at: a mode switch mid
+        // capture must not retarget the file header or the readback walk
+        int capW = 0;
+        int capH = 0;
+        int readbackW = 0;
+        int readbackH = 0;
         VkFormat format = VK_FORMAT_UNDEFINED;
         float uiScale = 1.f;
 
@@ -69,6 +75,7 @@ namespace {
         bool busy() const override;
         void request() override;
         bool submit(int scanoutIndex, VkImage image, VkImageLayout layout) override;
+        void resize(int w, int h) override;
         void onListen(void* data) override;
         void ensureReadback();
         void pollFence();
@@ -204,10 +211,29 @@ void ScreenshotCaptureImpl::onListen(void* data) {
     renderReady->onListen(this);
 }
 
+void ScreenshotCaptureImpl::resize(int w, int h) {
+    // lazy on purpose: ensureReadback rebuilds its buffer at the next
+    // capture, and a capture already in flight keeps its capW/capH
+    width = w;
+    height = h;
+}
+
 void ScreenshotCaptureImpl::ensureReadback() {
+    if (readback && (readbackW != width || readbackH != height)) {
+        // sized for a mode the output left; only reached between captures
+        vkDestroyBuffer(device, readback, nullptr);
+        vkFreeMemory(device, readbackMemory, nullptr);
+        readback = VK_NULL_HANDLE;
+        readbackMemory = VK_NULL_HANDLE;
+        readbackMap = nullptr;
+    }
+
     if (readback) {
         return;
     }
+
+    readbackW = width;
+    readbackH = height;
 
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 
@@ -241,6 +267,9 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
         ensureReadback();
     }
 
+    capW = width;
+    capH = height;
+
     vkResetCommandBuffer(command, 0);
     vkResetFences(device, 1, &fence);
 
@@ -266,7 +295,7 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
         VkBufferImageCopy region{};
 
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {(u32)width, (u32)height, 1};
+        region.imageExtent = {(u32)capW, (u32)capH, 1};
         vkCmdCopyImageToBuffer(command, image, layout, readback, 1, &region);
     }
     vkEndCommandBuffer(command);
@@ -360,7 +389,7 @@ int ScreenshotCaptureImpl::buildFile() {
         u32 magic;
         u32 w;
         u32 h;
-    } header = {0x31574d49u, (u32)width, (u32)height};
+    } header = {0x31574d49u, (u32)capW, (u32)capH};
 
     auto writeAll = [mfd](const void* data, size_t size) {
         auto* p = (const u8*)data;
@@ -395,7 +424,7 @@ int ScreenshotCaptureImpl::buildFile() {
     }
 
     const u8* input = (const u8*)readbackMap;
-    size_t bytes = (size_t)width * height * sizeof(u32);
+    size_t bytes = (size_t)capW * capH * sizeof(u32);
 
     for (size_t offset = 0; offset < bytes;) {
         size_t chunkBytes = bytes - offset;

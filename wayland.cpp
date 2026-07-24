@@ -998,6 +998,13 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallWaylandOutputResized: Listener {
+        WaylandImpl* parent;
+
+        CallWaylandOutputResized(WaylandImpl* p);
+        void onListen(void*) override;
+    };
+
     struct WaylandImpl: public Wayland, public InputSink, public Listener, public IconProvider {
         Composer* composer = nullptr;
         ObjPool* pool = nullptr;
@@ -1027,6 +1034,7 @@ namespace {
 
         IntrusiveList wmBases;
         Vector<wl_resource*> outputResources;
+        Vector<wl_resource*> xdgOutputResources;
         ev_timer pingTimer{};
         u32 pingSerial = 0;
 
@@ -1102,6 +1110,7 @@ namespace {
         void syncKeyboardCapture();
         void sessionEnabled();
         void sessionDisabled();
+        void outputResized();
         bool pointerMotion(PointerMotionEvent& ev) override;
         bool button(u32 btn, bool pressed) override;
         bool key(u32 code, bool pressed) override;
@@ -1139,6 +1148,15 @@ namespace {
 
     void CallWaylandSessionDisabled::onListen(void*) {
         parent->sessionDisabled();
+    }
+
+    CallWaylandOutputResized::CallWaylandOutputResized(WaylandImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallWaylandOutputResized::onListen(void*) {
+        parent->outputResized();
     }
 
     wl_resource* resOf(Surface* s) {
@@ -7539,6 +7557,12 @@ namespace {
         wl_resource_destroy(res);
     }
 
+    void xdgOutputResourceDestroyed(wl_resource* res) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+
+        removeOne(srv->xdgOutputResources, res);
+    }
+
     const struct zxdg_output_v1_interface xdgOutputImpl = {.destroy = xdgOutputDestroy};
 
     void xdgOutputManagerGetXdgOutput(wl_client* client, wl_resource* res, u32 id, wl_resource* outputRes) {
@@ -7552,7 +7576,8 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(xres, &xdgOutputImpl, srv, nullptr);
+        wl_resource_set_implementation(xres, &xdgOutputImpl, srv, xdgOutputResourceDestroyed);
+        srv->xdgOutputResources.pushBack(xres);
 
         zxdg_output_v1_send_logical_position(xres, 0, 0);
         zxdg_output_v1_send_logical_size(xres, srv->scene->outW, srv->scene->outH);
@@ -11338,6 +11363,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.iconProviders.pushBack((IconProvider*)this);
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
     comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
+    comp.outputResizedListeners.pushBack(comp.pool->make<CallWaylandOutputResized>(this));
     comp.frameListeners.pushBack((Listener*)this);
     comp.inputSinks.pushBack((InputSink*)this);
     drmFd = cfg.drmFd;
@@ -12810,6 +12836,35 @@ void WaylandImpl::sessionEnabled() {
 
 void WaylandImpl::sessionDisabled() {
     seat.releaseAllKeys();
+}
+
+void WaylandImpl::outputResized() {
+    // the output announced a mode: every bound wl_output re-learns it.
+    // Toplevel configures need no sweep here — the per-frame desired-size
+    // pass reconfigures fullscreen and maximized windows from the next
+    // frame's layout at the new size.
+    Buffer make(output ? output->make() : "imway"_sv);
+    Buffer model(output ? output->model() : "unknown"_sv);
+
+    for (wl_resource* res : outputResources) {
+        wl_output_send_geometry(res, 0, 0, output ? output->physicalWidthMm() : 0, output ? output->physicalHeightMm() : 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, scene->outW, scene->outH, (i32)(scene->hz * 1000));
+    }
+
+    for (wl_resource* res : xdgOutputResources) {
+        zxdg_output_v1_send_logical_size(res, scene->outW, scene->outH);
+
+        // since v3 xdg_output.done is deprecated in favor of wl_output.done
+        if (wl_resource_get_version(res) < 3) {
+            zxdg_output_v1_send_done(res);
+        }
+    }
+
+    for (wl_resource* res : outputResources) {
+        if (wl_resource_get_version(res) >= WL_OUTPUT_DONE_SINCE_VERSION) {
+            wl_output_send_done(res);
+        }
+    }
 }
 
 void WaylandImpl::syncKeyboardCapture() {

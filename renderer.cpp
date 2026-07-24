@@ -25,6 +25,7 @@
 #include "anr_dialog.h"
 #include "log_view.h"
 #include "osd.h"
+#include "pooled.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
 #include "frame_capture.h"
@@ -193,6 +194,10 @@ namespace {
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
+    // the scene composes in linear half-float; the output pass maps it to
+    // the scanout format
+    constexpr VkFormat kSceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+
     struct RendererImpl;
 
     struct CallVolumeChanged: Listener {
@@ -206,6 +211,13 @@ namespace {
         RendererImpl* parent;
 
         CallWifiChanged(RendererImpl* p);
+        void onListen(void*) override;
+    };
+
+    struct CallOutputResized: Listener {
+        RendererImpl* parent;
+
+        CallOutputResized(RendererImpl* p);
         void onListen(void*) override;
     };
 
@@ -445,7 +457,8 @@ namespace {
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
         void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
-        void setup(int w, int h);
+        void setup();
+        void applyOutputSize();
         void setupOutputTransform();
         void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, VkDescriptorSet source, int w, int h, const OutputColorState& color, double kelvin);
         void recordCursorTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, int w, int h);
@@ -517,6 +530,15 @@ namespace {
 
     void CallVolumeChanged::onListen(void*) {
         parent->volumeChanged();
+    }
+
+    CallOutputResized::CallOutputResized(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallOutputResized::onListen(void*) {
+        parent->applyOutputSize();
     }
 
     CallWifiChanged::CallWifiChanged(RendererImpl* p)
@@ -651,6 +673,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     comp.inputSinks.pushFront((InputSink*)this);
     comp.mixerListeners.pushBack(comp.pool->make<CallVolumeChanged>(this));
     comp.wifiListeners.pushBack(comp.pool->make<CallWifiChanged>(this));
+    comp.outputResizedListeners.pushBack(comp.pool->make<CallOutputResized>(this));
 
     for (const ChordDef& d : kChords) {
         bindingsView.pushBack({d.chord, d.action});
@@ -660,13 +683,9 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     bindingsView.pushBack({"Esc"_sv, "cancel the window switch"_sv});
     bindingsView.pushBack({"XF86 volume keys"_sv, "volume up/down 5%, mute"_sv});
     bindingsView.pushBack({"XF86 brightness keys"_sv, "backlight 5% or sdr white 10 nits"_sv});
-    setup(scene->outW, scene->outH);
-    shotCapture = ScreenshotCapture::create(comp, vk, width, height, fmt, uiScale, *comp.pool->make<CallScreenshotReady>(this));
-
-    // before any input arrives the cursor sits at the screen center
-    posX = scene->outW / 2.0;
-    posY = scene->outH / 2.0;
-    ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
+    setup();
+    // sized by the first mode announcement, like everything else here
+    shotCapture = ScreenshotCapture::create(comp, vk, 0, 0, fmt, uiScale, *comp.pool->make<CallScreenshotReady>(this));
 
     if (output->vsynced()) {
         ev_prepare* prepare = createEvPrepare(*pool, loop);
@@ -1462,40 +1481,16 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VK_CHECK(vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map));
 }
 
-void RendererImpl::setup(int w, int h) {
-    constexpr VkFormat sceneFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-
-    width = w;
-    height = h;
+void RendererImpl::setup() {
     scanout = output->scanoutCount() > 0;
 
     if (scanout) {
         fmt = output->scanoutBuffer(0)->format;
     }
 
-    createImage(width, height, sceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, sceneTarget, sceneMemory);
-
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-
-    vci.image = sceneTarget;
-    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = sceneFormat;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &sceneView));
-
-    if (!scanout) {
-        createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
-
-        vci.image = target;
-        vci.format = fmt;
-        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
-    }
-
-    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
-
     VkAttachmentDescription att{};
 
-    att.format = sceneFormat;
+    att.format = kSceneFormat;
     att.samples = VK_SAMPLE_COUNT_1_BIT;
     att.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     att.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1529,58 +1524,11 @@ void RendererImpl::setup(int w, int h) {
     rpci.pDependencies = &sceneDone;
     VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &renderPass));
 
-    VkFramebufferCreateInfo sceneFci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-
-    sceneFci.renderPass = renderPass;
-    sceneFci.attachmentCount = 1;
-    sceneFci.pAttachments = &sceneView;
-    sceneFci.width = width;
-    sceneFci.height = height;
-    sceneFci.layers = 1;
-    VK_CHECK(vkCreateFramebuffer(device, &sceneFci, nullptr, &sceneFramebuffer));
-
     att.format = fmt;
     att.finalLayout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     rpci.dependencyCount = 0;
     rpci.pDependencies = nullptr;
     VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &outputPass));
-
-    if (scanout) {
-        for (int i = 0; i < output->scanoutCount(); i++) {
-            vci.image = output->scanoutBuffer(i)->image;
-            vci.format = fmt;
-
-            VkImageView view = VK_NULL_HANDLE;
-
-            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &view));
-            scanImages.pushBack(vci.image);
-            scanViews.pushBack(view);
-
-            VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-
-            fci.renderPass = outputPass;
-            fci.attachmentCount = 1;
-            fci.pAttachments = &view;
-            fci.width = width;
-            fci.height = height;
-            fci.layers = 1;
-
-            VkFramebuffer fb = VK_NULL_HANDLE;
-
-            VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &fb));
-            scanFbs.pushBack(fb);
-        }
-    } else {
-        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-
-        fci.renderPass = outputPass;
-        fci.attachmentCount = 1;
-        fci.pAttachments = &targetView;
-        fci.width = width;
-        fci.height = height;
-        fci.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &framebuffer));
-    }
 
     VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 
@@ -1765,18 +1713,36 @@ void RendererImpl::setup(int w, int h) {
         hwCursorReady = true;
     }
 
-    // pool-owned for the renderer's whole life (setup runs once): the pool
-    // unwinds these after ~RendererImpl has waited the device idle and shut
-    // imgui down, and before DeviceVk dies. LIFO — dependents last.
+    // pool-owned for the renderer's whole life: the pool unwinds these
+    // after ~RendererImpl has waited the device idle and shut imgui down,
+    // and before DeviceVk dies. LIFO — dependents last. The sized targets
+    // are guarded through lambdas reading the members, because a mode
+    // announcement replaces the handles mid-life.
     pooledVk(*pool, device, renderPass);
-    pooledVk(*pool, device, sceneMemory);
-    pooledVk(*pool, device, sceneTarget);
-    pooledVk(*pool, device, sceneView);
-    pooledVk(*pool, device, sceneFramebuffer);
-    pooledVk(*pool, device, targetMemory);
-    pooledVk(*pool, device, target);
-    pooledVk(*pool, device, targetView);
-    pooledVk(*pool, device, framebuffer);
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, sceneMemory, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImage(device, sceneTarget, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImageView(device, sceneView, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, targetMemory, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImage(device, target, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyImageView(device, targetView, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyFramebuffer(device, framebuffer, nullptr);
+    });
     pooledVk(*pool, device, outputPass);
     pooledVk(*pool, device, outputSetLayout);
     pooledVk(*pool, device, outputPipeLayout);
@@ -1785,8 +1751,12 @@ void RendererImpl::setup(int w, int h) {
     pooledVk(*pool, device, cursorPipeline);
     pooledVk(*pool, device, outputDescPool);
 
-    pooledVk(*pool, device, readbackMemory);
-    pooledVk(*pool, device, readback);
+    pooledGuard(*pool, [this] {
+        vkFreeMemory(device, readbackMemory, nullptr);
+    });
+    pooledGuard(*pool, [this] {
+        vkDestroyBuffer(device, readback, nullptr);
+    });
     pooledVk(*pool, device, cmdPool);
     pooledVk(*pool, device, fence);
     pooledVk(*pool, device, sampler);
@@ -1810,6 +1780,148 @@ void RendererImpl::setup(int w, int h) {
         pooledVk(*pool, device, curReadback);
         pooledVk(*pool, device, curFence);
     }
+}
+
+// Every target sized by the output mode, built on the mode announcement:
+// boot's first announcement builds them, a hotplug mode change rebuilds
+// them — one path, so the resize side cannot silently rot. The backend
+// idles the GPU before it rebuilds its scanout buffers and fires this.
+void RendererImpl::applyOutputSize() {
+    int w = scene->outW;
+    int h = scene->outH;
+
+    if (w <= 0 || h <= 0 || (w == width && h == height)) {
+        return;
+    }
+
+    bool first = width == 0;
+
+    if (!first) {
+        finishGpuFrame(true);
+        vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
+        vkDestroyImageView(device, sceneView, nullptr);
+        vkDestroyImage(device, sceneTarget, nullptr);
+        vkFreeMemory(device, sceneMemory, nullptr);
+        vkDestroyFramebuffer(device, framebuffer, nullptr);
+        framebuffer = VK_NULL_HANDLE;
+        vkDestroyImageView(device, targetView, nullptr);
+        vkDestroyImage(device, target, nullptr);
+        vkFreeMemory(device, targetMemory, nullptr);
+        target = VK_NULL_HANDLE;
+        targetView = VK_NULL_HANDLE;
+        targetMemory = VK_NULL_HANDLE;
+        vkDestroyBuffer(device, readback, nullptr);
+        vkFreeMemory(device, readbackMemory, nullptr);
+        readback = VK_NULL_HANDLE;
+        readbackMemory = VK_NULL_HANDLE;
+        readbackMap = nullptr;
+
+        for (VkFramebuffer fb : scanFbs) {
+            vkDestroyFramebuffer(device, fb, nullptr);
+        }
+
+        for (VkImageView view : scanViews) {
+            vkDestroyImageView(device, view, nullptr);
+        }
+
+        scanFbs.clear();
+        scanViews.clear();
+        scanImages.clear();
+        haveFrame = false;
+    }
+
+    width = w;
+    height = h;
+
+    createImage(width, height, kSceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, sceneTarget, sceneMemory);
+
+    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+
+    vci.image = sceneTarget;
+    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vci.format = kSceneFormat;
+    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &sceneView));
+
+    if (!scanout) {
+        createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
+
+        vci.image = target;
+        vci.format = fmt;
+        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
+    }
+
+    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
+
+    VkFramebufferCreateInfo sceneFci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+    sceneFci.renderPass = renderPass;
+    sceneFci.attachmentCount = 1;
+    sceneFci.pAttachments = &sceneView;
+    sceneFci.width = width;
+    sceneFci.height = height;
+    sceneFci.layers = 1;
+    VK_CHECK(vkCreateFramebuffer(device, &sceneFci, nullptr, &sceneFramebuffer));
+
+    if (scanout) {
+        for (int i = 0; i < output->scanoutCount(); i++) {
+            vci.image = output->scanoutBuffer(i)->image;
+            vci.format = fmt;
+
+            VkImageView view = VK_NULL_HANDLE;
+
+            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &view));
+            scanImages.pushBack(vci.image);
+            scanViews.pushBack(view);
+
+            VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+            fci.renderPass = outputPass;
+            fci.attachmentCount = 1;
+            fci.pAttachments = &view;
+            fci.width = width;
+            fci.height = height;
+            fci.layers = 1;
+
+            VkFramebuffer fb = VK_NULL_HANDLE;
+
+            VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &fb));
+            scanFbs.pushBack(fb);
+        }
+    } else {
+        VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+
+        fci.renderPass = outputPass;
+        fci.attachmentCount = 1;
+        fci.pAttachments = &targetView;
+        fci.width = width;
+        fci.height = height;
+        fci.layers = 1;
+        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &framebuffer));
+    }
+
+    // the output pass samples the scene through this set; the view is new
+    VkDescriptorImageInfo imageInfo{sampler, sceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+
+    write.dstSet = outputDesc;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+    shotCapture->resize(width, height);
+
+    if (first) {
+        // before any input arrives the cursor sits at the screen center
+        posX = width / 2.0;
+        posY = height / 2.0;
+        ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
+    } else {
+        clampPos();
+    }
+
+    scene->needsFrame = true;
 }
 
 void RendererImpl::faultSurfaceOwner(Surface& s) {
@@ -2235,15 +2347,8 @@ void RendererImpl::setupOutputTransform() {
     VK_CHECK(vkAllocateDescriptorSets(device, &dsai, sets));
     outputDesc = sets[0];
     cursorOutputDesc = sets[1];
-
-    VkDescriptorImageInfo imageInfo{sampler, sceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-
-    write.dstSet = outputDesc;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imageInfo;
-    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+    // outputDesc gets its scene view on the first mode announcement, which
+    // creates the sized scene target
 }
 
 void RendererImpl::recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, VkDescriptorSet source, int w, int h, const OutputColorState& outputColor, double kelvin) {
@@ -4785,6 +4890,11 @@ void RendererImpl::beginScreenshot() {
 }
 
 void RendererImpl::frameNow() {
+    if (width <= 0) {
+        // no mode announced yet: nothing to render into
+        return;
+    }
+
     if (!finishGpuFrame(false)) {
         scene->needsFrame = true;
 

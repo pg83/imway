@@ -230,11 +230,6 @@ int mainComposer(int argc, char** argv) {
 
         c.output = output;
 
-        scene->outW = output->width();
-        scene->outH = output->height();
-        scene->workW = scene->outW;
-        scene->workH = scene->outH;
-        scene->hz = output->refresh();
         scene->drawCursor = kms;
 
 #ifdef IMWAY_FOR_TESTS
@@ -324,6 +319,10 @@ int mainComposer(int argc, char** argv) {
             *log << "imway: --control is a test-build feature, ignored"_sv << endL;
 #endif
         }
+
+        // the whole stack is wired: the first frame goes through the same
+        // mode announcement a hotplug mode change takes
+        output->announceMode();
 
         if (cfg.cmdArgv) {
             Vector<StringView> args;

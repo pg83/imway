@@ -67,6 +67,13 @@ struct Output {
     // a physical link do nothing
     virtual void hotplug() = 0;
 
+    // publish the current mode: write scene->outW/outH/hz and fire
+    // Composer::outputResizedListeners. Called once at boot after the whole
+    // stack is wired — the first frame takes the same path as a hotplug
+    // mode change — and again by the backend when a swapped display
+    // remodesets.
+    virtual void announceMode() = 0;
+
     // timestamp (CLOCK_MONOTONIC ns) and vblank sequence of the last
     // completed pageflip; false when the backend has no real flips
     virtual bool lastFlip(u64& nsec, u32& seq) const = 0;
