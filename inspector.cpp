@@ -1,4 +1,5 @@
 #include "inspector.h"
+
 #include "composer.h"
 #include "dialog.h"
 #include "intr_list.h"

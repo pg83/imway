@@ -4,6 +4,12 @@
 #include "log.h"
 #include "util.h"
 
+#include <std/ios/sys.h>
+#include <std/lib/vector.h>
+#include <std/str/view.h>
+#include <std/sys/types.h>
+
+#include <drm_fourcc.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
@@ -16,15 +22,8 @@
 #include <sys/syscall.h>
 #include <time.h>
 #include <unistd.h>
-
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-#include <drm_fourcc.h>
-
-#include <std/ios/sys.h>
-#include <std/lib/vector.h>
-#include <std/str/view.h>
-#include <std/sys/types.h>
 
 // Everything KMS that device_kms.cpp needs, modeled in userspace: the
 // object/property tables, atomic commits with page-flip events on a real

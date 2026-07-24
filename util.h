@@ -1,13 +1,13 @@
 #pragma once
 
-#include <string.h>
-
 #include <std/dbg/verify.h>
-#include <std/lib/vector.h>
 #include <std/lib/buffer.h>
+#include <std/lib/vector.h>
 #include <std/str/builder.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
+
+#include <string.h>
 
 inline stl::StringView operator""_sv(const char* s, size_t len) {
     return {(const u8*)s, len};

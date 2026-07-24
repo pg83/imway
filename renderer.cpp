@@ -1,50 +1,71 @@
-#include "composer.h"
 #include "renderer.h"
 
+#include "anr_dialog.h"
 #include "calendar.h"
 #include "color.h"
+#include "composer.h"
 #include "desktop_chrome.h"
 #include "device_vk.h"
 #include "dialog.h"
-#include "tex_pool.h"
+#include "frame_capture.h"
 #include "frame_listener.h"
-#include "input.h"
-#include "input_sink.h"
-#include "keyboard.h"
+#include "history.h"
 #include "icon.h"
 #include "icon_pool.h"
+#include "input.h"
+#include "input_sink.h"
 #include "inspector.h"
+#include "intr_list.h"
+#include "keyboard.h"
 #include "launcher.h"
 #include "listener.h"
+#include "lock_screen.h"
 #include "log.h"
+#include "log_view.h"
 #include "main_supervisor.h"
 #include "mixer.h"
-#include "history.h"
 #include "notifier.h"
-#include "lock_screen.h"
-#include "anr_dialog.h"
-#include "log_view.h"
 #include "osd.h"
+#include "output.h"
 #include "pooled.h"
 #include "pooled_ev.h"
 #include "pooled_vk.h"
-#include "frame_capture.h"
 #include "render_filter.h"
+#include "scene.h"
+#include "screenshot_capture.h"
 #include "settings.h"
 #include "small_obj_allocator.h"
+#include "tex_pool.h"
+#include "toast.h"
+#include "util.h"
 #include "wayland.h"
 #include "wifi.h"
 #include "wifi_ui.h"
-#include "output.h"
-#include "intr_list.h"
-#include "scene.h"
-#include "screenshot_capture.h"
 #include "window_shadow.h"
-#include "toast.h"
-#include "util.h"
 
+#include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
+#include <std/ios/sys.h>
+#include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
+#include <std/rng/split_mix_64.h>
+#include <std/str/builder.h>
+#include <std/sys/fd.h>
+#include <std/sys/fs.h>
+
+#include <ev.h>
 #include <fcntl.h>
+#include <fullscreen.spv.h>
+#include <imgui.h>
+#include <imgui_impl_vulkan.h>
+#include <imgui_internal.h>
+#include <linux/dma-buf.h>
+#include <linux/input-event-codes.h>
 #include <math.h>
+#include <renderer_cursor.spv.h>
+#include <renderer_output.spv.h>
+#include <renderer_scene.spv.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
@@ -52,37 +73,10 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
-
-#include <xf86drm.h>
-
-#include <linux/dma-buf.h>
-
-#include <ev.h>
-#include <linux/input-event-codes.h>
-
 #include <vulkan/vulkan.h>
-#include <xkbcommon/xkbcommon-keysyms.h>
 #include <xdg-shell-server-protocol.h>
-
-#include <fullscreen.spv.h>
-#include <renderer_cursor.spv.h>
-#include <renderer_output.spv.h>
-#include <renderer_scene.spv.h>
-
-#include <imgui.h>
-#include <imgui_internal.h>
-#include <imgui_impl_vulkan.h>
-
-#include <std/dbg/verify.h>
-#include <std/rng/split_mix_64.h>
-#include <std/ios/fs_utils.h>
-#include <std/ios/out_fd.h>
-#include <std/ios/sys.h>
-#include <std/sys/fs.h>
-#include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
-#include <std/str/builder.h>
-#include <std/sys/fd.h>
+#include <xf86drm.h>
+#include <xkbcommon/xkbcommon-keysyms.h>
 
 using namespace stl;
 

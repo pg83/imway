@@ -1,15 +1,16 @@
+#include "notifier.h"
+
 #include "composer.h"
 #include "intr_list.h"
 #include "listener.h"
-#include "notifier.h"
-#include "small_obj_allocator.h"
 #include "scene.h"
+#include "small_obj_allocator.h"
 #include "util.h"
-
-#include <ev.h>
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+
+#include <ev.h>
 
 using namespace stl;
 

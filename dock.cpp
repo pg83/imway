@@ -7,12 +7,12 @@
 #include "status_notifier.h"
 #include "util.h"
 
-#include <imgui.h>
-#include <imgui_internal.h>
-
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
 #include <std/str/view.h>
+
+#include <imgui.h>
+#include <imgui_internal.h>
 
 using namespace stl;
 

@@ -1,26 +1,26 @@
-#include "composer.h"
-#include "log_extern.h"
-#include "log.h"
 #include "input.h"
-#include "pooled_ev.h"
-#include "scene.h"
-#include "pooled_fd.h"
+
+#include "composer.h"
 #include "input_sink.h"
 #include "listener.h"
+#include "log.h"
+#include "log_extern.h"
+#include "pooled_ev.h"
+#include "pooled_fd.h"
+#include "scene.h"
 #include "session.h"
 #include "util.h"
-
-#include <ev.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <sys/inotify.h>
-#include <unistd.h>
-
-#include <libinput.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+
+#include <errno.h>
+#include <ev.h>
+#include <fcntl.h>
+#include <libinput.h>
+#include <sys/inotify.h>
+#include <unistd.h>
 
 using namespace stl;
 

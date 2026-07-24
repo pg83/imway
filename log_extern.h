@@ -1,8 +1,8 @@
 #pragma once
 
-#include <stdarg.h>
-
 #include <std/str/view.h>
+
+#include <stdarg.h>
 
 struct Composer;
 struct Log;

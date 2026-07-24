@@ -1,9 +1,10 @@
+#include "mixer_sndio.h"
+
 #include "composer.h"
-#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
+#include "log.h"
 #include "mixer.h"
-#include "mixer_sndio.h"
 #include "pooled.h"
 #include "pooled_ev.h"
 

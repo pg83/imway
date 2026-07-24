@@ -5,7 +5,6 @@
 #include "scene.h"
 
 #include <imgui.h>
-
 #include <stdio.h>
 #include <time.h>
 

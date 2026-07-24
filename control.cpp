@@ -1,33 +1,33 @@
-#include "composer.h"
-#include "log.h"
 #include "control.h"
-#include "kms_intercept.h"
+
+#include "composer.h"
 #include "icon.h"
 #include "input_sink.h"
+#include "intr_list.h"
+#include "kms_intercept.h"
 #include "listener.h"
+#include "log.h"
+#include "output.h"
 #include "pooled.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
 #include "renderer.h"
-#include "intr_list.h"
-#include "output.h"
 #include "scene.h"
 #include "util.h"
-
-#include <ev.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
-#include <linux/input-event-codes.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/out_fd.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/fd.h>
+
+#include <ev.h>
+#include <fcntl.h>
+#include <linux/input-event-codes.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 using namespace stl;
 

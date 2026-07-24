@@ -1,13 +1,14 @@
 #include "small_obj_allocator.h"
-#include "util.h"
 
-#include <stdlib.h>
-#include <string.h>
+#include "util.h"
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
 #include <std/mem/free_list.h>
 #include <std/mem/obj_pool.h>
+
+#include <stdlib.h>
+#include <string.h>
 
 using namespace stl;
 

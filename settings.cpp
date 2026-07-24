@@ -1,4 +1,5 @@
 #include "settings.h"
+
 #include "composer.h"
 #include "dialog.h"
 

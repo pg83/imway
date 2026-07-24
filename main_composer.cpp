@@ -1,9 +1,8 @@
 #include "main_composer.h"
 
-#include "crash_trace.h"
-
 #include "composer.h"
 #include "control.h"
+#include "crash_trace.h"
 #include "dbus_conn.h"
 #include "device.h"
 #include "device_headless.h"

@@ -1,9 +1,8 @@
 #include "color.h"
 
+#include <array>
 #include <math.h>
 #include <stdio.h>
-
-#include <array>
 
 namespace {
     std::array<u8, 256> hdrEdid() {

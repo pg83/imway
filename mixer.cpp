@@ -1,6 +1,7 @@
 #include "mixer.h"
-#include "mixer_sndio.h"
+
 #include "mixer_pulse.h"
+#include "mixer_sndio.h"
 
 Mixer* Mixer::create(Composer& c) {
     if (Mixer* m = MixerSndio::create(c)) {

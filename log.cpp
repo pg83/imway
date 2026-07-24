@@ -1,9 +1,9 @@
 #include "log.h"
 
-#include <string.h>
-
 #include <std/dbg/verify.h>
 #include <std/mem/obj_pool.h>
+
+#include <string.h>
 
 using namespace stl;
 

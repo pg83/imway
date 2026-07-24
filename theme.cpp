@@ -1,7 +1,6 @@
 #include "theme.h"
 
 #include <imgui.h>
-
 #include <math.h>
 
 namespace {

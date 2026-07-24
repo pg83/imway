@@ -1,7 +1,6 @@
 #include "icc.h"
 
 #include <lcms2.h>
-
 #include <math.h>
 
 namespace {

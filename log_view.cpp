@@ -1,4 +1,5 @@
 #include "log_view.h"
+
 #include "composer.h"
 #include "dialog.h"
 #include "log.h"

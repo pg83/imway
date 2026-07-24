@@ -1,9 +1,10 @@
+#include "mixer_pulse.h"
+
 #include "composer.h"
-#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
+#include "log.h"
 #include "mixer.h"
-#include "mixer_pulse.h"
 #include "pooled.h"
 #include "small_obj_allocator.h"
 

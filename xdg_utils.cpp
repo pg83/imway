@@ -1,4 +1,5 @@
 #include "xdg_utils.h"
+
 #include "util.h"
 
 #include <stdlib.h>

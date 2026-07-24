@@ -118,9 +118,11 @@ functionCall(
   If the class is declared in an anonymous namespace, close that namespace
   before its qualified method definitions.
 - Avoid heavyweight includes in headers when a forward declaration suffices.
-- A `.cpp` file includes its own header first, then related project headers,
-  then third-party and system headers. Preserve meaningful blank groups; do
-  not sort includes mechanically.
+- Includes go from the least general to the most general, one blank line
+  between groups, each group sorted: the paired header first, then project
+  headers, then `<std/...>`, then third-party and system headers. `style.py`
+  rewrites the leading include block into this order; includes behind
+  preprocessor conditionals stay where they are.
 - File-local declarations belong in an anonymous namespace. Shared program
   declarations live in the global namespace.
 - Avoid non-trivial global objects. Make ownership and lifetime explicit.

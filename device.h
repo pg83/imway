@@ -1,12 +1,12 @@
 #pragma once
 
+#include "color.h"
+#include "visitor.h"
+
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
 #include <stddef.h>
-
-#include "color.h"
-#include "visitor.h"
 
 namespace stl {
     class ObjPool;

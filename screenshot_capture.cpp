@@ -1,22 +1,14 @@
 #include "screenshot_capture.h"
 
 #include "composer.h"
-#include "log.h"
 #include "device_vk.h"
-#include "main_supervisor.h"
 #include "listener.h"
+#include "log.h"
+#include "main_supervisor.h"
 #include "output.h"
 #include "pooled_ev.h"
 #include "scene.h"
 #include "util.h"
-
-#include <errno.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/mman.h>
-#include <unistd.h>
-
-#include <ev.h>
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
@@ -28,6 +20,13 @@
 #include <std/sys/event_fd.h>
 #include <std/sys/types.h>
 #include <std/thr/pool.h>
+
+#include <errno.h>
+#include <ev.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 using namespace stl;
 

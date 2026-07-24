@@ -1,29 +1,29 @@
-#include "icon.h"
-#include "composer.h"
-#include "log.h"
-#include "icon_provider.h"
 #include "icon_store.h"
+
+#include "composer.h"
+#include "icon.h"
+#include "icon_pool.h"
+#include "icon_provider.h"
+#include "log.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
-#include "icon_pool.h"
 #include "scene.h"
 #include "util.h"
 #include "xdg_utils.h"
 
-#include <fcntl.h>
-#include <string.h>
-#include <sys/inotify.h>
-#include <unistd.h>
-
-#include <ev.h>
-#include <lunasvg.h>
-
 #include <std/ios/fs_utils.h>
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
 #include <std/sym/i_map.h>
 #include <std/sys/fs.h>
-#include <std/mem/obj_pool.h>
+
+#include <ev.h>
+#include <fcntl.h>
+#include <lunasvg.h>
+#include <string.h>
+#include <sys/inotify.h>
+#include <unistd.h>
 
 using namespace stl;
 

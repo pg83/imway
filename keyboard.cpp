@@ -1,19 +1,19 @@
 #include "keyboard.h"
+
 #include "log.h"
 #include "log_extern.h"
 #include "util.h"
 
-#include <fcntl.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/mman.h>
-
-#include <xkbcommon/xkbcommon.h>
-
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+
+#include <fcntl.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <xkbcommon/xkbcommon.h>
 
 using namespace stl;
 

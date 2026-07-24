@@ -1,21 +1,47 @@
-#include "composer.h"
-#include "log.h"
-#include "device.h"
-#include "kms_intercept.h"
-#include "robustness.h"
+#include "device_kms.h"
 
+#include "composer.h"
+#include "device.h"
 #include "device_vk.h"
 #include "frame_listener.h"
+#include "intr_list.h"
+#include "kms_intercept.h"
 #include "listener.h"
+#include "log.h"
 #include "output.h"
+#include "pooled.h"
+#include "pooled_ev.h"
+#include "pooled_fd.h"
 #include "renderer.h"
+#include "robustness.h"
 #include "scene.h"
 #include "session.h"
 #include "util.h"
 
-#include <ev.h>
+#include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
+#include <std/ios/sys.h>
+#include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
+#include <std/str/builder.h>
+#include <std/str/view.h>
+#include <std/sym/i_map.h>
+#include <std/sys/atomic.h>
+#include <std/sys/event_fd.h>
+#include <std/sys/fd.h>
+#include <std/sys/fs.h>
+#include <std/sys/throw.h>
+#include <std/thr/pool.h>
+
+#include <drm_fourcc.h>
 #include <errno.h>
+#include <ev.h>
 #include <fcntl.h>
+#include <libudev.h>
+#include <linux/i2c-dev.h>
+#include <linux/kd.h>
+#include <linux/vt.h>
 #include <math.h>
 #include <poll.h>
 #include <string.h>
@@ -24,35 +50,8 @@
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
-
-#include <drm_fourcc.h>
-#include <linux/i2c-dev.h>
-#include <linux/kd.h>
-#include <linux/vt.h>
-#include <libudev.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-
-#include <std/dbg/verify.h>
-#include <std/ios/fs_utils.h>
-#include <std/ios/out_fd.h>
-#include <std/ios/sys.h>
-#include <std/sys/fs.h>
-#include <std/sys/fd.h>
-#include <std/sys/atomic.h>
-#include <std/sys/event_fd.h>
-#include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
-#include <std/str/builder.h>
-#include <std/str/view.h>
-#include <std/sym/i_map.h>
-#include <std/sys/throw.h>
-#include <std/thr/pool.h>
-#include "device_kms.h"
-#include "intr_list.h"
-#include "pooled.h"
-#include "pooled_ev.h"
-#include "pooled_fd.h"
 
 using namespace stl;
 

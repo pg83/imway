@@ -1,5 +1,6 @@
-#include "icon.h"
 #include "icon_pool.h"
+
+#include "icon.h"
 #include "pooled.h"
 
 #include <std/mem/obj_pool.h>

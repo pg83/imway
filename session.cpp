@@ -1,16 +1,15 @@
 #include "session.h"
 
 #include "composer.h"
-#include "log.h"
 #include "intr_list.h"
 #include "listener.h"
+#include "log.h"
 #include "util.h"
 
 #include <errno.h>
+#include <ev.h>
 #include <fcntl.h>
 #include <unistd.h>
-
-#include <ev.h>
 
 extern "C" {
 #include <libseat.h>

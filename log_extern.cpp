@@ -4,12 +4,11 @@
 #include "log.h"
 #include "util.h"
 
-#include <stdio.h>
-
 #include <std/ios/manip.h>
-#include <string.h>
 
 #include <lcms2.h>
+#include <stdio.h>
+#include <string.h>
 
 extern "C" {
 #include <libseat.h>

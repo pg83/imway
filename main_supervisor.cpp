@@ -2,6 +2,10 @@
 
 #include "composer.h"
 
+#include <std/lib/buffer.h>
+#include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
+
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -9,10 +13,6 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
-
-#include <std/lib/buffer.h>
-#include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
 
 using namespace stl;
 

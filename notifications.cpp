@@ -1,15 +1,16 @@
-#include "composer.h"
-#include "log.h"
-#include "listener.h"
 #include "notifications.h"
-#include "notifier.h"
-#include "dbus_conn.h"
-#include "util.h"
 
-#include <dbus/dbus.h>
+#include "composer.h"
+#include "dbus_conn.h"
+#include "listener.h"
+#include "log.h"
+#include "notifier.h"
+#include "util.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+
+#include <dbus/dbus.h>
 
 using namespace stl;
 

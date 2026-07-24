@@ -1,4 +1,5 @@
 #include "toast.h"
+
 #include "composer.h"
 #include "icon.h"
 #include "notifier.h"

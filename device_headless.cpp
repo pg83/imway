@@ -1,49 +1,47 @@
-#include "composer.h"
-#include "log.h"
-#include "device.h"
+#include "device_headless.h"
 
+#include "composer.h"
+#include "device.h"
 #include "device_vk.h"
 #include "frame_listener.h"
 #include "intr_list.h"
 #include "listener.h"
+#include "log.h"
 #include "output.h"
+#include "pooled_fd.h"
 #include "renderer.h"
 #include "scene.h"
 #include "session.h"
 #include "util.h"
 
-#include <ev.h>
+#include <std/dbg/verify.h>
+#include <std/ios/fs_utils.h>
+#include <std/ios/out_fd.h>
+#include <std/ios/sys.h>
+#include <std/lib/vector.h>
+#include <std/mem/obj_pool.h>
+#include <std/str/builder.h>
+#include <std/str/view.h>
+#include <std/sys/fd.h>
+#include <std/sys/fs.h>
+#include <std/sys/throw.h>
+
+#include <drm_fourcc.h>
 #include <errno.h>
+#include <ev.h>
 #include <fcntl.h>
+#include <libudev.h>
+#include <linux/kd.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 #include <unistd.h>
-
-#include <drm_fourcc.h>
-#include <linux/kd.h>
-#include <libudev.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
-
-#include <std/dbg/verify.h>
-#include <std/ios/fs_utils.h>
-#include <std/ios/out_fd.h>
-#include <std/ios/sys.h>
-#include <std/sys/fs.h>
-#include <std/sys/fd.h>
-#include <std/lib/vector.h>
-#include <std/mem/obj_pool.h>
-#include <std/str/builder.h>
-#include <std/str/view.h>
-#include <std/sys/throw.h>
-#include "device_headless.h"
-#include "pooled_fd.h"
-
-#include <stdlib.h>
 
 using namespace stl;
 

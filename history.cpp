@@ -1,4 +1,5 @@
 #include "history.h"
+
 #include "composer.h"
 #include "dialog.h"
 #include "icon.h"
