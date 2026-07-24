@@ -4,6 +4,7 @@
 #include "fake_kms.h"
 #include "icon.h"
 #include "input_sink.h"
+#include "listener.h"
 #include "pooled.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
@@ -362,6 +363,41 @@ void ControlImpl::handleLine(StringView cmd) {
         }
     } else if (verb == "kms-fail-new-fb"_sv && fakeKmsActive()) {
         fakeKmsFailNewFb((int)args.stou());
+    } else if (verb == "kms-fail-prime"_sv && fakeKmsActive()) {
+        StringView err, rest, count, skip;
+
+        if (args.split(' ', err, rest)) {
+            if (!rest.split(' ', count, skip)) {
+                count = rest;
+                skip = "0"_sv;
+            }
+
+            fakeKmsFailPrime((int)err.stou(), (int)count.stou(), (int)skip.stou());
+        }
+    } else if (verb == "kms-fail-addfb"_sv && fakeKmsActive()) {
+        StringView err, count;
+
+        if (args.split(' ', err, count)) {
+            fakeKmsFailAddFb((int)err.stou(), (int)count.stou());
+        }
+    } else if (verb == "kms-reject-cursor"_sv && fakeKmsActive()) {
+        fakeKmsRejectCursor((int)args.stou());
+        comp->scene->needsFrame = true;
+    } else if (verb == "kms-tv-modes"_sv && fakeKmsActive()) {
+        fakeKmsSetTvModes(args.stou() != 0);
+    } else if (verb == "session"_sv) {
+        // fires the same listener lists a libseat VT switch would
+        if (args.stou() != 0) {
+            forEach<Listener>(comp->sessionEnabledListeners, [](Listener& l) {
+                l.onListen();
+            });
+        } else {
+            forEach<Listener>(comp->sessionDisabledListeners, [](Listener& l) {
+                l.onListen();
+            });
+        }
+
+        comp->scene->needsFrame = true;
     } else if (verb == "render-fault"_sv) {
         // injects a renderer-attributed client fault: the real producers
         // (device OOM on a client-sized texture) cannot fire in a scenario
@@ -416,6 +452,12 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
     out << "frames done="_sv << scene->framesDone << "\n"_sv;
+
+    if (fakeKmsActive()) {
+        // delivered page-flip events: the fake device's ground truth for
+        // frames that actually reached the screen
+        out << "kms flips="_sv << fakeKmsFlips() << "\n"_sv;
+    }
     out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << "\n"_sv;
     out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;
 

@@ -48,6 +48,8 @@ namespace {
         pConnMaxBpc,
         pConnBroadcastRgb,
         pConnHdrMeta,
+        pConnEdid,
+        pConnLinkBpc,
         pCrtcModeId,
         pCrtcActive,
         pCrtcGamma,
@@ -157,6 +159,9 @@ namespace {
         pthread_t flipThread{};
 
         bool connected = true;
+        bool tvModes = false;
+        bool noPrime = false;
+        bool asyncFlipLogged = false;
         Vector<PropDef> props;
         Vector<FakeBlob*> blobs;
         Vector<FakeFb> fbs;
@@ -175,7 +180,15 @@ namespace {
         int failCount = 0;
         int failNewFbErr = 0;
         u32 failNewFbSince = 0;
+        int failPrimeErr = 0;
+        int failPrimeCount = 0;
+        int failPrimeSkip = 0;
+        int failAddFbErr = 0;
+        int failAddFbCount = 0;
+        int rejectCursorErr = 0;
         bool rejectColor = false;
+
+        u64 flips = 0;
     };
 
     FakeKms* g = nullptr;
@@ -229,12 +242,110 @@ namespace {
         g->props.pushBack(p);
     }
 
+    // A minimal but structurally valid EDID 1.4 with one CTA-861 extension:
+    // sRGB chromaticity, a 1280x800 preferred timing, BT.2020 RGB
+    // colorimetry and PQ HDR static metadata (~1000 nit peak, 400 nit
+    // maxFALL, 0.1 nit floor). libdisplay-info reads it like a real HDR
+    // panel's, which opens the compositor's positive HDR path.
+    u32 makeEdidBlob() {
+        u8 e[256];
+
+        memset(e, 0, 256);
+
+        const u8 header[8] = {0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00};
+
+        memcpy(e, header, 8);
+        e[8] = 0x19; // "FKE"
+        e[9] = 0x65;
+        e[16] = 1; // week 1 of 2020
+        e[17] = 30;
+        e[18] = 1; // EDID 1.4
+        e[19] = 4;
+        e[20] = 0xb5; // digital input, 10 bpc
+        e[21] = 34;   // physical size, cm
+        e[22] = 21;
+        e[23] = 120;  // gamma 2.2
+        e[24] = 0x06; // preferred timing present, sRGB default
+
+        // sRGB primaries + D65 white, 10-bit fixed point
+        const u16 chroma[8] = {655, 338, 307, 614, 154, 61, 320, 337};
+
+        e[25] = (u8)(((chroma[0] & 3) << 6) | ((chroma[1] & 3) << 4) | ((chroma[2] & 3) << 2) | (chroma[3] & 3));
+        e[26] = (u8)(((chroma[4] & 3) << 6) | ((chroma[5] & 3) << 4) | ((chroma[6] & 3) << 2) | (chroma[7] & 3));
+
+        for (int i = 0; i < 8; i++) {
+            e[27 + i] = (u8)(chroma[i] >> 2);
+        }
+
+        // preferred detailed timing: 1280x800@60, 83.5 MHz
+        const u8 dtd[18] = {0x9e, 0x20, 0x00, 0xa0, 0x50, 0x20, 0x2d, 0x30, 0x30, 0x20, 0x36, 0x00, 0x54, 0xd2, 0x10, 0x00, 0x00, 0x1e};
+
+        memcpy(e + 54, dtd, 18);
+
+        // display name, then two dummy descriptors
+        const u8 name[18] = {0, 0, 0, 0xfc, 0, 'F', 'a', 'k', 'e', 'K', 'M', 'S', '\n', ' ', ' ', ' ', ' ', ' '};
+
+        memcpy(e + 72, name, 18);
+        e[93] = 0x10;
+        e[111] = 0x10;
+        e[126] = 1; // one extension block
+
+        // CTA-861 revision 3, data blocks end at byte 15
+        u8* c = e + 128;
+
+        c[0] = 0x02;
+        c[1] = 0x03;
+        c[2] = 15;
+        c[3] = 0x00;
+
+        // colorimetry data block: BT.2020 RGB
+        c[4] = 0xe3;
+        c[5] = 0x05;
+        c[6] = 0x80;
+        c[7] = 0x00;
+
+        // HDR static metadata: PQ + SDR EOTFs, type 1 descriptor,
+        // luminance codes for ~1000 / 400 / 0.1 nits
+        c[8] = 0xe6;
+        c[9] = 0x06;
+        c[10] = 0x05;
+        c[11] = 0x01;
+        c[12] = 0x8a;
+        c[13] = 0x60;
+        c[14] = 0x1a;
+
+        for (int block = 0; block < 2; block++) {
+            u8 sum = 0;
+
+            for (int i = 0; i < 127; i++) {
+                sum = (u8)(sum + e[block * 128 + i]);
+            }
+
+            e[block * 128 + 127] = (u8)(0u - sum);
+        }
+
+        auto* blob = new FakeBlob();
+
+        blob->id = g->nextBlob++;
+        blob->data.append(e, 256);
+        g->blobs.pushBack(blob);
+
+        return blob->id;
+    }
+
     void buildProps() {
         addProp(kConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
         addProp(kConnectorId, pConnColorspace, "Colorspace", DRM_MODE_PROP_ENUM, kColorspaceEnums, 3, 0, 0, 0);
         addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, 6, 16, 10);
         addProp(kConnectorId, pConnBroadcastRgb, "Broadcast RGB", DRM_MODE_PROP_ENUM, kBroadcastEnums, 3, 0, 0, 0);
         addProp(kConnectorId, pConnHdrMeta, "HDR_OUTPUT_METADATA", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
+        addProp(kConnectorId, pConnEdid, "EDID", DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 0, makeEdidBlob());
+
+        // what the link actually negotiated; a scenario boots it low to
+        // exercise the HDR degradation ladder
+        const char* linkBpc = getenv("IMWAY_FAKE_KMS_LINK_BPC");
+
+        addProp(kConnectorId, pConnLinkBpc, "link bpc", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 16, linkBpc ? (u64)atoi(linkBpc) : 10);
 
         addProp(kCrtcId, pCrtcModeId, "MODE_ID", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
         addProp(kCrtcId, pCrtcActive, "ACTIVE", DRM_MODE_PROP_RANGE, nullptr, 0, 0, 1, 0);
@@ -361,7 +472,7 @@ namespace {
                 c->value = 64;
                 return 0;
             case DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP:
-                c->value = 0;
+                c->value = 1;
                 return 0;
             case DRM_CAP_ADDFB2_MODIFIERS:
             case DRM_CAP_PRIME:
@@ -391,17 +502,28 @@ namespace {
         return 0;
     }
 
+    // the connector's current mode list; the tv set models replugging a
+    // different display that only does 1080p
+    u32 currentModes(drm_mode_modeinfo* modes) {
+        if (g->tvModes) {
+            fillMode(modes[0], 1920, 1080, 60, true);
+
+            return 1;
+        }
+
+        fillMode(modes[0], 1280, 800, 60, true);
+        fillMode(modes[1], 1920, 1080, 60, false);
+
+        return 2;
+    }
+
     int emuGetConnector(drm_mode_get_connector* c) {
         if (c->connector_id != kConnectorId) {
             return -ENOENT;
         }
 
         drm_mode_modeinfo modes[2];
-
-        fillMode(modes[0], 1280, 800, 60, true);
-        fillMode(modes[1], 1920, 1080, 60, false);
-
-        u32 nModes = g->connected ? 2 : 0;
+        u32 nModes = g->connected ? currentModes(modes) : 0;
 
         if (c->modes_ptr && c->count_modes >= nModes) {
             memcpy((void*)(uintptr_t)c->modes_ptr, modes, sizeof(drm_mode_modeinfo) * nModes);
@@ -545,7 +667,7 @@ namespace {
     // (LINEAR) whose mask covers every format
     void buildInFormatsBlob(Vector<u8>& out) {
         constexpr u32 nFmt = (u32)(sizeof(kFormats) / sizeof(kFormats[0]));
-        struct drm_format_modifier_blob hdr {};
+        struct drm_format_modifier_blob hdr{};
 
         hdr.version = 1;
         hdr.count_formats = nFmt;
@@ -553,7 +675,7 @@ namespace {
         hdr.count_modifiers = 1;
         hdr.modifiers_offset = sizeof(hdr) + sizeof(kFormats);
 
-        struct drm_format_modifier mod {};
+        struct drm_format_modifier mod{};
 
         mod.formats = (1ull << nFmt) - 1;
         mod.offset = 0;
@@ -620,6 +742,18 @@ namespace {
     }
 
     int emuPrimeFdToHandle(drm_prime_handle* p) {
+        if (g->noPrime) {
+            return -ENOTSUP;
+        }
+
+        if (g->failPrimeSkip > 0) {
+            g->failPrimeSkip--;
+        } else if (g->failPrimeCount > 0) {
+            g->failPrimeCount--;
+
+            return -g->failPrimeErr;
+        }
+
         int dup = fcntl(p->fd, F_DUPFD_CLOEXEC, 0);
 
         if (dup < 0) {
@@ -710,6 +844,12 @@ namespace {
     }
 
     int emuAddFb2(drm_mode_fb_cmd2* f) {
+        if (g->failAddFbCount > 0) {
+            g->failAddFbCount--;
+
+            return -g->failAddFbErr;
+        }
+
         for (size_t i = 0; i < g->gems.length(); i++) {
             if (g->gems[i].handle == f->handles[0]) {
                 FakeFb fb;
@@ -781,6 +921,36 @@ namespace {
                 if (g->failNewFbErr && !test && (propIds[k] == pPlaneFbId || propIds[k] == pCursorFbId) && (u32)values[k] >= g->failNewFbSince) {
                     return -g->failNewFbErr;
                 }
+
+                // a display that cannot do hardware cursors: enabling the
+                // cursor plane fails, shutting it off is fine — the shape
+                // the compositor's cursor bisect is built for
+                if (g->rejectCursorErr && propIds[k] == pCursorFbId && values[k]) {
+                    return -g->rejectCursorErr;
+                }
+
+                // a mode the connector does not currently offer is refused,
+                // like a real display would after being swapped on hotplug
+                if (propIds[k] == pCrtcModeId && values[k]) {
+                    FakeBlob* blob = findBlob((u32)values[k]);
+
+                    if (!blob) {
+                        return -EINVAL;
+                    }
+
+                    const drm_mode_modeinfo* m = (const drm_mode_modeinfo*)blob->data.data();
+                    drm_mode_modeinfo offered[2];
+                    u32 n = currentModes(offered);
+                    bool listed = false;
+
+                    for (u32 mi = 0; mi < n; mi++) {
+                        listed = listed || (offered[mi].hdisplay == m->hdisplay && offered[mi].vdisplay == m->vdisplay && offered[mi].vrefresh == m->vrefresh);
+                    }
+
+                    if (!listed) {
+                        return -EINVAL;
+                    }
+                }
             }
         }
 
@@ -802,6 +972,12 @@ namespace {
 
                 p->value = values[k];
             }
+        }
+
+        if ((a->flags & DRM_MODE_PAGE_FLIP_ASYNC) && !g->asyncFlipLogged) {
+            // scenarios assert tearing engaged by this one-shot marker
+            sysE << "fake-kms: async page flip"_sv << endL;
+            g->asyncFlipLogged = true;
         }
 
         if (a->flags & DRM_MODE_PAGE_FLIP_EVENT) {
@@ -850,6 +1026,7 @@ namespace {
             ev.sequence = ++g->flipSeq;
             ev.crtc_id = kCrtcId;
             g->flipPending = false;
+            g->flips++;
 
             ssize_t n = write(g->eventFd, &ev, sizeof(ev));
 
@@ -1054,6 +1231,8 @@ int fakeKmsOpenDevice() {
     g->eventFd = pipeFds[1];
     g->renderFd = render;
     g->rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
+    g->rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
+    g->noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
     buildProps();
     pthread_create(&g->flipThread, nullptr, flipThreadMain, nullptr);
 
@@ -1070,6 +1249,12 @@ void fakeKmsSetConnected(bool connected) {
     pthread_mutex_unlock(&g->mu);
 }
 
+void fakeKmsSetTvModes(bool tv) {
+    pthread_mutex_lock(&g->mu);
+    g->tvModes = tv;
+    pthread_mutex_unlock(&g->mu);
+}
+
 void fakeKmsFailCommits(int err, int count) {
     pthread_mutex_lock(&g->mu);
     g->failErr = err;
@@ -1082,4 +1267,35 @@ void fakeKmsFailNewFb(int err) {
     g->failNewFbErr = err;
     g->failNewFbSince = g->nextFb;
     pthread_mutex_unlock(&g->mu);
+}
+
+void fakeKmsFailPrime(int err, int count, int skip) {
+    pthread_mutex_lock(&g->mu);
+    g->failPrimeErr = err;
+    g->failPrimeCount = count;
+    g->failPrimeSkip = skip;
+    pthread_mutex_unlock(&g->mu);
+}
+
+void fakeKmsFailAddFb(int err, int count) {
+    pthread_mutex_lock(&g->mu);
+    g->failAddFbErr = err;
+    g->failAddFbCount = count;
+    pthread_mutex_unlock(&g->mu);
+}
+
+void fakeKmsRejectCursor(int err) {
+    pthread_mutex_lock(&g->mu);
+    g->rejectCursorErr = err;
+    pthread_mutex_unlock(&g->mu);
+}
+
+unsigned long long fakeKmsFlips() {
+    pthread_mutex_lock(&g->mu);
+
+    unsigned long long n = g->flips;
+
+    pthread_mutex_unlock(&g->mu);
+
+    return n;
 }

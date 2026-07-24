@@ -3,15 +3,15 @@
 // plane does not blend, so a translucent buffer would render differently
 // than in composition. Phase 1 commits without an opaque region (must not be
 // a scanout candidate), phase 2 declares full opacity (must be one again).
-// Exits 77 if /dev/udmabuf is unavailable (skip).
+// The buffer is a DRM dumb buffer from a card node; exits 77 without one.
 
 #include "wl_util.h"
 
-#include <sys/ioctl.h>
-
-#include <linux/udmabuf.h>
+#include <xf86drm.h>
 
 #include <linux-dmabuf-v1-client-protocol.h>
+
+#include <sys/mman.h>
 
 #define FOURCC_ARGB8888 0x34325241 /* 'AR24' */
 
@@ -48,44 +48,51 @@ static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
 }
 static const struct wl_registry_listener extra_listener = {extra_global, extra_remove};
 
-static int make_dmabuf_fd(size_t size) {
-    int dev = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
-    if (dev < 0) {
-        fprintf(stderr, "no /dev/udmabuf: %m\n");
-        exit(77);
-    }
-    int mem = memfd_create("dmabuf-src", MFD_ALLOW_SEALING);
-    if (mem < 0 || ftruncate(mem, size) < 0 ||
-        fcntl(mem, F_ADD_SEALS, F_SEAL_SHRINK) < 0) {
-        perror("memfd");
-        exit(1);
-    }
-    uint32_t* px = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, mem, 0);
-    for (size_t i = 0; i < size / 4; i++) px[i] = 0xFFFF8000u;
-    munmap(px, size);
+static int make_dmabuf_fd(uint32_t* pitch) {
+    for (int i = 0; i < 8; i++) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/dri/card%d", i);
+        int fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0) continue;
 
-    struct udmabuf_create create = {0};
-    create.memfd = mem;
-    create.flags = UDMABUF_FLAGS_CLOEXEC;
-    create.offset = 0;
-    create.size = size;
-    int buf_fd = ioctl(dev, UDMABUF_CREATE, &create);
-    if (buf_fd < 0) {
-        fprintf(stderr, "UDMABUF_CREATE: %m\n");
-        exit(77);
+        struct drm_mode_create_dumb create = {0};
+        create.width = cw;
+        create.height = ch;
+        create.bpp = 32;
+        if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0) {
+            close(fd);
+            continue;
+        }
+
+        struct drm_mode_map_dumb map = {0};
+        map.handle = create.handle;
+        int prime = -1;
+        if (drmIoctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map) != 0 ||
+            drmPrimeHandleToFD(fd, create.handle, DRM_CLOEXEC | DRM_RDWR, &prime) != 0 || prime < 0) {
+            close(fd);
+            continue;
+        }
+
+        uint32_t* px = mmap(NULL, (size_t)create.pitch * ch, PROT_READ | PROT_WRITE,
+                            MAP_SHARED, fd, map.offset);
+        if (px != MAP_FAILED) {
+            for (size_t j = 0; j < (size_t)create.pitch * ch / 4; j++) px[j] = 0xFFFF8000u;
+            munmap(px, (size_t)create.pitch * ch);
+        }
+        close(fd); /* the prime fd keeps the buffer alive */
+        *pitch = create.pitch;
+        return prime;
     }
-    close(mem);
-    close(dev);
-    return buf_fd;
+    fprintf(stderr, "no usable /dev/dri/card node\n");
+    exit(77);
 }
 
 static void draw(void) {
-    long page = sysconf(_SC_PAGESIZE);
-    size_t size = ((size_t)cw * ch * 4 + page - 1) / page * page;
-    int fd = make_dmabuf_fd(size);
+    uint32_t pitch = 0;
+    int fd = make_dmabuf_fd(&pitch);
 
     struct zwp_linux_buffer_params_v1* params = zwp_linux_dmabuf_v1_create_params(dmabuf);
-    zwp_linux_buffer_params_v1_add(params, fd, 0, 0, cw * 4, 0, 0); // LINEAR
+    zwp_linux_buffer_params_v1_add(params, fd, 0, 0, pitch, 0, 0); // LINEAR
     struct wl_buffer* buffer =
         zwp_linux_buffer_params_v1_create_immed(params, cw, ch, FOURCC_ARGB8888, 0);
     zwp_linux_buffer_params_v1_destroy(params);
