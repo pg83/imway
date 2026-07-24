@@ -25,6 +25,11 @@ inline stl::StringView sv(const stl::Buffer& b) {
 
 double parseFloat(stl::StringView s);
 
+// zero-padded formatting the libstd streams do not carry: two decimal
+// digits (clock fields) and sixteen lowercase hex digits (token halves)
+void pad2(stl::StringBuilder& out, unsigned v);
+void hex16(stl::StringBuilder& out, u64 v);
+
 u32 nowMsec();
 
 // i32 addition that clamps instead of overflowing: hostile clients feed

@@ -34,7 +34,6 @@
 #include <time.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <stdio.h>
 #include <signal.h>
 #include <string.h>
 #include <unistd.h>
@@ -8736,7 +8735,13 @@ namespace {
             random = ((u64)nowMsec() << 32) ^ ++request->srv->tokenCounter;
         }
 
-        snprintf(grant.token, sizeof(grant.token), "imway-%016llx-%016llx", (unsigned long long)++request->srv->tokenCounter, (unsigned long long)random);
+        auto& token = sb();
+
+        token << "imway-"_sv;
+        hex16(token, ++request->srv->tokenCounter);
+        token << "-"_sv;
+        hex16(token, random);
+        memcpy(grant.token, token.cStr(), token.used() + 1);
         grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) && (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface.get())) == request->client));
 
         if (request->srv->activationGrants.length() == 64) {

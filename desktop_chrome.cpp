@@ -1,12 +1,12 @@
 #include "desktop_chrome.h"
 
 #include "dock.h"
+#include "util.h"
 #include "scene.h"
 #include "composer.h"
 #include "imgui_wm.h"
 
 #include <time.h>
-#include <stdio.h>
 
 using namespace stl;
 
@@ -77,16 +77,22 @@ namespace {
 
         localtime_r(&now, &local);
 
-        char clock[32];
+        auto& clock = sb();
 
-        snprintf(clock, sizeof(clock), "%02d.%02d %02d:%02d", local.tm_mday, local.tm_mon + 1, local.tm_hour, local.tm_min);
+        pad2(clock, (unsigned)local.tm_mday);
+        clock << "."_sv;
+        pad2(clock, (unsigned)(local.tm_mon + 1));
+        clock << " "_sv;
+        pad2(clock, (unsigned)local.tm_hour);
+        clock << ":"_sv;
+        pad2(clock, (unsigned)local.tm_min);
 
         const ImGuiStyle& style = ImGui::GetStyle();
-        float clockW = ImGui::CalcTextSize(clock).x;
+        float clockW = ImGui::CalcTextSize(clock.cStr()).x;
         float x = ImGui::GetWindowWidth() - clockW - style.ItemSpacing.x;
 
         ImGui::SetCursorPosX(x);
-        ImGui::TextUnformatted(clock);
+        ImGui::TextUnformatted(clock.cStr());
 
         if (ImGui::IsItemClicked()) {
             result.calendar = true;
@@ -103,15 +109,15 @@ namespace {
         }
 
         if (info.batteryPct >= 0) {
-            char stats[32];
+            auto& stats = sb();
 
-            snprintf(stats, sizeof(stats), "bat %ld%%", info.batteryPct);
+            stats << "bat "_sv << info.batteryPct << "%"_sv;
 
-            float statsW = ImGui::CalcTextSize(stats).x;
+            float statsW = ImGui::CalcTextSize(stats.cStr()).x;
 
             left -= statsW + style.ItemSpacing.x * 2.f;
             ImGui::SameLine(left);
-            ImGui::TextUnformatted(stats);
+            ImGui::TextUnformatted(stats.cStr());
         }
 
         if (!info.wifi.empty()) {

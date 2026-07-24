@@ -23,7 +23,7 @@
 
 #include <ev.h>
 #include <fcntl.h>
-#include <stdio.h>
+#include <stdio.h> // rename(2) only
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/stat.h>
