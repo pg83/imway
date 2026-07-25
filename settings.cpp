@@ -19,6 +19,7 @@ namespace {
         "input",
         "keys",
         "notifications",
+        "desktop",
     };
 
     struct Dialog {
@@ -31,6 +32,7 @@ namespace {
         void pageInput(Settings& s);
         void pageKeys(Settings& s);
         void pageNotifications(Settings& s);
+        void pageDesktop(Settings& s);
     };
 
     // label | control rows; every page lays out through these so the
@@ -240,6 +242,23 @@ void Dialog::pageNotifications(Settings& s) {
     ImGui::EndTable();
 }
 
+void Dialog::pageDesktop(Settings& s) {
+    if (!beginRows()) {
+        return;
+    }
+
+    row("ItemIsMenu primary");
+
+    bool open = s.trayMenuOnPrimary;
+
+    if (ImGui::Checkbox("open DBusMenu", &open)) {
+        s.trayMenuOnPrimary = open;
+        s.desktopChanged = true;
+    }
+
+    ImGui::EndTable();
+}
+
 void Dialog::draw(Settings& s, bool& open) {
     ImGui::SetNextWindowPos(ImVec2(80.f * s.uiScale, 80.f * s.uiScale), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(640.f * s.uiScale, 400.f * s.uiScale), ImGuiCond_FirstUseEver);
@@ -285,6 +304,9 @@ void Dialog::draw(Settings& s, bool& open) {
         case 5:
             pageNotifications(s);
             break;
+        case 6:
+            pageDesktop(s);
+            break;
     }
 
     ImGui::EndChild();
@@ -302,6 +324,7 @@ void drawSettings(Composer&, Settings& s, bool toggle, DialogState** state) {
     s.themeChanged = false;
     s.layoutChanged = false;
     s.pointerChanged = false;
+    s.desktopChanged = false;
 
     dialog<Dialog>(toggle, state, [&](Dialog& d, bool& open) {
         d.draw(s, open);

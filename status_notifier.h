@@ -7,14 +7,13 @@
 #include <std/str/builder.h>
 
 struct Composer;
+struct DBusMenu;
 struct Icon;
 struct StatusNotifierItem;
 
 enum class StatusActionKind {
     primary,
     context,
-    menuOpen,
-    menu,
 };
 
 // An opaque command embedded in the UI model.  The dock renders the model;
@@ -22,19 +21,6 @@ enum class StatusActionKind {
 struct StatusAction {
     StatusNotifierItem* item = nullptr;
     StatusActionKind kind = StatusActionKind::primary;
-    i32 menuId = 0;
-};
-
-struct StatusMenuItem {
-    stl::StringBuilder label;
-    stl::Vector<StatusMenuItem*> children;
-    StatusAction action;
-    StatusAction open;
-    bool visible = true;
-    bool enabled = true;
-    bool separator = false;
-    bool checkable = false;
-    bool checked = false;
 };
 
 // Read-only from the dock's point of view.  Named icons resolve through the
@@ -53,9 +39,10 @@ struct StatusNotifierItem {
 
     StatusAction primary;
     StatusAction context;
-    stl::Vector<StatusMenuItem*> menu;
+    DBusMenu* menu = nullptr;
 
     bool hasMenu = false;
+    bool itemIsMenu = false;
 };
 
 struct StatusNotifier {

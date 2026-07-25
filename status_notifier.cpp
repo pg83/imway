@@ -6,6 +6,7 @@
 #include "scene.h"
 #include "composer.h"
 #include "dbus_conn.h"
+#include "dbus_menu.h"
 #include "icon_pool.h"
 #include "intr_list.h"
 #include "icon_provider.h"
@@ -22,29 +23,22 @@ namespace {
     constexpr const char* kWatcher = "org.kde.StatusNotifierWatcher";
     constexpr const char* kWatcherPath = "/StatusNotifierWatcher";
     constexpr const char* kItem = "org.kde.StatusNotifierItem";
-    constexpr const char* kMenu = "com.canonical.dbusmenu";
     constexpr const char* kProps = "org.freedesktop.DBus.Properties";
     constexpr int kTimeout = 3000;
-    constexpr int kMaxMenuDepth = 16;
-    constexpr int kMaxMenuItems = 1024;
 
     struct StatusNotifierImpl;
 
     DBusHandlerResult watcherMessage(DBusConnection*, DBusMessage* msg, void* data);
     DBusHandlerResult busSignal(DBusConnection*, DBusMessage* msg, void* data);
     void propertiesReply(DBusPendingCall* pc, void* data);
-    void menuReply(DBusPendingCall* pc, void* data);
 
     struct ItemBox: public StatusNotifierItem {
-        // menu generation arena: every GetLayout reply rebuilds it wholesale
-        ObjPool* menuPool = nullptr;
         StatusNotifierImpl* impl = nullptr;
         StringBuilder service;
         StringBuilder path;
         StringBuilder menuPath;
         // replies still holding `this`; canceled when the item dies
         Vector<DBusPendingCall*> pending;
-        bool itemIsMenu = false;
 
         // the pixmaps behind iconSym/attentionIconSym, owned here
         Icon* pixmap = nullptr;
@@ -89,15 +83,11 @@ namespace {
         void registerItem(DBusMessage* msg);
         void unregisterOwner(StringView owner);
         void getProperties(ItemBox& item);
-        void getMenu(ItemBox& item);
-        void aboutToShow(ItemBox& item, i32 id);
         void clearMenu(ItemBox& item);
         void readProperties(ItemBox& item, DBusMessage* reply);
-        void readMenu(ItemBox& item, DBusMessage* reply);
         void changed(ItemBox& item);
         bool sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, ItemBox& item);
         void sendSimple(ItemBox& item, const char* iface, const char* method, int x, int y);
-        void sendMenuEvent(ItemBox& item, i32 id);
         void watcherGet(DBusMessage* msg);
         void watcherGetAll(DBusMessage* msg);
         void emitItem(const char* member, ItemBox& item);
@@ -308,9 +298,13 @@ namespace {
             if (text(item.menuPath) != path) {
                 impl.clearMenu(item);
                 assign(item.menuPath, path);
+
+                if (!path.empty()) {
+                    item.menu = impl.c->dbusMenus->connect(text(item.service), path);
+                }
             }
 
-            item.hasMenu = !path.empty();
+            item.hasMenu = item.menu != nullptr;
         } else if (key == "ItemIsMenu"_sv) {
             item.itemIsMenu = iterBool(value);
         } else if (key == "IconPixmap"_sv) {
@@ -318,83 +312,6 @@ namespace {
         } else if (key == "AttentionIconPixmap"_sv) {
             readPixmap(impl, item.attentionPixmap, value);
         }
-    }
-
-    StatusMenuItem* parseMenuNode(StatusNotifierImpl& impl, ItemBox& item, DBusMessageIter* node, StatusMenuItem* parent, int depth, int& count) {
-        if (depth > kMaxMenuDepth || count >= kMaxMenuItems || dbus_message_iter_get_arg_type(node) != DBUS_TYPE_STRUCT) {
-            return nullptr;
-        }
-
-        DBusMessageIter fields;
-
-        dbus_message_iter_recurse(node, &fields);
-
-        if (dbus_message_iter_get_arg_type(&fields) != DBUS_TYPE_INT32) {
-            return nullptr;
-        }
-
-        i32 id = iterI32(&fields);
-        dbus_message_iter_next(&fields);
-
-        StatusMenuItem* entry = nullptr;
-
-        if (id != 0) {
-            entry = item.menuPool->make<StatusMenuItem>();
-            entry->action = {&item, StatusActionKind::menu, id};
-            entry->open = {&item, StatusActionKind::menuOpen, id};
-            count++;
-        }
-
-        if (dbus_message_iter_get_arg_type(&fields) == DBUS_TYPE_ARRAY) {
-            eachDict(&fields, [&](StringView key, DBusMessageIter* value) {
-                if (!entry) {
-                    return;
-                }
-
-                if (key == "label"_sv) {
-                    assign(entry->label, iterString(value));
-                } else if (key == "enabled"_sv) {
-                    entry->enabled = iterBool(value, true);
-                } else if (key == "visible"_sv) {
-                    entry->visible = iterBool(value, true);
-                } else if (key == "type"_sv) {
-                    entry->separator = iterString(value) == "separator"_sv;
-                } else if (key == "toggle-type"_sv) {
-                    entry->checkable = !iterString(value).empty();
-                } else if (key == "toggle-state"_sv) {
-                    entry->checked = iterI32(value) > 0;
-                }
-            });
-
-            dbus_message_iter_next(&fields);
-        }
-
-        StatusMenuItem* childParent = entry ? entry : parent;
-
-        if (dbus_message_iter_get_arg_type(&fields) == DBUS_TYPE_ARRAY) {
-            DBusMessageIter children;
-
-            dbus_message_iter_recurse(&fields, &children);
-
-            while (dbus_message_iter_get_arg_type(&children) == DBUS_TYPE_VARIANT) {
-                DBusMessageIter child;
-
-                dbus_message_iter_recurse(&children, &child);
-                StatusMenuItem* parsed = parseMenuNode(impl, item, &child, childParent, depth + 1, count);
-
-                if (parsed) {
-                    if (childParent) {
-                        childParent->children.pushBack(parsed);
-                    } else {
-                        item.menu.pushBack(parsed);
-                    }
-                }
-
-                dbus_message_iter_next(&children);
-            }
-        }
-
-        return entry;
     }
 
     DBusMessage* steal(DBusPendingCall* pc) {
@@ -439,7 +356,6 @@ StatusNotifierImpl::StatusNotifierImpl(Composer& comp)
     dbus_bus_add_match(conn, "type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged'", nullptr);
     dbus_bus_add_match(conn, "type='signal',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'", nullptr);
     dbus_bus_add_match(conn, "type='signal',interface='org.kde.StatusNotifierItem'", nullptr);
-    dbus_bus_add_match(conn, "type='signal',interface='com.canonical.dbusmenu',member='LayoutUpdated'", nullptr);
     dbus_connection_add_filter(conn, busSignal, this, nullptr);
     *(c->log) << "imway: StatusNotifierWatcher on the session bus"_sv << endL;
 }
@@ -480,7 +396,7 @@ ItemBox::~ItemBox() noexcept {
         impl->c->iconPool->release(attentionPixmap);
     }
 
-    delete menuPool;
+    impl->c->dbusMenus->disconnect(menu);
 }
 
 void ItemBox::dropPending(DBusPendingCall* pc) {
@@ -548,12 +464,8 @@ ItemBox* StatusNotifierImpl::findSignal(DBusMessage* msg) {
     return nullptr;
 }
 
-void StatusNotifierImpl::changed(ItemBox& item) {
+void StatusNotifierImpl::changed(ItemBox&) {
     c->scene->needsFrame = true;
-
-    if (!item.menuPath.empty() && item.menu.empty()) {
-        getMenu(item);
-    }
 }
 
 bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, ItemBox& item) {
@@ -585,38 +497,6 @@ void StatusNotifierImpl::getProperties(ItemBox& item) {
     sendReply(msg, propertiesReply, item);
 }
 
-void StatusNotifierImpl::getMenu(ItemBox& item) {
-    if (item.menuPath.empty()) {
-        return;
-    }
-
-    Buffer service(text(item.service)), path(text(item.menuPath));
-    DBusMessage* msg = dbus_message_new_method_call(service.cStr(), path.cStr(), kMenu, "GetLayout");
-    i32 parent = 0, depth = -1;
-    DBusMessageIter it, names;
-
-    dbus_message_iter_init_append(msg, &it);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_INT32, &parent);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_INT32, &depth);
-    dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "s", &names);
-    dbus_message_iter_close_container(&it, &names);
-    sendReply(msg, menuReply, item);
-}
-
-void StatusNotifierImpl::aboutToShow(ItemBox& item, i32 id) {
-    if (item.menuPath.empty()) {
-        return;
-    }
-
-    Buffer service(text(item.service)), path(text(item.menuPath));
-    DBusMessage* msg = dbus_message_new_method_call(service.cStr(), path.cStr(), kMenu, "AboutToShow");
-
-    dbus_message_append_args(msg, DBUS_TYPE_INT32, &id, DBUS_TYPE_INVALID);
-    dbus_connection_send(conn, msg, nullptr);
-    dbus_message_unref(msg);
-    getMenu(item);
-}
-
 void StatusNotifierImpl::readProperties(ItemBox& item, DBusMessage* reply) {
     DBusMessageIter it;
 
@@ -631,25 +511,9 @@ void StatusNotifierImpl::readProperties(ItemBox& item, DBusMessage* reply) {
 }
 
 void StatusNotifierImpl::clearMenu(ItemBox& item) {
-    item.menu.clear();
-    delete item.menuPool;
-    item.menuPool = nullptr;
-}
-
-void StatusNotifierImpl::readMenu(ItemBox& item, DBusMessage* reply) {
-    DBusMessageIter it;
-
-    if (!reply || !dbus_message_iter_init(reply, &it) || dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_UINT32 || !dbus_message_iter_next(&it)) {
-        return;
-    }
-
-    clearMenu(item);
-    item.menuPool = ObjPool::fromMemoryRaw();
-
-    int count = 0;
-
-    parseMenuNode(*this, item, &it, nullptr, 0, count);
-    c->scene->needsFrame = true;
+    c->dbusMenus->disconnect(item.menu);
+    item.menu = nullptr;
+    item.hasMenu = false;
 }
 
 void StatusNotifierImpl::emitItem(const char* member, ItemBox& item) {
@@ -700,8 +564,8 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
         pixmaps.insert(item->iconSym, item);
         pixmaps.insert(item->attentionIconSym, item);
 
-        item->primary = {item, StatusActionKind::primary, 0};
-        item->context = {item, StatusActionKind::context, 0};
+        item->primary = {item, StatusActionKind::primary};
+        item->context = {item, StatusActionKind::context};
         peer->items.pushBack(item);
     }
 
@@ -748,29 +612,6 @@ void StatusNotifierImpl::sendSimple(ItemBox& item, const char* iface, const char
     dbus_message_unref(msg);
 }
 
-void StatusNotifierImpl::sendMenuEvent(ItemBox& item, i32 id) {
-    if (item.menuPath.empty()) {
-        return;
-    }
-
-    Buffer service(text(item.service)), path(text(item.menuPath));
-    DBusMessage* msg = dbus_message_new_method_call(service.cStr(), path.cStr(), kMenu, "Event");
-    DBusMessageIter it, var;
-    const char* event = "clicked";
-    const char* empty = "";
-    u32 stamp = nowMsec();
-
-    dbus_message_iter_init_append(msg, &it);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_INT32, &id);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &event);
-    dbus_message_iter_open_container(&it, DBUS_TYPE_VARIANT, "s", &var);
-    dbus_message_iter_append_basic(&var, DBUS_TYPE_STRING, &empty);
-    dbus_message_iter_close_container(&it, &var);
-    dbus_message_iter_append_basic(&it, DBUS_TYPE_UINT32, &stamp);
-    dbus_connection_send(conn, msg, nullptr);
-    dbus_message_unref(msg);
-}
-
 void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
     auto* item = (ItemBox*)action.item;
 
@@ -780,20 +621,14 @@ void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
 
     switch (action.kind) {
         case StatusActionKind::primary:
-            sendSimple(*item, kItem, item->itemIsMenu ? "ContextMenu" : "Activate", x, y);
+            sendSimple(*item, kItem, "Activate", x, y);
             break;
         case StatusActionKind::context:
-            if (!item->menuPath.empty()) {
-                aboutToShow(*item, 0);
+            if (item->menu) {
+                item->menu->prepare(0);
             } else {
                 sendSimple(*item, kItem, "ContextMenu", x, y);
             }
-            break;
-        case StatusActionKind::menuOpen:
-            aboutToShow(*item, action.menuId);
-            break;
-        case StatusActionKind::menu:
-            sendMenuEvent(*item, action.menuId);
             break;
     }
 }
@@ -901,22 +736,6 @@ namespace {
         }
     }
 
-    void menuReply(DBusPendingCall* pc, void* data) {
-        auto* item = (ItemBox*)data;
-
-        item->dropPending(pc);
-
-        DBusMessage* reply = steal(pc);
-
-        if (reply) {
-            item->impl->readMenu(*item, reply);
-        }
-
-        if (reply) {
-            dbus_message_unref(reply);
-        }
-    }
-
     DBusHandlerResult watcherMessage(DBusConnection*, DBusMessage* msg, void* data) {
         auto* impl = (StatusNotifierImpl*)data;
 
@@ -980,8 +799,6 @@ namespace {
             // The original SNI protocol predates PropertiesChanged and many
             // implementations still emit NewIcon/NewStatus/NewTitle only.
             impl->getProperties(*item);
-        } else if (dbus_message_is_signal(msg, kMenu, "LayoutUpdated")) {
-            impl->getMenu(*item);
         }
 
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;

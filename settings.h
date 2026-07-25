@@ -34,6 +34,9 @@ struct Settings {
 
     bool hasDnd = false; // in: a notifier exists, else the row is hidden
     bool dnd = false;    // do-not-disturb, edited in place
+    // StatusNotifier ItemIsMenu policy. True opens the compositor-rendered
+    // DBusMenu on primary click; false sends the ordinary Activate method.
+    bool trayMenuOnPrimary = true;
 
     // input page: layout groups of the one compiled keymap (names point into
     // it, valid for the frame), plus the libinput accel bias
@@ -60,9 +63,10 @@ struct Settings {
     bool themeChanged = false;
     bool layoutChanged = false;
     bool pointerChanged = false;
+    bool desktopChanged = false;
 
     bool changed() const {
-        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged || dndChanged || themeChanged || layoutChanged || pointerChanged;
+        return volumeChanged || muteChanged || brightnessChanged || scaleChanged || sdrChanged || nightChanged || dndChanged || themeChanged || layoutChanged || pointerChanged || desktopChanged;
     }
 };
 

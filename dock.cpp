@@ -4,6 +4,8 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
+#include "dbus_menu.h"
+#include "dbus_menu_ui.h"
 #include "imgui_wm.h"
 #include "intr_list.h"
 #include "status_notifier.h"
@@ -156,36 +158,6 @@ namespace {
         return c.findIcon(item.iconSym, desired);
     }
 
-    void drawTrayMenu(StatusNotifier& notifier, Vector<StatusMenuItem*>& entries, int x, int y) {
-        for (StatusMenuItem* entry : entries) {
-            if (!entry->visible) {
-                continue;
-            }
-
-            if (entry->separator) {
-                ImGui::Separator();
-
-                continue;
-            }
-
-            const char* label = entry->label.empty() ? "(unnamed)" : entry->label.cStr();
-
-            if (!entry->children.empty()) {
-                bool open = ImGui::BeginMenu(label, entry->enabled);
-
-                if (ImGui::IsItemActivated()) {
-                    notifier.activate(entry->open, x, y);
-                }
-
-                if (open) {
-                    drawTrayMenu(notifier, entry->children, x, y);
-                    ImGui::EndMenu();
-                }
-            } else if (ImGui::MenuItem(label, nullptr, entry->checkable && entry->checked, entry->enabled)) {
-                notifier.activate(entry->action, x, y);
-            }
-        }
-    }
 }
 
 float dockBarWidth() {
@@ -316,7 +288,12 @@ void drawDock(Composer& c, DockResult& result) {
                 } else if (tray) {
                     ImVec2 mouse = ImGui::GetMousePos();
 
-                    c.statusNotifier->activate(tray->primary, (int)mouse.x, (int)mouse.y);
+                    if (tray->itemIsMenu && tray->menu && c.trayMenuOnPrimary) {
+                        tray->menu->prepare(0);
+                        ImGui::OpenPopup("##menu");
+                    } else {
+                        c.statusNotifier->activate(tray->primary, (int)mouse.x, (int)mouse.y);
+                    }
                 }
             }
 
@@ -385,12 +362,10 @@ void drawDock(Composer& c, DockResult& result) {
                         ImGui::Separator();
                     }
 
-                    if (tray->menu.empty()) {
+                    if (!tray->menu || !tray->menu->ready) {
                         ImGui::MenuItem("loading...", nullptr, false, false);
                     } else {
-                        ImVec2 mouse = ImGui::GetMousePos();
-
-                        drawTrayMenu(*c.statusNotifier, tray->menu, (int)mouse.x, (int)mouse.y);
+                        drawDBusMenuItems(c, *tray->menu, tray->menu->items);
                     }
                 }
 

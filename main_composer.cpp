@@ -5,6 +5,7 @@
 #include "desktop.h"
 #include "composer.h"
 #include "dbus_conn.h"
+#include "dbus_menu.h"
 #include "device_kms.h"
 #include "device_headless.h"
 
@@ -289,6 +290,7 @@ int mainComposer(int argc, char** argv) {
         c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, false);
 
         if (c.bus) {
+            c.dbusMenus = DBusMenus::create(c);
             c.notes = Notifications::create(c);
             c.statusNotifier = StatusNotifier::create(c);
         }

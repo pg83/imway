@@ -9,6 +9,7 @@
 #include "output.h"
 #include "session.h"
 #include "composer.h"
+#include "dbus_menu.h"
 #include "keyboard.h"
 #include "listener.h"
 #include "weak_ptr.h"
@@ -59,6 +60,7 @@
 #include <pointer-warp-v1-server-protocol.h>
 #include <commit-timing-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
+#include <appmenu-server-protocol.h>
 #include <presentation-time-server-protocol.h>
 #include <xdg-activation-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
@@ -137,6 +139,12 @@ namespace {
     struct WaylandImpl;
     struct ConstraintBox;
     struct IdleInhibitor;
+
+    struct AppMenuBox {
+        WaylandImpl* srv = nullptr;
+        Weak<Surface> surface;
+        DBusMenu* menu = nullptr;
+    };
 
     // the node links it into WaylandImpl::cmOutputResources
     struct CmOutput: IntrusiveNode {
@@ -4809,6 +4817,94 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &decoManagerImpl, data, nullptr);
+    }
+
+    // ---- KDE appmenu ----------------------------------------------------
+    // Canonical's registrar identifies X11 windows by XID. Native Wayland
+    // clients use this protocol instead, so the DBusMenu endpoint follows the
+    // wl_surface directly and cannot be confused with an internal toplevel id.
+    void appMenuSetAddress(wl_client*, wl_resource* res, const char* service, const char* path) {
+        auto* box = (AppMenuBox*)wl_resource_get_user_data(res);
+
+        if (!box) {
+            return;
+        }
+
+        if (box->surface && box->surface->appMenu == box->menu) {
+            box->surface->appMenu = nullptr;
+        }
+
+        box->srv->composer->dbusMenus->disconnect(box->menu);
+        box->menu = box->srv->composer->dbusMenus->connect(StringView(service), StringView(path));
+
+        if (box->surface) {
+            box->surface->appMenu = box->menu;
+        }
+
+        box->srv->scene->needsFrame = true;
+    }
+
+    void appMenuResourceDestroyed(wl_resource* res) {
+        auto* box = (AppMenuBox*)wl_resource_get_user_data(res);
+
+        if (!box) {
+            return;
+        }
+
+        if (box->surface && box->surface->appMenu == box->menu) {
+            box->surface->appMenu = nullptr;
+            box->srv->scene->needsFrame = true;
+        }
+
+        box->srv->composer->dbusMenus->disconnect(box->menu);
+        box->srv->alloc->release(box);
+    }
+
+    const struct org_kde_kwin_appmenu_interface appMenuImpl = {
+        .set_address = appMenuSetAddress,
+        .release = resDestroy,
+    };
+
+    void appMenuManagerCreate(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* menuRes = wl_resource_create(client, &org_kde_kwin_appmenu_interface, wl_resource_get_version(res), id);
+
+        if (!menuRes) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        SurfaceImpl* surface = surfaceFrom(surfaceRes);
+
+        if (!surface) {
+            wl_resource_destroy(menuRes);
+
+            return;
+        }
+
+        AppMenuBox* box = srv->alloc->make<AppMenuBox>();
+
+        box->srv = srv;
+        box->surface.bind(surface->weak);
+        wl_resource_set_implementation(menuRes, &appMenuImpl, box, appMenuResourceDestroyed);
+    }
+
+    const struct org_kde_kwin_appmenu_manager_interface appMenuManagerImpl = {
+        .create = appMenuManagerCreate,
+        .release = resDestroy,
+    };
+
+    void appMenuManagerBind(wl_client* client, void* data, u32 version, u32 id) {
+        wl_resource* res = wl_resource_create(client, &org_kde_kwin_appmenu_manager_interface, version, id);
+
+        if (!res) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(res, &appMenuManagerImpl, data, nullptr);
     }
 
     void viewportDestroy(wl_client*, wl_resource* res) {
@@ -12558,6 +12654,9 @@ void WaylandImpl::createGlobals() {
     global(*(composer->log), display, &wp_presentation_interface, 2, this, presentationBind);
     global(*(composer->log), display, &xdg_activation_v1_interface, 1, this, activationBind);
     global(*(composer->log), display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
+    if (composer->dbusMenus) {
+        global(*(composer->log), display, &org_kde_kwin_appmenu_manager_interface, 2, this, appMenuManagerBind);
+    }
     global(*(composer->log), display, &wp_viewporter_interface, 1, this, viewporterBind);
     global(*(composer->log), display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
     global(*(composer->log), display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);

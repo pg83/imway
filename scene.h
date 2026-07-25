@@ -11,6 +11,7 @@
 #include <std/str/builder.h>
 
 struct Composer;
+struct DBusMenu;
 struct Icon;
 struct Popup;
 struct Surface;
@@ -170,6 +171,9 @@ struct Surface: SceneNode, GrabNode {
     // weak ring: the toplevel role, nulled when the toplevel (or the xdg
     // surface binding them) goes
     Weak<Toplevel> toplevel;
+    // org_kde_kwin_appmenu association. The protocol object owns the menu;
+    // the surface only exposes the currently attached model to desktop UI.
+    DBusMenu* appMenu = nullptr;
 
     Surface* rootSurface();
     Toplevel* rootToplevel();

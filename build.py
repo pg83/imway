@@ -133,6 +133,7 @@ def protocol_rule(path, kind, out_dir, root=None):
 # protocols the installed wayland-protocols does not carry (wlr extras),
 # vendored under dev/protocols
 local_protocol_paths = [
+    "appmenu",
     "wlr-screencopy-unstable-v1",
     "input-method-unstable-v2",
     "virtual-keyboard-unstable-v1",

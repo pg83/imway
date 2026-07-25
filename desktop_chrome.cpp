@@ -4,6 +4,8 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
+#include "dbus_menu.h"
+#include "dbus_menu_ui.h"
 #include "imgui_wm.h"
 
 #include <time.h>
@@ -56,7 +58,7 @@ namespace {
         draw.PopClipRect();
     }
 
-    void drawTop(const DesktopChromeInfo& info, DesktopChromeResult& result) {
+    void drawTop(Composer& c, const DesktopChromeInfo& info, DesktopChromeResult& result) {
         ImGuiIO& io = ImGui::GetIO();
         ImGuiWindowShadowCallback shadow = io.WindowShadowCallback;
 
@@ -70,6 +72,10 @@ namespace {
 
         if (!info.focusedAppId.empty()) {
             ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
+        }
+
+        if (info.globalMenu && info.globalMenu->ready) {
+            drawDBusMenuBar(c, *info.globalMenu);
         }
 
         time_t now = time(nullptr);
@@ -154,7 +160,7 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     // Sidebars cut the viewport in call order.  Left-first gives the dock the
     // full height and makes the top bar start at its right edge.
     drawDock(c, dock);
-    drawTop(info, result);
+    drawTop(c, info, result);
 
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);

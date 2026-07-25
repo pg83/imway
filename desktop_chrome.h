@@ -3,11 +3,13 @@
 #include <std/str/view.h>
 
 struct Composer;
+struct DBusMenu;
 
 struct DesktopChromeInfo {
     // app_id of the focused toplevel, first element of the bar; empty when
     // nothing is focused — nothing is printed
     stl::StringView focusedAppId;
+    DBusMenu* globalMenu = nullptr;
     stl::StringView layout;
     stl::StringView wifi;
     // < 0 hides the widget: no battery, or the machine runs on mains

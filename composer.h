@@ -14,6 +14,7 @@ namespace stl {
 struct ev_loop;
 
 struct DBusConn;
+struct DBusMenus;
 struct Icon;
 struct IconPool;
 struct IconResolver;
@@ -74,9 +75,13 @@ struct Composer {
     IconPool* iconPool = nullptr;
     IconResolver* iconResolver = nullptr;
     DBusConn* bus = nullptr;
+    DBusMenus* dbusMenus = nullptr;
     Notifier* notifier = nullptr;
     Notifications* notes = nullptr;
     StatusNotifier* statusNotifier = nullptr;
+    // ItemIsMenu tray entries open their exported DBusMenu on primary click.
+    // The Settings desktop page edits this runtime policy.
+    bool trayMenuOnPrimary = true;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
     Desktop* desktop = nullptr;

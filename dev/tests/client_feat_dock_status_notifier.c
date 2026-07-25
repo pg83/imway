@@ -7,6 +7,10 @@
 #include <string.h>
 #include <unistd.h>
 
+#ifndef TEST_ITEM_IS_MENU
+#define TEST_ITEM_IS_MENU FALSE
+#endif
+
 static DBusConnection* conn;
 
 static void dict_string(DBusMessageIter* dict, const char* key, const char* value) {
@@ -81,7 +85,7 @@ static void send_properties(DBusMessage* call) {
     dict_string(&dict, "DesktopEntry", "dock-status-test");
     dict_string(&dict, "Status", "Active");
     dict_path(&dict, "Menu", "/Menu");
-    dict_bool(&dict, "ItemIsMenu", FALSE);
+    dict_bool(&dict, "ItemIsMenu", TEST_ITEM_IS_MENU);
     dict_pixmap(&dict);
     dbus_message_iter_close_container(&it, &dict);
     dbus_connection_send(conn, reply, NULL);

@@ -1125,6 +1125,10 @@ void DesktopImpl::buildUi(Scene& scene) {
     // last frame's truth: the reset happens right before the toplevels draw
     if (Toplevel* ft = scene.focusedToplevel.get()) {
         chromeInfo.focusedAppId = sv(ft->appId);
+
+        if (ft->surface) {
+            chromeInfo.globalMenu = ft->surface->appMenu;
+        }
     }
 
     chromeInfo.layout = StringView(scene.layout);
@@ -1175,6 +1179,7 @@ void DesktopImpl::buildUi(Scene& scene) {
     settings.brightness = output->hasBrightness() && !output->colorState().hdr() ? output->brightness() : -1.f;
     settings.hdrPeakNits = (float)output->colorState().displayPeakNits;
     settings.hasDnd = notifier != nullptr;
+    settings.trayMenuOnPrimary = comp->trayMenuOnPrimary;
 
     if (notifier) {
         settings.dnd = notifier->dnd();
@@ -1247,6 +1252,10 @@ void DesktopImpl::buildUi(Scene& scene) {
 
     if (settings.pointerChanged && comp->input) {
         comp->input->setPointerSpeed(settings.pointerSpeed);
+    }
+
+    if (settings.desktopChanged) {
+        comp->trayMenuOnPrimary = settings.trayMenuOnPrimary;
     }
 
     if (settings.changed()) {
@@ -1329,10 +1338,14 @@ void DesktopImpl::buildUi(Scene& scene) {
         scene.needsFrame = true;
     }
 
-    // the focus truth resets right before the windows rebind it, so
+    // The focus truth resets right before the windows rebind it, so
     // everything drawn earlier in the frame (the chrome, the dock) reads
-    // last frame's value instead of an always-empty mid-frame one
-    scene.focusedToplevel.reset();
+    // last frame's value instead of an always-empty mid-frame one. An ImGui
+    // popup is compositor UI, however: its nav focus must not erase the
+    // Wayland client focus (and, for a global menu, its own data source).
+    if (GImGui->OpenPopupStack.empty()) {
+        scene.focusedToplevel.reset();
+    }
 
     // client frames are half-scene.outW
     const ImVec2 fullPad = ImGui::GetStyle().WindowPadding;
@@ -1740,6 +1753,26 @@ void DesktopImpl::buildUi(Scene& scene) {
         launcherToggle = false;
     }
 
+    // Client surfaces are ordinary ImGui windows and are submitted after the
+    // desktop chrome, so their focus can otherwise place them above menu
+    // popups opened by the top bar or dock. Restore the popup invariant at
+    // the end of window submission: popups are painted and hit-tested above
+    // every client on the following frame.
+    bool imguiPopup = false;
+    Vector<ImGuiWindow*> popupWindows;
+    ImGuiContext& imgui = *GImGui;
+
+    for (ImGuiWindow* window : imgui.Windows) {
+        if (window->Active && (window->Flags & ImGuiWindowFlags_Popup)) {
+            popupWindows.pushBack(window);
+            imguiPopup = true;
+        }
+    }
+
+    for (ImGuiWindow* window : popupWindows) {
+        ImGui::BringWindowToDisplayFront(window);
+    }
+
     // ui owns the pointer when it is over our widgets but not over client
     // content (client windows are imgui windows too, hence the second term)
     scene.ptrCaptured = ImGui::GetIO().WantCaptureMouse && !overClient;
@@ -1846,7 +1879,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
     // the scanout gate reads one scalar instead of the ui internals; the
     // bell flash counts too — a direct-scanout frame would hide it
-    scene.overlayActive = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState || altTabActive || osdMs != 0 || pickArmed || pickShow || scene.bellMs != 0 || toastsActive();
+    scene.overlayActive = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState || altTabActive || imguiPopup || osdMs != 0 || pickArmed || pickShow || scene.bellMs != 0 || toastsActive();
 }
 
 void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
