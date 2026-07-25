@@ -795,7 +795,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         return pressed;
     }
 
-    return consumed || capture && pressed;
+    return consumed || (capture && pressed);
 }
 
 void DesktopImpl::wifiChanged() {

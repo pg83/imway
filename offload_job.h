@@ -3,6 +3,10 @@
 struct Composer;
 struct Listener;
 
+namespace stl {
+    class ObjPool;
+}
+
 // One background job on the composer's offload thread with a loop-side
 // completion: run() executes work(self) on the worker and done fires on
 // the event loop after the pass retires. A run() while a pass is in
@@ -17,4 +21,7 @@ struct OffloadJob {
     virtual void join() = 0;
 
     static OffloadJob* create(Composer& c, void (*work)(void*), void* self, Listener& done);
+    // A shorter-lived owner may hold the job. Its pool stops the event watcher
+    // and joins an in-flight pass before destroying self/done.
+    static OffloadJob* create(Composer& c, stl::ObjPool& owner, void (*work)(void*), void* self, Listener& done);
 };

@@ -8,6 +8,7 @@
 #include "listener.h"
 #include "tex_pool.h"
 #include "device_vk.h"
+#include "offload_job.h"
 #include "render_filter.h"
 
 #include <std/ios/sys.h>
@@ -15,6 +16,7 @@
 #include <std/dbg/verify.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
+#include <std/sys/atomic.h>
 #include <std/mem/obj_pool.h>
 
 #if __has_include(<security/pam_appl.h>)
@@ -71,6 +73,7 @@ namespace {
         context.WantTextInputNextFrame = 0;
     }
 
+#if !__has_include(<security/pam_appl.h>) || defined(IMWAY_FOR_TESTS)
     bool secureEqual(StringView a, StringView b) {
         size_t n = a.length() > b.length() ? a.length() : b.length();
         unsigned diff = (unsigned)(a.length() ^ b.length());
@@ -84,6 +87,7 @@ namespace {
 
         return diff == 0;
     }
+#endif
 
 #if __has_include(<security/pam_appl.h>)
     struct PamInput {
@@ -215,11 +219,22 @@ namespace {
 #endif
 
     bool authenticate(StringView password) {
-        // Temporary development escape hatch, deliberately before either
-        // system authentication backend.
+#ifdef IMWAY_FOR_TESTS
+        if (const char* delay = getenv("IMWAY_TEST_AUTH_DELAY_MS")) {
+            long millis = strtol(delay, nullptr, 10);
+
+            if (millis > 0 && millis <= 5000) {
+                usleep((useconds_t)millis * 1000);
+            }
+        }
+
+        // The headless test build has no account database. Keep its credential
+        // out of the production binary while exercising the complete async UI
+        // and teardown path.
         if (secureEqual(password, StringView("xxx"))) {
             return true;
         }
+#endif
 
         if (password.empty()) {
             return false;
@@ -287,21 +302,29 @@ namespace {
         void createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage, VkImage& image, VkDeviceMemory& memory);
     };
 
-    struct Dialog {
+    struct Dialog: Listener {
+        Composer* comp = nullptr;
+        OffloadJob* authJob = nullptr;
         LockFilter filter;
         Log* log = nullptr;
         char password[256] = "";
+        char authPassword[256] = "";
         bool focusField = true;
         bool failed = false;
+        bool authenticating = false;
+        bool accepted = false;
         bool closeRequested = false;
 
         ~Dialog() noexcept {
             wipe(password, sizeof(password));
+            wipe(authPassword, sizeof(authPassword));
             wipeImGuiPasswordState();
             *log << StringView("imway: lockscreen closed") << endL;
         }
 
+        void onListen(void*) override;
         void draw(Composer& c, bool& open);
+        void beginAuthentication();
     };
 }
 
@@ -746,7 +769,7 @@ void Dialog::draw(Composer& c, bool& open) {
         ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 28.f * scale));
         ImGui::SetNextItemWidth(fieldW);
 
-        if (focusField) {
+        if (focusField && !authenticating) {
             ImGui::SetKeyboardFocusHere();
             focusField = false;
 
@@ -755,31 +778,53 @@ void Dialog::draw(Composer& c, bool& open) {
             }
         }
 
-        bool enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+        bool enter = false;
 
-        if (failed) {
+        if (authenticating) {
+            ImGui::TextUnformatted("checking...");
+        } else {
+            enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+        }
+
+        if (failed && !authenticating) {
             ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));
             ImGui::TextColored(ImVec4(1.f, 0.42f, 0.42f, 1.f), "wrong password");
         }
 
         if (enter) {
-            bool accepted = authenticate(StringView(password));
-
-            wipe(password, sizeof(password));
-            wipeImGuiPasswordState();
-
-            if (accepted) {
-                *(c.log) << StringView("imway: lockscreen accepted") << endL;
-                closeRequested = true;
-            } else {
-                *(c.log) << StringView("imway: lockscreen rejected") << endL;
-                failed = true;
-                focusField = true;
-            }
+            beginAuthentication();
         }
     }
 
     ImGui::End();
+}
+
+void Dialog::beginAuthentication() {
+    memcpy(authPassword, password, sizeof(authPassword));
+    authPassword[sizeof(authPassword) - 1] = 0;
+    wipe(password, sizeof(password));
+    wipeImGuiPasswordState();
+    failed = false;
+    authenticating = true;
+    stdAtomicStore(&accepted, false, MemoryOrder::Relaxed);
+    *log << StringView("imway: lockscreen authenticating") << endL;
+    authJob->run();
+    comp->scene->needsFrame = true;
+}
+
+void Dialog::onListen(void*) {
+    authenticating = false;
+
+    if (stdAtomicFetch(&accepted, MemoryOrder::Acquire)) {
+        *log << StringView("imway: lockscreen accepted") << endL;
+        closeRequested = true;
+    } else {
+        *log << StringView("imway: lockscreen rejected") << endL;
+        failed = true;
+        focusField = true;
+    }
+
+    comp->scene->needsFrame = true;
 }
 
 void openLockOverlay(Composer& c, DialogState** state) {
@@ -789,12 +834,20 @@ void openLockOverlay(Composer& c, DialogState** state) {
 
     ObjPool* pool = ObjPool::fromMemoryRaw();
     DialogState* created = pool->make<DialogState>();
+    Dialog* value = pool->make<Dialog>();
 
     created->pool = pool;
-    created->opaque = pool->make<Dialog>();
-    ((Dialog*)created->opaque)->log = c.log;
+    created->opaque = value;
+    value->comp = &c;
+    value->log = c.log;
+    value->authJob = OffloadJob::create(c, *pool, [](void* self) {
+        auto& dialog = *(Dialog*)self;
+
+        stdAtomicStore(&dialog.accepted, authenticate(StringView(dialog.authPassword)), MemoryOrder::Release);
+        wipe(dialog.authPassword, sizeof(dialog.authPassword));
+    }, value, *value);
     *state = created;
-    auto& filter = ((Dialog*)created->opaque)->filter;
+    auto& filter = value->filter;
 
     c.filters.pushBack((Filter*)&filter);
     c.outputResizedListeners.pushBack((Listener*)&filter);

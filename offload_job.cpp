@@ -5,6 +5,7 @@
 #include "pooled_ev.h"
 
 #include <std/thr/pool.h>
+#include <std/sys/atomic.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/event_fd.h>
 
@@ -20,10 +21,12 @@ namespace {
         Listener* done = nullptr;
         EventFD fd;
         ev_io* io = nullptr;
+        u32 completion = 0;
         bool busy = false;
         bool again = false;
 
-        OffloadJobImpl(Composer& comp, void (*w)(void*), void* s, Listener& listener);
+        OffloadJobImpl(Composer& comp, ObjPool& owner, void (*w)(void*), void* s, Listener& listener);
+        ~OffloadJobImpl() noexcept;
 
         void run() override;
         bool inFlight() const override;
@@ -36,16 +39,20 @@ namespace {
     }
 }
 
-OffloadJobImpl::OffloadJobImpl(Composer& comp, void (*w)(void*), void* s, Listener& listener)
+OffloadJobImpl::OffloadJobImpl(Composer& comp, ObjPool& owner, void (*w)(void*), void* s, Listener& listener)
     : c(&comp)
     , work(w)
     , self(s)
     , done(&listener)
 {
-    io = createEvIo(*comp.pool, comp.loop);
+    io = createEvIo(owner, comp.loop);
     ev_io_init(io, offloadJobCb, fd.fd(), EV_READ);
     io->data = this;
     ev_io_start(comp.loop, io);
+}
+
+OffloadJobImpl::~OffloadJobImpl() noexcept {
+    join();
 }
 
 void OffloadJobImpl::run() {
@@ -58,6 +65,7 @@ void OffloadJobImpl::run() {
     busy = true;
     c->offload->submit([this] {
         work(self);
+        stdAtomicAddAndFetch(&completion, 1, MemoryOrder::Release);
         fd.signal();
     });
 }
@@ -74,6 +82,7 @@ void OffloadJobImpl::join() {
 
 void OffloadJobImpl::retired() {
     fd.drain();
+    (void)stdAtomicFetch(&completion, MemoryOrder::Acquire);
     busy = false;
 
     bool rerun = again;
@@ -89,5 +98,9 @@ void OffloadJobImpl::retired() {
 }
 
 OffloadJob* OffloadJob::create(Composer& c, void (*work)(void*), void* self, Listener& done) {
-    return c.pool->make<OffloadJobImpl>(c, work, self, done);
+    return create(c, *c.pool, work, self, done);
+}
+
+OffloadJob* OffloadJob::create(Composer& c, ObjPool& owner, void (*work)(void*), void* self, Listener& done) {
+    return owner.make<OffloadJobImpl>(c, owner, work, self, done);
 }

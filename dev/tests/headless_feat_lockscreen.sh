@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Super+L opens a live blurred lockscreen; desktop shortcuts and client input
 # stay below its input sink, invalid passwords stay locked, and xxx unlocks.
-# imway-env: IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_FORCE_CURSOR=1 IMWAY_TEST_AUTH_DELAY_MS=1500
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -46,6 +46,12 @@ done
 ctl "type nope"
 sleep 0.4 # let ImGui's trickle queue consume all text before Enter
 ctl "key 28 press"; ctl "key 28 release" # Enter
+await 20 in_log "lockscreen authenticating" ||
+    { echo "authentication did not start"; exit 1; }
+rm -f "$XDG_RUNTIME_DIR/auth-pending.txt"
+ctl "dump $XDG_RUNTIME_DIR/auth-pending.txt"
+await 8 test -e "$XDG_RUNTIME_DIR/auth-pending.txt" ||
+    { echo "event loop blocked during authentication"; exit 1; }
 await 50 in_log "lockscreen rejected" || { echo "invalid password was not checked"; exit 1; }
 await 50 in_log "lockscreen refocused" || { echo "password field did not refocus"; exit 1; }
 screenshot "$XDG_RUNTIME_DIR/rejected.ppm"

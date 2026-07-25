@@ -212,10 +212,10 @@ namespace {
             return 0;
         }
 
-        for (cmsghdr* c = CMSG_FIRSTHDR(&msg); c; c = CMSG_NXTHDR(&msg, c)) {
-            if (c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int))) {
-                memcpy(fd, CMSG_DATA(c), sizeof(int));
-            }
+        cmsghdr* c = CMSG_FIRSTHDR(&msg);
+
+        if (c && c->cmsg_level == SOL_SOCKET && c->cmsg_type == SCM_RIGHTS && c->cmsg_len == CMSG_LEN(sizeof(int))) {
+            memcpy(fd, CMSG_DATA(c), sizeof(int));
         }
 
         return (size_t)count;

@@ -35,6 +35,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <xf86drm.h>
@@ -535,8 +536,15 @@ namespace {
     // listen fd; every client accepted on it is tagged, and the display's
     // global filter hides privileged protocols from tagged clients
     // the node links it into WaylandImpl::sandboxed
+    struct SandboxTag;
+
+    struct SandboxDestroyListener {
+        wl_listener listener{};
+        SandboxTag* tag = nullptr;
+    };
+
     struct SandboxTag: IntrusiveNode {
-        wl_listener destroy{};
+        SandboxDestroyListener destroy;
         WaylandImpl* srv = nullptr;
         wl_client* client = nullptr;
         StringBuilder engine;
@@ -6357,7 +6365,7 @@ namespace {
     }
 
     void sandboxTagDestroyed(wl_listener* l, void*) {
-        auto* tag = (SandboxTag*)((char*)l - offsetof(SandboxTag, destroy));
+        auto* tag = ((SandboxDestroyListener*)l)->tag;
 
         tag->unlink();
         tag->srv->alloc->release(tag);
@@ -6386,8 +6394,9 @@ namespace {
         tag->engine << sv(ctx->engine);
         tag->appId << sv(ctx->appId);
         tag->instanceId << sv(ctx->instanceId);
-        tag->destroy.notify = sandboxTagDestroyed;
-        wl_client_add_destroy_listener(client, &tag->destroy);
+        tag->destroy.tag = tag;
+        tag->destroy.listener.notify = sandboxTagDestroyed;
+        wl_client_add_destroy_listener(client, &tag->destroy.listener);
         ctx->srv->sandboxed.pushBack(tag);
 
         return 0;
@@ -8642,7 +8651,7 @@ namespace {
         xdg_toplevel_icon_manager_v1_send_done(res);
     }
 
-    void presentationFeedback(wl_client* client, wl_resource* res, wl_resource* surfRes, u32 id) {
+    void presentationFeedback(wl_client* client, wl_resource*, wl_resource* surfRes, u32 id) {
         wl_resource* fb = wl_resource_create(client, &wp_presentation_feedback_interface, 1, id);
 
         if (!fb) {
@@ -11416,8 +11425,8 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , socketName(cfg.socketName)
     , keyboard(comp.kb)
     , mainDevice(cfg.mainDevice)
-    , windowIcons(comp.pool)
     , seat(*this)
+    , windowIcons(comp.pool)
 {
     formats.append(cfg.formats, cfg.formatCount);
 

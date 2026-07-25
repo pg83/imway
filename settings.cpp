@@ -291,7 +291,7 @@ void Dialog::draw(Settings& s, bool& open) {
     ImGui::End();
 }
 
-void drawSettings(Composer& c, Settings& s, bool toggle, DialogState** state) {
+void drawSettings(Composer&, Settings& s, bool toggle, DialogState** state) {
     s.volumeChanged = false;
     s.muteChanged = false;
     s.brightnessChanged = false;

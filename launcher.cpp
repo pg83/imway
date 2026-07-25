@@ -249,7 +249,6 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
     IconResolver& texes = *c.iconResolver;
     int screenW = c.scene->outW;
     int screenH = c.scene->outH;
-    float uiScale = ImGui::GetStyle().FontScaleMain;
 
     refilter();
 

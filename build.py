@@ -8,12 +8,29 @@ flags.allow({
     "runs": {"descr": "runs per test scenario", "default": "3"},
     "filter": {"descr": "glob restricting which test scenarios build", "default": ""},
     "allow_flaky": {"descr": "treat flaky tests as a warning, not a failure"},
+    "sanitizers": {"descr": "instrument build (address,undefined or thread)", "default": ""},
 })
 
 
 build.cflags += ["-O2", "-g"]
 build.cxxflags += ["-std=c++23"]
 build.cppflags += ["-DGLFW_INCLUDE_NONE"]
+
+sanitizers = [value for value in str(flags.sanitizers).split(",") if value]
+unknown_sanitizers = set(sanitizers) - {"address", "undefined", "thread"}
+
+if unknown_sanitizers or ("thread" in sanitizers and len(sanitizers) != 1):
+    raise ValueError("-Dsanitizers must be address,undefined or thread")
+
+if sanitizers:
+    sanitizer_flag = "-fsanitize=" + ",".join(sanitizers)
+
+    build.cflags += [sanitizer_flag, "-fno-omit-frame-pointer"]
+    build.ldflags += [sanitizer_flag]
+
+    if "undefined" in sanitizers:
+        build.cflags += ["-fno-sanitize-recover=all"]
+
 build.includes += [
     "$(S)/third_party/imgui",
     "$(B)/protocols",
@@ -42,6 +59,10 @@ pulse = pkg_config("libpulse", required=False)
 pam = pkg_config("pam", required=False)
 
 system = dependency(ldflags=["-lev", "-lstd", "-lcrypt"])
+# Vulkan's canonical `VkFoo info{VK_STRUCTURE_TYPE_FOO}` initialization zeros
+# the remaining aggregate fields by design; Clang otherwise diagnoses every
+# such declaration under -Wextra.
+warning_flags = ["-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers"]
 
 
 protocol_root = pkg_config_variable("wayland-protocols", "pkgdatadir")
@@ -159,7 +180,7 @@ for shader, stage in [
 imgui = library(
     name="imgui",
     srcs=build.glob("$(S)/third_party/imgui/*.cpp"),
-    deps=[vulkan, glfw],
+    deps=[vulkan, glfw, wayland_client],
 )
 
 
@@ -192,7 +213,7 @@ imway_test = program(
     output="$(B)/imway_test",
     srcs=imway_sources,
     cppflags=["-DIMWAY_FOR_TESTS=1"],
-    cflags=["-fno-omit-frame-pointer"],
+    cflags=[*warning_flags, "-fno-omit-frame-pointer"],
     deps=imway_deps,
 )
 

@@ -520,8 +520,7 @@ void RenderContext::finish() {
 }
 
 RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
-    : comp(&comp)
-    , loop(comp.loop)
+    : loop(comp.loop)
     , pool(comp.pool)
     , scene(comp.scene)
     , output(comp.output)
@@ -532,6 +531,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , queueFamily(vk.queueFamily)
     , queue(vk.queue)
     , alloc(comp.alloc)
+    , comp(&comp)
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {

@@ -1347,10 +1347,10 @@ void KmsOutput::remodeset(StringView why) {
 
 KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView connector, StringView modeStr, const OutputConfiguration& outputConfig)
     : c(&c)
-    , pool(c.pool)
-    , loop(c.loop)
     , fd(drmFd)
     , vk(v)
+    , pool(c.pool)
+    , loop(c.loop)
     , gemHandles(c.pool)
     , config(outputConfig)
 {
@@ -2573,7 +2573,7 @@ void KmsOutput::initDdc(StringView connName) {
     StringBuilder busDev;
 
     try {
-        listDir("/sys/class/drm"_sv, [this, connName, &busDev](const TPathInfo& e) {
+        listDir("/sys/class/drm"_sv, [connName, &busDev](const TPathInfo& e) {
             // exact card<N>-<conn> match: endsWith would let "DP-1" hit
             // "eDP-1" or the other GPU's connector and poke a foreign monitor
             StringView item = e.item;

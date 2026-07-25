@@ -348,6 +348,8 @@ PropDef* FakeKms::findProp(u32 id) {
             return &props.mut(i);
         }
     }
+
+    return nullptr;
 }
 
 FakeBlob* FakeKms::findBlob(u32 id) {
