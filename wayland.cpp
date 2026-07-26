@@ -707,16 +707,20 @@ namespace {
         Weak<Surface> surface;
     };
 
-    // refcounted drm syncobj: the resource holds one ref, every commit
+    // Refcounted drm syncobj: the resource holds one ref, every commit
     // holding an acquire/release point holds another; the destructor drops
-    // the kernel handle when the last one goes
-    struct TimelineBox {
-        WaylandImpl* srv = nullptr;
-        FrameResource* lifetime = nullptr;
-        u32 handle = 0;
+    // the kernel handle when the last one goes.
+    struct TimelineBox final: ARC {
+        SmallObjAllocator* alloc;
+        WaylandImpl* srv;
+        u32 handle;
 
+        TimelineBox(SmallObjAllocator* alloc, WaylandImpl* srv, u32 handle);
         ~TimelineBox() noexcept;
+        void operator delete(TimelineBox* timeline, std::destroying_delete_t) noexcept;
     };
+
+    using TimelineRef = IntrusivePtr<TimelineBox>;
 
     struct DmabufUse;
 
@@ -730,17 +734,18 @@ namespace {
     // destructor is therefore the single release point for both implicit and
     // explicit sync.
     struct DmabufUse {
-        WaylandImpl* srv = nullptr;
-        DmabufBuffer* buffer = nullptr;
+        WaylandImpl* srv;
+        DmabufRef buffer;
         wl_resource* res = nullptr;
         // wl_surface.get_release callback (v7), fired together with the
         // wl_buffer.release of this buffer
         wl_resource* releaseCb = nullptr;
         DmabufUseDestroyListener destroy;
-        TimelineBox* acq = nullptr;
-        TimelineBox* rel = nullptr;
+        TimelineRef* acq = nullptr;
+        TimelineRef* rel = nullptr;
         u64 relPoint = 0;
 
+        DmabufUse(WaylandImpl* srv, const DmabufRef& buffer, wl_resource* res);
         ~DmabufUse() noexcept;
     };
 
@@ -860,8 +865,8 @@ namespace {
         wl_resource* syncRes = nullptr;
         wl_resource* colorRes = nullptr;
         wl_resource* representationRes = nullptr;
-        TimelineBox* pendAcqTl = nullptr;
-        TimelineBox* pendRelTl = nullptr;
+        TimelineRef* pendAcqTl = nullptr;
+        TimelineRef* pendRelTl = nullptr;
         u64 pendAcqPt = 0, pendRelPt = 0;
         bool pendColorChanged = false;
         // lazily boxed: most surfaces never see color management, and the
@@ -904,12 +909,12 @@ namespace {
         Vector<u8> pixels;
         ShmContentRef* shm = nullptr;
         Vector<wl_resource*> frames;
-        DmabufBuffer* dmabuf = nullptr;
+        DmabufRef* dmabuf = nullptr;
         wl_resource* dmabufRes = nullptr;
         CachedBufferDestroyListener dmabufDestroy;
         bool dmabufDestroyArmed = false;
-        TimelineBox* acq = nullptr;
-        TimelineBox* rel = nullptr;
+        TimelineRef* acq = nullptr;
+        TimelineRef* rel = nullptr;
         u64 acquirePoint = 0, releasePoint = 0;
         bool scaleSet = false, transformSet = false;
         int scale = 1, transform = WL_OUTPUT_TRANSFORM_NORMAL;
@@ -1336,11 +1341,9 @@ namespace {
 
     struct BufferBox {
         WaylandImpl* srv = nullptr;
-        DmabufBuffer* buf = nullptr;
+        DmabufRef* buffer = nullptr;
 
-        ~BufferBox() noexcept {
-            dmabufUnref(buf);
-        }
+        ~BufferBox() noexcept;
     };
 
     struct SpbBox {
@@ -1978,6 +1981,7 @@ namespace {
     void foreignListToplevelUpdated(WaylandImpl* srv, ToplevelImpl* t);
     void foreignListToplevelGone(WaylandImpl* srv, ToplevelImpl* t);
     void syncSurfaceGone(SurfaceImpl&);
+    DmabufRef* dmabufRefFromRes(wl_resource*);
     DmabufBuffer* dmabufFromRes(wl_resource*);
     struct SpbBox;
     SpbBox* spbFromRes(wl_resource*);
@@ -2021,15 +2025,14 @@ namespace {
         wl_list_remove(&s->pending.bufferDestroy.listener.link);
     }
 
-    void tlRef(TimelineBox* t) {
-        if (t) {
-            frameRef(t->lifetime);
-        }
+    TimelineBox* timelinePtr(TimelineRef* timeline) {
+        return timeline ? timeline->mutPtr() : nullptr;
     }
 
-    void tlUnref(TimelineBox* t) {
-        if (t) {
-            frameUnref(t->lifetime);
+    void releaseTimeline(SmallObjAllocator* alloc, TimelineRef*& timeline) {
+        if (timeline) {
+            alloc->release(timeline);
+            timeline = nullptr;
         }
     }
 
@@ -2046,12 +2049,12 @@ namespace {
             return;
         }
 
-        if (cache.rel) {
-            drmSyncobjTimelineSignal(srv->drmFd, &cache.rel->handle, &cache.releasePoint, 1);
+        if (TimelineBox* rel = timelinePtr(cache.rel)) {
+            drmSyncobjTimelineSignal(srv->drmFd, &rel->handle, &cache.releasePoint, 1);
         }
 
-        tlUnref(cache.acq);
-        tlUnref(cache.rel);
+        releaseTimeline(srv->alloc, cache.acq);
+        releaseTimeline(srv->alloc, cache.rel);
 
         if (cache.dmabufRes) {
             wl_buffer_send_release(cache.dmabufRes);
@@ -2065,11 +2068,10 @@ namespace {
             wl_list_remove(&cache.dmabufDestroy.listener.link);
         }
 
-        dmabufUnref(cache.dmabuf);
+        srv->alloc->release(cache.dmabuf);
         cache.dmabuf = nullptr;
         cache.dmabufRes = nullptr;
         cache.dmabufDestroyArmed = false;
-        cache.acq = cache.rel = nullptr;
     }
 
     void releaseCachedShm(SmallObjAllocator* alloc, CommitCache& cache) {
@@ -2093,7 +2095,7 @@ namespace {
             return;
         }
 
-        FrameResource* frame = s.frame;
+        FrameResourceRef* frame = s.frame;
 
         s.texture.reset();
         s.dmabuf = nullptr;
@@ -2101,7 +2103,7 @@ namespace {
         s.dmabufUse = nullptr;
         s.syncAcquireWait = false;
         s.explicitSync = false;
-        frameUnref(frame);
+        s.srv->alloc->release(frame);
     }
 
     void releaseHeldShm(SurfaceImpl& s) {
@@ -2113,36 +2115,26 @@ namespace {
         s.shm = nullptr;
     }
 
-    DmabufUse* holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf, bool addRef = true) {
+    DmabufUse* holdDmabuf(SurfaceImpl& s, wl_resource* buffer, const DmabufRef& bufferRef) {
         if (!s.dmabuf && s.frame) {
-            FrameResource* frame = s.frame;
+            FrameResourceRef* frame = s.frame;
 
             s.texture.reset();
             s.frame = nullptr;
-            frameUnref(frame);
+            s.srv->alloc->release(frame);
         }
 
         releaseHeldDmabuf(s);
 
-        FrameResource* frame = frameCreate();
-        DmabufUse* use = frame->make<DmabufUse>();
-
-        if (addRef) {
-            dmabufRef(buf);
-        }
-
-        use->srv = s.srv;
-        use->buffer = buf;
-        use->res = buffer;
-        use->destroy.listener.notify = dmabufUseBufferDestroyed;
-        use->destroy.use = use;
+        FrameResourceRef frame = ObjPool::fromMemory();
+        DmabufUse* use = frame->make<DmabufUse>(s.srv, bufferRef, buffer);
 
         if (buffer) {
             wl_resource_add_destroy_listener(buffer, &use->destroy.listener);
         }
 
-        s.frame = frame;
-        s.dmabuf = buf;
+        s.frame = s.srv->alloc->make<FrameResourceRef>(frame);
+        s.dmabuf = use->buffer.mutPtr();
         s.dmabufUse = use;
 
         return use;
@@ -2392,7 +2384,7 @@ namespace {
                     cache.dmabufDestroyArmed = false;
                 }
 
-                DmabufUse* use = holdDmabuf(s, cache.dmabufRes, cache.dmabuf, false);
+                DmabufUse* use = holdDmabuf(s, cache.dmabufRes, *cache.dmabuf);
 
                 // the cached release callback follows the buffer into the
                 // applied use
@@ -2401,13 +2393,14 @@ namespace {
                 use->acq = cache.acq;
                 use->rel = cache.rel;
                 use->relPoint = cache.releasePoint;
-                s.syncAcquireHandle = use->acq ? use->acq->handle : 0;
+                s.syncAcquireHandle = timelinePtr(use->acq) ? timelinePtr(use->acq)->handle : 0;
                 s.syncAcquirePoint = cache.acquirePoint;
                 s.syncAcquireWait = use->acq != nullptr;
                 s.explicitSync = use->acq != nullptr;
                 s.pixels.clear();
                 s.dirty = true;
 
+                s.srv->alloc->release(cache.dmabuf);
                 cache.dmabuf = nullptr;
                 cache.dmabufRes = nullptr;
                 cache.acq = cache.rel = nullptr;
@@ -2515,7 +2508,9 @@ namespace {
 
         FifoEntry* e = (FifoEntry*)s.fifo->queue.mutFront();
 
-        return e->waitAcquire && e->cache.acq && !acquireMaterialized(s.srv, e->cache.acq->handle, e->cache.acquirePoint);
+        TimelineBox* acquire = timelinePtr(e->cache.acq);
+
+        return e->waitAcquire && acquire && !acquireMaterialized(s.srv, acquire->handle, e->cache.acquirePoint);
     }
 
     void drainFifo(SurfaceImpl& s, bool presented) {
@@ -2586,7 +2581,7 @@ namespace {
             return false;
         }
 
-        if (s.pendAcqTl == s.pendRelTl && s.pendAcqPt >= s.pendRelPt) {
+        if (timelinePtr(s.pendAcqTl) == timelinePtr(s.pendRelTl) && s.pendAcqPt >= s.pendRelPt) {
             wl_resource_post_error(s.syncRes, WP_LINUX_DRM_SYNCOBJ_SURFACE_V1_ERROR_CONFLICTING_POINTS, "release point is not after the acquire point");
 
             return false;
@@ -2605,7 +2600,7 @@ namespace {
         s.dmabufUse->acq = s.pendAcqTl;
         s.dmabufUse->rel = s.pendRelTl;
         s.dmabufUse->relPoint = s.pendRelPt;
-        s.syncAcquireHandle = s.dmabufUse->acq->handle;
+        s.syncAcquireHandle = timelinePtr(s.dmabufUse->acq)->handle;
         s.syncAcquirePoint = s.pendAcqPt;
         s.syncAcquireWait = true;
         s.explicitSync = true;
@@ -2653,7 +2648,8 @@ namespace {
         // registration to wake the loop when the fence shows up. No
         // timeout — a client that never signals just never presents this
         // surface (spec-correct, mirrors wlroots)
-        bool acquireWait = !cache && s.srv->syncEventfdOk && s.pendAcqTl && s.pending.newlyAttached && s.pending.buffer && !acquireMaterialized(s.srv, s.pendAcqTl->handle, s.pendAcqPt) && drmSyncobjEventfd(s.srv->drmFd, s.pendAcqTl->handle, s.pendAcqPt, s.srv->syncEvFd, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) == 0;
+        TimelineBox* pendingAcquire = timelinePtr(s.pendAcqTl);
+        bool acquireWait = !cache && s.srv->syncEventfdOk && pendingAcquire && s.pending.newlyAttached && s.pending.buffer && !acquireMaterialized(s.srv, pendingAcquire->handle, s.pendAcqPt) && drmSyncobjEventfd(s.srv->drmFd, pendingAcquire->handle, s.pendAcqPt, s.srv->syncEvFd, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE) == 0;
 
         if (!cache && (acquireWait || (s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) || (timeSet && timeNs > nowNs()))))) {
             if (!s.fifo) {
@@ -2820,15 +2816,16 @@ namespace {
                     releaseHeldDmabuf(s);
                     releaseHeldShm(s);
                 }
-            } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
+            } else if (DmabufRef* dmabuf = dmabufRefFromRes(s.pending.buffer)) {
+                DmabufBuffer* db = dmabuf->mutPtr();
+
                 if (cache) {
                     // the cached buffer is released later; the release
                     // callback rides with it
                     dropReleaseCb(cache->releaseCb);
                     cache->releaseCb = s.pending.releaseCb;
                     s.pending.releaseCb = nullptr;
-                    dmabufRef(db);
-                    cache->dmabuf = db;
+                    cache->dmabuf = s.srv->alloc->make<DmabufRef>(*dmabuf);
                     cache->dmabufRes = s.pending.buffer;
                     cache->dmabufDestroy.listener.notify = cachedDmabufDestroyed;
                     cache->dmabufDestroy.cache = cache;
@@ -2849,7 +2846,7 @@ namespace {
                     }
                 } else {
                     releaseHeldShm(s);
-                    DmabufUse* use = holdDmabuf(s, s.pending.buffer, db);
+                    DmabufUse* use = holdDmabuf(s, s.pending.buffer, *dmabuf);
 
                     // the dmabuf releases when the frame that samples it
                     // retires; the release callback fires with it
@@ -2938,7 +2935,7 @@ namespace {
             targetRepresentation = s.pendRepresentation;
         }
 
-        DmabufBuffer* targetDmabuf = cache && cache->valid ? cache->dmabuf : s.dmabuf;
+        DmabufBuffer* targetDmabuf = cache && cache->valid ? (cache->dmabuf ? cache->dmabuf->mutPtr() : nullptr) : s.dmabuf;
         bool targetYuv = targetDmabuf && (targetDmabuf->format == kFourccNv12 || targetDmabuf->format == kFourccP010);
         bool incompatibleRepresentation = targetYuv ? targetRepresentation.coefficients == WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY : targetRepresentation.chromaLocation || (targetRepresentation.coefficients && targetRepresentation.coefficients != WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY);
 
@@ -3234,11 +3231,11 @@ namespace {
         }
 
         if (s->frame) {
-            FrameResource* frame = s->frame;
+            FrameResourceRef* frame = s->frame;
 
             s->texture.reset();
             s->frame = nullptr;
-            frameUnref(frame);
+            srv->alloc->release(frame);
         }
 
         if (s->pendColor) {
@@ -8975,7 +8972,10 @@ namespace {
 
     // ---- linux-drm-syncobj ----
     void syncTimelineResourceDestroyed(wl_resource* res) {
-        tlUnref((TimelineBox*)wl_resource_get_user_data(res));
+        auto* timeline = (TimelineRef*)wl_resource_get_user_data(res);
+        SmallObjAllocator* alloc = timeline->mutPtr()->alloc;
+
+        alloc->release(timeline);
     }
 
     const struct wp_linux_drm_syncobj_timeline_v1_interface syncTimelineImpl = {.destroy = relPointerDestroy};
@@ -8988,9 +8988,8 @@ namespace {
         }
 
         s->syncRes = nullptr;
-        tlUnref(s->pendAcqTl);
-        tlUnref(s->pendRelTl);
-        s->pendAcqTl = s->pendRelTl = nullptr;
+        releaseTimeline(s->srv->alloc, s->pendAcqTl);
+        releaseTimeline(s->srv->alloc, s->pendRelTl);
     }
 
     void syncSurfaceSetAcquirePoint(wl_client*, wl_resource* res, wl_resource* tlRes, u32 hi, u32 lo) {
@@ -9002,11 +9001,10 @@ namespace {
             return;
         }
 
-        auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
+        auto* timeline = (TimelineRef*)wl_resource_get_user_data(tlRes);
 
-        tlRef(t);
-        tlUnref(s->pendAcqTl);
-        s->pendAcqTl = t;
+        releaseTimeline(s->srv->alloc, s->pendAcqTl);
+        s->pendAcqTl = s->srv->alloc->make<TimelineRef>(*timeline);
         s->pendAcqPt = ((u64)hi << 32) | lo;
     }
 
@@ -9019,11 +9017,10 @@ namespace {
             return;
         }
 
-        auto* t = (TimelineBox*)wl_resource_get_user_data(tlRes);
+        auto* timeline = (TimelineRef*)wl_resource_get_user_data(tlRes);
 
-        tlRef(t);
-        tlUnref(s->pendRelTl);
-        s->pendRelTl = t;
+        releaseTimeline(s->srv->alloc, s->pendRelTl);
+        s->pendRelTl = s->srv->alloc->make<TimelineRef>(*timeline);
         s->pendRelPt = ((u64)hi << 32) | lo;
     }
 
@@ -9076,13 +9073,10 @@ namespace {
             return;
         }
 
-        FrameResource* lifetime = frameCreate();
-        TimelineBox* t = lifetime->make<TimelineBox>();
+        TimelineRef timeline = srv->alloc->make<TimelineBox>(srv->alloc, srv, handle);
+        auto* holder = srv->alloc->make<TimelineRef>(timeline);
 
-        t->srv = srv;
-        t->lifetime = lifetime;
-        t->handle = handle;
-        wl_resource_set_implementation(r, &syncTimelineImpl, t, syncTimelineResourceDestroyed);
+        wl_resource_set_implementation(r, &syncTimelineImpl, holder, syncTimelineResourceDestroyed);
     }
 
     const struct wp_linux_drm_syncobj_manager_v1_interface syncManagerImpl = {
@@ -9108,9 +9102,8 @@ namespace {
             wl_resource_set_user_data(s.syncRes, nullptr);
         }
 
-        tlUnref(s.pendAcqTl);
-        tlUnref(s.pendRelTl);
-        s.pendAcqTl = s.pendRelTl = nullptr;
+        releaseTimeline(s.srv->alloc, s.pendAcqTl);
+        releaseTimeline(s.srv->alloc, s.pendRelTl);
     }
 
     void dpmsTimerCb(struct ev_loop* l, ev_timer* w, int) {
@@ -9597,12 +9590,18 @@ namespace {
         wl_resource_set_implementation(res, &spbManagerImpl, data, nullptr);
     }
 
-    DmabufBuffer* dmabufFromRes(wl_resource* res) {
+    DmabufRef* dmabufRefFromRes(wl_resource* res) {
         if (!wl_resource_instance_of(res, &wl_buffer_interface, &dmabufWlBufferImpl)) {
             return nullptr;
         }
 
-        return ((BufferBox*)wl_resource_get_user_data(res))->buf;
+        return ((BufferBox*)wl_resource_get_user_data(res))->buffer;
+    }
+
+    DmabufBuffer* dmabufFromRes(wl_resource* res) {
+        DmabufRef* dmabuf = dmabufRefFromRes(res);
+
+        return dmabuf ? dmabuf->mutPtr() : nullptr;
     }
 
     void dmabufBufferResourceDestroyed(wl_resource* res) {
@@ -9670,7 +9669,7 @@ namespace {
             return;
         }
 
-        DmabufBuffer& b = *p->pending->buf;
+        DmabufBuffer& b = *p->pending->buffer->mutPtr();
 
         if (b.fds[planeIdx] >= 0) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_PLANE_SET, "plane %u already set", planeIdx);
@@ -9730,7 +9729,7 @@ namespace {
             return nullptr;
         }
 
-        DmabufBuffer& b = *p->pending->buf;
+        DmabufBuffer& b = *p->pending->buffer->mutPtr();
 
         if (b.nplanes == 0 || b.fds[0] < 0) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE, "plane 0 missing");
@@ -9810,9 +9809,9 @@ namespace {
         BufferBox* box = p->pending;
 
         p->pending = nullptr;
-        box->buf->width = width;
-        box->buf->height = height;
-        box->buf->format = format;
+        box->buffer->mutPtr()->width = width;
+        box->buffer->mutPtr()->height = height;
+        box->buffer->mutPtr()->format = format;
         wl_resource_set_implementation(bres, &dmabufWlBufferImpl, box, dmabufBufferResourceDestroyed);
 
         return bres;
@@ -9854,10 +9853,11 @@ namespace {
         p->srv = srv;
         p->pending = srv->alloc->make<BufferBox>();
         p->pending->srv = srv;
-        FrameResource* lifetime = frameCreate();
+        FrameResourceRef lifetime = ObjPool::fromMemory();
+        DmabufBuffer* buffer = lifetime->make<DmabufBuffer>();
 
-        p->pending->buf = lifetime->make<DmabufBuffer>();
-        p->pending->buf->lifetime = lifetime;
+        buffer->lifetime = lifetime.mutPtr();
+        p->pending->buffer = srv->alloc->make<DmabufRef>(buffer);
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
 
@@ -10929,19 +10929,39 @@ void WaylandImpl::activity() {
     }
 }
 
+TimelineBox::TimelineBox(SmallObjAllocator* a, WaylandImpl* s, u32 h)
+    : alloc(a)
+    , srv(s)
+    , handle(h)
+{
+}
+
 TimelineBox::~TimelineBox() noexcept {
     if (handle) {
         drmSyncobjDestroy(srv->drmFd, handle);
     }
 }
 
+void TimelineBox::operator delete(TimelineBox* timeline, std::destroying_delete_t) noexcept {
+    timeline->alloc->release(timeline);
+}
+
+DmabufUse::DmabufUse(WaylandImpl* s, const DmabufRef& b, wl_resource* resource)
+    : srv(s)
+    , buffer(b)
+    , res(resource)
+{
+    destroy.listener.notify = dmabufUseBufferDestroyed;
+    destroy.use = this;
+}
+
 DmabufUse::~DmabufUse() noexcept {
-    if (rel) {
-        drmSyncobjTimelineSignal(srv->drmFd, &rel->handle, &relPoint, 1);
+    if (TimelineBox* release = timelinePtr(rel)) {
+        drmSyncobjTimelineSignal(srv->drmFd, &release->handle, &relPoint, 1);
     }
 
-    tlUnref(acq);
-    tlUnref(rel);
+    releaseTimeline(srv->alloc, acq);
+    releaseTimeline(srv->alloc, rel);
 
     if (res) {
         wl_buffer_send_release(res);
@@ -10954,8 +10974,12 @@ DmabufUse::~DmabufUse() noexcept {
         wl_resource_destroy(releaseCb);
         releaseCb = nullptr;
     }
+}
 
-    dmabufUnref(buffer);
+BufferBox::~BufferBox() noexcept {
+    if (buffer) {
+        srv->alloc->release(buffer);
+    }
 }
 
 bool WaylandImpl::idleBlocked() {

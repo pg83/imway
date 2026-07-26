@@ -52,6 +52,7 @@ namespace {
 
         ObjPool* netGen = nullptr;
         Vector<WifiNetwork*> nets; // the ordered, ui-facing list
+        Vector<DBusPendingCall*> pending;
 
         bool refreshInFlight = false;
         bool refreshAgain = false;
@@ -75,6 +76,9 @@ namespace {
         void cancelPassphrase() override;
 
         void refresh();
+        bool call(DBusMessage* msg, DBusPendingCallNotifyFunction cb);
+        DBusMessage* takeReply(DBusPendingCall* call);
+        void finishRefresh();
         void callVoid(StringView path, StringView iface, StringView method);
         void notify();
         NetInfo* infoByPath(StringView path);
@@ -130,6 +134,21 @@ IwdWifi::IwdWifi(Composer& comp, DBusConnection* c)
 }
 
 IwdWifi::~IwdWifi() noexcept {
+    dbus_connection_remove_filter(conn, onSignal, this);
+    dbus_connection_unregister_object_path(conn, kAgentPath);
+
+    for (DBusPendingCall* call : pending) {
+        dbus_pending_call_cancel(call);
+        dbus_pending_call_unref(call);
+    }
+
+    pending.clear();
+
+    if (passMsg) {
+        dbus_message_unref(passMsg);
+        passMsg = nullptr;
+    }
+
     delete infoGen;
     delete netGen;
 }
@@ -174,6 +193,57 @@ void IwdWifi::notify() {
     c->scene->needsFrame = true;
 }
 
+bool IwdWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb) {
+    DBusPendingCall* call = nullptr;
+
+    if (!dbus_connection_send_with_reply(conn, msg, &call, 5000) || !call) {
+        dbus_message_unref(msg);
+
+        return false;
+    }
+
+    // Install ownership first: an already-completed call may notify from
+    // dbus_pending_call_set_notify itself.
+    pending.pushBack(call);
+
+    if (!dbus_pending_call_set_notify(call, cb, this, nullptr)) {
+        removeOne(pending, call);
+        dbus_pending_call_cancel(call);
+        dbus_pending_call_unref(call);
+        dbus_message_unref(msg);
+
+        return false;
+    }
+
+    dbus_message_unref(msg);
+
+    return true;
+}
+
+DBusMessage* IwdWifi::takeReply(DBusPendingCall* call) {
+    removeOne(pending, call);
+    DBusMessage* reply = dbus_pending_call_steal_reply(call);
+
+    dbus_pending_call_unref(call);
+
+    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        dbus_message_unref(reply);
+
+        return nullptr;
+    }
+
+    return reply;
+}
+
+void IwdWifi::finishRefresh() {
+    refreshInFlight = false;
+
+    if (refreshAgain) {
+        refreshAgain = false;
+        refresh();
+    }
+}
+
 // GetManagedObjects, async; the reply rebuilds infos + station, then chains
 // GetOrderedNetworks for order and strength
 void IwdWifi::refresh() {
@@ -184,17 +254,12 @@ void IwdWifi::refresh() {
     }
 
     DBusMessage* msg = dbus_message_new_method_call(kService, "/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects");
-    DBusPendingCall* pc = nullptr;
-
-    if (!dbus_connection_send_with_reply(conn, msg, &pc, 5000) || !pc) {
-        dbus_message_unref(msg);
-
-        return;
-    }
 
     refreshInFlight = true;
-    dbus_pending_call_set_notify(pc, onManaged, this, nullptr);
-    dbus_message_unref(msg);
+
+    if (!call(msg, onManaged)) {
+        finishRefresh();
+    }
 }
 
 void IwdWifi::managedReply(DBusMessage* reply) {
@@ -334,23 +399,21 @@ void IwdWifi::managedReply(DBusMessage* reply) {
         // next ordered reply swaps the generation
         nets.clear();
         notify();
+        finishRefresh();
 
         return;
     }
 
     // chain GetOrderedNetworks for the ui list
-    auto& call = sb();
+    auto& path = sb();
 
-    call << sv(stationPath);
+    path << sv(stationPath);
 
-    DBusMessage* msg = dbus_message_new_method_call(kService, Buffer(sv(call)).cStr(), "net.connman.iwd.Station", "GetOrderedNetworks");
-    DBusPendingCall* pc = nullptr;
+    DBusMessage* msg = dbus_message_new_method_call(kService, Buffer(sv(path)).cStr(), "net.connman.iwd.Station", "GetOrderedNetworks");
 
-    if (dbus_connection_send_with_reply(conn, msg, &pc, 5000) && pc) {
-        dbus_pending_call_set_notify(pc, onOrdered, this, nullptr);
+    if (!call(msg, onOrdered)) {
+        orderedReply(nullptr);
     }
-
-    dbus_message_unref(msg);
 }
 
 void IwdWifi::orderedReply(DBusMessage* reply) {
@@ -405,11 +468,7 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
     }
 
     notify();
-
-    if (refreshAgain) {
-        refreshAgain = false;
-        refresh();
-    }
+    finishRefresh();
 }
 
 void IwdWifi::callVoid(StringView path, StringView iface, StringView method) {
@@ -533,29 +592,24 @@ void IwdWifi::agentCall(DBusMessage* msg) {
 namespace {
     void onManaged(DBusPendingCall* pc, void* data) {
         auto* w = (IwdWifi*)data;
-        DBusMessage* reply = dbus_pending_call_steal_reply(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
-        w->refreshInFlight = false;
         w->managedReply(reply);
 
         if (reply) {
             dbus_message_unref(reply);
         }
-
-        dbus_pending_call_unref(pc);
     }
 
     void onOrdered(DBusPendingCall* pc, void* data) {
         auto* w = (IwdWifi*)data;
-        DBusMessage* reply = dbus_pending_call_steal_reply(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->orderedReply(reply);
 
         if (reply) {
             dbus_message_unref(reply);
         }
-
-        dbus_pending_call_unref(pc);
     }
 
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data) {

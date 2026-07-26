@@ -75,13 +75,12 @@ namespace {
 
         Vector<WifiNetwork*> nets; // committed, ui-facing
         Vector<Known*> known;      // committed
+        Vector<DBusPendingCall*> pending;
 
         // refresh epochs: everything a sequence builds — networks, known
         // connections, reply contexts, path scratch — lives in `building`;
         // the commit swaps it into `committed`, whose objects back nets and
-        // known between refreshes, and the old generation dies whole. A
-        // teardown mid-flight just deletes both arenas: in-flight reply
-        // contexts die with their epoch, no tracking needed
+        // known between refreshes, and the old generation dies whole
         ObjPool* building = nullptr;
         ObjPool* committed = nullptr;
 
@@ -124,6 +123,7 @@ namespace {
 
         // async plumbing
         bool call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data);
+        DBusMessage* takeReply(DBusPendingCall* call);
         bool getProp(StringView path, const char* iface, const char* prop, DBusPendingCallNotifyFunction cb, void* data);
         bool getAll(StringView path, const char* iface, DBusPendingCallNotifyFunction cb, void* data);
 
@@ -240,6 +240,14 @@ NmWifi::NmWifi(Composer& comp, DBusConnection* c)
 }
 
 NmWifi::~NmWifi() noexcept {
+    dbus_connection_remove_filter(conn, onSignal, this);
+
+    for (DBusPendingCall* call : pending) {
+        dbus_pending_call_cancel(call);
+        dbus_pending_call_unref(call);
+    }
+
+    pending.clear();
     delete building;
     delete committed;
 }
@@ -313,10 +321,38 @@ bool NmWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data
         return false;
     }
 
-    dbus_pending_call_set_notify(pc, cb, data, nullptr);
+    // Track the initial ref before installing the callback: libdbus may
+    // invoke a notify immediately when the reply is already complete.
+    pending.pushBack(pc);
+
+    if (!dbus_pending_call_set_notify(pc, cb, data, nullptr)) {
+        removeOne(pending, pc);
+        dbus_pending_call_cancel(pc);
+        dbus_pending_call_unref(pc);
+        dbus_message_unref(msg);
+
+        return false;
+    }
+
     dbus_message_unref(msg);
 
     return true;
+}
+
+DBusMessage* NmWifi::takeReply(DBusPendingCall* call) {
+    removeOne(pending, call);
+    DBusMessage* reply = dbus_pending_call_steal_reply(call);
+
+    dbus_pending_call_unref(call);
+
+    // An error reply is not a value reply; treat it as empty.
+    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        dbus_message_unref(reply);
+
+        return nullptr;
+    }
+
+    return reply;
 }
 
 bool NmWifi::getProp(StringView path, const char* iface, const char* prop, DBusPendingCallNotifyFunction cb, void* data) {
@@ -876,24 +912,9 @@ void NmWifi::cancelPassphrase() {
 }
 
 namespace {
-    DBusMessage* steal(DBusPendingCall* pc) {
-        DBusMessage* reply = dbus_pending_call_steal_reply(pc);
-
-        dbus_pending_call_unref(pc);
-
-        // an error reply is not a value reply; treat as empty
-        if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
-            dbus_message_unref(reply);
-
-            return nullptr;
-        }
-
-        return reply;
-    }
-
     void devicesCb(DBusPendingCall* pc, void* data) {
         auto* w = (NmWifi*)data;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->devicesReply(reply);
 
@@ -905,7 +926,7 @@ namespace {
     void deviceCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
         NmWifi* w = cx->w;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->deviceReply(cx, reply);
 
@@ -916,7 +937,7 @@ namespace {
 
     void connectionsCb(DBusPendingCall* pc, void* data) {
         auto* w = (NmWifi*)data;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->connectionsReply(reply);
 
@@ -928,7 +949,7 @@ namespace {
     void connectionCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
         NmWifi* w = cx->w;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->connectionReply(cx, reply);
 
@@ -939,7 +960,7 @@ namespace {
 
     void wirelessCb(DBusPendingCall* pc, void* data) {
         auto* w = (NmWifi*)data;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->wirelessReply(reply);
 
@@ -951,7 +972,7 @@ namespace {
     void apCb(DBusPendingCall* pc, void* data) {
         auto* cx = (Ctx*)data;
         NmWifi* w = cx->w;
-        DBusMessage* reply = steal(pc);
+        DBusMessage* reply = w->takeReply(pc);
 
         w->apReply(cx, reply);
 

@@ -113,7 +113,7 @@ namespace {
         bool screenshotPending() const override;
         bool presentNeedsPixels() const override;
         void present(const void*) override;
-        bool directScanout(DmabufBuffer*, FrameResource*) override;
+        bool directScanout(DmabufBuffer*, const FrameResourceRef&) override;
         void dropScanoutFb(DmabufBuffer*) override;
         void scanoutFormatsImpl(stl::VisitorFace&&) override;
         void applyDisplaySettings();
@@ -474,7 +474,7 @@ Device* DeviceHeadless::create(Composer& c) {
     return c.pool->make<HeadlessDevice>(c);
 }
 
-bool HeadlessOutput::directScanout(DmabufBuffer*, FrameResource*) {
+bool HeadlessOutput::directScanout(DmabufBuffer*, const FrameResourceRef&) {
     return false;
 }
 

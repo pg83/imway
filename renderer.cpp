@@ -363,7 +363,7 @@ namespace {
         VkCommandBuffer cmd = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         bool frameInFlight = false;
-        Vector<FrameResource*> inFlightFrames;
+        Vector<FrameResourceRef*> inFlightFrames;
         Vector<ShmContentRef*> inFlightShm;
         VkSampler sampler = VK_NULL_HANDLE;
 
@@ -1021,8 +1021,8 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         }
     }
 
-    for (FrameResource* frame : inFlightFrames) {
-        frameUnref(frame);
+    for (FrameResourceRef* frame : inFlightFrames) {
+        alloc->release(frame);
     }
 
     inFlightFrames.clear();
@@ -2286,7 +2286,7 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
     }
 
     if (!tex) {
-        FrameResource* frame = frameCreate();
+        FrameResourceRef frame = ObjPool::fromMemory();
 
         tex = frame->make<SurfaceTexture>();
         tex->weak.anchor(tex);
@@ -2294,8 +2294,8 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
         tex->w = s.width;
         tex->h = s.height;
         tex->xrgb = xrgb;
-        tex->lifetime = frame;
-        s.frame = frame;
+        tex->lifetime = frame.mutPtr();
+        s.frame = alloc->make<FrameResourceRef>(frame);
 
         try {
             createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
@@ -2305,8 +2305,8 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
             }
         } catch (...) {
             *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
+            alloc->release(s.frame);
             s.frame = nullptr;
-            frameUnref(frame);
             faultSurfaceOwner(s);
 
             return nullptr;
@@ -2325,8 +2325,8 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
 
         if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
             destroyTexture(tex);
+            alloc->release(s.frame);
             s.frame = nullptr;
-            frameUnref(frame);
 
             return nullptr;
         }
@@ -2337,8 +2337,8 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
             // only genuine device OOM reaches here; drop the half-built texture
             // and leave the surface untextured (drawing skips it) this frame
             destroyTexture(tex);
+            alloc->release(s.frame);
             s.frame = nullptr;
-            frameUnref(frame);
 
             return nullptr;
         }
@@ -2481,7 +2481,7 @@ bool RendererImpl::cacheContainsTex(const SurfaceTexture* tex) const {
 
 void RendererImpl::releaseSurfaceTexture(Surface& s) {
     SurfaceTexture* tex = s.texture.get();
-    FrameResource* frame = s.frame;
+    FrameResourceRef* frame = s.frame;
 
     s.texture.reset();
 
@@ -2494,7 +2494,7 @@ void RendererImpl::releaseSurfaceTexture(Surface& s) {
     }
 
     s.frame = nullptr;
-    frameUnref(frame);
+    alloc->release(frame);
 }
 
 // a fullscreen client whose dmabuf can go straight to the plane, with no
@@ -2542,7 +2542,7 @@ Surface* RendererImpl::scanoutCandidate() {
 
     Surface* s = fs->surface.get();
 
-    if (!s || !s->dmabuf || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 || s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst || s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 || s->representation.alphaMode != 0 || s->representation.coefficients || s->representation.chromaLocation) {
+    if (!s || !s->dmabuf || !s->frame || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 || s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst || s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 || s->representation.alphaMode != 0 || s->representation.coefficients || s->representation.chromaLocation) {
         return nullptr;
     }
 
@@ -4000,10 +4000,19 @@ bool RendererImpl::renderFrame(int scanIdx) {
         tex->firstUse = false;
     }
 
+    auto frameHeld = [&](FrameResource* frame) {
+        for (FrameResourceRef* held : inFlightFrames) {
+            if (held->ptr() == frame) {
+                return true;
+            }
+        }
+
+        return false;
+    };
+
     for (FrameResource* frame : uploadedFrames) {
-        if (!contains(inFlightFrames, frame)) {
-            frameRef(frame);
-            inFlightFrames.pushBack(frame);
+        if (!frameHeld(frame)) {
+            inFlightFrames.pushBack(alloc->make<FrameResourceRef>(frame));
         }
     }
 
@@ -4017,11 +4026,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
     }
 
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
-        FrameResource* frame = s.frame;
+        FrameResource* frame = s.frame ? s.frame->mutPtr() : nullptr;
 
-        if (surfaceVisible(&s) && frame && !contains(inFlightFrames, frame)) {
-            frameRef(frame);
-            inFlightFrames.pushBack(frame);
+        if (surfaceVisible(&s) && frame && !frameHeld(frame)) {
+            inFlightFrames.pushBack(alloc->make<FrameResourceRef>(frame));
         }
     });
 
@@ -4498,7 +4506,7 @@ void RendererImpl::frameNow() {
 
     output->setTearingHint(tearing);
 
-    bool direct = comp->settings->directScanout() && cand && output->directScanout(cand->dmabuf, cand->frame);
+    bool direct = comp->settings->directScanout() && cand && output->directScanout(cand->dmabuf, *cand->frame);
 
     lastFrameDirect = direct;
 

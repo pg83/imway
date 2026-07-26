@@ -105,7 +105,7 @@ struct Output {
     // plane, skipping composition; false when it cannot be imported or
     // committed (wrong format, busy). dropScanoutFb releases the imported
     // drm fb when the client buffer dies
-    virtual bool directScanout(DmabufBuffer* buf, FrameResource* frame) = 0;
+    virtual bool directScanout(DmabufBuffer* buf, const FrameResourceRef& frame) = 0;
     virtual void dropScanoutFb(DmabufBuffer* buf) = 0;
 
     // wp-tearing-control: allow an async (immediate) page flip for the next

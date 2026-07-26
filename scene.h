@@ -91,6 +91,17 @@ struct DmabufBuffer {
     ~DmabufBuffer() noexcept;
 };
 
+class DmabufRef {
+    DmabufBuffer* buffer_;
+    FrameResourceRef lifetime_;
+
+public:
+    explicit DmabufRef(DmabufBuffer* buffer);
+
+    const DmabufBuffer* ptr() const noexcept;
+    DmabufBuffer* mutPtr() noexcept;
+};
+
 struct ColorRepresentation {
     // color-representation-v1 wire values; zero coefficients/chroma means
     // that the client left the corresponding metadata unset.
@@ -99,18 +110,6 @@ struct ColorRepresentation {
     u32 range = 0;
     u32 chromaLocation = 0;
 };
-
-inline void dmabufRef(DmabufBuffer* b) noexcept {
-    if (b) {
-        frameRef(b->lifetime);
-    }
-}
-
-inline void dmabufUnref(DmabufBuffer* b) noexcept {
-    if (b) {
-        frameUnref(b->lifetime);
-    }
-}
 
 // tagged list memberships: one entity can sit in several intrusive lists
 // at once, the tag names which link to follow
@@ -136,7 +135,7 @@ struct Surface: SceneNode, GrabNode {
     stl::Vector<u8> pixels;
     DmabufBuffer* dmabuf = nullptr;
     ShmContentRef* shm = nullptr;
-    FrameResource* frame = nullptr;
+    FrameResourceRef* frame = nullptr;
 
     // weak: the renderer invalidates the texture's anchor on destruction,
     // so a surface can never sample a freed texture

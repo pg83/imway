@@ -14,6 +14,20 @@ DmabufBuffer::~DmabufBuffer() noexcept {
     }
 }
 
+DmabufRef::DmabufRef(DmabufBuffer* buffer)
+    : buffer_(buffer)
+    , lifetime_(buffer->lifetime)
+{
+}
+
+const DmabufBuffer* DmabufRef::ptr() const noexcept {
+    return buffer_;
+}
+
+DmabufBuffer* DmabufRef::mutPtr() noexcept {
+    return buffer_;
+}
+
 int Surface::viewW() const {
     bool swapped = bufferTransform == 1 || bufferTransform == 3 || bufferTransform == 5 || bufferTransform == 7;
 

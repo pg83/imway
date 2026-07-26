@@ -16,6 +16,7 @@
 #include "offload_job.h"
 #include "kms_intercept.h"
 #include "frame_listener.h"
+#include "small_obj_allocator.h"
 
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
@@ -604,8 +605,8 @@ namespace {
 
         DmabufBuffer* queuedDirect = nullptr;
         DmabufBuffer* currentDirect = nullptr;
-        FrameResource* queuedDirectFrame = nullptr;
-        FrameResource* currentDirectFrame = nullptr;
+        FrameResourceRef* queuedDirectFrame = nullptr;
+        FrameResourceRef* currentDirectFrame = nullptr;
         bool asyncFlipCap = false; // DRM_CAP_ASYNC_PAGE_FLIP
         bool tearingAllowed = false;
         long ddcMax = 0;
@@ -725,7 +726,7 @@ namespace {
         void screenshotPrepared();
         void retireScreenshot();
         bool presentNeedsPixels() const override;
-        bool directScanout(DmabufBuffer*, FrameResource*) override;
+        bool directScanout(DmabufBuffer*, const FrameResourceRef&) override;
         void dropScanoutFb(DmabufBuffer*) override;
 
         void setTearingHint(bool allow) override {
@@ -736,7 +737,7 @@ namespace {
         u32 importDirectFb(DmabufBuffer* buf);
         void gemHandleRef(u32 handle);
         void gemHandleUnref(u32 handle);
-        void releaseDirectUse(DmabufBuffer*& buf, FrameResource*& frame);
+        void releaseDirectUse(DmabufBuffer*& buf, FrameResourceRef*& frame);
         void present(const void* pixels) override;
     };
 
@@ -3217,8 +3218,8 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     return fbId;
 }
 
-bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
-    if (color.hdr() || !started || flipPending || !sessionActive || !modesetDone || !buf || !frame) {
+bool KmsOutput::directScanout(DmabufBuffer* buf, const FrameResourceRef& frame) {
+    if (color.hdr() || !started || flipPending || !sessionActive || !modesetDone || !buf) {
         return false;
     }
 
@@ -3243,9 +3244,8 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, FrameResource* frame) {
     if (commit(fbId, false, -1, &err)) {
         // our own composition swapchain is now stale; the next non-direct
         // frame re-acquires and modesets nothing, just flips back
-        frameRef(frame);
         queuedDirect = buf;
-        queuedDirectFrame = frame;
+        queuedDirectFrame = c->alloc->make<FrameResourceRef>(frame);
         queuedScan = -1;
 
         return true;
@@ -3303,14 +3303,13 @@ void KmsOutput::scanoutFormatsImpl(stl::VisitorFace&& vis) {
     }
 }
 
-void KmsOutput::releaseDirectUse(DmabufBuffer*& buf, FrameResource*& frame) {
-    if (!buf) {
-        return;
-    }
-
+void KmsOutput::releaseDirectUse(DmabufBuffer*& buf, FrameResourceRef*& frame) {
     buf = nullptr;
-    frameUnref(frame);
-    frame = nullptr;
+
+    if (frame) {
+        c->alloc->release(frame);
+        frame = nullptr;
+    }
 }
 
 void KmsOutput::present(const void* pixels) {
