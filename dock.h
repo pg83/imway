@@ -6,8 +6,8 @@
 struct Composer;
 struct Theme;
 
-float dockBarWidth();
-float dockIconSize();
+float dockBarWidth(const Composer& c);
+float dockIconSize(const Composer& c);
 
 // the shared icon button: hover plate, the texture with the dock's inner
 // padding, or a fallback — an initial plate when fallbackName is set, the
@@ -18,8 +18,9 @@ struct DockResult {
     bool launcher = false;
     float launcherX = -1.f;
     float launcherY = -1.f;
+    char launchApp[128] = "";
 };
 
-// Vertical section of desktop_chrome; not a standalone renderer widget.
-// It reserves the left viewport edge and applies standard window actions.
+// Configurable edge section of desktop_chrome; not a standalone renderer
+// widget. It reserves its viewport edge and applies standard window actions.
 void drawDock(Composer& c, DockResult& result);

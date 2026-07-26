@@ -60,9 +60,9 @@ wait_client "menu clicked"
 
 # Disable the policy through its public Settings page.
 open_settings
-click_at 120 216   # desktop page
-click_at 420 118   # "open DBusMenu"
-click_at 706 91    # close settings
+click_at 120 278   # desktop page
+click_at 480 118   # "open DBusMenu"
+click_at 826 91    # close settings
 sleep 0.2
 
 point_at_color 255 0 255 || { echo "tray pixmap disappeared after settings"; exit 1; }

@@ -49,6 +49,41 @@
 using namespace stl;
 
 namespace {
+    void runAutostart(Composer& c) {
+        StringView commands = c.settings.autostart.get();
+        StringBuilder display;
+
+        display << "WAYLAND_DISPLAY="_sv << c.scene->socketName;
+
+        StringView env[] = {sv(display)};
+
+        while (!commands.empty()) {
+            StringView line, rest;
+
+            if (commands.split('\n', line, rest)) {
+                commands = rest;
+            } else {
+                line = commands;
+                commands = {};
+            }
+
+            line = line.stripSpace();
+
+            if (line.empty() || line.startsWith("#"_sv)) {
+                continue;
+            }
+
+            StringView args[] = {"sh"_sv, "-c"_sv, line};
+            SupervisorSpawn spawn;
+
+            spawn.args = args;
+            spawn.argCount = 3;
+            spawn.env = env;
+            spawn.envCount = 1;
+            c.supervisor->spawn(spawn);
+        }
+    }
+
     struct Config {
         StringView devicePath = "auto";
         StringView outputName;
@@ -198,6 +233,20 @@ int mainComposer(int argc, char** argv) {
     Composer& c = *pool->make<Composer>(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
+    c.settings.uiScale.set(cfg.uiScale);
+    c.settings.outputName.set(cfg.outputName);
+    c.settings.outputMode.set(cfg.mode);
+    c.settings.xkbLayouts.set(cfg.xkbLayout);
+    c.settings.xkbOptions.set(cfg.xkbOptions);
+    c.settings.fontPath.set(cfg.fontPath);
+    c.settings.dpmsSeconds.set(cfg.dpmsSec);
+    c.settings.hdrEnabled.set(cfg.outputColor.hdrSdrWhiteNits > 0);
+    c.settings.sdrNits.set((float)(cfg.outputColor.hdrSdrWhiteNits > 0 ? cfg.outputColor.hdrSdrWhiteNits : 80.));
+    c.settings.displayMinNits.set((float)cfg.outputColor.displayMinNits);
+    c.settings.displayPeakNits.set((float)cfg.outputColor.displayPeakNits);
+    c.settings.displayMaxFallNits.set((float)cfg.outputColor.displayMaxFallNits);
+    c.settings.outputBpc.set(cfg.outputColor.bpc);
+    c.settings.outputRange.set(cfg.outputColor.range);
     c.log = log;
     installExternLogHandlers(c);
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
@@ -213,12 +262,20 @@ int mainComposer(int argc, char** argv) {
         Session* session = nullptr;
 
         if (kms) {
-            try {
-                session = Session::create(c);
-                *log << "imway: libseat session on "_sv << session->seatName() << endL;
-            } catch (...) {
-                *log << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
+            if (c.settings.seatBackend.get() == SeatBackend::direct) {
                 session = Session::createDirect(c);
+            } else {
+                try {
+                    session = Session::create(c);
+                    *log << "imway: libseat session on "_sv << session->seatName() << endL;
+                } catch (...) {
+                    if (c.settings.seatBackend.get() == SeatBackend::libseat) {
+                        throw;
+                    }
+
+                    *log << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
+                    session = Session::createDirect(c);
+                }
             }
         }
 
@@ -236,7 +293,16 @@ int mainComposer(int argc, char** argv) {
 
         c.device = device;
 
-        ::Output* output = device->createOutput(cfg.outputName, cfg.mode, cfg.outputColor);
+        OutputConfiguration outputConfig;
+
+        outputConfig.hdrSdrWhiteNits = c.settings.hdrEnabled.get() ? c.settings.sdrNits.get() : 0.;
+        outputConfig.displayMinNits = c.settings.displayMinNits.get();
+        outputConfig.displayPeakNits = c.settings.displayPeakNits.get();
+        outputConfig.displayMaxFallNits = c.settings.displayMaxFallNits.get();
+        outputConfig.bpc = c.settings.outputBpc.get();
+        outputConfig.range = c.settings.outputRange.get();
+
+        ::Output* output = device->createOutput(c.settings.outputName.get(), c.settings.outputMode.get(), outputConfig);
 
         c.output = output;
 
@@ -262,7 +328,7 @@ int mainComposer(int argc, char** argv) {
             scanoutFormats.pushBack(f);
         });
 
-        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, cfg.xkbLayout, cfg.xkbOptions);
+        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, c.settings.xkbLayouts.get(), c.settings.xkbOptions.get());
 
         c.kb = kb;
 
@@ -276,7 +342,6 @@ int mainComposer(int argc, char** argv) {
         wcfg.mainDevice = device->renderDevice();
         wcfg.maxImageDim = device->maxImageSize();
         wcfg.output = output;
-        wcfg.dpmsSec = kms ? cfg.dpmsSec : 0;
         wcfg.drmFd = device->drmFd();
         wcfg.explicitSync = device->explicitSyncSupported();
 
@@ -311,10 +376,11 @@ int mainComposer(int argc, char** argv) {
             c.bus->setActivationEnv("XDG_CURRENT_DESKTOP"_sv, "imway"_sv);
         }
 
-        Renderer* renderer = device->createRenderer(c, cfg.fontPath, cfg.uiScale, cfg.framesLimit);
+        Renderer* renderer = device->createRenderer(c, cfg.framesLimit);
 
         c.renderer = renderer;
-        c.desktop = Desktop::create(c, cfg.uiScale);
+        c.desktop = Desktop::create(c);
+        runAutostart(c);
 
         if (kms) {
             try {

@@ -13,12 +13,16 @@
 using namespace stl;
 
 namespace {
-    void drawOuterShadow() {
+    void drawOuterShadow(Composer& c, bool dock, bool top) {
+        if (!c.settings.windowShadows.get() || !dock || !top || c.settings.dockPosition.get() != DockPosition::left) {
+            return;
+        }
+
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         ImGuiIO& io = ImGui::GetIO();
         ImVec2 pos = viewport->Pos;
         ImVec2 size = viewport->Size;
-        float dockW = dockBarWidth();
+        float dockW = dockBarWidth(c);
         float topH = ImGui::GetFrameHeight();
         ImDrawList* background = ImGui::GetBackgroundDrawList(viewport);
 
@@ -33,12 +37,16 @@ namespace {
         }
     }
 
-    void drawOuterBorder(ImDrawList& draw) {
+    void drawOuterBorder(Composer& c, ImDrawList& draw) {
+        if (!c.settings.dockVisible.get() || c.settings.dockPosition.get() != DockPosition::left) {
+            return;
+        }
+
         ImGuiViewport* viewport = ImGui::GetMainViewport();
         const ImGuiStyle& style = ImGui::GetStyle();
         ImVec2 pos = viewport->Pos;
         ImVec2 size = viewport->Size;
-        float dockW = dockBarWidth();
+        float dockW = dockBarWidth(c);
         float topH = ImGui::GetFrameHeight();
 
         // One six-segment outline describes the Г union.  It lives in the
@@ -70,11 +78,11 @@ namespace {
             return;
         }
 
-        if (!info.focusedAppId.empty()) {
+        if (c.settings.topBarAppId.get() && !info.focusedAppId.empty()) {
             ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
         }
 
-        if (info.globalMenu && info.globalMenu->ready) {
+        if (c.settings.topBarGlobalMenu.get() && info.globalMenu && info.globalMenu->ready) {
             drawDBusMenuBar(c, *info.globalMenu);
         }
 
@@ -83,22 +91,23 @@ namespace {
 
         localtime_r(&now, &local);
 
-        auto& clock = sb();
+        char clock[128];
+        const char* format;
 
-        pad2(clock, (unsigned)local.tm_mday);
-        clock << "."_sv;
-        pad2(clock, (unsigned)(local.tm_mon + 1));
-        clock << " "_sv;
-        pad2(clock, (unsigned)local.tm_hour);
-        clock << ":"_sv;
-        pad2(clock, (unsigned)local.tm_min);
+        if (c.settings.clockLocale.get()) {
+            format = c.settings.clockShowDate.get() ? c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%x %H:%M:%S" : "%x %H:%M" : c.settings.clockShowSeconds.get() ? "%x %I:%M:%S %p" : "%x %I:%M %p" : c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%H:%M:%S" : "%H:%M" : c.settings.clockShowSeconds.get() ? "%I:%M:%S %p" : "%I:%M %p";
+        } else {
+            format = c.settings.clockShowDate.get() ? c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%d.%m %H:%M:%S" : "%d.%m %H:%M" : c.settings.clockShowSeconds.get() ? "%d.%m %I:%M:%S %p" : "%d.%m %I:%M %p" : c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%H:%M:%S" : "%H:%M" : c.settings.clockShowSeconds.get() ? "%I:%M:%S %p" : "%I:%M %p";
+        }
+
+        strftime(clock, sizeof(clock), format, &local);
 
         const ImGuiStyle& style = ImGui::GetStyle();
-        float clockW = ImGui::CalcTextSize(clock.cStr()).x;
+        float clockW = ImGui::CalcTextSize(clock).x;
         float x = ImGui::GetWindowWidth() - clockW - style.ItemSpacing.x;
 
         ImGui::SetCursorPosX(x);
-        ImGui::TextUnformatted(clock.cStr());
+        ImGui::TextUnformatted(clock);
 
         if (ImGui::IsItemClicked()) {
             result.calendar = true;
@@ -106,7 +115,7 @@ namespace {
 
         float left = x;
 
-        if (!info.layout.empty()) {
+        if (c.settings.topBarLayout.get() && !info.layout.empty()) {
             float w = ImGui::CalcTextSize((const char*)info.layout.begin(), (const char*)info.layout.end()).x;
 
             left = x - w - style.ItemSpacing.x * 2.f;
@@ -114,7 +123,7 @@ namespace {
             ImGui::TextUnformatted((const char*)info.layout.begin(), (const char*)info.layout.end());
         }
 
-        if (info.batteryPct >= 0) {
+        if (c.settings.topBarBattery.get() != BatteryDisplay::never && info.batteryPct >= 0) {
             auto& stats = sb();
 
             stats << "bat "_sv << info.batteryPct << "%"_sv;
@@ -126,7 +135,7 @@ namespace {
             ImGui::TextUnformatted(stats.cStr());
         }
 
-        if (!info.wifi.empty()) {
+        if (c.settings.topBarWifi.get() && !info.wifi.empty()) {
             float wifiW = ImGui::CalcTextSize((const char*)info.wifi.begin(), (const char*)info.wifi.end()).x;
             float wifiX = left - wifiW - style.ItemSpacing.x * 2.f;
 
@@ -138,15 +147,22 @@ namespace {
             }
         }
 
-        drawOuterBorder(*ImGui::GetWindowDrawList());
+        drawOuterBorder(c, *ImGui::GetWindowDrawList());
         ImGui::EndMainMenuBar();
     }
 }
 
 void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChromeResult& result) {
     const ImVec4 chrome = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImVec2 mouse = ImGui::GetMousePos();
+    DockPosition position = c.settings.dockPosition.get();
+    float extent = dockBarWidth(c);
+    bool nearDock = position == DockPosition::left ? mouse.x <= viewport->Pos.x + extent : position == DockPosition::right ? mouse.x >= viewport->Pos.x + viewport->Size.x - extent : position == DockPosition::top ? mouse.y <= viewport->Pos.y + extent : mouse.y >= viewport->Pos.y + viewport->Size.y - extent;
+    bool dockVisible = c.settings.dockVisible.get() && (!c.settings.dockAutoHide.get() || nearDock);
+    bool topVisible = c.settings.topBarVisible.get();
 
-    drawOuterShadow();
+    drawOuterShadow(c, dockVisible, topVisible);
 
     // Both sidebar windows paint the exact same borderless material.  The
     // caller sees one widget; the two rectangles are only ImGui's internal
@@ -157,10 +173,13 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
 
     DockResult dock;
 
-    // Sidebars cut the viewport in call order.  Left-first gives the dock the
-    // full height and makes the top bar start at its right edge.
-    drawDock(c, dock);
-    drawTop(c, info, result);
+    if (dockVisible) {
+        drawDock(c, dock);
+    }
+
+    if (topVisible) {
+        drawTop(c, info, result);
+    }
 
     ImGui::PopStyleVar();
     ImGui::PopStyleColor(2);
@@ -169,7 +188,14 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     result.launcherX = dock.launcherX;
     result.launcherY = dock.launcherY;
 
-    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    for (size_t i = 0; i < sizeof(result.launchApp); i++) {
+        result.launchApp[i] = dock.launchApp[i];
+
+        if (!dock.launchApp[i]) {
+            break;
+        }
+    }
+
     Scene& scene = *c.scene;
 
     scene.workX = (int)viewport->WorkPos.x;

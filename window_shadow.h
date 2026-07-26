@@ -2,6 +2,8 @@
 
 #include "imgui_wm.h"
 
+struct Composer;
+
 // drop shadows under imgui windows, fed into the imway imgui fork hook
 // (ImGuiIO::WindowShadowCallback). the sprite is a gaussian rounded blob
 // baked into the font atlas as a custom rect: same texture as the rest of
@@ -11,6 +13,7 @@ struct ShadowSprite {
     ImFontAtlas* atlas = nullptr;
     int rectId = -1;   // ImFontAtlasRectId
     float scale = 1.f; // written by the renderer on rescale
+    Composer* composer = nullptr;
 };
 
 // registers and rasterizes the sprite; call once after fonts are set up

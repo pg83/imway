@@ -30,6 +30,7 @@ namespace {
         KeyboardImpl(Log& log, StringView layout, StringView options);
         ~KeyboardImpl() noexcept;
 
+        void configure(StringView layout, StringView options) override;
         void updateKey(u32 evdevCode, bool pressed) override;
         void setGroup(u32 group) override;
         KeyMods mods() const override;
@@ -109,6 +110,54 @@ KeyboardImpl::~KeyboardImpl() noexcept {
     if (ctx) {
         xkb_context_unref(ctx);
     }
+}
+
+void KeyboardImpl::configure(StringView layout, StringView options) {
+    Buffer lb(layout), ob(options);
+    xkb_rule_names names{};
+
+    names.layout = lb.cStr();
+    names.options = ob.cStr();
+
+    xkb_keymap* nextKeymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+    if (!nextKeymap && (!layout.empty() || !options.empty())) {
+        *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
+        nextKeymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    }
+
+    STD_VERIFY(nextKeymap);
+
+    xkb_state* nextState = xkb_state_new(nextKeymap);
+
+    STD_VERIFY(nextState);
+
+    u32 group = xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
+    u32 count = xkb_keymap_num_layouts(nextKeymap);
+
+    if (count && group >= count) {
+        group = count - 1;
+    }
+
+    xkb_state_update_mask(nextState, 0, 0, 0, 0, 0, group);
+
+    char* text = xkb_keymap_get_as_string(nextKeymap, XKB_KEYMAP_FORMAT_TEXT_V1);
+    u32 nextSize = (u32)StringView(text).length() + 1;
+    int nextFd = memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    bool written = nextFd >= 0 && write(nextFd, text, nextSize) == (ssize_t)nextSize;
+
+    free(text);
+    STD_VERIFY(written);
+    fcntl(nextFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
+
+    close(fd);
+    xkb_state_unref(state);
+    xkb_keymap_unref(keymap);
+    fd = nextFd;
+    size = nextSize;
+    state = nextState;
+    keymap = nextKeymap;
+    opts = Buffer(options);
 }
 
 void KeyboardImpl::updateKey(u32 evdevCode, bool pressed) {

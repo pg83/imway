@@ -1,6 +1,7 @@
 #pragma once
 
 #include "theme.h"
+#include "settings.h"
 
 #include <std/lib/list.h>
 #include <std/str/view.h>
@@ -58,6 +59,10 @@ struct Composer {
     Icon* findIcon(u64 sym, u32 desired, stl::StringView id = {});
 
     Theme theme;
+    // The one authoritative runtime preference set. Subsystems read this
+    // object directly; the settings dialog edits it in place. Persistence is
+    // deliberately a separate concern.
+    Settings settings;
     // created right after the pool, before everything else: every subsystem
     // logs through it from its first line
     Log* log = nullptr;
@@ -79,9 +84,6 @@ struct Composer {
     Notifier* notifier = nullptr;
     Notifications* notes = nullptr;
     StatusNotifier* statusNotifier = nullptr;
-    // ItemIsMenu tray entries open their exported DBusMenu on primary click.
-    // The Settings desktop page edits this runtime policy.
-    bool trayMenuOnPrimary = true;
     Wayland* wayland = nullptr;
     Renderer* renderer = nullptr;
     Desktop* desktop = nullptr;

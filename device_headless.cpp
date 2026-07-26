@@ -46,6 +46,19 @@
 using namespace stl;
 
 namespace {
+    struct HeadlessOutput;
+
+    struct CallHeadlessSetting: Listener {
+        HeadlessOutput* parent = nullptr;
+
+        explicit CallHeadlessSetting(HeadlessOutput* p)
+            : parent(p)
+        {
+        }
+
+        void onListen(void*) override;
+    };
+
     struct HeadlessOutput: public ::Output {
         Composer* c = nullptr;
         int w = 0, h = 0;
@@ -103,10 +116,15 @@ namespace {
         bool directScanout(DmabufBuffer*, FrameResource*) override;
         void dropScanoutFb(DmabufBuffer*) override;
         void scanoutFormatsImpl(stl::VisitorFace&&) override;
+        void applyDisplaySettings();
 
         void setTearingHint(bool) override {
         }
     };
+
+    void CallHeadlessSetting::onListen(void*) {
+        parent->applyDisplaySettings();
+    }
 
     struct HeadlessDevice: public Device {
         Composer* c = nullptr;
@@ -134,7 +152,7 @@ namespace {
         }
 
         ::Output* createOutput(StringView, StringView modeStr, const OutputConfiguration& config) override;
-        Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
+        Renderer* createRenderer(Composer& c, int framesLimit) override;
     };
 }
 
@@ -150,6 +168,25 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
     metadata = hdrOutputMetadata(color, content);
 
+    Setting<bool>* boolSettings[] = {&comp.settings.hdrEnabled};
+    Setting<float>* floatSettings[] = {
+        &comp.settings.sdrNits,
+        &comp.settings.displayMinNits,
+        &comp.settings.displayPeakNits,
+        &comp.settings.displayMaxFallNits,
+    };
+
+    for (Setting<bool>* setting : boolSettings) {
+        setting->changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
+    }
+
+    for (Setting<float>* setting : floatSettings) {
+        setting->changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
+    }
+
+    comp.settings.outputBpc.changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings.outputRange.changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
+
 #ifdef IMWAY_FOR_TESTS
     // headless has no cursor plane; scenarios opt into a fake one to test
     // the hardware-cursor path
@@ -157,6 +194,29 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
         curCap = 64;
     }
 #endif
+}
+
+void HeadlessOutput::applyDisplaySettings() {
+    OutputConfiguration config;
+
+    config.hdrSdrWhiteNits = c->settings.hdrEnabled.get() ? c->settings.sdrNits.get() : 0.;
+    config.displayMinNits = c->settings.displayMinNits.get();
+    config.displayPeakNits = c->settings.displayPeakNits.get();
+    config.displayMaxFallNits = c->settings.displayMaxFallNits.get();
+    config.bpc = c->settings.outputBpc.get();
+    config.range = c->settings.outputRange.get();
+    OutputColorState next = outputColorState(config, {});
+
+    if (next == color) {
+        return;
+    }
+
+    color = next;
+    HdrContentMetadata content;
+
+    content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
+    metadata = hdrOutputMetadata(color, content);
+    c->scene->needsFrame = true;
 }
 
 int HeadlessOutput::width() const {
@@ -415,8 +475,8 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
     return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, config);
 }
 
-Renderer* HeadlessDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(c, *vk, fontPath, uiScale, framesLimit);
+Renderer* HeadlessDevice::createRenderer(Composer& c, int framesLimit) {
+    return Renderer::create(c, *vk, framesLimit);
 }
 
 Device* DeviceHeadless::create(Composer& c) {

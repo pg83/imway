@@ -11,13 +11,11 @@
 #include <std/mem/obj_pool.h>
 
 #include <ev.h>
+#include <time.h>
 
 using namespace stl;
 
 namespace {
-    constexpr double kDefaultExpiry = 5.0;
-    constexpr size_t kHistoryMax = 50;
-
     constexpr u32 kExpired = 1;
     constexpr u32 kDismissed = 2;
 
@@ -29,14 +27,14 @@ namespace {
     };
 
     void expiryCb(struct ev_loop*, ev_timer* w, int);
+    void scheduleCb(struct ev_loop*, ev_timer* w, int);
 
     struct NotifierImpl: public Notifier {
         Composer* c = nullptr;
         struct ev_loop* loop = nullptr;
         IntrusiveList toasts; // newest last
         u32 lastId = 0;
-        bool dndOn = false;
-
+        ev_timer scheduleTimer{};
         NotifierImpl(Composer& comp);
         ~NotifierImpl() noexcept;
 
@@ -52,6 +50,16 @@ namespace {
         ToastImpl* byId(u32 id);
         void armTimer(ToastImpl& t, i32 expireMs);
         void trim();
+        bool dndActive() const;
+        void applyDnd();
+    };
+
+    struct CallNotifierSetting: Listener {
+        NotifierImpl* parent;
+        void (NotifierImpl::*callback)();
+
+        CallNotifierSetting(NotifierImpl* p, void (NotifierImpl::*cb)());
+        void onListen(void*) override;
     };
 }
 
@@ -59,9 +67,20 @@ NotifierImpl::NotifierImpl(Composer& comp)
     : c(&comp)
     , loop(comp.loop)
 {
+    comp.settings.dnd.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings.dndScheduled.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings.dndStartMinute.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings.dndEndMinute.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings.notificationHistory.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::trim));
+
+    ev_timer_init(&scheduleTimer, scheduleCb, 30., 30.);
+    scheduleTimer.data = this;
+    ev_timer_start(loop, &scheduleTimer);
 }
 
 NotifierImpl::~NotifierImpl() noexcept {
+    ev_timer_stop(loop, &scheduleTimer);
+
     while (!toasts.empty()) {
         auto* t = (ToastImpl*)(Toast*)toasts.popFront();
 
@@ -87,7 +106,7 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
         return; // sticky
     }
 
-    double sec = expireMs > 0 ? expireMs / 1000.0 : kDefaultExpiry;
+    double sec = expireMs > 0 ? expireMs / 1000.0 : c->settings.notificationSeconds.get();
 
     ev_timer_init(&t.timer, expiryCb, sec, 0.);
     t.timer.data = &t;
@@ -96,7 +115,9 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
 
 // keep history bounded: drop the oldest off-screen toasts past the cap
 void NotifierImpl::trim() {
-    while (toasts.length() > kHistoryMax) {
+    size_t limit = (size_t)c->settings.notificationHistory.get();
+
+    while (toasts.length() > limit) {
         Toast* victim = nullptr;
 
         for (Toast* t : each<Toast>(toasts)) {
@@ -134,10 +155,22 @@ u32 NotifierImpl::post(const Post& p) {
     t->body << p.body;
     t->icon.reset();
     t->icon << p.icon;
-    t->critical = p.critical;
+    t->critical = p.critical && c->settings.allowCriticalNotifications.get();
     t->fromBus = p.fromBus;
     t->postedMs = nowMsec();
-    t->onScreen = !dndOn;
+    NotificationPolicy policy = NotificationPolicy::defaultPolicy;
+    size_t rules = c->settings.notificationRuleCount.get();
+
+    for (size_t i = 0; i < rules && i < sizeof(c->settings.notificationRules) / sizeof(*c->settings.notificationRules); i++) {
+        const NotificationRule& rule = c->settings.notificationRules[i].get();
+
+        if (StringView(rule.app) == p.app) {
+            policy = rule.policy;
+            break;
+        }
+    }
+
+    t->onScreen = policy == NotificationPolicy::allow || (policy == NotificationPolicy::defaultPolicy && !dndActive());
 
     if (t->onScreen) {
         armTimer(*t, p.expireMs);
@@ -207,13 +240,36 @@ void NotifierImpl::clearHistory() {
 }
 
 bool NotifierImpl::dnd() {
-    return dndOn;
+    return dndActive();
 }
 
 void NotifierImpl::setDnd(bool v) {
-    dndOn = v;
+    c->settings.dnd.set(v);
+}
 
-    if (v) {
+bool NotifierImpl::dndActive() const {
+    if (c->settings.dnd.get()) {
+        return true;
+    }
+
+    if (!c->settings.dndScheduled.get()) {
+        return false;
+    }
+
+    time_t now = time(nullptr);
+    tm local{};
+
+    localtime_r(&now, &local);
+
+    int minute = local.tm_hour * 60 + local.tm_min;
+    int start = c->settings.dndStartMinute.get();
+    int end = c->settings.dndEndMinute.get();
+
+    return start <= end ? minute >= start && minute < end : minute >= start || minute < end;
+}
+
+void NotifierImpl::applyDnd() {
+    if (dndActive()) {
         // pull everything off screen, keep it in history
         forEach<Toast>(toasts, [&](Toast& t) {
             if (t.onScreen) {
@@ -226,11 +282,26 @@ void NotifierImpl::setDnd(bool v) {
     c->scene->needsFrame = true;
 }
 
+CallNotifierSetting::CallNotifierSetting(NotifierImpl* p, void (NotifierImpl::*cb)())
+    : parent(p)
+    , callback(cb)
+{
+}
+
+void CallNotifierSetting::onListen(void*) {
+    (parent->*callback)();
+    parent->c->scene->needsFrame = true;
+}
+
 namespace {
     void expiryCb(struct ev_loop*, ev_timer* w, int) {
         auto* t = (ToastImpl*)w->data;
 
         t->store->close(t->id, kExpired);
+    }
+
+    void scheduleCb(struct ev_loop*, ev_timer* w, int) {
+        ((NotifierImpl*)w->data)->applyDnd();
     }
 }
 

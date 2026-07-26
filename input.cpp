@@ -51,6 +51,13 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallInputSettings: Listener {
+        LibinputSource* parent;
+
+        CallInputSettings(LibinputSource* p);
+        void onListen(void*) override;
+    };
+
     struct LibinputSource: public InputSource {
         Composer* comp = nullptr;
         struct ev_loop* loop = nullptr;
@@ -61,8 +68,6 @@ namespace {
         int inoFd = -1;
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
-
-        double speed = 0.;
 
         LibinputSource(Composer& c);
         ~LibinputSource() noexcept;
@@ -84,6 +89,8 @@ namespace {
         void sessionEnabled();
         void sessionDisabled();
 
+        void applySettings();
+        void registerDevice(libinput_device* dev);
         void dispatch();
     };
 
@@ -105,6 +112,15 @@ namespace {
         parent->sessionDisabled();
     }
 
+    CallInputSettings::CallInputSettings(LibinputSource* p)
+        : parent(p)
+    {
+    }
+
+    void CallInputSettings::onListen(void*) {
+        parent->applySettings();
+    }
+
     int openRestricted(const char* path, int, void* data) {
         return ((LibinputSource*)data)->session->openDevice(path);
     }
@@ -121,14 +137,70 @@ namespace {
         ((LibinputSource*)w->data)->inotifyEvents();
     }
 
-    // libinput ships touchpads with tap-to-click off, the compositor opts in
-    void configureDevice(libinput_device* dev, double speed) {
+    const InputDeviceSettings* deviceSettings(const Settings& settings, libinput_device* dev) {
+        StringView id(libinput_device_get_sysname(dev));
+        size_t count = settings.inputDeviceCount.get();
+
+        for (size_t i = 0; i < count && i < sizeof(settings.inputDevices) / sizeof(*settings.inputDevices); i++) {
+            const InputDeviceSettings& value = settings.inputDevices[i].get();
+
+            if (StringView(value.id) == id) {
+                return &value;
+            }
+        }
+
+        return nullptr;
+    }
+
+    void configureDevice(libinput_device* dev, const Settings& settings) {
+        const InputDeviceSettings* local = deviceSettings(settings, dev);
+        double speed = local && local->enabled && local->pointerSpeedSet ? local->pointerSpeed : settings.pointerSpeed.get();
+        bool natural = local && local->enabled && local->naturalScrollSet ? local->naturalScroll : settings.naturalScroll.get();
+        bool left = local && local->enabled && local->leftHandedSet ? local->leftHanded : settings.leftHanded.get();
+
         if (libinput_device_config_tap_get_finger_count(dev) > 0) {
-            libinput_device_config_tap_set_enabled(dev, LIBINPUT_CONFIG_TAP_ENABLED);
+            libinput_device_config_tap_set_enabled(dev, settings.tapToClick.get() ? LIBINPUT_CONFIG_TAP_ENABLED : LIBINPUT_CONFIG_TAP_DISABLED);
         }
 
         if (libinput_device_config_accel_is_available(dev)) {
             libinput_device_config_accel_set_speed(dev, speed);
+
+            u32 profiles = (u32)libinput_device_config_accel_get_profiles(dev);
+            libinput_config_accel_profile profile = settings.pointerAccelProfile.get() == PointerAccelProfile::flat ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+
+            if (profiles & (u32)profile) {
+                libinput_device_config_accel_set_profile(dev, profile);
+            }
+        }
+
+        if (libinput_device_config_scroll_has_natural_scroll(dev)) {
+            libinput_device_config_scroll_set_natural_scroll_enabled(dev, natural);
+        }
+
+        if (libinput_device_config_left_handed_is_available(dev)) {
+            libinput_device_config_left_handed_set(dev, left);
+        }
+
+        if (libinput_device_config_dwt_is_available(dev)) {
+            libinput_device_config_dwt_set_enabled(dev, settings.disableWhileTyping.get() ? LIBINPUT_CONFIG_DWT_ENABLED : LIBINPUT_CONFIG_DWT_DISABLED);
+        }
+
+        if (libinput_device_config_middle_emulation_is_available(dev)) {
+            libinput_device_config_middle_emulation_set_enabled(dev, settings.middleEmulation.get() ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED);
+        }
+
+        u32 clicks = (u32)libinput_device_config_click_get_methods(dev);
+        libinput_config_click_method click = settings.touchpadClickMethod.get() == TouchpadClickMethod::buttonAreas ? LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS : settings.touchpadClickMethod.get() == TouchpadClickMethod::clickfinger ? LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER : libinput_device_config_click_get_default_method(dev);
+
+        if (clicks & (u32)click) {
+            libinput_device_config_click_set_method(dev, click);
+        }
+
+        u32 scrolls = (u32)libinput_device_config_scroll_get_methods(dev);
+        libinput_config_scroll_method scroll = settings.touchpadScrollMethod.get() == TouchpadScrollMethod::twoFinger ? LIBINPUT_CONFIG_SCROLL_2FG : settings.touchpadScrollMethod.get() == TouchpadScrollMethod::edge ? LIBINPUT_CONFIG_SCROLL_EDGE : settings.touchpadScrollMethod.get() == TouchpadScrollMethod::button ? LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN : libinput_device_config_scroll_get_default_method(dev);
+
+        if (scrolls & (u32)scroll) {
+            libinput_device_config_scroll_set_method(dev, scroll);
         }
     }
 }
@@ -175,6 +247,20 @@ LibinputSource::LibinputSource(Composer& c)
 
     c.sessionEnabledListeners.pushBack(c.pool->make<CallInputSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallInputSessionDisabled>(this));
+    c.settings.pointerSpeed.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.pointerAccelProfile.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.tapToClick.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.naturalScroll.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.leftHanded.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.disableWhileTyping.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.middleEmulation.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.touchpadClickMethod.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.touchpadScrollMethod.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    c.settings.inputDeviceCount.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+
+    for (Setting<InputDeviceSettings>& setting : c.settings.inputDevices) {
+        setting.changedListeners.pushBack(c.pool->make<CallInputSettings>(this));
+    }
 
     ev_io* inputIo = createEvIo(*c.pool, loop);
 
@@ -218,17 +304,11 @@ void LibinputSource::pathDrop(int n) {
 }
 
 void LibinputSource::setPointerSpeed(double s) {
-    speed = s < -1. ? -1. : s > 1. ? 1. : s;
-
-    for (libinput_device* d : pathDevs) {
-        if (d && libinput_device_config_accel_is_available(d)) {
-            libinput_device_config_accel_set_speed(d, speed);
-        }
-    }
+    comp->settings.pointerSpeed.set((float)(s < -1. ? -1. : s > 1. ? 1. : s));
 }
 
 double LibinputSource::pointerSpeed() const {
-    return speed;
+    return comp->settings.pointerSpeed.get();
 }
 
 int LibinputSource::sysnameIndex(libinput_device* dev) {
@@ -285,6 +365,41 @@ void LibinputSource::sessionEnabled() {
 
 void LibinputSource::sessionDisabled() {
     libinput_suspend(li);
+}
+
+void LibinputSource::applySettings() {
+    for (libinput_device* dev : pathDevs) {
+        if (dev) {
+            configureDevice(dev, comp->settings);
+        }
+    }
+}
+
+void LibinputSource::registerDevice(libinput_device* dev) {
+    StringView id(libinput_device_get_sysname(dev));
+    size_t count = comp->settings.inputDeviceCount.get();
+
+    for (size_t i = 0; i < count && i < sizeof(comp->settings.inputDevices) / sizeof(*comp->settings.inputDevices); i++) {
+        if (StringView(comp->settings.inputDevices[i].get().id) == id) {
+            return;
+        }
+    }
+
+    if (count >= sizeof(comp->settings.inputDevices) / sizeof(*comp->settings.inputDevices)) {
+        return;
+    }
+
+    InputDeviceSettings value;
+    StringView name(libinput_device_get_name(dev));
+    size_t idLen = id.length() < sizeof(value.id) - 1 ? id.length() : sizeof(value.id) - 1;
+    size_t nameLen = name.length() < sizeof(value.name) - 1 ? name.length() : sizeof(value.name) - 1;
+
+    memcpy(value.id, id.begin(), idLen);
+    value.id[idLen] = 0;
+    memcpy(value.name, name.begin(), nameLen);
+    value.name[nameLen] = 0;
+    comp->settings.inputDevices[count].set(value);
+    comp->settings.inputDeviceCount.set(count + 1);
 }
 
 // churn state: devices come and go with hotplug, the context holds session
@@ -468,14 +583,14 @@ void LibinputSource::dispatch() {
                 break;
             case LIBINPUT_EVENT_DEVICE_ADDED: {
                 libinput_device* dev = libinput_event_get_device(ev);
-
-                configureDevice(dev, speed);
-
                 int idx = sysnameIndex(dev);
 
                 if (idx >= 0 && !pathDevs[idx]) {
                     pathDevs[idx] = libinput_device_ref(dev);
                 }
+
+                registerDevice(dev);
+                configureDevice(dev, comp->settings);
 
                 break;
             }

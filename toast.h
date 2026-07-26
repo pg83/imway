@@ -8,4 +8,4 @@ struct Notifier;
 // whole state lives in Notifications — this is pure drawing plus the click
 // = dismiss wire back. imgui calls inside, so this runs between NewFrame
 // and Render
-void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, float uiScale);
+void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, int screenH, float uiScale);

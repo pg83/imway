@@ -16,5 +16,5 @@ struct ScreenshotCapture {
     // capture already in flight finishes at the size it was submitted at)
     virtual void resize(int width, int height) = 0;
 
-    static ScreenshotCapture* create(Composer& c, const DeviceVk& vk, int width, int height, VkFormat format, float uiScale, Listener& ready);
+    static ScreenshotCapture* create(Composer& c, const DeviceVk& vk, int width, int height, VkFormat format, Listener& ready);
 };

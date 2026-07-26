@@ -9,6 +9,8 @@ struct ThemeColor {
     float g = 0.f;
     float b = 0.f;
     float a = 1.f;
+
+    bool operator==(const ThemeColor&) const = default;
 };
 
 struct ThemePalette {

@@ -312,6 +312,9 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         test_sources += ["$(S)/scene.cpp", "$(S)/color.cpp", "$(S)/weak_ptr.cpp"]
         test_deps.append(display_info)
 
+    if name == "client_reg_settings":
+        test_sources += ["$(S)/setting.cpp", "$(S)/listener.cpp"]
+
     tests.append(program(
         name=name,
         output=f"$(B)/tests/{name}",

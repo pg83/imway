@@ -5,6 +5,7 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
+#include "listener.h"
 #include "icon_pool.h"
 #include "pooled_ev.h"
 #include "pooled_fd.h"
@@ -30,6 +31,19 @@
 using namespace stl;
 
 namespace {
+    struct IconStoreImpl;
+
+    struct CallIconTheme: Listener {
+        IconStoreImpl* parent = nullptr;
+
+        explicit CallIconTheme(IconStoreImpl* p)
+            : parent(p)
+        {
+        }
+
+        void onListen(void*) override;
+    };
+
     // svg rasterization edge: the desired size rounded up to a power of two,
     // so nearby ui sizes share one raster instead of one raster each
     constexpr u32 kIconMinPx = 16;
@@ -115,6 +129,7 @@ namespace {
 
         void addWatches();
         void buildIndex();
+        void indexTheme(StringView base, StringView theme);
         void addDesktop(StringBuilder& file, StringView fileId);
         IconName& nameEntry(u64 sym);
         void drainInotify();
@@ -126,6 +141,10 @@ namespace {
         Icon* resolveSym(u64 sym, u32 bucket);
         Icon* findIcon(u64 sym, u32 desired, StringView id) override;
     };
+
+    void CallIconTheme::onListen(void*) {
+        parent->reload();
+    }
 
     void inoCb(struct ev_loop*, ev_io* w, int) {
         ((IconStoreImpl*)w->data)->drainInotify();
@@ -146,6 +165,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
+    comp.settings.iconTheme.changedListeners.pushBack(comp.pool->make<CallIconTheme>(this));
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
@@ -184,25 +204,30 @@ void IconStoreImpl::addWatches() {
         p << base << "/applications"_sv;
         inotify_add_watch(inoFd, p.cStr(), mask);
         p.reset();
-        p << base << "/icons/hicolor"_sv;
-        inotify_add_watch(inoFd, p.cStr(), mask);
+        StringView themes[] = {c->settings.iconTheme.get(), "hicolor"_sv};
 
-        StringBuilder hicolor;
+        for (size_t i = 0; i < 2; i++) {
+            if (themes[i].empty() || (i && themes[i] == themes[0])) {
+                continue;
+            }
 
-        hicolor << sv(p);
+            p.reset();
+            p << base << "/icons/"_sv << themes[i];
+            inotify_add_watch(inoFd, p.cStr(), mask);
 
-        try {
-            listDir(sv(hicolor), [this, mask, &hicolor](const TPathInfo& e) {
-                if (!e.isDir || (e.item != "scalable"_sv && !parseSizeDir(e.item))) {
-                    return;
-                }
+            try {
+                listDir(sv(p), [this, mask, &p](const TPathInfo& e) {
+                    if (!e.isDir || (e.item != "scalable"_sv && !parseSizeDir(e.item))) {
+                        return;
+                    }
 
-                StringBuilder apps;
+                    StringBuilder apps;
 
-                apps << sv(hicolor) << "/"_sv << e.item << "/apps"_sv;
-                inotify_add_watch(inoFd, apps.cStr(), mask);
-            });
-        } catch (...) {
+                    apps << sv(p) << "/"_sv << e.item << "/apps"_sv;
+                    inotify_add_watch(inoFd, apps.cStr(), mask);
+                });
+            } catch (...) {
+            }
         }
     });
 }
@@ -235,69 +260,77 @@ void IconStoreImpl::buildIndex() {
         } catch (...) {
         }
 
-        dir.reset();
-        dir << base << "/icons/hicolor/scalable/apps"_sv;
+        StringView themes[] = {c->settings.iconTheme.get(), "hicolor"_sv};
 
-        try {
-            listDir(sv(dir), [this, &dir](const TPathInfo& e) {
-                if (e.isDir || !e.item.endsWith(".svg"_sv)) {
-                    return;
-                }
-
-                IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
-
-                // first hit wins: XDG_DATA_HOME precedes XDG_DATA_DIRS
-                if (!n.svg) {
-                    n.svg = gen->make<StringBuilder>();
-                    *n.svg << sv(dir) << "/"_sv << e.item;
-                }
-            });
-        } catch (...) {
-        }
-
-        // the fixed-size png rasters: icons/hicolor/<NxN>/apps/*.png
-        StringBuilder hicolor;
-
-        hicolor << base << "/icons/hicolor"_sv;
-
-        try {
-            listDir(sv(hicolor), [this, &hicolor](const TPathInfo& sizeDir) {
-                u32 size = sizeDir.isDir ? parseSizeDir(sizeDir.item) : 0;
-
-                if (!size) {
-                    return;
-                }
-
-                StringBuilder apps;
-
-                apps << sv(hicolor) << "/"_sv << sizeDir.item << "/apps"_sv;
-
-                try {
-                    listDir(sv(apps), [this, &apps, size](const TPathInfo& e) {
-                        if (e.isDir || !e.item.endsWith(".png"_sv)) {
-                            return;
-                        }
-
-                        IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
-
-                        // first base dir wins per size, matching the svg rule
-                        for (const IconSource& s : n.pngs) {
-                            if (s.size == size) {
-                                return;
-                            }
-                        }
-
-                        StringBuilder* p = gen->make<StringBuilder>();
-
-                        *p << sv(apps) << "/"_sv << e.item;
-                        n.pngs.pushBack({p, size});
-                    });
-                } catch (...) {
-                }
-            });
-        } catch (...) {
+        for (size_t i = 0; i < 2; i++) {
+            if (!themes[i].empty() && (!i || themes[i] != themes[0])) {
+                indexTheme(base, themes[i]);
+            }
         }
     });
+}
+
+void IconStoreImpl::indexTheme(StringView base, StringView theme) {
+    StringBuilder dir;
+
+    dir << base << "/icons/"_sv << theme << "/scalable/apps"_sv;
+
+    try {
+        listDir(sv(dir), [this, &dir](const TPathInfo& e) {
+            if (e.isDir || !e.item.endsWith(".svg"_sv)) {
+                return;
+            }
+
+            IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
+
+            if (!n.svg) {
+                n.svg = gen->make<StringBuilder>();
+                *n.svg << sv(dir) << "/"_sv << e.item;
+            }
+        });
+    } catch (...) {
+    }
+
+    StringBuilder root;
+
+    root << base << "/icons/"_sv << theme;
+
+    try {
+        listDir(sv(root), [this, &root](const TPathInfo& sizeDir) {
+            u32 size = sizeDir.isDir ? parseSizeDir(sizeDir.item) : 0;
+
+            if (!size) {
+                return;
+            }
+
+            StringBuilder apps;
+
+            apps << sv(root) << "/"_sv << sizeDir.item << "/apps"_sv;
+
+            try {
+                listDir(sv(apps), [this, &apps, size](const TPathInfo& e) {
+                    if (e.isDir || !e.item.endsWith(".png"_sv)) {
+                        return;
+                    }
+
+                    IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
+
+                    for (const IconSource& source : n.pngs) {
+                        if (source.size == size) {
+                            return;
+                        }
+                    }
+
+                    StringBuilder* path = gen->make<StringBuilder>();
+
+                    *path << sv(apps) << "/"_sv << e.item;
+                    n.pngs.pushBack({path, size});
+                });
+            } catch (...) {
+            }
+        });
+    } catch (...) {
+    }
 }
 
 IconName& IconStoreImpl::nameEntry(u64 sym) {
@@ -377,7 +410,9 @@ void IconStoreImpl::drainInotify() {
 }
 
 void IconStoreImpl::reload() {
-    ev_timer_stop(loop, reloadTimer);
+    if (reloadTimer) {
+        ev_timer_stop(loop, reloadTimer);
+    }
 
     // nobody holds an Icon* across the loop iteration, so the old generation
     // simply dies: its icon leases return to the pool, and the next lookup

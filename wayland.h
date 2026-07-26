@@ -31,13 +31,16 @@ struct WaylandConfig {
     // the render device's 2d image ceiling for client buffers
     u32 maxImageDim = 0;
     Output* output = nullptr;
-    double dpmsSec = 0;
     int drmFd = -1;
     bool explicitSync = false;
 };
 
 struct Wayland {
     virtual void run() = 0;
+
+    // Raw input activity is reported before UI routing, so an overlay which
+    // consumes the event (notably the lock screen) cannot prevent DPMS wake.
+    virtual void inputActivity() = 0;
 
     // switch the active xkb group and broadcast the modifier change to the
     // focused client, exactly as a layout hotkey would

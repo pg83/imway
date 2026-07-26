@@ -1,5 +1,7 @@
 #include "window_shadow.h"
 
+#include "composer.h"
+
 #include <math.h>
 
 namespace {
@@ -60,6 +62,10 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
 
     auto& s = *(ShadowSprite*)user;
 
+    if (!s.composer || !s.composer->settings.windowShadows.get()) {
+        return;
+    }
+
     // child windows live inside an already-shadowed root; their own ring
     // would darken the parent's interior around them
     if (s.rectId < 0 || (flags & (ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_ChildWindow))) {
@@ -93,7 +99,21 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
     float us[4] = {r.uv0.x, r.uv0.x + (r.uv1.x - r.uv0.x) * cut0, r.uv0.x + (r.uv1.x - r.uv0.x) * cut1, r.uv1.x};
     float vs[4] = {r.uv0.y, r.uv0.y + (r.uv1.y - r.uv0.y) * cut0, r.uv0.y + (r.uv1.y - r.uv0.y) * cut1, r.uv1.y};
 
-    ImU32 col = IM_COL32(0, 0, 0, kAlpha);
+    float strength = s.composer->settings.shadowStrength.get();
+
+    if (strength < 0.f) {
+        strength = 0.f;
+    } else if (strength > 2.f) {
+        strength = 2.f;
+    }
+
+    int alpha = (int)(kAlpha * strength + .5f);
+
+    if (alpha > 255) {
+        alpha = 255;
+    }
+
+    ImU32 col = IM_COL32(0, 0, 0, alpha);
 
     dl->PushClipRectFullScreen();
 

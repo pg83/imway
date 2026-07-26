@@ -6,6 +6,7 @@
 #include "util.h"
 #include "scene.h"
 #include "device.h"
+#include "desktop.h"
 #include "output.h"
 #include "session.h"
 #include "composer.h"
@@ -684,6 +685,7 @@ namespace {
         int pendingMaxW = 0, pendingMaxH = 0;
         bool pendingMinSet = false, pendingMaxSet = false;
         wl_resource* decoRes = nullptr;
+        u32 requestedDecoration = 0;
         wl_resource* dialogRes = nullptr;
 
         // xdg-toplevel-icon double buffering: pixels staged as a pool icon
@@ -1038,6 +1040,14 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallWaylandSetting: Listener {
+        WaylandImpl* parent;
+        void (WaylandImpl::*callback)();
+
+        CallWaylandSetting(WaylandImpl* p, void (WaylandImpl::*cb)());
+        void onListen(void*) override;
+    };
+
     struct WaylandImpl: public Wayland, public InputSink, public Listener, public IconProvider {
         Composer* composer = nullptr;
         ObjPool* pool = nullptr;
@@ -1126,17 +1136,24 @@ namespace {
         IntrusiveList foreignTLHandles;
         IntrusiveList screencopyFrames;
         ::Output* output = nullptr;
-        double dpmsSec = 0;
         bool dpmsOff = false;
         ev_timer dpmsTimer{};
 
         void activity();
         bool idleBlocked();
+        void updateDpms();
+        void updateRepeat();
+        void updateKeymap();
+        void updateFractionalScale();
+        void updateDecorations();
+        void updateAnrTimer();
+        u32 preferredScale() const;
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
 
         void run() override;
+        void inputActivity() override;
         void setLayout(u32 group) override;
 
         Icon* findIcon(u64 sym, u32 desired, StringView id) override;
@@ -1190,6 +1207,16 @@ namespace {
 
     void CallWaylandOutputResized::onListen(void*) {
         parent->outputResized();
+    }
+
+    CallWaylandSetting::CallWaylandSetting(WaylandImpl* p, void (WaylandImpl::*cb)())
+        : parent(p)
+        , callback(cb)
+    {
+    }
+
+    void CallWaylandSetting::onListen(void*) {
+        (parent->*callback)();
     }
 
     wl_resource* resOf(Surface* s) {
@@ -4743,6 +4770,31 @@ namespace {
         wl_resource_set_implementation(res, &primaryManagerImpl, data, nullptr);
     }
 
+    u32 decorationMode(ToplevelImpl& t) {
+        switch (t.srv->composer->settings.decorations.get()) {
+        case DecorationPolicy::client:
+            return ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+        case DecorationPolicy::clientPreference:
+            return t.requestedDecoration ? t.requestedDecoration : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+        case DecorationPolicy::server:
+            return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+        }
+
+        return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+    }
+
+    void applyDecoration(ToplevelImpl& t) {
+        if (!t.decoRes) {
+            return;
+        }
+
+        u32 mode = decorationMode(t);
+
+        t.csd = mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+        zxdg_toplevel_decoration_v1_send_configure(t.decoRes, mode);
+        t.srv->scene->needsFrame = true;
+    }
+
     void decoSetMode(wl_client*, wl_resource* res, u32 mode) {
         if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res)) || (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE && mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)) {
             wl_resource_post_error(res, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE, "invalid decoration mode");
@@ -4750,11 +4802,17 @@ namespace {
             return;
         }
 
-        zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        t->requestedDecoration = mode;
+        applyDecoration(*t);
     }
 
     void decoUnsetMode(wl_client*, wl_resource* res) {
-        zxdg_toplevel_decoration_v1_send_configure(res, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
+
+        t->requestedDecoration = 0;
+        applyDecoration(*t);
     }
 
     void decoResourceDestroyed(wl_resource* res) {
@@ -4764,6 +4822,7 @@ namespace {
                 t->decoRes = nullptr;
             }
 
+            t->requestedDecoration = 0;
             t->csd = true;
             t->srv->scene->needsFrame = true;
         }
@@ -4793,13 +4852,11 @@ namespace {
             return;
         }
 
-        // we always answer SERVER_SIDE, so negotiating at all means our bar
-        t->csd = false;
-        t->srv->scene->needsFrame = true;
         t->decoRes = d;
+        t->requestedDecoration = 0;
 
         wl_resource_set_implementation(d, &decoImpl, t, decoResourceDestroyed);
-        zxdg_toplevel_decoration_v1_send_configure(d, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+        applyDecoration(*t);
     }
 
     const struct zxdg_decoration_manager_v1_interface decoManagerImpl = {
@@ -6179,7 +6236,7 @@ namespace {
 
         zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat.kb->keymapFd(), seat.kb->keymapSize());
         zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display), seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
-        zwp_input_method_keyboard_grab_v2_send_repeat_info(r, 25, 600);
+        zwp_input_method_keyboard_grab_v2_send_repeat_info(r, im->srv->composer->settings.repeatRate.get(), im->srv->composer->settings.repeatDelay.get());
     }
 
     void imDestroy(wl_client*, wl_resource* res) {
@@ -7640,6 +7697,10 @@ namespace {
     void systemBellRing(wl_client*, wl_resource* res, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
+        if (!srv->composer->settings.visualBell.get()) {
+            return;
+        }
+
         // a visible bell: the renderer flashes the screen briefly. The
         // surface argument only scopes which window rang; we flash globally
         srv->scene->bellMs = nowMsec();
@@ -7832,8 +7893,7 @@ namespace {
         s->fracRes = fres;
         wl_resource_set_implementation(fres, &fracImpl, s, fracResourceDestroyed);
 
-        // scale in 1/120ths; fixed 1.0 for now, output scaling is not wired up yet
-        wp_fractional_scale_v1_send_preferred_scale(fres, 120);
+        wp_fractional_scale_v1_send_preferred_scale(fres, s->srv->preferredScale());
     }
 
     const struct wp_fractional_scale_manager_v1_interface fracManagerImpl = {
@@ -8487,6 +8547,10 @@ namespace {
         }
 
         if (!srv->dpmsOff && srv->output) {
+            if (srv->composer->settings.lockBeforeDpms.get() && srv->composer->desktop) {
+                srv->composer->desktop->lock();
+            }
+
             srv->dpmsOff = true;
             srv->output->setPowerSave(false);
         }
@@ -9535,7 +9599,7 @@ namespace {
         wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->kb->keymapFd(), seat->kb->keymapSize());
 
         if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
-            wl_keyboard_send_repeat_info(k, 25, 600);
+            wl_keyboard_send_repeat_info(k, seat->srv->composer->settings.repeatRate.get(), seat->srv->composer->settings.repeatDelay.get());
         }
 
         SeatState& s = *seat;
@@ -10271,7 +10335,7 @@ void WaylandImpl::activity() {
         ev_timer_again(loop, &n.timer);
     });
 
-    if (dpmsSec > 0 && output) {
+    if (composer->settings.dpmsSeconds.get() > 0 && output) {
         ev_timer_again(loop, &dpmsTimer);
 
         if (dpmsOff) {
@@ -10363,6 +10427,18 @@ void SeatState::handleMotion(double x, double y) {
         double sx = target ? x - target->imgX : 0, sy = target ? y - target->imgY : 0;
 
         pointerSetFocus(target, sx, sy);
+
+        if (target && srv->composer->settings.focusPolicy.get() == FocusPolicy::followsPointer) {
+            if (Toplevel* t = target->rootToplevel()) {
+                srv->scene->focusedToplevel.bind(t->weak);
+
+                if (srv->composer->settings.raiseOnFocus.get()) {
+                    t->raiseRequested = true;
+                }
+
+                focusToplevel(t);
+            }
+        }
 
         return;
     }
@@ -11302,9 +11378,11 @@ void SeatState::focusToplevel(Toplevel* t) {
 
     focusGeneration++;
 
-    // the layout belongs to the window: park the current group with the
-    // window that loses focus
-    if (kbFocus) {
+    bool perWindowLayout = srv->composer->settings.layoutPolicy.get() == LayoutPolicy::perWindow;
+
+    // With per-window layouts the group follows focus. Global policy leaves
+    // the keyboard's current group untouched.
+    if (perWindowLayout && kbFocus) {
         kbFocus->xkbGroup = kb->mods().group;
     }
 
@@ -11342,7 +11420,7 @@ void SeatState::focusToplevel(Toplevel* t) {
 
     kbFocus = t;
 
-    if (t) {
+    if (t && perWindowLayout) {
         kb->setGroup(t->xkbGroup);
 
         // refresh the cache silently so kbSendEnter carries fresh modifiers
@@ -11512,6 +11590,109 @@ void SeatState::toplevelGone(Toplevel* t) {
     updateShortcutInhibit();
 }
 
+u32 WaylandImpl::preferredScale() const {
+    float scale = composer->settings.uiScale.get();
+
+    if (scale < 1.f / 120.f) {
+        scale = 1.f / 120.f;
+    } else if (scale > 100.f) {
+        scale = 100.f;
+    }
+
+    return (u32)(scale * 120.f + .5f);
+}
+
+void WaylandImpl::updateFractionalScale() {
+    u32 scale = preferredScale();
+
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+        auto& impl = (SurfaceImpl&)surface;
+
+        if (impl.fracRes) {
+            wp_fractional_scale_v1_send_preferred_scale(impl.fracRes, scale);
+        }
+    });
+}
+
+void WaylandImpl::updateRepeat() {
+    int rate = composer->settings.repeatRate.get();
+    int delay = composer->settings.repeatDelay.get();
+
+    for (wl_resource* keyboardRes : seat.keyboards) {
+        if (wl_resource_get_version(keyboardRes) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
+            wl_keyboard_send_repeat_info(keyboardRes, rate, delay);
+        }
+    }
+
+    if (seat.inputMethod && seat.inputMethod->grab) {
+        zwp_input_method_keyboard_grab_v2_send_repeat_info(seat.inputMethod->grab, rate, delay);
+    }
+}
+
+void WaylandImpl::updateKeymap() {
+    seat.releaseAllKeys();
+    keyboard->configure(composer->settings.xkbLayouts.get(), composer->settings.xkbOptions.get());
+
+    for (wl_resource* keyboardRes : seat.keyboards) {
+        wl_keyboard_send_keymap(keyboardRes, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keyboard->keymapFd(), keyboard->keymapSize());
+    }
+
+    if (seat.inputMethod && seat.inputMethod->grab) {
+        zwp_input_method_keyboard_grab_v2_send_keymap(seat.inputMethod->grab, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keyboard->keymapFd(), keyboard->keymapSize());
+    }
+
+    seat.modsDepressed = ~0u;
+    seat.modsLatched = ~0u;
+    seat.modsLocked = ~0u;
+    seat.modsGroup = ~0u;
+    seat.updateModifiers();
+    scene->needsFrame = true;
+}
+
+void WaylandImpl::updateDecorations() {
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& toplevel) {
+        applyDecoration((ToplevelImpl&)toplevel);
+    });
+}
+
+void WaylandImpl::updateDpms() {
+    double seconds = composer->settings.dpmsSeconds.get();
+
+    ev_timer_stop(loop, &dpmsTimer);
+
+    if (!output || seconds <= 0.) {
+        if (dpmsOff && output) {
+            dpmsOff = false;
+            output->setPowerSave(true);
+            scene->needsFrame = true;
+        }
+
+        return;
+    }
+
+    ev_timer_set(&dpmsTimer, seconds, seconds);
+    ev_timer_again(loop, &dpmsTimer);
+}
+
+void WaylandImpl::updateAnrTimer() {
+    double seconds = composer->settings.anrSeconds.get() * .5;
+
+#ifdef IMWAY_FOR_TESTS
+    // the ANR scenario cannot wait out two real ping periods
+    if (getenv("IMWAY_FAST_PING")) {
+        seconds = .2;
+    }
+#endif
+
+    if (seconds < .05) {
+        seconds = .05;
+    }
+
+    ev_timer_stop(loop, &pingTimer);
+    ev_timer_set(&pingTimer, seconds, seconds);
+    ev_timer_start(loop, &pingTimer);
+}
+
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     : composer(&comp)
     , pool(comp.pool)
@@ -11548,7 +11729,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     output = cfg.output;
     cmDisplayColor = output ? output->colorState() : OutputColorState::sdr();
     cmDisplayIdentity = ++cimgIdentity;
-    dpmsSec = cfg.dpmsSec;
     iconPool = comp.iconPool;
     comp.iconProviders.pushBack((IconProvider*)this);
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
@@ -11560,11 +11740,9 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     explicitSyncSupported = cfg.explicitSync;
     maxImageDim = cfg.maxImageDim;
 
-    if (output && dpmsSec > 0) {
-        ev_timer_init(&dpmsTimer, dpmsTimerCb, dpmsSec, dpmsSec);
-        dpmsTimer.data = this;
-        ev_timer_again(loop, &dpmsTimer);
-    }
+    ev_timer_init(&dpmsTimer, dpmsTimerCb, 0., 0.);
+    dpmsTimer.data = this;
+    updateDpms();
 
     if (wl_display_add_socket(display, Buffer(socketName).cStr()) != 0) {
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
@@ -11587,18 +11765,18 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     ev_signal_start(loop, &sigTerm);
     watchersStarted = true;
 
-    double pingSec = 5.;
-
-#ifdef IMWAY_FOR_TESTS
-    // the ANR scenario cannot wait out two real ping periods
-    if (getenv("IMWAY_FAST_PING")) {
-        pingSec = 0.2;
-    }
-#endif
-
-    ev_timer_init(&pingTimer, pingTimerCb, pingSec, pingSec);
+    ev_timer_init(&pingTimer, pingTimerCb, 0., 0.);
     pingTimer.data = this;
-    ev_timer_start(loop, &pingTimer);
+    updateAnrTimer();
+
+    comp.settings.dpmsSeconds.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
+    comp.settings.repeatRate.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
+    comp.settings.repeatDelay.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
+    comp.settings.xkbLayouts.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.settings.xkbOptions.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.settings.uiScale.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateFractionalScale));
+    comp.settings.decorations.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
+    comp.settings.anrSeconds.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
     syncEvFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 
@@ -11619,6 +11797,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 
 WaylandImpl::~WaylandImpl() noexcept {
     ev_timer_stop(loop, &pingTimer);
+    ev_timer_stop(loop, &dpmsTimer);
 
     if (syncEvFd >= 0) {
         ev_io_stop(loop, &syncEvIo);
@@ -13069,6 +13248,10 @@ void WaylandImpl::syncKeyboardCapture() {
 
     seat.uiCaptured = cap;
     seat.updateModifiers();
+}
+
+void WaylandImpl::inputActivity() {
+    activity();
 }
 
 bool WaylandImpl::pointerMotion(PointerMotionEvent& ev) {

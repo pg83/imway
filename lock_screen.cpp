@@ -163,12 +163,13 @@ namespace {
         return PAM_SUCCESS;
     }
 
-    bool authenticateSystem(passwd& account, StringView password) {
+    bool authenticateSystem(passwd& account, StringView password, StringView service) {
         Buffer input(password);
+        Buffer serviceName(service);
         PamInput conversationInput = {account.pw_name, input.cStr()};
         pam_conv conversation = {pamConversation, &conversationInput};
         pam_handle_t* handle = nullptr;
-        int status = pam_start("login", account.pw_name, &conversation, &handle);
+        int status = pam_start(serviceName.cStr(), account.pw_name, &conversation, &handle);
 
         if (status == PAM_SUCCESS) {
             status = pam_authenticate(handle, PAM_SILENT | PAM_DISALLOW_NULL_AUTHTOK);
@@ -187,7 +188,9 @@ namespace {
         return status == PAM_SUCCESS;
     }
 #else
-    bool authenticateSystem(passwd& account, StringView password) {
+    bool authenticateSystem(passwd& account, StringView password, StringView service) {
+        (void)service;
+
         if (!account.pw_passwd) {
             return false;
         }
@@ -218,7 +221,7 @@ namespace {
     }
 #endif
 
-    bool authenticate(StringView password) {
+    bool authenticate(StringView password, StringView service) {
 #ifdef IMWAY_FOR_TESTS
         if (const char* delay = getenv("IMWAY_TEST_AUTH_DELAY_MS")) {
             long millis = strtol(delay, nullptr, 10);
@@ -246,7 +249,7 @@ namespace {
             return false;
         }
 
-        return authenticateSystem(*account, password);
+        return authenticateSystem(*account, password, service);
     }
 
     void initDrawData(ImDrawData& out, const ImDrawData& src) {
@@ -259,6 +262,7 @@ namespace {
     }
 
     struct LockFilter: Filter, Listener {
+        Composer* comp = nullptr;
         ImDrawList* overlayDrawList = nullptr;
         ImDrawList* foregroundDrawList = nullptr; // software/client cursor, drawn after the dialog
 
@@ -309,6 +313,7 @@ namespace {
         Log* log = nullptr;
         char password[256] = "";
         char authPassword[256] = "";
+        char authService[64] = "";
         bool focusField = true;
         bool failed = false;
         bool authenticating = false;
@@ -318,6 +323,7 @@ namespace {
         ~Dialog() noexcept {
             wipe(password, sizeof(password));
             wipe(authPassword, sizeof(authPassword));
+            wipe(authService, sizeof(authService));
             wipeImGuiPasswordState();
             *log << StringView("imway: lockscreen closed") << endL;
         }
@@ -690,7 +696,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
 }
 
 void LockFilter::apply(RenderContext& ctx) {
-    if (ctx.handled || !overlayDrawList || !ctx.drawData) {
+    if (ctx.handled || !overlayDrawList || !ctx.drawData || !comp->settings.lockBlur.get()) {
         return;
     }
 
@@ -752,13 +758,17 @@ void Dialog::draw(Composer& c, bool& open) {
         ImVec2 min = ImGui::GetWindowPos();
         ImVec2 max(min.x + w, min.y + h);
 
-        if (ImTextureID background = filter.background()) {
+        if (c.settings.lockBlur.get()) {
+            ImTextureID background = filter.background();
+
+            if (background) {
             draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
             draw->AddImage(background, min, max);
             draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
+            }
         }
 
-        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, 0.42f)));
+        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, c.settings.lockTint.get())));
 
         float fieldW = 360.f * scale;
         float contentH = 78.f * scale;
@@ -802,6 +812,11 @@ void Dialog::draw(Composer& c, bool& open) {
 void Dialog::beginAuthentication() {
     memcpy(authPassword, password, sizeof(authPassword));
     authPassword[sizeof(authPassword) - 1] = 0;
+    StringView service = comp->settings.pamService.get();
+    size_t serviceLen = service.length() < sizeof(authService) - 1 ? service.length() : sizeof(authService) - 1;
+
+    memcpy(authService, service.begin(), serviceLen);
+    authService[serviceLen] = 0;
     wipe(password, sizeof(password));
     wipeImGuiPasswordState();
     failed = false;
@@ -843,12 +858,14 @@ void openLockOverlay(Composer& c, DialogState** state) {
     value->authJob = OffloadJob::create(c, *pool, [](void* self) {
         auto& dialog = *(Dialog*)self;
 
-        stdAtomicStore(&dialog.accepted, authenticate(StringView(dialog.authPassword)), MemoryOrder::Release);
+        stdAtomicStore(&dialog.accepted, authenticate(StringView(dialog.authPassword), StringView(dialog.authService)), MemoryOrder::Release);
         wipe(dialog.authPassword, sizeof(dialog.authPassword));
+        wipe(dialog.authService, sizeof(dialog.authService));
     }, value, *value);
     *state = created;
     auto& filter = value->filter;
 
+    filter.comp = &c;
     c.filters.pushBack((Filter*)&filter);
     c.outputResizedListeners.pushBack((Listener*)&filter);
 

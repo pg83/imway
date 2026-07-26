@@ -30,3 +30,7 @@ enum class LauncherAction {
 // `terminal` reflects its Desktop Entry Terminal key (caller memory, precisely
 // because the dialog dies with the pick)
 bool drawLauncher(Composer& c, bool toggle, DialogState** state, stl::Buffer& run, LauncherAction& action, bool& terminal, float anchorX = -1.f, float anchorY = -1.f);
+
+// Resolve one XDG desktop-file id to the same sanitized Exec command used by
+// the launcher. Used by pinned dock entries.
+bool launcherCommand(stl::StringView appId, stl::Buffer& run, bool& terminal);

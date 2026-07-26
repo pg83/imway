@@ -22,6 +22,10 @@ struct KeyMods {
 // the single owner of xkb state: clients and the compositor ui both live off
 // this one keymap and group, so they can never disagree about the layout
 struct Keyboard {
+    // Rebuild the keymap in place. Existing Wayland keyboard resources keep
+    // their identity; the Wayland owner broadcasts the new sealed keymap fd.
+    virtual void configure(stl::StringView layout, stl::StringView options) = 0;
+
     virtual void updateKey(u32 evdevCode, bool pressed) = 0;
 
     // switch the active layout group, preserving modifier state

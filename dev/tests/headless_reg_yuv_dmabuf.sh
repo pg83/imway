@@ -72,6 +72,15 @@ for location in 1 2 3 4 5 6; do
     wait_yuv
     sleep 0.3
     screenshot "$XDG_RUNTIME_DIR/chroma-$location.ppm"
+
+    if [[ "$location" == 1 ]]; then
+        imgx=$(dump_field '^toplevel' imgx)
+        imgy=$(dump_field '^toplevel' imgy)
+        client_w=$(dump_field '^toplevel' client_w)
+        client_h=$(dump_field '^toplevel' client_h)
+        echo "$imgx $imgy $client_w $client_h" > "$XDG_RUNTIME_DIR/chroma-geometry"
+    fi
+
     stop_client
 done
 
@@ -79,6 +88,9 @@ python3 - "$XDG_RUNTIME_DIR" <<'PY'
 import sys
 
 root = sys.argv[1]
+x0, y0, client_w, client_h = map(
+    int, open(f"{root}/chroma-geometry").read().split())
+
 def load(n):
     with open(f"{root}/chroma-{n}.ppm", 'rb') as f:
         assert f.readline().strip() == b'P6'
@@ -89,11 +101,12 @@ def load(n):
 def difference(a, b):
     w, h, x = load(a)
     _, _, y = load(b)
-    # The test compositor places the first 512x256 client at (102,53); stay
-    # inside that content and ignore moving chrome/background pixels.
+    # Stay inside client content and ignore moving chrome/background pixels.
+    # The font size is configurable, so chrome height and window placement
+    # are deliberately obtained from the compositor rather than hard-coded.
     changed = 0
-    for row in range(53, 309):
-        for col in range(102, 614):
+    for row in range(y0, y0 + client_h):
+        for col in range(x0, x0 + client_w):
             i = (row * w + col) * 3
             if sum(abs(x[i + c] - y[i + c]) for c in range(3)) > 40:
                 changed += 1
@@ -111,11 +124,15 @@ def mean_channel(n, points, channel):
 
 # Check direction as well as variability: cosited horizontal samples reach the
 # U edge before midpoint samples; vertical offsets order 1, 0.5, 0 at the edge.
-h_cosited = mean_channel(1, [(357, y) for y in range(70, 160)], 2)
-h_midpoint = mean_channel(2, [(357, y) for y in range(70, 160)], 2)
-v_midpoint = mean_channel(1, [(x, 180) for x in range(140, 330)], 0)
-v_cosited = mean_channel(3, [(x, 180) for x in range(140, 330)], 0)
-v_offset_1 = mean_channel(5, [(x, 180) for x in range(140, 330)], 0)
+h_edge = x0 + client_w // 2 - 1
+v_edge = y0 + client_h // 2 - 1
+h_samples = [(h_edge, y) for y in range(y0 + 17, y0 + 107)]
+v_samples = [(x, v_edge) for x in range(x0 + 38, x0 + 228)]
+h_cosited = mean_channel(1, h_samples, 2)
+h_midpoint = mean_channel(2, h_samples, 2)
+v_midpoint = mean_channel(1, v_samples, 0)
+v_cosited = mean_channel(3, v_samples, 0)
+v_offset_1 = mean_channel(5, v_samples, 0)
 print(f"chroma horizontal cosited={h_cosited:.1f} midpoint={h_midpoint:.1f}")
 print(f"chroma vertical offset1={v_offset_1:.1f} midpoint={v_midpoint:.1f} cosited={v_cosited:.1f}")
 assert h_cosited > h_midpoint + 80

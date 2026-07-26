@@ -855,7 +855,7 @@ namespace {
         int createLease(const u32* connectorIds, int count, u32& lesseeId) override;
         void revokeLease(u32 lesseeId) override;
         ::Output* createOutput(StringView connector, StringView modeStr, const OutputConfiguration& config) override;
-        Renderer* createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) override;
+        Renderer* createRenderer(Composer& c, int framesLimit) override;
     };
 
     int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath, KmsIntercept* intercept) {
@@ -1196,8 +1196,8 @@ void KmsDevice::revokeLease(u32 lesseeId) {
     return output;
 }
 
-Renderer* KmsDevice::createRenderer(Composer& c, StringView fontPath, float uiScale, int framesLimit) {
-    return Renderer::create(c, *vk, fontPath, uiScale, framesLimit);
+Renderer* KmsDevice::createRenderer(Composer& c, int framesLimit) {
+    return Renderer::create(c, *vk, framesLimit);
 }
 
 namespace {

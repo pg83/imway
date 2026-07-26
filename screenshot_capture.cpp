@@ -50,7 +50,6 @@ namespace {
         int readbackW = 0;
         int readbackH = 0;
         VkFormat format = VK_FORMAT_UNDEFINED;
-        float uiScale = 1.f;
 
         VkBuffer readback = VK_NULL_HANDLE;
         VkDeviceMemory readbackMemory = VK_NULL_HANDLE;
@@ -70,7 +69,7 @@ namespace {
         int resultFd = -1;
         SharedScanout shared;
 
-        ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, float scale, Listener& ready);
+        ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, Listener& ready);
         ~ScreenshotCaptureImpl() noexcept;
 
         bool busy() const override;
@@ -138,7 +137,7 @@ namespace {
     }
 }
 
-ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, float scale, Listener& ready)
+ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, Listener& ready)
     : comp(&c)
     , output(c.output)
     , renderReady(&ready)
@@ -149,7 +148,6 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
     , width(w)
     , height(h)
     , format(fmt)
-    , uiScale(scale)
 {
     VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 
@@ -505,10 +503,16 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
 
     StringBuilder scale;
 
-    scale << "IMGUI_SCALE="_sv << (long double)uiScale;
+    scale << "IMGUI_SCALE="_sv << (long double)comp->settings.uiScale.get();
 
     StringBuilder metadata;
     StringBuilder color;
+    StringBuilder action;
+    StringBuilder format;
+    StringBuilder directory;
+    StringBuilder name;
+    StringBuilder lossless;
+    StringBuilder quality;
     const OutputColorState& shotColor = image ? image->color : output->colorState();
     bool hdr = shotColor.hdr();
     double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
@@ -519,13 +523,24 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
         metadata << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
     }
 
-    StringView env[] = {sv(display), sv(scale), sv(color), sv(metadata)};
+    const Settings& settings = comp->settings;
+    const char* actionName = settings.screenshotAction.get() == ScreenshotAction::save ? "save" : settings.screenshotAction.get() == ScreenshotAction::copy ? "copy" : "editor";
+    const char* formatName = settings.screenshotFormat.get() == ScreenshotFormat::png ? "png" : "jxl";
+
+    action << "IMWAY_SHOT_ACTION="_sv << StringView(actionName);
+    format << "IMWAY_SHOT_FORMAT="_sv << StringView(formatName);
+    directory << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory.get();
+    name << "IMWAY_SHOT_NAME="_sv << settings.screenshotName.get();
+    lossless << "IMWAY_SHOT_LOSSLESS="_sv << (settings.screenshotLossless.get() ? 1 : 0);
+    quality << "IMWAY_SHOT_QUALITY="_sv << (long double)settings.screenshotQuality.get();
+
+    StringView env[] = {sv(display), sv(scale), sv(color), sv(action), sv(format), sv(directory), sv(name), sv(lossless), sv(quality), sv(metadata)};
     SupervisorSpawn spec;
 
     spec.args = args;
     spec.argCount = 3;
     spec.env = env;
-    spec.envCount = image ? 4 : 3;
+    spec.envCount = image ? 10 : 9;
 
     spec.fd = fd;
     comp->supervisor->spawn(spec);
@@ -533,6 +548,6 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     close(fd);
 }
 
-ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk, int width, int height, VkFormat format, float uiScale, Listener& ready) {
-    return c.pool->make<ScreenshotCaptureImpl>(c, vk, width, height, format, uiScale, ready);
+ScreenshotCapture* ScreenshotCapture::create(Composer& c, const DeviceVk& vk, int width, int height, VkFormat format, Listener& ready) {
+    return c.pool->make<ScreenshotCaptureImpl>(c, vk, width, height, format, ready);
 }

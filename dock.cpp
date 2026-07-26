@@ -14,6 +14,8 @@
 #include <std/alg/qsort.h>
 #include <std/lib/vector.h>
 
+#include <string.h>
+
 using namespace stl;
 
 namespace {
@@ -31,6 +33,8 @@ namespace {
         // the tiebreak (never-focused and tray-only slots keep their order)
         u64 seq = 0;
         size_t idx = 0;
+        bool pinned = false;
+        size_t pinnedOrder = 0;
     };
 
     StringView normalizedAppId(StringView id) {
@@ -160,28 +164,34 @@ namespace {
 
 }
 
-float dockBarWidth() {
-    return 58.f * ImGui::GetStyle().FontScaleMain;
+float dockBarWidth(const Composer& c) {
+    return c.settings.dockWidth.get() * ImGui::GetStyle().FontScaleMain;
 }
 
-float dockIconSize() {
-    return 48.f * ImGui::GetStyle().FontScaleMain;
+float dockIconSize(const Composer& c) {
+    return c.settings.dockIconSize.get() * ImGui::GetStyle().FontScaleMain;
 }
 
 void drawDock(Composer& c, DockResult& result) {
     Scene& scene = *c.scene;
     float scale = ImGui::GetStyle().FontScaleMain;
-    float width = dockBarWidth();
-    float iconSize = dockIconSize();
+    float width = dockBarWidth(c);
+    float iconSize = dockIconSize(c);
+    DockPosition position = c.settings.dockPosition.get();
+    ImGuiDir direction = position == DockPosition::left ? ImGuiDir_Left : position == DockPosition::right ? ImGuiDir_Right : position == DockPosition::top ? ImGuiDir_Up : ImGuiDir_Down;
+    bool horizontal = position == DockPosition::top || position == DockPosition::bottom;
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2((width - iconSize) * 0.5f, 5.f * scale));
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 5.f * scale));
+    ImVec2 padding = horizontal ? ImVec2(5.f * scale, (width - iconSize) * .5f) : ImVec2((width - iconSize) * .5f, 5.f * scale);
+    ImVec2 spacing = horizontal ? ImVec2(5.f * scale, 0.f) : ImVec2(0.f, 5.f * scale);
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, padding);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, spacing);
     ImGuiIO& io = ImGui::GetIO();
     ImGuiWindowShadowCallback shadow = io.WindowShadowCallback;
 
     io.WindowShadowCallback = nullptr;
-    bool open = ImGui::BeginViewportSideBar("##dock", ImGui::GetMainViewport(), ImGuiDir_Left, width, flags);
+    bool open = ImGui::BeginViewportSideBar("##dock", ImGui::GetMainViewport(), direction, width, flags);
     io.WindowShadowCallback = shadow;
 
     if (open) {
@@ -195,7 +205,7 @@ void drawDock(Composer& c, DockResult& result) {
 
             Group* group = nullptr;
 
-            if (!t.appId.empty()) {
+            if (c.settings.dockGroupWindows.get() && !t.appId.empty()) {
                 for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
                     Group& candidate = *it;
 
@@ -231,13 +241,13 @@ void drawDock(Composer& c, DockResult& result) {
             }
         });
 
-        if (c.statusNotifier) {
+        if (c.statusNotifier && c.settings.dockShowTray.get()) {
             c.statusNotifier->items([&](StatusNotifierItem& item) {
                 StringView app = !item.desktopEntry.empty() ? sv(item.desktopEntry) : sv(item.id);
                 Group* group = nullptr;
 
                 for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
-                    if (!it->tray && sameApp(it->appId, app)) {
+                    if (c.settings.dockMergeTray.get() && !it->tray && sameApp(it->appId, app)) {
                         group = it;
 
                         break;
@@ -260,12 +270,63 @@ void drawDock(Composer& c, DockResult& result) {
             });
         }
 
+        StringView pinned = c.settings.dockPinned.get();
+        size_t pinnedOrder = 0;
+
+        while (!pinned.empty()) {
+            StringView app, rest;
+
+            if (pinned.split(',', app, rest)) {
+                pinned = rest;
+            } else {
+                app = pinned;
+                pinned = {};
+            }
+
+            app = app.stripSpace();
+
+            if (app.empty()) {
+                continue;
+            }
+
+            Group* group = nullptr;
+
+            for (Group* candidate = groups.mutBegin(); candidate != groups.mutEnd(); candidate++) {
+                if (sameApp(candidate->appId, app)) {
+                    group = candidate;
+                    break;
+                }
+            }
+
+            if (!group) {
+                groups.pushBack({app, nullptr, nullptr, c.findIcon(app, iconPx), 0});
+                group = &groups.mutBack();
+                group->idx = groups.length() - 1;
+            }
+
+            group->pinned = true;
+            group->pinnedOrder = pinnedOrder++;
+        }
+
         // focus-MRU: the freshest stamp first; never-focused windows and
         // tray-only slots fall to the bottom in collection order
-        quickSort(groups.mutBegin(), groups.mutEnd(), [](const Group& a, const Group& b) {
-            return a.seq != b.seq ? a.seq > b.seq : a.idx < b.idx;
-        });
+        if (pinnedOrder || c.settings.dockMruOrder.get()) {
+            bool mru = c.settings.dockMruOrder.get();
 
+            quickSort(groups.mutBegin(), groups.mutEnd(), [mru](const Group& a, const Group& b) {
+                if (a.pinned != b.pinned) {
+                    return a.pinned;
+                }
+
+                if (a.pinned && a.pinnedOrder != b.pinnedOrder) {
+                    return a.pinnedOrder < b.pinnedOrder;
+                }
+
+                return mru && a.seq != b.seq ? a.seq > b.seq : a.idx < b.idx;
+            });
+        }
+
+        bool first = true;
         for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
             Group& group = *it;
             Toplevel* t = group.active;
@@ -277,23 +338,64 @@ void drawDock(Composer& c, DockResult& result) {
                 icon = group.icon;
             }
 
-            ImGui::PushID(t ? (void*)t : (void*)tray);
+            if (horizontal && !first) {
+                ImGui::SameLine();
+            }
+
+            first = false;
+            if (t || tray) {
+                ImGui::PushID(t ? (void*)t : (void*)tray);
+            } else {
+                ImGui::PushID((const char*)group.appId.begin(), (const char*)group.appId.end());
+            }
 
             u64 texture = c.iconResolver ? c.iconResolver->iconTexture(icon) : 0;
             bool clicked = dockIconButton(c.theme, "##icon", texture, iconSize, group.focused, attention, group.appId);
 
             if (clicked) {
                 if (t) {
-                    focus(c, *t);
+                    DockClickAction action = c.settings.dockClickAction.get();
+
+                    if (action == DockClickAction::minimize && group.focused) {
+                        t->minimized = true;
+                        scene.focusedToplevel.reset();
+                        scene.needsFrame = true;
+                    } else if (action == DockClickAction::cycle && group.windows > 1) {
+                        Vector<Toplevel*> members;
+
+                        forEach<Toplevel>(scene.toplevels, [&](Toplevel& candidate) {
+                            if (candidate.mapped && sameApp(sv(candidate.appId), group.appId)) {
+                                members.pushBack(&candidate);
+                            }
+                        });
+
+                        size_t next = 0;
+
+                        for (size_t i = 0; i < members.length(); i++) {
+                            if (members[i] == t) {
+                                next = (i + 1) % members.length();
+                                break;
+                            }
+                        }
+
+                        focus(c, *members[next]);
+                    } else {
+                        focus(c, *t);
+                    }
                 } else if (tray) {
                     ImVec2 mouse = ImGui::GetMousePos();
 
-                    if (tray->itemIsMenu && tray->menu && c.trayMenuOnPrimary) {
+                    if (tray->itemIsMenu && tray->menu && c.settings.trayMenuOnPrimary.get()) {
                         tray->menu->prepare(0);
                         ImGui::OpenPopup("##menu");
                     } else {
                         c.statusNotifier->activate(tray->primary, (int)mouse.x, (int)mouse.y);
                     }
+                } else if (group.pinned) {
+                    size_t length = group.appId.length() < sizeof(result.launchApp) - 1 ? group.appId.length() : sizeof(result.launchApp) - 1;
+
+                    memcpy(result.launchApp, group.appId.begin(), length);
+                    result.launchApp[length] = 0;
                 }
             }
 
@@ -375,22 +477,28 @@ void drawDock(Composer& c, DockResult& result) {
             ImGui::PopID();
         }
 
-        // the launcher is pinned to the dock's bottom edge
-        float bottomY = ImGui::GetWindowHeight() - iconSize - ImGui::GetStyle().WindowPadding.y;
+        // the launcher is pinned to the far edge of the dock
+        if (horizontal) {
+            float edgeX = ImGui::GetWindowWidth() - iconSize - ImGui::GetStyle().WindowPadding.x;
 
-        if (ImGui::GetCursorPosY() < bottomY) {
-            ImGui::SetCursorPosY(bottomY);
+            ImGui::SameLine(edgeX);
+        } else {
+            float edgeY = ImGui::GetWindowHeight() - iconSize - ImGui::GetStyle().WindowPadding.y;
+
+            if (ImGui::GetCursorPosY() < edgeY) {
+                ImGui::SetCursorPosY(edgeY);
+            }
         }
 
         ImGui::PushID("launcher");
 
         if (dockIconButton(c.theme, "##icon", 0, iconSize, false, false, {})) {
             ImVec2 max = ImGui::GetItemRectMax();
+            ImVec2 min = ImGui::GetItemRectMin();
 
             result.launcher = true;
-            result.launcherX = max.x + 8.f * scale;
-            // the launcher window bottom-aligns to the dock's bottom edge
-            result.launcherY = ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
+            result.launcherX = position == DockPosition::right ? min.x - 8.f * scale : position == DockPosition::left ? max.x + 8.f * scale : min.x;
+            result.launcherY = position == DockPosition::top ? max.y + 8.f * scale : position == DockPosition::bottom ? min.y - 8.f * scale : ImGui::GetWindowPos().y + ImGui::GetWindowHeight();
         }
 
         if (ImGui::IsItemHovered()) {

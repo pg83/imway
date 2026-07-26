@@ -75,36 +75,13 @@ namespace {
         CallDesktopWifi(DesktopImpl* p);
         void onListen(void*) override;
     };
-}
 
-namespace {
-    enum class Chord {
-        screenshot,
-        lock,
-        launcher,
-        inspector,
-        altTabNext,
-        altTabPrev,
-    };
+    struct CallDesktopSetting: Listener {
+        DesktopImpl* parent;
+        void (DesktopImpl::*callback)();
 
-    struct ChordDef {
-        u32 mask; // exact modifier state to match; kChordAnyMods matches any
-        u32 sym;
-        Chord id;
-        StringView chord;
-        StringView action;
-    };
-
-    constexpr u32 kChordAnyMods = ~0u;
-
-    // the one table behind both chord dispatch and the settings keys page
-    const ChordDef kChords[] = {
-        {kChordAnyMods, XKB_KEY_Print, Chord::screenshot, "PrtSc"_sv, "save a screenshot"_sv},
-        {kModLogo, XKB_KEY_l, Chord::lock, "Super+L"_sv, "lock the screen"_sv},
-        {kModLogo, XKB_KEY_F2, Chord::launcher, "Super+F2"_sv, "application launcher"_sv},
-        {kModLogo, XKB_KEY_F12, Chord::inspector, "Super+F12"_sv, "inspector"_sv},
-        {kModAlt, XKB_KEY_Tab, Chord::altTabNext, "Alt+Tab"_sv, "next window"_sv},
-        {kModAlt | kModShift, XKB_KEY_Tab, Chord::altTabPrev, "Alt+Shift+Tab"_sv, "previous window"_sv},
+        CallDesktopSetting(DesktopImpl* p, void (DesktopImpl::*cb)());
+        void onListen(void*) override;
     };
 }
 
@@ -393,19 +370,13 @@ namespace {
         Keyboard* keyboard = nullptr;
         Notifier* notifier = nullptr;
 
-        float uiScale = 1.f;
-        float nextUiScale = 1.f;
+        float appliedUiScale = 1.f;
         u64 themeRevision = 0;
-        ThemeColor desktopColor;
-        Settings settings;
         DialogState* settingsState = nullptr;
         DialogState* anrState = nullptr;
         bool anrToggle = false;
         Weak<Toplevel> anrTarget;
         bool settingsToggle = false;
-        // the keys page rows: the chord table plus the non-chord bindings
-        Vector<KeyBinding> bindingsView;
-
         // bar battery widget, /sys-fed; sampled at most once per ~2s
         u64 statMs = 0;
         long batPct = -1; // -1 no battery
@@ -440,6 +411,10 @@ namespace {
         bool placed = false;
         bool kbCapturePrev = false;
         bool chordDown[256] = {};
+        bool swipeOwned = false;
+        double swipeDx = 0, swipeDy = 0;
+        bool pinchOwned = false;
+        double pinchScale = 1.;
 
         // alt-tab overlay: selection commits on Alt release; weak so a
         // window dying under the overlay drops out of the selection
@@ -448,16 +423,19 @@ namespace {
 
         // lockscreen's self-owned arena also gates the input sink
         DialogState* lockState = nullptr;
+        ev_timer autoLockTimer{};
+        ev_timer nightTimer{};
 
         DialogState* launcherState = nullptr;
         bool launcherToggle = false;
         float launcherX = -1.f, launcherY = -1.f;
 
-        DesktopImpl(Composer& c, float scale);
+        DesktopImpl(Composer& c);
         ~DesktopImpl() noexcept;
 
         void build() override;
         void drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale, int kind) override;
+        void lock() override;
 
         // Composer::outputResizedListeners: place or clamp the pointer
         void onListen(void*) override;
@@ -467,6 +445,13 @@ namespace {
         void sampleStats();
         void volumeChanged();
         void wifiChanged();
+        void redrawSetting();
+        void sdrSettingChanged();
+        void nightSettingChanged();
+        void themeSettingChanged();
+        void updateAutoLock();
+        void inputActivity();
+        void applyNightLight();
         void markTreeUnhovered(Surface& s);
         void clampPos();
         bool toastsActive() const;
@@ -486,6 +471,7 @@ namespace {
         bool holdEnd(bool cancelled) override;
 
         bool chordAction(u32 mask, u32 sym);
+        void gestureAction(GestureAction action);
         void altTabStep(long dir);
         void altTabCommit();
     };
@@ -506,6 +492,24 @@ namespace {
 
     void CallDesktopWifi::onListen(void*) {
         parent->wifiChanged();
+    }
+
+    CallDesktopSetting::CallDesktopSetting(DesktopImpl* p, void (DesktopImpl::*cb)())
+        : parent(p)
+        , callback(cb)
+    {
+    }
+
+    void CallDesktopSetting::onListen(void*) {
+        (parent->*callback)();
+    }
+
+    void autoLockTimerCb(struct ev_loop*, ev_timer* timer, int) {
+        ((DesktopImpl*)timer->data)->lock();
+    }
+
+    void nightTimerCb(struct ev_loop*, ev_timer* timer, int) {
+        ((DesktopImpl*)timer->data)->nightSettingChanged();
     }
 }
 
@@ -578,6 +582,7 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
     }
 
     if (ev.moved) {
+        inputActivity();
         posX = ev.x;
         posY = ev.y;
         clampPos();
@@ -593,6 +598,7 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
 }
 
 bool DesktopImpl::button(u32 btn, bool pressed) {
+    inputActivity();
     scene->needsFrame = true;
 
     if (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) {
@@ -633,6 +639,7 @@ bool DesktopImpl::button(u32 btn, bool pressed) {
 }
 
 bool DesktopImpl::scroll(const ScrollEvent& ev) {
+    inputActivity();
     scene->needsFrame = true;
     ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
@@ -640,6 +647,7 @@ bool DesktopImpl::scroll(const ScrollEvent& ev) {
 }
 
 bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
+    inputActivity();
     // the pen drives the shared cursor, so hover picking follows it exactly
     // like the mouse — one frame behind. ImGui has no stylus model beyond
     // that: the events stay unconsumed and reach the client under the pen
@@ -655,30 +663,68 @@ bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
 }
 
 bool DesktopImpl::swipeBegin(u32) {
-    return lockState != nullptr;
+    inputActivity();
+    swipeDx = swipeDy = 0;
+    swipeOwned = lockState || comp->settings.swipeLeft.get() != GestureAction::none || comp->settings.swipeRight.get() != GestureAction::none || comp->settings.swipeUp.get() != GestureAction::none || comp->settings.swipeDown.get() != GestureAction::none;
+
+    return swipeOwned;
 }
 
-bool DesktopImpl::swipeUpdate(double, double) {
-    return lockState != nullptr;
+bool DesktopImpl::swipeUpdate(double dx, double dy) {
+    swipeDx += dx;
+    swipeDy += dy;
+
+    return swipeOwned;
 }
 
-bool DesktopImpl::swipeEnd(bool) {
-    return lockState != nullptr;
+bool DesktopImpl::swipeEnd(bool cancelled) {
+    bool owned = swipeOwned;
+
+    swipeOwned = false;
+
+    if (!cancelled && !lockState && (swipeDx * swipeDx + swipeDy * swipeDy) >= 6400.) {
+        if (swipeDx * swipeDx > swipeDy * swipeDy) {
+            gestureAction(swipeDx < 0 ? comp->settings.swipeLeft.get() : comp->settings.swipeRight.get());
+        } else {
+            gestureAction(swipeDy < 0 ? comp->settings.swipeUp.get() : comp->settings.swipeDown.get());
+        }
+    }
+
+    return owned;
 }
 
 bool DesktopImpl::pinchBegin(u32) {
-    return lockState != nullptr;
+    inputActivity();
+    pinchScale = 1.;
+    pinchOwned = lockState || comp->settings.pinchIn.get() != GestureAction::none || comp->settings.pinchOut.get() != GestureAction::none;
+
+    return pinchOwned;
 }
 
-bool DesktopImpl::pinchUpdate(double, double, double, double) {
-    return lockState != nullptr;
+bool DesktopImpl::pinchUpdate(double, double, double scale, double) {
+    pinchScale = scale;
+
+    return pinchOwned;
 }
 
-bool DesktopImpl::pinchEnd(bool) {
-    return lockState != nullptr;
+bool DesktopImpl::pinchEnd(bool cancelled) {
+    bool owned = pinchOwned;
+
+    pinchOwned = false;
+
+    if (!cancelled && !lockState) {
+        if (pinchScale < .85) {
+            gestureAction(comp->settings.pinchIn.get());
+        } else if (pinchScale > 1.15) {
+            gestureAction(comp->settings.pinchOut.get());
+        }
+    }
+
+    return owned;
 }
 
 bool DesktopImpl::holdBegin(u32) {
+    inputActivity();
     return lockState != nullptr;
 }
 
@@ -687,6 +733,7 @@ bool DesktopImpl::holdEnd(bool) {
 }
 
 bool DesktopImpl::key(u32 code, bool pressed) {
+    inputActivity();
     scene->needsFrame = true;
 
     if (keyboard) {
@@ -697,18 +744,48 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     bool consumed = false;
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
+    if (!locked && comp->settings.shortcutCapture >= 0 && keyboard) {
+        bool modifier = code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL || code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT || code == KEY_LEFTALT || code == KEY_RIGHTALT || code == KEY_LEFTMETA || code == KEY_RIGHTMETA;
+
+        if (pressed && code == KEY_ESC) {
+            comp->settings.shortcutCapture = -1;
+
+            return true;
+        }
+
+        if (pressed && !modifier) {
+            size_t index = (size_t)comp->settings.shortcutCapture;
+
+            if (index < sizeof(comp->settings.shortcuts) / sizeof(*comp->settings.shortcuts)) {
+                ShortcutBinding binding = comp->settings.shortcuts[index].get();
+
+                binding.modifiers = mask;
+                binding.keysym = keyboard->keysymBase(code);
+                comp->settings.shortcuts[index].set(binding);
+            }
+
+            comp->settings.shortcutCapture = -1;
+
+            return true;
+        }
+
+        if (modifier) {
+            return true;
+        }
+    }
+
     if (!locked && pressed && (output->hasBrightness() || output->colorState().hdr()) && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
         bool up = code == KEY_BRIGHTNESSUP;
 
         if (output->colorState().hdr()) {
-            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? 10.0 : -10.0));
+            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? comp->settings.hdrStepNits.get() : -comp->settings.hdrStepNits.get()));
             osdKind = 3;
         } else {
-            output->setBrightness(output->brightness() + (up ? .05f : -.05f));
+            output->setBrightness(output->brightness() + (up ? comp->settings.brightnessStep.get() : -comp->settings.brightnessStep.get()));
             osdKind = 2;
         }
 
-        osdMs = nowMsec() + 1500;
+        osdMs = nowMsec() + (u64)(comp->settings.osdSeconds.get() * 1000.f);
         scene->needsFrame = true;
         consumed = true;
     }
@@ -717,7 +794,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         Mixer* mixer = comp->mixer;
 
         if (code == KEY_VOLUMEUP || code == KEY_VOLUMEDOWN) {
-            float delta = code == KEY_VOLUMEUP ? 0.05f : -0.05f;
+            float delta = code == KEY_VOLUMEUP ? comp->settings.volumeStep.get() : -comp->settings.volumeStep.get();
             float volume = mixer->volume() + delta;
 
             mixer->setVolume(volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume);
@@ -804,39 +881,155 @@ void DesktopImpl::wifiChanged() {
 
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
-        osdMs = nowMsec() + 1500;
+        osdMs = nowMsec() + (u64)(comp->settings.osdSeconds.get() * 1000.f);
         osdKind = 1;
     }
 
     scene->needsFrame = true;
 }
 
+void DesktopImpl::applyNightLight() {
+    const Settings& settings = comp->settings;
+    bool enabled = settings.nightOn.get();
+
+    if (settings.nightScheduled.get()) {
+        time_t now = time(nullptr);
+        tm local{};
+
+        localtime_r(&now, &local);
+
+        int minute = local.tm_hour * 60 + local.tm_min;
+        int start = settings.nightStartMinute.get();
+        int end = settings.nightEndMinute.get();
+        bool scheduled = start <= end ? minute >= start && minute < end : minute >= start || minute < end;
+
+        enabled = enabled || scheduled;
+    }
+
+    output->setColorTemp(enabled ? settings.nightK.get() : 0);
+}
+
+void DesktopImpl::redrawSetting() {
+    scene->needsFrame = true;
+}
+
+void DesktopImpl::sdrSettingChanged() {
+    output->setSdrWhite(comp->settings.sdrNits.get());
+    scene->needsFrame = true;
+}
+
+void DesktopImpl::nightSettingChanged() {
+    ev_timer_stop(comp->loop, &nightTimer);
+    applyNightLight();
+
+    if (comp->settings.nightScheduled.get()) {
+        ev_timer_set(&nightTimer, 30., 30.);
+        ev_timer_start(comp->loop, &nightTimer);
+    }
+
+    scene->needsFrame = true;
+}
+
+void DesktopImpl::themeSettingChanged() {
+    ThemeColor neutral = comp->settings.neutral.get();
+
+    if (comp->settings.themeVariant.get() == ThemeVariant::light) {
+        neutral.r = 1.f - neutral.r * .28f;
+        neutral.g = 1.f - neutral.g * .28f;
+        neutral.b = 1.f - neutral.b * .28f;
+    }
+
+    comp->theme.setSeeds(neutral, comp->settings.selection.get());
+    scene->needsFrame = true;
+}
+
+void DesktopImpl::updateAutoLock() {
+    ev_timer_stop(comp->loop, &autoLockTimer);
+
+    double seconds = comp->settings.lockSeconds.get();
+
+    if (!lockState && seconds > 0.) {
+        ev_timer_set(&autoLockTimer, seconds, 0.);
+        ev_timer_start(comp->loop, &autoLockTimer);
+    }
+}
+
+void DesktopImpl::inputActivity() {
+    if (comp->wayland) {
+        comp->wayland->inputActivity();
+    }
+
+    updateAutoLock();
+}
+
+void DesktopImpl::lock() {
+    if (!lockState) {
+        openLockOverlay(*comp, &lockState);
+    }
+
+    ev_timer_stop(comp->loop, &autoLockTimer);
+    scene->needsFrame = true;
+}
+
+void DesktopImpl::gestureAction(GestureAction action) {
+    switch (action) {
+        case GestureAction::none:
+            break;
+        case GestureAction::altTabNext:
+            altTabStep(1);
+            altTabCommit();
+            altTabActive = false;
+            altTabSel.reset();
+            break;
+        case GestureAction::altTabPrev:
+            altTabStep(-1);
+            altTabCommit();
+            altTabActive = false;
+            altTabSel.reset();
+            break;
+        case GestureAction::launcher:
+            launcherX = launcherY = -1.f;
+            launcherToggle = true;
+            break;
+        case GestureAction::notifications:
+            historyToggle = true;
+            break;
+        case GestureAction::lock:
+            lock();
+            break;
+    }
+
+    scene->needsFrame = true;
+}
+
 bool DesktopImpl::chordAction(u32 mask, u32 sym) {
-    for (const ChordDef& d : kChords) {
-        if (d.sym != sym || (d.mask != kChordAnyMods && d.mask != mask)) {
+    for (Setting<ShortcutBinding>& setting : comp->settings.shortcuts) {
+        const ShortcutBinding& binding = setting.get();
+
+        if (binding.keysym != sym || (binding.modifiers != ~0u && binding.modifiers != mask)) {
             continue;
         }
 
-        switch (d.id) {
-            case Chord::screenshot:
+        switch (binding.action) {
+            case ShortcutAction::screenshot:
                 renderer->captureScreenshot();
                 break;
-            case Chord::lock:
-                openLockOverlay(*comp, &lockState);
+            case ShortcutAction::lock:
+                lock();
                 break;
-            case Chord::launcher:
+            case ShortcutAction::launcher:
                 launcherX = launcherY = -1.f;
                 launcherToggle = true;
                 scene->needsFrame = true;
                 break;
-            case Chord::inspector:
+            case ShortcutAction::inspector:
                 inspectorToggle = true;
                 scene->needsFrame = true;
                 break;
-            case Chord::altTabNext:
+            case ShortcutAction::altTabNext:
                 altTabStep(1);
                 break;
-            case Chord::altTabPrev:
+            case ShortcutAction::altTabPrev:
                 altTabStep(-1);
                 break;
         }
@@ -1039,29 +1232,26 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     }
 }
 
-static StringView terminalProgram() {
-    const char* value = getenv("IMWAY_TERMINAL");
-
-    if (!value || !*value) {
-        value = getenv("TERMINAL");
-    }
-
-    return value && *value ? StringView(value) : "zutty"_sv;
-}
-
 static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool terminal) {
     if (cmd.empty() || sock.empty()) {
         return;
     }
 
     StringView shellArgs[] = {"sh"_sv, "-c"_sv, cmd};
-    StringView terminalArgs[] = {terminalProgram(), "-e"_sv, "sh"_sv, "-c"_sv, cmd};
+    StringBuilder terminalScript;
+
+    terminalScript << "exec \"$0\" "_sv << comp.settings.terminalExec.get() << " \"$1\""_sv;
+    StringView terminalArgs[] = {"sh"_sv, "-c"_sv, sv(terminalScript), comp.settings.terminal.get(), cmd};
     StringBuilder display;
 
     display << "WAYLAND_DISPLAY="_sv << sock;
 
     StringView env[] = {sv(display)};
     SupervisorSpawn spawn;
+
+    if (terminal && comp.settings.terminal.get().empty()) {
+        return;
+    }
 
     spawn.args = terminal ? terminalArgs : shellArgs;
     spawn.argCount = terminal ? 5 : 3;
@@ -1089,6 +1279,9 @@ static StringView wifiGlyph(WifiState s) {
 }
 
 void DesktopImpl::buildUi(Scene& scene) {
+    Settings& settings = comp->settings;
+    float uiScale = settings.uiScale.get();
+
     if (scene.focusedToplevel && (scene.focusedToplevel->minimized || !scene.focusedToplevel->mapped)) {
         scene.focusedToplevel.reset();
     }
@@ -1096,14 +1289,11 @@ void DesktopImpl::buildUi(Scene& scene) {
     if (themeRevision != comp->theme.revision) {
         applyImGuiTheme(ImGui::GetStyle(), comp->theme);
         themeRevision = comp->theme.revision;
-        desktopColor = comp->theme.desktop;
     }
 
-    // the ui only writes nextUiScale: the scale flips here and nowhere
-    // else, so a whole frame never mixes the new scale with the old style
-    if (nextUiScale != uiScale) {
-        uiScale = nextUiScale;
-
+    // The settings widget commits only when its slider is released. Apply
+    // that committed value here, before any windows for the frame are built.
+    if (appliedUiScale != uiScale) {
         // restyle from a pristine copy: ScaleAllSizes compounds otherwise
         ImGuiStyle fresh;
 
@@ -1114,6 +1304,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
         // the renderer rebakes its cursor bitmaps and the shadow sprite
         // off this scalar
+        appliedUiScale = uiScale;
         scene.uiScale = uiScale;
         scene.needsFrame = true;
     }
@@ -1133,7 +1324,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
     chromeInfo.layout = StringView(scene.layout);
     chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
-    chromeInfo.batteryPct = batDischarging ? batPct : -1;
+    chromeInfo.batteryPct = comp->settings.topBarBattery.get() == BatteryDisplay::always ? batPct : comp->settings.topBarBattery.get() == BatteryDisplay::discharging && batDischarging ? batPct : -1;
 
     DesktopChromeResult chromeResult;
 
@@ -1144,6 +1335,15 @@ void DesktopImpl::buildUi(Scene& scene) {
         launcherY = chromeResult.launcherY;
         launcherToggle = true;
         scene.needsFrame = true;
+    }
+
+    if (chromeResult.launchApp[0]) {
+        Buffer command;
+        bool terminal = false;
+
+        if (launcherCommand(StringView(chromeResult.launchApp), command, terminal)) {
+            spawnClient(*comp, sv(command), scene.socketName, terminal);
+        }
     }
 
     calendarToggle |= chromeResult.calendar;
@@ -1158,109 +1358,13 @@ void DesktopImpl::buildUi(Scene& scene) {
     }
 
     if (notifier) {
-        drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, uiScale);
+        drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
     }
-
-    if (settings.sdrNits < 0.f) {
-        settings.sdrNits = (float)output->colorState().sdrWhiteNits;
-    }
-
-    settings.uiScale = uiScale;
-    settings.neutral = comp->theme.neutralSeed;
-    settings.selection = comp->theme.selectionSeed;
-
-    if (comp->mixer) {
-        settings.volume = comp->mixer->volume();
-        settings.volMuted = comp->mixer->muted();
-    } else {
-        settings.volume = -1.f;
-    }
-
-    settings.brightness = output->hasBrightness() && !output->colorState().hdr() ? output->brightness() : -1.f;
-    settings.hdrPeakNits = (float)output->colorState().displayPeakNits;
-    settings.hasDnd = notifier != nullptr;
-    settings.trayMenuOnPrimary = comp->trayMenuOnPrimary;
-
-    if (notifier) {
-        settings.dnd = notifier->dnd();
-    }
-
-    if (keyboard) {
-        u32 n = keyboard->layoutCount();
-
-        settings.layoutCount = n < Settings::kMaxLayouts ? n : Settings::kMaxLayouts;
-
-        for (u32 i = 0; i < settings.layoutCount; i++) {
-            settings.layouts[i] = keyboard->layoutName(i);
-        }
-
-        settings.layoutActive = keyboard->activeLayout();
-        settings.xkbOptions = keyboard->options();
-    } else {
-        settings.layoutCount = 0;
-    }
-
-    settings.hasPointer = comp->input != nullptr;
-
-    if (comp->input) {
-        settings.pointerSpeed = (float)comp->input->pointerSpeed();
-    }
-
-    settings.bindings = bindingsView.data();
-    settings.bindingCount = bindingsView.length();
 
     drawSettings(*comp, settings, settingsToggle, &settingsState);
     drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
     anrToggle = false;
     settingsToggle = false;
-
-    if (settings.dndChanged && notifier) {
-        notifier->setDnd(settings.dnd);
-    }
-
-    if (settings.volumeChanged && comp->mixer) {
-        comp->mixer->setVolume(settings.volume);
-    }
-
-    if (settings.muteChanged && comp->mixer) {
-        comp->mixer->setMuted(settings.volMuted);
-    }
-
-    if (settings.brightnessChanged) {
-        output->setBrightness(settings.brightness);
-    }
-
-    if (settings.scaleChanged) {
-        nextUiScale = settings.scale;
-    }
-
-    if (settings.sdrChanged) {
-        output->setSdrWhite(settings.sdrNits);
-    }
-
-    if (settings.nightChanged) {
-        output->setColorTemp(settings.nightOn ? settings.nightK : 0);
-    }
-
-    if (settings.themeChanged) {
-        comp->theme.setSeeds(settings.neutral, settings.selection);
-    }
-
-    if (settings.layoutChanged && comp->wayland) {
-        comp->wayland->setLayout(settings.layoutSel);
-    }
-
-    if (settings.pointerChanged && comp->input) {
-        comp->input->setPointerSpeed(settings.pointerSpeed);
-    }
-
-    if (settings.desktopChanged) {
-        comp->trayMenuOnPrimary = settings.trayMenuOnPrimary;
-    }
-
-    if (settings.changed()) {
-        scene.needsFrame = true;
-    }
 
     if (osdMs) {
         u64 now = nowMsec();
@@ -1269,7 +1373,8 @@ void DesktopImpl::buildUi(Scene& scene) {
             osdMs = 0;
         } else {
             float rem = (float)(osdMs - now) / 1000.f;
-            float alpha = rem > 0.3f ? 1.f : rem / 0.3f;
+            float fade = settings.osdFadeSeconds.get();
+            float alpha = rem > fade ? 1.f : rem / fade;
 
             if (osdKind == 1 && comp->mixer) {
                 drawOsd(scene.outW, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
@@ -1727,7 +1832,7 @@ void DesktopImpl::buildUi(Scene& scene) {
         if (drawLauncher(*comp, launcherToggle, &launcherState, cmd, act, terminal, launcherX, launcherY)) {
             switch (act) {
                 case LauncherAction::lockScreen:
-                    openLockOverlay(*comp, &lockState);
+                    lock();
                     break;
                 case LauncherAction::settings:
                     settingsToggle = true;
@@ -1853,7 +1958,13 @@ void DesktopImpl::buildUi(Scene& scene) {
         }
     }
 
+    bool wasLocked = lockState != nullptr;
+
     drawLockOverlay(*comp, &lockState);
+
+    if (wasLocked && !lockState) {
+        updateAutoLock();
+    }
 
     if (lockState) {
         scene.kbCaptured = true;
@@ -1861,12 +1972,13 @@ void DesktopImpl::buildUi(Scene& scene) {
     }
 
     // xdg-system-bell: a brief screen flash on ring, fading over ~150ms
-    if (scene.bellMs) {
+    if (scene.bellMs && settings.visualBell.get()) {
         u64 now = nowMsec();
         u64 age = now >= scene.bellMs ? now - scene.bellMs : 0;
+        u64 duration = (u64)(settings.visualBellSeconds.get() * 1000.f);
 
-        if (age < 150) {
-            float a = (1.f - (float)age / 150.f) * 0.35f;
+        if (duration && age < duration) {
+            float a = (1.f - (float)age / (float)duration) * settings.visualBellStrength.get();
 
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), ImVec2((float)scene.outW, (float)scene.outH), IM_COL32(255, 255, 255, (int)(a * 255.f)));
             scene.needsFrame = true;
@@ -1883,6 +1995,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 }
 
 void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
+    float uiScale = comp->settings.uiScale.get();
     Surface* cs = overClient && scene.cursorSurface && scene.cursorSurface->texture ? scene.cursorSurface : nullptr;
 
     if (cs) {
@@ -1951,7 +2064,7 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
     if (cs) {
         renderer->drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
     } else if (kind != ImGuiMouseCursor_None) {
-        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale, kind);
+        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings.cursorScale.get(), kind);
     }
 }
 
@@ -1984,33 +2097,44 @@ void DesktopImpl::onListen(void*) {
     ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 }
 
-DesktopImpl::DesktopImpl(Composer& c, float scale)
+DesktopImpl::DesktopImpl(Composer& c)
     : comp(&c)
     , scene(c.scene)
     , output(c.output)
     , renderer(c.renderer)
     , keyboard(c.kb)
     , notifier(c.notifier)
-    , uiScale(scale)
-    , nextUiScale(scale)
+    , appliedUiScale(c.settings.uiScale.get())
 {
-    scene->uiScale = scale;
+    scene->uiScale = c.settings.uiScale.get();
     c.inputSinks.pushFront((InputSink*)this);
     c.mixerListeners.pushBack(c.pool->make<CallDesktopVolume>(this));
     c.wifiListeners.pushBack(c.pool->make<CallDesktopWifi>(this));
     c.outputResizedListeners.pushBack((Listener*)this);
 
-    for (const ChordDef& d : kChords) {
-        bindingsView.pushBack({d.chord, d.action});
-    }
+    c.settings.uiScale.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::redrawSetting));
+    c.settings.sdrNits.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::sdrSettingChanged));
+    c.settings.nightOn.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings.nightScheduled.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings.nightStartMinute.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings.nightEndMinute.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings.nightK.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings.neutral.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings.selection.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings.themeVariant.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings.lockSeconds.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::updateAutoLock));
 
-    bindingsView.pushBack({"Alt release"_sv, "commit the window switch"_sv});
-    bindingsView.pushBack({"Esc"_sv, "cancel the window switch"_sv});
-    bindingsView.pushBack({"XF86 volume keys"_sv, "volume up/down 5%, mute"_sv});
-    bindingsView.pushBack({"XF86 brightness keys"_sv, "backlight 5% or sdr white 10 nits"_sv});
+    ev_timer_init(&autoLockTimer, autoLockTimerCb, 0., 0.);
+    autoLockTimer.data = this;
+    ev_timer_init(&nightTimer, nightTimerCb, 0., 0.);
+    nightTimer.data = this;
+    updateAutoLock();
+    nightSettingChanged();
 }
 
 DesktopImpl::~DesktopImpl() noexcept {
+    ev_timer_stop(comp->loop, &autoLockTimer);
+    ev_timer_stop(comp->loop, &nightTimer);
     // the dialogs hold wl-side popup surfaces; close them while the imgui
     // context (owned by the renderer, which outlives us in the pool) is up
     dialog(settingsState);
@@ -2023,6 +2147,6 @@ DesktopImpl::~DesktopImpl() noexcept {
     closeLockOverlay(&lockState);
 }
 
-Desktop* Desktop::create(Composer& c, float uiScale) {
-    return c.pool->make<DesktopImpl>(c, uiScale);
+Desktop* Desktop::create(Composer& c) {
+    return c.pool->make<DesktopImpl>(c);
 }

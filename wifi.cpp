@@ -9,19 +9,29 @@
 using namespace stl;
 
 Wifi* Wifi::create(Composer& c) {
-    if (Wifi* w = WifiIwd::create(c)) {
-        return w;
+    BackendPreference preference = c.settings.wifiBackend.get();
+
+    if (preference == BackendPreference::disabled) {
+        return nullptr;
     }
 
-    if (Wifi* w = WifiNm::create(c)) {
-        return w;
+    if (preference != BackendPreference::second) {
+        if (Wifi* w = WifiIwd::create(c)) {
+            return w;
+        }
+    }
+
+    if (preference != BackendPreference::first) {
+        if (Wifi* w = WifiNm::create(c)) {
+            return w;
+        }
     }
 
     return nullptr;
 }
 
 void wifiNotifyTransition(Composer& c, WifiState& last, WifiState now, StringView ssid) {
-    if (!c.notifier) {
+    if (!c.notifier || !c.settings.notifyWifi.get()) {
         return;
     }
 

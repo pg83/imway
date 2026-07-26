@@ -22,6 +22,7 @@ struct DesktopChromeResult {
     bool wifi = false;
     float launcherX = -1.f;
     float launcherY = -1.f;
+    char launchApp[128] = "";
 };
 
 // The Unity-like desktop chrome is one public widget.  Internally its two

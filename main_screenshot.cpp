@@ -366,7 +366,27 @@ namespace {
         JxlEncoderFrameSettings* frame = JxlEncoderFrameSettingsCreate(enc, nullptr);
         JxlPixelFormat format{3, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
         size_t bytes = (size_t)w * h * 3 * sizeof(u16);
-        bool ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS && JxlEncoderSetColorEncoding(enc, &color) == JXL_ENC_SUCCESS && frame && JxlEncoderSetFrameLossless(frame, JXL_TRUE) == JXL_ENC_SUCCESS && JxlEncoderAddImageFrame(frame, &format, pixels, bytes) == JXL_ENC_SUCCESS;
+        bool lossless = !getenv("IMWAY_SHOT_LOSSLESS") || StringView(getenv("IMWAY_SHOT_LOSSLESS")) != "0"_sv;
+        bool frameConfigured = false;
+
+        if (frame) {
+            if (lossless) {
+                frameConfigured = JxlEncoderSetFrameLossless(frame, JXL_TRUE) == JXL_ENC_SUCCESS;
+            } else {
+                double quality = 90.;
+
+                if (const char* value = getenv("IMWAY_SHOT_QUALITY")) {
+                    quality = strtod(value, nullptr);
+                }
+
+                quality = quality < 1. ? 1. : quality > 100. ? 100. : quality;
+                float distance = quality >= 100. ? 0.f : (float)(.1 + (100. - quality) * .15);
+
+                frameConfigured = JxlEncoderSetFrameDistance(frame, distance) == JXL_ENC_SUCCESS;
+            }
+        }
+
+        bool ok = JxlEncoderSetBasicInfo(enc, &info) == JXL_ENC_SUCCESS && JxlEncoderSetColorEncoding(enc, &color) == JXL_ENC_SUCCESS && frameConfigured && JxlEncoderAddImageFrame(frame, &format, pixels, bytes) == JXL_ENC_SUCCESS;
 
         if (!ok) {
             JxlEncoderDestroy(enc);
@@ -423,12 +443,16 @@ namespace {
         encodeJxlPixels(selected, (const u16*)selected.rgb16.data(), selected.w, selected.h, out);
     }
 
-    // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.jxl (fallback ~/Pictures)
+    // User directory/template, falling back to
+    // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.<format>.
     Buffer destPath() {
         StringBuilder dir;
+        const char* configured = getenv("IMWAY_SHOT_DIR");
         const char* base = getenv("XDG_PICTURES_DIR");
 
-        if (base && *base) {
+        if (configured && *configured) {
+            dir << StringView(configured);
+        } else if (base && *base) {
             dir << StringView(base);
         } else {
             const char* home = getenv("HOME");
@@ -436,7 +460,10 @@ namespace {
             dir << StringView(home ? home : ".") << "/Pictures"_sv;
         }
 
-        dir << "/screenshots"_sv;
+        if (!configured || !*configured) {
+            dir << "/screenshots"_sv;
+        }
+
         mkdirs(sv(dir));
 
         time_t t = time(nullptr);
@@ -444,11 +471,20 @@ namespace {
 
         localtime_r(&t, &tm);
 
-        char stamp[32];
+        char stamp[256];
+        const char* name = getenv("IMWAY_SHOT_NAME");
 
-        strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &tm);
+        if (!name || !*name) {
+            name = "imway-%Y%m%d-%H%M%S";
+        }
 
-        return Buffer(sv(StringBuilder() << sv(dir) << "/imway-"_sv << StringView(stamp) << ".jxl"_sv));
+        if (!strftime(stamp, sizeof(stamp), name, &tm)) {
+            fail("screenshot filename is too long"_sv);
+        }
+
+        StringView extension = getenv("IMWAY_SHOT_FORMAT") && StringView(getenv("IMWAY_SHOT_FORMAT")) == "png"_sv ? ".png"_sv : ".jxl"_sv;
+
+        return Buffer(sv(StringBuilder() << sv(dir) << "/"_sv << StringView(stamp) << extension));
     }
 
     // ---- wayland clipboard ----
@@ -2192,9 +2228,19 @@ int mainScreenshot(StringView path) {
         Viewer view; // zoom 50%, no selection (whole frame) until the user drags
 
         // interactive phase: the cropper, or the error panel if the load failed
-        int action = runLoop(window, [&] {
-            return errText.empty() ? drawUi(window, img, tex, view) : drawError(sv(errText));
-        });
+        int action = 0;
+        StringView configuredAction(getenv("IMWAY_SHOT_ACTION") ? getenv("IMWAY_SHOT_ACTION") : "editor");
+
+        if (loaded && errText.empty() && configuredAction == "save"_sv) {
+            glfwHideWindow(window);
+            action = 1;
+        } else if (loaded && errText.empty() && configuredAction == "copy"_sv) {
+            action = 2;
+        } else {
+            action = runLoop(window, [&] {
+                return errText.empty() ? drawUi(window, img, tex, view) : drawError(sv(errText));
+            });
+        }
 
         // action phase: encode + save/copy; a failure switches to the error panel
         if (loaded && errText.empty() && (action == 1 || action == 2)) {
@@ -2204,13 +2250,18 @@ int mainScreenshot(StringView path) {
                 cropRegion(img, view.crop, x0, y0, x1, y1);
 
                 if (action == 1) {
-                    Buffer jxl;
+                    Buffer encoded;
+                    bool png = getenv("IMWAY_SHOT_FORMAT") && StringView(getenv("IMWAY_SHOT_FORMAT")) == "png"_sv;
 
-                    encodeJxlSelection(img, tex, x0, y0, x1, y1, jxl);
+                    if (png) {
+                        encodeSelection(img, tex, x0, y0, x1, y1, encoded);
+                    } else {
+                        encodeJxlSelection(img, tex, x0, y0, x1, y1, encoded);
+                    }
 
                     Buffer dest = destPath();
 
-                    saveFile(jxl, sv(dest));
+                    saveFile(encoded, sv(dest));
                     sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
                 } else {
                     encodeJxlSelection(img, tex, x0, y0, x1, y1, gClip.jxl);

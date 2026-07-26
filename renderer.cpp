@@ -214,6 +214,14 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallRendererSetting: Listener {
+        RendererImpl* parent;
+        void (RendererImpl::*callback)();
+
+        CallRendererSetting(RendererImpl* p, void (RendererImpl::*cb)());
+        void onListen(void*) override;
+    };
+
     struct RendererImpl: public Renderer, public IconResolver, public Listener, public FrameCapture {
         struct ev_loop* loop = nullptr;
         stl::ObjPool* pool = nullptr;
@@ -318,12 +326,12 @@ namespace {
         Vector<VkFramebuffer> scanFbs;
         Vector<VkImage> scanImages;
 
-        StringView fontPath;
         // the ui scale as last seen; the desktop owns changes and the
         // renderer rebakes cursor bitmaps when the scene scalar moves
-        float uiScale = 1.f;
+        float appliedUiScale = 1.f;
         ShadowSprite shadow; // window drop shadows, baked into the font atlas
         Composer* comp = nullptr;
+        ev_idle fontReloadIdle{};
 
         bool forceComposition = false;
         bool lastFrameDirect = false;
@@ -381,7 +389,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit);
+        RendererImpl(Composer& comp, const DeviceVk& vk, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -391,6 +399,9 @@ namespace {
         void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
         void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
         void setup();
+        void loadFont();
+        void scheduleFontReload();
+        void updateUiScale();
         void applyOutputSize();
         void setupOutputTransform();
         void recordOutputTransform(VkCommandBuffer commands, VkFramebuffer outputFramebuffer, VkDescriptorSet source, int w, int h, const OutputColorState& color, double kelvin);
@@ -465,6 +476,23 @@ namespace {
         parent->beginScreenshot();
     }
 
+    CallRendererSetting::CallRendererSetting(RendererImpl* p, void (RendererImpl::*cb)())
+        : parent(p)
+        , callback(cb)
+    {
+    }
+
+    void CallRendererSetting::onListen(void*) {
+        (parent->*callback)();
+    }
+
+    void fontReloadIdleCb(struct ev_loop* loop, ev_idle* idle, int) {
+        auto* renderer = (RendererImpl*)idle->data;
+
+        ev_idle_stop(loop, idle);
+        renderer->loadFont();
+    }
+
     void prepareCb(struct ev_loop*, ev_prepare* w, int) {
         auto* r = (RendererImpl*)w->data;
 
@@ -519,7 +547,7 @@ void RenderContext::finish() {
     handled = true;
 }
 
-RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, float scale, int limit)
+RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, int limit)
     : loop(comp.loop)
     , pool(comp.pool)
     , scene(comp.scene)
@@ -535,17 +563,22 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
-    fontPath = font;
-    uiScale = scale;
+    appliedUiScale = comp.settings.uiScale.get();
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.iconResolver = this;
     comp.frameListeners.pushFront((Listener*)this);
     comp.frameCapture = (FrameCapture*)this;
     comp.outputResizedListeners.pushBack(comp.pool->make<CallOutputResized>(this));
+    comp.settings.uiScale.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
+    comp.settings.cursorScale.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
+    comp.settings.fontPath.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
+    comp.settings.fontSize.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
+    ev_idle_init(&fontReloadIdle, fontReloadIdleCb);
+    fontReloadIdle.data = this;
     setup();
     // sized by the first mode announcement, like everything else here
-    shotCapture = ScreenshotCapture::create(comp, vk, 0, 0, fmt, uiScale, *comp.pool->make<CallScreenshotReady>(this));
+    shotCapture = ScreenshotCapture::create(comp, vk, 0, 0, fmt, *comp.pool->make<CallScreenshotReady>(this));
 
     if (output->vsynced()) {
         ev_prepare* prepare = createEvPrepare(*pool, loop);
@@ -563,7 +596,7 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, StringView font, 
 
     ev_timer* clockTimer = createEvTimer(*pool, loop);
 
-    ev_timer_init(clockTimer, clockTimerCb, 2., 2.);
+    ev_timer_init(clockTimer, clockTimerCb, 1., 1.);
     clockTimer->data = this;
     ev_timer_start(loop, clockTimer);
 }
@@ -575,6 +608,7 @@ RendererImpl::~RendererImpl() noexcept {
     // the impl and go here, everything setup-once sits in the pool
     vkDeviceWaitIdle(device);
     finishGpuFrame(false);
+    ev_idle_stop(loop, &fontReloadIdle);
 
     if (presentFenceFd >= 0) {
         close(presentFenceFd);
@@ -809,6 +843,68 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VK_CHECK(vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map));
 }
 
+void RendererImpl::loadFont() {
+    ImGuiIO& io = ImGui::GetIO();
+
+    io.Fonts->Clear();
+    io.FontDefault = nullptr;
+    shadow.rectId = -1;
+    shadow.atlas = io.Fonts;
+
+    StringView fontCandidates[] = {
+        comp->settings.fontPath.get(),
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv,
+        "/usr/share/fonts/TTF/DejaVuSans.ttf"_sv,
+    };
+    float size = comp->settings.fontSize.get();
+
+    for (StringView path : fontCandidates) {
+        if (path.empty()) {
+            continue;
+        }
+
+        Buffer p(path);
+
+        if (access(p.cStr(), R_OK) == 0) {
+            io.FontDefault = io.Fonts->AddFontFromFileTTF(p.cStr(), size, nullptr, io.Fonts->GetGlyphRangesCyrillic());
+        }
+
+        if (io.FontDefault) {
+            break;
+        }
+    }
+
+    if (!io.FontDefault) {
+        ImFontConfig config;
+
+        config.SizePixels = size;
+        io.FontDefault = io.Fonts->AddFontDefault(&config);
+    }
+
+    bakeWindowShadow(io.Fonts, shadow);
+    scene->needsFrame = true;
+}
+
+void RendererImpl::scheduleFontReload() {
+    ev_idle_start(loop, &fontReloadIdle);
+}
+
+void RendererImpl::updateUiScale() {
+    appliedUiScale = comp->settings.uiScale.get();
+    shadow.scale = appliedUiScale;
+
+    for (Vector<u32>& image : hwShapeCache) {
+        image.clear();
+    }
+
+    if (hwKind >= 0) {
+        pendingShape = hwKind;
+        hwKind = -2;
+    }
+
+    scene->needsFrame = true;
+}
+
 void RendererImpl::setup() {
     scanout = output->scanoutCount() > 0;
 
@@ -925,44 +1021,33 @@ void RendererImpl::setup() {
 
     ImGuiIO& io = ImGui::GetIO();
 
-    StringView fontCandidates[] = {fontPath, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv, "/usr/share/fonts/TTF/DejaVuSans.ttf"_sv};
-
-    for (StringView f : fontCandidates) {
-        if (f.empty()) {
-            continue;
-        }
-
-        Buffer p(f);
-
-        if (access(p.cStr(), R_OK) == 0 && io.Fonts->AddFontFromFileTTF(p.cStr(), 16.f, nullptr, io.Fonts->GetGlyphRangesCyrillic())) {
-            break;
-        }
-    }
-
     io.IniFilename = nullptr;
     io.DisplaySize = ImVec2((float)width, (float)height);
     io.BackendFlags |= ImGuiBackendFlags_HasMouseCursors;
 
     // window drop shadows via the imway fork hook; the sprite lives in the
     // font atlas, repacks carry its pixels along
-    bakeWindowShadow(io.Fonts, shadow);
-    shadow.scale = uiScale;
+    shadow.composer = comp;
+    shadow.scale = appliedUiScale;
+    loadFont();
     io.WindowShadowCallback = drawWindowShadow;
     io.WindowShadowCallbackUserData = &shadow;
 
     // clients are imgui windows: docking gives tabs and splits of wayland
     // windows for free
-    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    if (comp->settings.imguiDocking.get()) {
+        io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    }
 
     // dragging inside the client area belongs to the client (text selection),
     // windows move by their title bar only
     io.ConfigWindowsMoveFromTitleBarOnly = true;
 
-    if (uiScale != 1.f) {
+    if (appliedUiScale != 1.f) {
         ImGuiStyle& st = ImGui::GetStyle();
 
-        st.FontScaleMain = uiScale;
-        st.ScaleAllSizes(uiScale);
+        st.FontScaleMain = appliedUiScale;
+        st.ScaleAllSizes(appliedUiScale);
     }
 
     ImGui_ImplVulkan_InitInfo ii{};
@@ -1750,7 +1835,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands, VkFramebuffer
 
     push.row[6][0] = (float)mapping.peakNits;
     push.row[6][1] = mapping.hdr ? 0.f : 203.f;
-    push.row[6][2] = (float)((1u << ditherBits) - 1);
+    push.row[6][2] = comp->settings.dithering.get() ? (float)((1u << ditherBits) - 1) : 0.f;
     // temporal dither: shift the noise pattern every frame so quantization
     // structure does not freeze in screen space. splitMix64 of the frame
     // index: a pure function of it, decorrelated between frames (a linear
@@ -2271,7 +2356,7 @@ void RendererImpl::drawSurfaceRect(Surface& s, void* drawList, float x0, float y
 // frame edge and cache per kind.
 bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int hotX, int hotY) {
     // the plane can get rejected at runtime (mode-dependent), re-check live
-    bool hwCursor = hwCursorReady && output->cursorCapW() > 0;
+    bool hwCursor = comp->settings.hardwareCursor.get() && hwCursorReady && output->cursorCapW() > 0;
 
     if (cs) {
         // client-provided cursor surface: feed its pixels to the cursor plane.
@@ -2357,7 +2442,7 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
 
 // input-rate plane moves: the cursor tracks the pointer between frames
 void RendererImpl::cursorPlaneMove(double x, double y) {
-    if (hwCursorReady && hwVisible) {
+    if (comp->settings.hardwareCursor.get() && hwCursorReady && hwVisible) {
         output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
     }
 }
@@ -2380,7 +2465,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
     dl.PushClipRect(ImVec2(0.f, 0.f), ImVec2((float)hwCapW, (float)hwCapH), false);
 
-    float s = uiScale;
+    float s = appliedUiScale * comp->settings.cursorScale.get();
     float half = (float)(hwCapW < hwCapH ? hwCapW : hwCapH) * 0.5f;
 
     // the plane cannot scale: clamp so the largest shape fits the buffer
@@ -2643,21 +2728,6 @@ bool RendererImpl::renderFrame(int scanIdx) {
     frameIo.DisplaySize = ImVec2((float)width, (float)height);
     frameIo.DeltaTime = (float)(1.0 / scene->hz);
 
-    // the desktop applied a scale change: rebake the cursor bitmaps
-    if (scene->uiScale != uiScale) {
-        uiScale = scene->uiScale;
-        shadow.scale = uiScale;
-
-        for (Vector<u32>& img : hwShapeCache) {
-            img.clear();
-        }
-
-        if (hwKind >= 0) {
-            pendingShape = hwKind;
-            hwKind = -2;
-        }
-    }
-
     // icon textures the previous frame did not reference die now
     for (size_t i = 0; i < iconTexes.length();) {
         if (!iconTexes[i].used) {
@@ -2669,6 +2739,12 @@ bool RendererImpl::renderFrame(int scanIdx) {
             iconTexes.mut(i).used = false;
             i++;
         }
+    }
+
+    if (comp->settings.imguiDocking.get()) {
+        frameIo.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    } else {
+        frameIo.ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
     }
 
     ImGui_ImplVulkan_NewFrame();
@@ -3353,10 +3429,24 @@ void RendererImpl::frameNow() {
 
     scene->scanoutCandidateId = cand && cand->toplevel ? cand->toplevel->id : 0;
 
-    // let a fullscreen client that opted into tearing get async page flips
-    output->setTearingHint(cand && cand->tearingAsync);
+    bool tearing = false;
 
-    bool direct = cand && output->directScanout(cand->dmabuf, cand->frame);
+    if (cand) {
+        switch (comp->settings.tearing.get()) {
+        case TearingPolicy::deny:
+            break;
+        case TearingPolicy::client:
+            tearing = cand->tearingAsync;
+            break;
+        case TearingPolicy::always:
+            tearing = true;
+            break;
+        }
+    }
+
+    output->setTearingHint(tearing);
+
+    bool direct = comp->settings.directScanout.get() && cand && output->directScanout(cand->dmabuf, cand->frame);
 
     lastFrameDirect = direct;
 
@@ -3432,6 +3522,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(Composer& c, const DeviceVk& vk, StringView fontPath, float uiScale, int framesLimit) {
-    return c.pool->make<RendererImpl>(c, vk, fontPath, uiScale, framesLimit);
+Renderer* Renderer::create(Composer& c, const DeviceVk& vk, int framesLimit) {
+    return c.pool->make<RendererImpl>(c, vk, framesLimit);
 }

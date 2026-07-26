@@ -85,6 +85,78 @@ static void appendExec(StringBuilder& out, StringView val) {
     out << StringView(seg, b);
 }
 
+bool launcherCommand(StringView appId, Buffer& run, bool& terminal) {
+    if (appId.endsWith(".desktop"_sv)) {
+        appId = appId.prefix(appId.length() - 8);
+    }
+
+    bool found = false;
+
+    forEachXdgDataDir([&](StringView base) {
+        if (found) {
+            return;
+        }
+
+        StringBuilder path;
+
+        path << base << "/applications/"_sv << appId << ".desktop"_sv;
+        Buffer data;
+
+        try {
+            readFileContent(path, data);
+        } catch (...) {
+            return;
+        }
+
+        StringView rest = sv(data);
+        bool inSection = false;
+        bool isApp = false;
+        StringBuilder exec;
+
+        while (!rest.empty()) {
+            StringView line, tail;
+
+            if (!rest.split('\n', line, tail)) {
+                line = rest;
+                tail = {};
+            }
+
+            rest = tail;
+            line = line.stripCr();
+
+            if (!line.empty() && line[0] == '[') {
+                inSection = line == "[Desktop Entry]"_sv;
+                continue;
+            }
+
+            if (!inSection) {
+                continue;
+            }
+
+            StringView key, value;
+
+            if (!line.split('=', key, value)) {
+                continue;
+            }
+
+            if (key == "Exec"_sv && exec.empty()) {
+                appendExec(exec, value);
+            } else if (key == "Type"_sv) {
+                isApp = value == "Application"_sv;
+            } else if (key == "Terminal"_sv) {
+                terminal = value == "true"_sv;
+            }
+        }
+
+        if (isApp && !exec.empty()) {
+            run.append(exec.data(), exec.length());
+            found = true;
+        }
+    });
+
+    return found;
+}
+
 Dialog::Dialog() {
     rescan();
 }
@@ -277,8 +349,8 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
     const ImGuiStyle& st = ImGui::GetStyle();
     // the grid reuses the dock's icon metrics: the same button side, the
     // same slot-to-icon breathing room as the gap
-    float cell = dockIconSize();
-    float gap = dockBarWidth() - dockIconSize();
+    float cell = dockIconSize(c);
+    float gap = dockBarWidth(c) - dockIconSize(c);
 
     long appsN = appsVis;
     long sysN = n - appsN;
@@ -480,8 +552,11 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
                 // nothing highlighted: run the typed text as a command
                 StringView cmd(query);
 
-                run.append(cmd.begin(), cmd.length());
-                picked = !run.empty();
+                if (c.settings.launcherShellCommands.get()) {
+                    run.append(cmd.begin(), cmd.length());
+                    picked = !run.empty();
+                }
+
                 open = false;
             }
         }

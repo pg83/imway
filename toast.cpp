@@ -8,13 +8,17 @@
 
 using namespace stl;
 
-void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, float uiScale) {
-    float w = 320.f * uiScale;
-    float y = ImGui::GetFrameHeight() + 8.f;
+void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, int screenH, float uiScale) {
+    float w = c.settings.notificationWidth.get() * uiScale;
+    ToastPosition position = c.settings.toastPosition.get();
+    bool right = position == ToastPosition::topRight || position == ToastPosition::bottomRight;
+    bool bottom = position == ToastPosition::bottomRight || position == ToastPosition::bottomLeft;
+    float x = right ? (float)screenW - 8.f : 8.f;
+    float y = bottom ? (float)screenH - 8.f : ImGui::GetFrameHeight() + 8.f;
     u32 clicked = 0;
 
     notes.active([&](Toast& t) {
-        ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, y), ImGuiCond_Always, ImVec2(1.f, 0.f));
+        ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always, ImVec2(right ? 1.f : 0.f, bottom ? 1.f : 0.f));
         ImGui::SetNextWindowSize(ImVec2(w, 0.f), ImGuiCond_Always);
 
         auto& label = sb();
@@ -48,7 +52,7 @@ void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, 
                 clicked = t.id;
             }
 
-            y += ImGui::GetWindowHeight() + 6.f;
+            y += (bottom ? -1.f : 1.f) * (ImGui::GetWindowHeight() + 6.f);
         }
 
         ImGui::End();

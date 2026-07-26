@@ -17,5 +17,7 @@ struct Desktop {
     // cursor shape geometry for the renderer's cursor-plane rasterizer
     virtual void drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale, int kind) = 0;
 
-    static Desktop* create(Composer& c, float uiScale);
+    virtual void lock() = 0;
+
+    static Desktop* create(Composer& c);
 };
