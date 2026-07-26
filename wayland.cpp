@@ -6,14 +6,14 @@
 #include "util.h"
 #include "scene.h"
 #include "device.h"
-#include "desktop.h"
 #include "output.h"
+#include "desktop.h"
 #include "session.h"
 #include "composer.h"
-#include "dbus_menu.h"
 #include "keyboard.h"
 #include "listener.h"
 #include "weak_ptr.h"
+#include "dbus_menu.h"
 #include "device_vk.h"
 #include "icon_pool.h"
 #include "intr_list.h"
@@ -47,6 +47,7 @@
 #include <sys/socket.h>
 #include <sys/eventfd.h>
 #include <xkbcommon/xkbcommon.h>
+#include <appmenu-server-protocol.h>
 #include <fifo-v1-server-protocol.h>
 #include <linux/input-event-codes.h>
 #include <wayland-server-protocol.h>
@@ -61,7 +62,6 @@
 #include <pointer-warp-v1-server-protocol.h>
 #include <commit-timing-v1-server-protocol.h>
 #include <alpha-modifier-v1-server-protocol.h>
-#include <appmenu-server-protocol.h>
 #include <presentation-time-server-protocol.h>
 #include <xdg-activation-v1-server-protocol.h>
 #include <ext-idle-notify-v1-server-protocol.h>
@@ -4771,7 +4771,7 @@ namespace {
     }
 
     u32 decorationMode(ToplevelImpl& t) {
-        switch (t.srv->composer->settings.decorations.get()) {
+        switch (t.srv->composer->settings->decorations()) {
         case DecorationPolicy::client:
             return ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
         case DecorationPolicy::clientPreference:
@@ -6236,7 +6236,7 @@ namespace {
 
         zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat.kb->keymapFd(), seat.kb->keymapSize());
         zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display), seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
-        zwp_input_method_keyboard_grab_v2_send_repeat_info(r, im->srv->composer->settings.repeatRate.get(), im->srv->composer->settings.repeatDelay.get());
+        zwp_input_method_keyboard_grab_v2_send_repeat_info(r, im->srv->composer->settings->repeatRate(), im->srv->composer->settings->repeatDelay());
     }
 
     void imDestroy(wl_client*, wl_resource* res) {
@@ -7697,7 +7697,7 @@ namespace {
     void systemBellRing(wl_client*, wl_resource* res, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        if (!srv->composer->settings.visualBell.get()) {
+        if (!srv->composer->settings->visualBell()) {
             return;
         }
 
@@ -8547,7 +8547,7 @@ namespace {
         }
 
         if (!srv->dpmsOff && srv->output) {
-            if (srv->composer->settings.lockBeforeDpms.get() && srv->composer->desktop) {
+            if (srv->composer->settings->lockBeforeDpms() && srv->composer->desktop) {
                 srv->composer->desktop->lock();
             }
 
@@ -9599,7 +9599,7 @@ namespace {
         wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->kb->keymapFd(), seat->kb->keymapSize());
 
         if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
-            wl_keyboard_send_repeat_info(k, seat->srv->composer->settings.repeatRate.get(), seat->srv->composer->settings.repeatDelay.get());
+            wl_keyboard_send_repeat_info(k, seat->srv->composer->settings->repeatRate(), seat->srv->composer->settings->repeatDelay());
         }
 
         SeatState& s = *seat;
@@ -10335,7 +10335,7 @@ void WaylandImpl::activity() {
         ev_timer_again(loop, &n.timer);
     });
 
-    if (composer->settings.dpmsSeconds.get() > 0 && output) {
+    if (composer->settings->dpmsSeconds() > 0 && output) {
         ev_timer_again(loop, &dpmsTimer);
 
         if (dpmsOff) {
@@ -10428,11 +10428,11 @@ void SeatState::handleMotion(double x, double y) {
 
         pointerSetFocus(target, sx, sy);
 
-        if (target && srv->composer->settings.focusPolicy.get() == FocusPolicy::followsPointer) {
+        if (target && srv->composer->settings->focusPolicy() == FocusPolicy::followsPointer) {
             if (Toplevel* t = target->rootToplevel()) {
                 srv->scene->focusedToplevel.bind(t->weak);
 
-                if (srv->composer->settings.raiseOnFocus.get()) {
+                if (srv->composer->settings->raiseOnFocus()) {
                     t->raiseRequested = true;
                 }
 
@@ -11378,7 +11378,7 @@ void SeatState::focusToplevel(Toplevel* t) {
 
     focusGeneration++;
 
-    bool perWindowLayout = srv->composer->settings.layoutPolicy.get() == LayoutPolicy::perWindow;
+    bool perWindowLayout = srv->composer->settings->layoutPolicy() == LayoutPolicy::perWindow;
 
     // With per-window layouts the group follows focus. Global policy leaves
     // the keyboard's current group untouched.
@@ -11591,7 +11591,7 @@ void SeatState::toplevelGone(Toplevel* t) {
 }
 
 u32 WaylandImpl::preferredScale() const {
-    float scale = composer->settings.uiScale.get();
+    float scale = composer->settings->uiScale();
 
     if (scale < 1.f / 120.f) {
         scale = 1.f / 120.f;
@@ -11615,8 +11615,8 @@ void WaylandImpl::updateFractionalScale() {
 }
 
 void WaylandImpl::updateRepeat() {
-    int rate = composer->settings.repeatRate.get();
-    int delay = composer->settings.repeatDelay.get();
+    int rate = composer->settings->repeatRate();
+    int delay = composer->settings->repeatDelay();
 
     for (wl_resource* keyboardRes : seat.keyboards) {
         if (wl_resource_get_version(keyboardRes) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
@@ -11631,7 +11631,7 @@ void WaylandImpl::updateRepeat() {
 
 void WaylandImpl::updateKeymap() {
     seat.releaseAllKeys();
-    keyboard->configure(composer->settings.xkbLayouts.get(), composer->settings.xkbOptions.get());
+    keyboard->configure(composer->settings->xkbLayouts(), composer->settings->xkbOptions());
 
     for (wl_resource* keyboardRes : seat.keyboards) {
         wl_keyboard_send_keymap(keyboardRes, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keyboard->keymapFd(), keyboard->keymapSize());
@@ -11656,7 +11656,7 @@ void WaylandImpl::updateDecorations() {
 }
 
 void WaylandImpl::updateDpms() {
-    double seconds = composer->settings.dpmsSeconds.get();
+    double seconds = composer->settings->dpmsSeconds();
 
     ev_timer_stop(loop, &dpmsTimer);
 
@@ -11675,7 +11675,7 @@ void WaylandImpl::updateDpms() {
 }
 
 void WaylandImpl::updateAnrTimer() {
-    double seconds = composer->settings.anrSeconds.get() * .5;
+    double seconds = composer->settings->anrSeconds() * .5;
 
 #ifdef IMWAY_FOR_TESTS
     // the ANR scenario cannot wait out two real ping periods
@@ -11769,14 +11769,14 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     pingTimer.data = this;
     updateAnrTimer();
 
-    comp.settings.dpmsSeconds.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
-    comp.settings.repeatRate.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
-    comp.settings.repeatDelay.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
-    comp.settings.xkbLayouts.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
-    comp.settings.xkbOptions.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
-    comp.settings.uiScale.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateFractionalScale));
-    comp.settings.decorations.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
-    comp.settings.anrSeconds.changedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
+    comp.settings->addDpmsSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
+    comp.settings->addRepeatRateListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
+    comp.settings->addRepeatDelayListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
+    comp.settings->addXkbLayoutsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.settings->addXkbOptionsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.settings->addUiScaleListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateFractionalScale));
+    comp.settings->addDecorationsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
+    comp.settings->addAnrSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
     syncEvFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 

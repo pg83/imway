@@ -9,7 +9,7 @@
 using namespace stl;
 
 Wifi* Wifi::create(Composer& c) {
-    BackendPreference preference = c.settings.wifiBackend.get();
+    BackendPreference preference = c.settings->wifiBackend();
 
     if (preference == BackendPreference::disabled) {
         return nullptr;
@@ -31,7 +31,7 @@ Wifi* Wifi::create(Composer& c) {
 }
 
 void wifiNotifyTransition(Composer& c, WifiState& last, WifiState now, StringView ssid) {
-    if (!c.notifier || !c.settings.notifyWifi.get()) {
+    if (!c.notifier || !c.settings->notifyWifi()) {
         return;
     }
 

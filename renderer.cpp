@@ -563,17 +563,17 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, int limit)
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
-    appliedUiScale = comp.settings.uiScale.get();
+    appliedUiScale = comp.settings->uiScale();
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
     comp.iconResolver = this;
     comp.frameListeners.pushFront((Listener*)this);
     comp.frameCapture = (FrameCapture*)this;
     comp.outputResizedListeners.pushBack(comp.pool->make<CallOutputResized>(this));
-    comp.settings.uiScale.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
-    comp.settings.cursorScale.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
-    comp.settings.fontPath.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
-    comp.settings.fontSize.changedListeners.pushBack(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
+    comp.settings->addUiScaleListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
+    comp.settings->addCursorScaleListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
+    comp.settings->addFontPathListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
+    comp.settings->addFontSizeListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
     ev_idle_init(&fontReloadIdle, fontReloadIdleCb);
     fontReloadIdle.data = this;
     setup();
@@ -852,11 +852,11 @@ void RendererImpl::loadFont() {
     shadow.atlas = io.Fonts;
 
     StringView fontCandidates[] = {
-        comp->settings.fontPath.get(),
+        comp->settings->fontPath(),
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv,
         "/usr/share/fonts/TTF/DejaVuSans.ttf"_sv,
     };
-    float size = comp->settings.fontSize.get();
+    float size = comp->settings->fontSize();
 
     for (StringView path : fontCandidates) {
         if (path.empty()) {
@@ -890,7 +890,7 @@ void RendererImpl::scheduleFontReload() {
 }
 
 void RendererImpl::updateUiScale() {
-    appliedUiScale = comp->settings.uiScale.get();
+    appliedUiScale = comp->settings->uiScale();
     shadow.scale = appliedUiScale;
 
     for (Vector<u32>& image : hwShapeCache) {
@@ -1035,7 +1035,7 @@ void RendererImpl::setup() {
 
     // clients are imgui windows: docking gives tabs and splits of wayland
     // windows for free
-    if (comp->settings.imguiDocking.get()) {
+    if (comp->settings->imguiDocking()) {
         io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     }
 
@@ -1835,7 +1835,7 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands, VkFramebuffer
 
     push.row[6][0] = (float)mapping.peakNits;
     push.row[6][1] = mapping.hdr ? 0.f : 203.f;
-    push.row[6][2] = comp->settings.dithering.get() ? (float)((1u << ditherBits) - 1) : 0.f;
+    push.row[6][2] = comp->settings->dithering() ? (float)((1u << ditherBits) - 1) : 0.f;
     // temporal dither: shift the noise pattern every frame so quantization
     // structure does not freeze in screen space. splitMix64 of the frame
     // index: a pure function of it, decorrelated between frames (a linear
@@ -2356,7 +2356,7 @@ void RendererImpl::drawSurfaceRect(Surface& s, void* drawList, float x0, float y
 // frame edge and cache per kind.
 bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int hotX, int hotY) {
     // the plane can get rejected at runtime (mode-dependent), re-check live
-    bool hwCursor = comp->settings.hardwareCursor.get() && hwCursorReady && output->cursorCapW() > 0;
+    bool hwCursor = comp->settings->hardwareCursor() && hwCursorReady && output->cursorCapW() > 0;
 
     if (cs) {
         // client-provided cursor surface: feed its pixels to the cursor plane.
@@ -2442,7 +2442,7 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
 
 // input-rate plane moves: the cursor tracks the pointer between frames
 void RendererImpl::cursorPlaneMove(double x, double y) {
-    if (comp->settings.hardwareCursor.get() && hwCursorReady && hwVisible) {
+    if (comp->settings->hardwareCursor() && hwCursorReady && hwVisible) {
         output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
     }
 }
@@ -2465,7 +2465,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     dl.PushTexture(ImGui::GetIO().Fonts->TexRef);
     dl.PushClipRect(ImVec2(0.f, 0.f), ImVec2((float)hwCapW, (float)hwCapH), false);
 
-    float s = appliedUiScale * comp->settings.cursorScale.get();
+    float s = appliedUiScale * comp->settings->cursorScale();
     float half = (float)(hwCapW < hwCapH ? hwCapW : hwCapH) * 0.5f;
 
     // the plane cannot scale: clamp so the largest shape fits the buffer
@@ -2741,7 +2741,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         }
     }
 
-    if (comp->settings.imguiDocking.get()) {
+    if (comp->settings->imguiDocking()) {
         frameIo.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     } else {
         frameIo.ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
@@ -3432,7 +3432,7 @@ void RendererImpl::frameNow() {
     bool tearing = false;
 
     if (cand) {
-        switch (comp->settings.tearing.get()) {
+        switch (comp->settings->tearing()) {
         case TearingPolicy::deny:
             break;
         case TearingPolicy::client:
@@ -3446,7 +3446,7 @@ void RendererImpl::frameNow() {
 
     output->setTearingHint(tearing);
 
-    bool direct = comp->settings.directScanout.get() && cand && output->directScanout(cand->dmabuf, cand->frame);
+    bool direct = comp->settings->directScanout() && cand && output->directScanout(cand->dmabuf, cand->frame);
 
     lastFrameDirect = direct;
 

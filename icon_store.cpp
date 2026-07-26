@@ -165,7 +165,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
-    comp.settings.iconTheme.changedListeners.pushBack(comp.pool->make<CallIconTheme>(this));
+    comp.settings->addIconThemeListener(comp.pool->make<CallIconTheme>(this));
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
@@ -204,7 +204,7 @@ void IconStoreImpl::addWatches() {
         p << base << "/applications"_sv;
         inotify_add_watch(inoFd, p.cStr(), mask);
         p.reset();
-        StringView themes[] = {c->settings.iconTheme.get(), "hicolor"_sv};
+        StringView themes[] = {c->settings->iconTheme(), "hicolor"_sv};
 
         for (size_t i = 0; i < 2; i++) {
             if (themes[i].empty() || (i && themes[i] == themes[0])) {
@@ -260,7 +260,7 @@ void IconStoreImpl::buildIndex() {
         } catch (...) {
         }
 
-        StringView themes[] = {c->settings.iconTheme.get(), "hicolor"_sv};
+        StringView themes[] = {c->settings->iconTheme(), "hicolor"_sv};
 
         for (size_t i = 0; i < 2; i++) {
             if (!themes[i].empty() && (!i || themes[i] != themes[0])) {

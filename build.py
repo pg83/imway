@@ -33,6 +33,7 @@ if sanitizers:
 
 build.includes += [
     "$(S)/third_party/imgui",
+    "$(B)/generated",
     "$(B)/protocols",
     "$(B)/shaders",
     "$(B)/tests",
@@ -185,7 +186,25 @@ imgui = library(
 )
 
 
-imway_sources = build.glob("$(S)/*.cpp")
+settings_gen_header = "$(B)/generated/settings.gen.h"
+settings_gen_impl = "$(B)/generated/settings.gen.cpp"
+settings_gen_dialog = "$(B)/generated/settings.dialog.gen.inc"
+settings_codegen = command(
+    name="settings_codegen",
+    inputs=["$(S)/dev/gen_settings.py", "$(S)/dev/settings_def.py"],
+    outputs=[settings_gen_header, settings_gen_impl, settings_gen_dialog],
+    descr="GEN",
+    cmd=[
+        "python3", "$(S)/dev/gen_settings.py",
+        "--schema", "$(S)/dev/settings_def.py",
+        "--header", settings_gen_header,
+        "--impl", settings_gen_impl,
+        "--dialog", settings_gen_dialog,
+    ],
+)
+
+
+imway_sources = build.glob("$(S)/*.cpp") + [settings_gen_impl]
 
 # the control FIFO harness and the userspace KMS emulator are test tooling:
 # the production binary does not even link them
@@ -193,7 +212,7 @@ prod_sources = [s for s in imway_sources
                 if not s.endswith("/control.cpp") and not s.endswith("/kms_fake.cpp")]
 
 imway_deps = [
-    imgui, protocols,
+    settings_codegen, imgui, protocols,
     wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
     png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse, pam,
 ]
@@ -313,7 +332,16 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
         test_deps.append(display_info)
 
     if name == "client_reg_settings":
-        test_sources += ["$(S)/setting.cpp", "$(S)/listener.cpp"]
+        test_sources += [
+            settings_gen_impl,
+            "$(S)/composer.cpp",
+            "$(S)/input_router.cpp",
+            "$(S)/input_sink.cpp",
+            "$(S)/listener.cpp",
+            "$(S)/theme.cpp",
+            "$(S)/weak_ptr.cpp",
+        ]
+        test_deps += [settings_codegen, imgui]
 
     tests.append(program(
         name=name,

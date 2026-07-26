@@ -168,24 +168,18 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
     metadata = hdrOutputMetadata(color, content);
 
-    Setting<bool>* boolSettings[] = {&comp.settings.hdrEnabled};
-    Setting<float>* floatSettings[] = {
-        &comp.settings.sdrNits,
-        &comp.settings.displayMinNits,
-        &comp.settings.displayPeakNits,
-        &comp.settings.displayMaxFallNits,
-    };
-
-    for (Setting<bool>* setting : boolSettings) {
-        setting->changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
-    }
-
-    for (Setting<float>* setting : floatSettings) {
-        setting->changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
-    }
-
-    comp.settings.outputBpc.changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
-    comp.settings.outputRange.changedListeners.pushBack(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addHdrEnabledListener(
+        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addSdrNitsListener(
+        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayMinNitsListener(
+        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayPeakNitsListener(
+        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayMaxFallNitsListener(
+        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addOutputBpcListener(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addOutputRangeListener(comp.pool->make<CallHeadlessSetting>(this));
 
 #ifdef IMWAY_FOR_TESTS
     // headless has no cursor plane; scenarios opt into a fake one to test
@@ -199,12 +193,12 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
 void HeadlessOutput::applyDisplaySettings() {
     OutputConfiguration config;
 
-    config.hdrSdrWhiteNits = c->settings.hdrEnabled.get() ? c->settings.sdrNits.get() : 0.;
-    config.displayMinNits = c->settings.displayMinNits.get();
-    config.displayPeakNits = c->settings.displayPeakNits.get();
-    config.displayMaxFallNits = c->settings.displayMaxFallNits.get();
-    config.bpc = c->settings.outputBpc.get();
-    config.range = c->settings.outputRange.get();
+    config.hdrSdrWhiteNits = c->settings->hdrEnabled() ? c->settings->sdrNits() : 0.;
+    config.displayMinNits = c->settings->displayMinNits();
+    config.displayPeakNits = c->settings->displayPeakNits();
+    config.displayMaxFallNits = c->settings->displayMaxFallNits();
+    config.bpc = c->settings->outputBpc();
+    config.range = c->settings->outputRange();
     OutputColorState next = outputColorState(config, {});
 
     if (next == color) {

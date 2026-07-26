@@ -5,7 +5,7 @@
 #include "mixer_sndio.h"
 
 Mixer* Mixer::create(Composer& c) {
-    BackendPreference preference = c.settings.audioBackend.get();
+    BackendPreference preference = c.settings->audioBackend();
 
     if (preference == BackendPreference::disabled) {
         return nullptr;

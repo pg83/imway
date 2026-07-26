@@ -4,10 +4,10 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
-#include "dbus_menu.h"
-#include "dbus_menu_ui.h"
 #include "imgui_wm.h"
+#include "dbus_menu.h"
 #include "intr_list.h"
+#include "dbus_menu_ui.h"
 #include "status_notifier.h"
 
 #include <std/str/view.h>
@@ -165,11 +165,11 @@ namespace {
 }
 
 float dockBarWidth(const Composer& c) {
-    return c.settings.dockWidth.get() * ImGui::GetStyle().FontScaleMain;
+    return c.settings->dockWidth() * ImGui::GetStyle().FontScaleMain;
 }
 
 float dockIconSize(const Composer& c) {
-    return c.settings.dockIconSize.get() * ImGui::GetStyle().FontScaleMain;
+    return c.settings->dockIconSize() * ImGui::GetStyle().FontScaleMain;
 }
 
 void drawDock(Composer& c, DockResult& result) {
@@ -177,7 +177,7 @@ void drawDock(Composer& c, DockResult& result) {
     float scale = ImGui::GetStyle().FontScaleMain;
     float width = dockBarWidth(c);
     float iconSize = dockIconSize(c);
-    DockPosition position = c.settings.dockPosition.get();
+    DockPosition position = c.settings->dockPosition();
     ImGuiDir direction = position == DockPosition::left ? ImGuiDir_Left : position == DockPosition::right ? ImGuiDir_Right : position == DockPosition::top ? ImGuiDir_Up : ImGuiDir_Down;
     bool horizontal = position == DockPosition::top || position == DockPosition::bottom;
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus;
@@ -205,7 +205,7 @@ void drawDock(Composer& c, DockResult& result) {
 
             Group* group = nullptr;
 
-            if (c.settings.dockGroupWindows.get() && !t.appId.empty()) {
+            if (c.settings->dockGroupWindows() && !t.appId.empty()) {
                 for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
                     Group& candidate = *it;
 
@@ -241,13 +241,13 @@ void drawDock(Composer& c, DockResult& result) {
             }
         });
 
-        if (c.statusNotifier && c.settings.dockShowTray.get()) {
+        if (c.statusNotifier && c.settings->dockShowTray()) {
             c.statusNotifier->items([&](StatusNotifierItem& item) {
                 StringView app = !item.desktopEntry.empty() ? sv(item.desktopEntry) : sv(item.id);
                 Group* group = nullptr;
 
                 for (Group* it = groups.mutBegin(); it != groups.mutEnd(); it++) {
-                    if (c.settings.dockMergeTray.get() && !it->tray && sameApp(it->appId, app)) {
+                    if (c.settings->dockMergeTray() && !it->tray && sameApp(it->appId, app)) {
                         group = it;
 
                         break;
@@ -270,7 +270,7 @@ void drawDock(Composer& c, DockResult& result) {
             });
         }
 
-        StringView pinned = c.settings.dockPinned.get();
+        StringView pinned = c.settings->dockPinned();
         size_t pinnedOrder = 0;
 
         while (!pinned.empty()) {
@@ -310,8 +310,8 @@ void drawDock(Composer& c, DockResult& result) {
 
         // focus-MRU: the freshest stamp first; never-focused windows and
         // tray-only slots fall to the bottom in collection order
-        if (pinnedOrder || c.settings.dockMruOrder.get()) {
-            bool mru = c.settings.dockMruOrder.get();
+        if (pinnedOrder || c.settings->dockMruOrder()) {
+            bool mru = c.settings->dockMruOrder();
 
             quickSort(groups.mutBegin(), groups.mutEnd(), [mru](const Group& a, const Group& b) {
                 if (a.pinned != b.pinned) {
@@ -354,7 +354,7 @@ void drawDock(Composer& c, DockResult& result) {
 
             if (clicked) {
                 if (t) {
-                    DockClickAction action = c.settings.dockClickAction.get();
+                    DockClickAction action = c.settings->dockClickAction();
 
                     if (action == DockClickAction::minimize && group.focused) {
                         t->minimized = true;
@@ -385,7 +385,7 @@ void drawDock(Composer& c, DockResult& result) {
                 } else if (tray) {
                     ImVec2 mouse = ImGui::GetMousePos();
 
-                    if (tray->itemIsMenu && tray->menu && c.settings.trayMenuOnPrimary.get()) {
+                    if (tray->itemIsMenu && tray->menu && c.settings->trayMenuOnPrimary()) {
                         tray->menu->prepare(0);
                         ImGui::OpenPopup("##menu");
                     } else {

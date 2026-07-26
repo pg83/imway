@@ -552,7 +552,7 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
                 // nothing highlighted: run the typed text as a command
                 StringView cmd(query);
 
-                if (c.settings.launcherShellCommands.get()) {
+                if (c.settings->launcherShellCommands()) {
                     run.append(cmd.begin(), cmd.length());
                     picked = !run.empty();
                 }

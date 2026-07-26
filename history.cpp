@@ -26,7 +26,7 @@ void Dialog::draw(Composer& c, bool& open) {
     int screenW = c.scene->outW;
     int screenH = c.scene->outH;
     float uiScale = ImGui::GetStyle().FontScaleMain;
-    float w = (c.settings.notificationWidth.get() + 20.f) * uiScale;
+    float w = (c.settings->notificationWidth() + 20.f) * uiScale;
 
     ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
     ImGui::SetNextWindowSize(ImVec2(w, 0.f), ImGuiCond_Always);

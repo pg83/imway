@@ -696,7 +696,7 @@ void LockFilter::recordBlur(VkCommandBuffer commands) {
 }
 
 void LockFilter::apply(RenderContext& ctx) {
-    if (ctx.handled || !overlayDrawList || !ctx.drawData || !comp->settings.lockBlur.get()) {
+    if (ctx.handled || !overlayDrawList || !ctx.drawData || !comp->settings->lockBlur()) {
         return;
     }
 
@@ -758,7 +758,7 @@ void Dialog::draw(Composer& c, bool& open) {
         ImVec2 min = ImGui::GetWindowPos();
         ImVec2 max(min.x + w, min.y + h);
 
-        if (c.settings.lockBlur.get()) {
+        if (c.settings->lockBlur()) {
             ImTextureID background = filter.background();
 
             if (background) {
@@ -768,7 +768,7 @@ void Dialog::draw(Composer& c, bool& open) {
             }
         }
 
-        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, c.settings.lockTint.get())));
+        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, c.settings->lockTint())));
 
         float fieldW = 360.f * scale;
         float contentH = 78.f * scale;
@@ -812,7 +812,7 @@ void Dialog::draw(Composer& c, bool& open) {
 void Dialog::beginAuthentication() {
     memcpy(authPassword, password, sizeof(authPassword));
     authPassword[sizeof(authPassword) - 1] = 0;
-    StringView service = comp->settings.pamService.get();
+    StringView service = comp->settings->pamService();
     size_t serviceLen = service.length() < sizeof(authService) - 1 ? service.length() : sizeof(authService) - 1;
 
     memcpy(authService, service.begin(), serviceLen);

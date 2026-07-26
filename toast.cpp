@@ -9,8 +9,8 @@
 using namespace stl;
 
 void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, int screenH, float uiScale) {
-    float w = c.settings.notificationWidth.get() * uiScale;
-    ToastPosition position = c.settings.toastPosition.get();
+    float w = c.settings->notificationWidth() * uiScale;
+    ToastPosition position = c.settings->toastPosition();
     bool right = position == ToastPosition::topRight || position == ToastPosition::bottomRight;
     bool bottom = position == ToastPosition::bottomRight || position == ToastPosition::bottomLeft;
     float x = right ? (float)screenW - 8.f : 8.f;

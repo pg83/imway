@@ -6,12 +6,12 @@
 #include "output.h"
 #include "wayland.h"
 #include "composer.h"
-#include "keyboard.h"
 #include "imgui_wm.h"
+#include "keyboard.h"
 
+#include <std/dbg/assert.h>
 #include <std/lib/buffer.h>
 
-#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,19 +21,6 @@ using namespace stl;
 
 namespace {
     constexpr u32 anyModifiers = ~0u;
-
-    ShortcutBinding defaultShortcut(size_t index) {
-        constexpr ShortcutBinding defaults[] = {
-            {ShortcutAction::screenshot, anyModifiers, XKB_KEY_Print},
-            {ShortcutAction::lock, kModLogo, XKB_KEY_l},
-            {ShortcutAction::launcher, kModLogo, XKB_KEY_F2},
-            {ShortcutAction::inspector, kModLogo, XKB_KEY_F12},
-            {ShortcutAction::altTabNext, kModAlt, XKB_KEY_Tab},
-            {ShortcutAction::altTabPrev, kModAlt | kModShift, XKB_KEY_Tab},
-        };
-
-        return defaults[index];
-    }
 
     const char* shortcutActionName(ShortcutAction action) {
         switch (action) {
@@ -111,45 +98,86 @@ namespace {
         return 0;
     }
 
-    bool editText(const char* id, TextSetting& setting) {
-        Buffer text(setting.get());
+    using BoolSetter = void (Settings::*)(bool);
+    using FloatSetter = void (Settings::*)(float);
+    using IntSetter = void (Settings::*)(int);
+    using TextSetter = void (Settings::*)(StringView);
+
+    void settingText(const char* id, Settings& settings, StringView value,
+                     TextSetter setter) {
+        Buffer text(value);
         char* data = text.cStr();
-        bool changed = ImGui::InputText(id, data, text.capacity(), ImGuiInputTextFlags_CallbackResize, resizeText, &text);
 
-        return changed && setting.set(StringView((const char*)text.data()));
+        if (ImGui::InputText(id, data, text.capacity(),
+                             ImGuiInputTextFlags_CallbackResize, resizeText,
+                             &text)) {
+            (settings.*setter)(StringView((const char*)text.data()));
+        }
     }
 
-    bool editTextMultiline(const char* id, TextSetting& setting, float height) {
-        Buffer text(setting.get());
+    void settingTextMultiline(const char* id, Settings& settings,
+                              StringView value, float height,
+                              TextSetter setter) {
+        Buffer text(value);
         char* data = text.cStr();
-        bool changed = ImGui::InputTextMultiline(id, data, text.capacity(), ImVec2(-FLT_MIN, height), ImGuiInputTextFlags_CallbackResize, resizeText, &text);
 
-        return changed && setting.set(StringView((const char*)text.data()));
+        if (ImGui::InputTextMultiline(
+                id, data, text.capacity(), ImVec2(-FLT_MIN, height),
+                ImGuiInputTextFlags_CallbackResize, resizeText, &text)) {
+            (settings.*setter)(StringView((const char*)text.data()));
+        }
     }
 
-    bool checkbox(const char* id, Setting<bool>& setting) {
-        bool value = setting.get();
-
-        return ImGui::Checkbox(id, &value) && setting.set(value);
+    void settingCheckbox(const char* id, Settings& settings, bool value,
+                         BoolSetter setter) {
+        if (ImGui::Checkbox(id, &value)) {
+            (settings.*setter)(value);
+        }
     }
 
-    bool sliderFloat(const char* id, Setting<float>& setting, float low, float high, const char* format) {
-        float value = setting.get();
-
-        return ImGui::SliderFloat(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp) && setting.set(value);
+    void settingSliderFloat(const char* id, Settings& settings, float value,
+                            float low, float high, const char* format,
+                            FloatSetter setter) {
+        if (ImGui::SliderFloat(id, &value, low, high, format,
+                               ImGuiSliderFlags_AlwaysClamp)) {
+            (settings.*setter)(value);
+        }
     }
 
-    bool sliderInt(const char* id, Setting<int>& setting, int low, int high, const char* format) {
-        int value = setting.get();
-
-        return ImGui::SliderInt(id, &value, low, high, format, ImGuiSliderFlags_AlwaysClamp) && setting.set(value);
+    void settingSliderInt(const char* id, Settings& settings, int value,
+                          int low, int high, const char* format,
+                          IntSetter setter) {
+        if (ImGui::SliderInt(id, &value, low, high, format,
+                             ImGuiSliderFlags_AlwaysClamp)) {
+            (settings.*setter)(value);
+        }
     }
 
     template <typename T, size_t N>
-    bool combo(const char* id, Setting<T>& setting, const char* const (&items)[N]) {
-        int value = (int)setting.get();
+    void settingCombo(const char* id, Settings& settings, T value,
+                      const char* const (&items)[N],
+                      void (Settings::*setter)(T)) {
+        int index = (int)value;
 
-        return ImGui::Combo(id, &value, items, (int)N) && setting.set((T)value);
+        if (ImGui::Combo(id, &index, items, (int)N)) {
+            (settings.*setter)((T)index);
+        }
+    }
+
+    void settingTime(const char* id, Settings& settings, int minute,
+                     IntSetter setter) {
+        char value[16];
+
+        snprintf(value, sizeof(value), "%02d:%02d", minute / 60, minute % 60);
+        ImGui::SetNextItemWidth(-72.f);
+
+        if (ImGui::SliderInt(id, &minute, 0, 1439, "",
+                             ImGuiSliderFlags_AlwaysClamp)) {
+            (settings.*setter)(minute);
+        }
+
+        ImGui::SameLine();
+        ImGui::TextUnformatted(value);
     }
 
     void row(const char* label) {
@@ -162,59 +190,84 @@ namespace {
     }
 
     bool beginRows() {
-        if (!ImGui::BeginTable("rows", 2, ImGuiTableFlags_SizingStretchProp)) {
+        if (!ImGui::BeginTable("rows", 2,
+                               ImGuiTableFlags_SizingStretchProp)) {
             return false;
         }
 
-        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch, 1.f);
-        ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthStretch, 2.f);
+        ImGui::TableSetupColumn("label", ImGuiTableColumnFlags_WidthStretch,
+                                1.f);
+        ImGui::TableSetupColumn("control", ImGuiTableColumnFlags_WidthStretch,
+                                2.f);
 
         return true;
     }
 
-    void timeSetting(const char* id, Setting<int>& setting) {
-        int minute = setting.get();
-        char value[16];
+    void drawAudioStatus(Composer& c) {
+        if (c.mixer) {
+            float volume = c.mixer->volume() * 100.f;
+            bool muted = c.mixer->muted();
 
-        snprintf(value, sizeof(value), "%02d:%02d", minute / 60, minute % 60);
-        ImGui::SetNextItemWidth(-72.f);
+            row("muted");
 
-        if (ImGui::SliderInt(id, &minute, 0, 1439, "", ImGuiSliderFlags_AlwaysClamp)) {
-            setting.set(minute);
+            if (ImGui::Checkbox("##muted", &muted)) {
+                c.mixer->setMuted(muted);
+            }
+
+            row("volume");
+
+            if (ImGui::SliderFloat("##volume", &volume, 0.f, 100.f, "%.0f%%",
+                                   ImGuiSliderFlags_AlwaysClamp)) {
+                c.mixer->setVolume(volume / 100.f);
+            }
+        } else {
+            row("mixer");
+            ImGui::TextDisabled("unavailable");
+        }
+    }
+
+    void drawActiveLayout(Composer& c) {
+        if (!c.kb || !c.wayland) {
+            return;
         }
 
-        ImGui::SameLine();
-        ImGui::TextUnformatted(value);
+        row("active layout");
+
+        for (u32 i = 0; i < c.kb->layoutCount(); i++) {
+            StringView layout = c.kb->layoutName(i);
+            char name[80];
+
+            copyText(name, layout);
+
+            if (ImGui::RadioButton(name, c.kb->activeLayout() == i)) {
+                c.wayland->setLayout(i);
+            }
+        }
     }
 
     struct Dialog {
         int page = 0;
         float scaleEdit = 0.f;
+        int* shortcutCapture = nullptr;
 
-        void draw(Composer& c, Settings& settings, bool& open);
+        void draw(Composer& c, Settings& settings, int& capture, bool& open);
+        void drawGeneratedPage(Composer& c, Settings& settings);
         void pageDisplay(Composer& c, Settings& settings);
-        void pageColor(Settings& settings);
-        void pageAppearance(Settings& settings);
-        void pageAudio(Composer& c, Settings& settings);
         void pageInput(Composer& c, Settings& settings);
-        void pageKeyboard(Composer& c, Settings& settings);
-        void pageShortcuts(Settings& settings);
-        void pageNotifications(Settings& settings);
-        void pageDesktop(Settings& settings);
-        void pageApplications(Settings& settings);
-        void pageAdvanced(Settings& settings);
+        void pageShortcuts(Composer& c, Settings& settings);
+        void pageNotifications(Composer& c, Settings& settings);
     };
+
+#include "settings.dialog.gen.inc"
 }
 
-void initializeSettings(Settings& settings) {
-    if (const char* terminal = getenv("IMWAY_TERMINAL"); terminal && *terminal) {
-        settings.terminal.set(StringView(terminal));
-    } else if (const char* terminal = getenv("TERMINAL"); terminal && *terminal) {
-        settings.terminal.set(StringView(terminal));
-    }
-
-    for (size_t i = 0; i < sizeof(settings.shortcuts) / sizeof(*settings.shortcuts); i++) {
-        settings.shortcuts[i].set(defaultShortcut(i));
+void applySettingsEnvironment(Settings& settings) {
+    if (const char* terminal = getenv("IMWAY_TERMINAL");
+        terminal && *terminal) {
+        settings.setTerminal(StringView(terminal));
+    } else if (const char* terminal = getenv("TERMINAL");
+               terminal && *terminal) {
+        settings.setTerminal(StringView(terminal));
     }
 }
 
@@ -226,58 +279,73 @@ void Dialog::pageDisplay(Composer& c, Settings& s) {
     row("ui scale");
 
     if (scaleEdit <= 0.f) {
-        scaleEdit = s.uiScale.get();
+        scaleEdit = s.uiScale();
     }
 
-    ImGui::SliderFloat("##scale", &scaleEdit, 1.f, 3.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    ImGui::SliderFloat("##scale", &scaleEdit, 1.f, 3.f, "%.2f",
+                       ImGuiSliderFlags_AlwaysClamp);
 
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-        s.uiScale.set(scaleEdit);
+        s.setUiScale(scaleEdit);
     }
 
     row("connector");
-    editText("##output", s.outputName);
+    settingText("##output", s, s.outputName(), &Settings::setOutputName);
     row("mode");
-    editText("##mode", s.outputMode);
+    settingText("##mode", s, s.outputMode(), &Settings::setOutputMode);
 
-    if (c.output && c.output->hasBrightness() && !c.output->colorState().hdr()) {
+    if (c.output && c.output->hasBrightness()
+        && !c.output->colorState().hdr()) {
         float brightness = c.output->brightness() * 100.f;
 
         row("brightness");
 
-        if (ImGui::SliderFloat("##brightness", &brightness, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
+        if (ImGui::SliderFloat("##brightness", &brightness, 0.f, 100.f,
+                               "%.0f%%",
+                               ImGuiSliderFlags_AlwaysClamp)) {
             c.output->setBrightness(brightness / 100.f);
         }
     }
 
     row("brightness step");
-    sliderFloat("##brightness-step", s.brightnessStep, .01f, .25f, "%.0f%%");
+    settingSliderFloat("##brightness-step", s, s.brightnessStep(), .01f,
+                       .25f, "%.2f", &Settings::setBrightnessStep);
     row("hdr");
-    checkbox("enabled##hdr", s.hdrEnabled);
+    settingCheckbox("enabled##hdr", s, s.hdrEnabled(),
+                    &Settings::setHdrEnabled);
 
-    if (s.hdrEnabled.get()) {
+    if (s.hdrEnabled()) {
         row("sdr white");
-        sliderFloat("##sdr-white", s.sdrNits, 80.f, 300.f, "%.0f nits");
+        settingSliderFloat("##sdr-white", s, s.sdrNits(), 80.f, 300.f,
+                           "%.0f nits", &Settings::setSdrNits);
         row("hdr key step");
-        sliderFloat("##hdr-step", s.hdrStepNits, 1.f, 50.f, "%.0f nits");
+        settingSliderFloat("##hdr-step", s, s.hdrStepNits(), 1.f, 50.f,
+                           "%.0f nits", &Settings::setHdrStepNits);
         row("display minimum");
-        sliderFloat("##display-min", s.displayMinNits, 0.f, 10.f, "%.3f nits");
+        settingSliderFloat("##display-min", s, s.displayMinNits(), 0.f, 10.f,
+                           "%.3f nits", &Settings::setDisplayMinNits);
         row("display peak");
-        sliderFloat("##display-peak", s.displayPeakNits, 100.f, 10000.f, "%.0f nits");
+        settingSliderFloat("##display-peak", s, s.displayPeakNits(), 100.f,
+                           10000.f, "%.0f nits",
+                           &Settings::setDisplayPeakNits);
         row("display maxFALL");
-        sliderFloat("##display-fall", s.displayMaxFallNits, 100.f, 10000.f, "%.0f nits");
+        settingSliderFloat("##display-fall", s, s.displayMaxFallNits(), 100.f,
+                           10000.f, "%.0f nits",
+                           &Settings::setDisplayMaxFallNits);
     }
 
     row("bits per channel");
 
     {
         constexpr const char* items[] = {"auto", "8", "10", "12"};
-        int value = s.outputBpc.get() == 8 ? 1 : s.outputBpc.get() == 10 ? 2 : s.outputBpc.get() == 12 ? 3 : 0;
+        int value = s.outputBpc() == 8 ? 1
+                  : s.outputBpc() == 10 ? 2
+                  : s.outputBpc() == 12 ? 3 : 0;
 
         if (ImGui::Combo("##bpc", &value, items, 4)) {
             constexpr u32 values[] = {0, 8, 10, 12};
 
-            s.outputBpc.set(values[value]);
+            s.setOutputBpc(values[value]);
         }
     }
 
@@ -286,161 +354,43 @@ void Dialog::pageDisplay(Composer& c, Settings& s) {
     {
         constexpr const char* items[] = {"auto", "full", "limited"};
 
-        combo("##range", s.outputRange, items);
+        settingCombo("##range", s, s.outputRange(), items,
+                     &Settings::setOutputRange);
     }
 
     row("display sleep");
 
     {
-        float seconds = (float)s.dpmsSeconds.get();
+        float seconds = (float)s.dpmsSeconds();
 
-        if (ImGui::SliderFloat("##dpms", &seconds, 0.f, 3600.f, seconds > 0.f ? "%.0f sec" : "off", ImGuiSliderFlags_AlwaysClamp)) {
-            s.dpmsSeconds.set(seconds);
+        if (ImGui::SliderFloat("##dpms", &seconds, 0.f, 3600.f,
+                               seconds > 0.f ? "%.0f sec" : "off",
+                               ImGuiSliderFlags_AlwaysClamp)) {
+            s.setDpmsSeconds(seconds);
         }
     }
 
     row("auto lock");
 
     {
-        float seconds = (float)s.lockSeconds.get();
+        float seconds = (float)s.lockSeconds();
 
-        if (ImGui::SliderFloat("##lock", &seconds, 0.f, 3600.f, seconds > 0.f ? "%.0f sec" : "off", ImGuiSliderFlags_AlwaysClamp)) {
-            s.lockSeconds.set(seconds);
+        if (ImGui::SliderFloat("##lock", &seconds, 0.f, 3600.f,
+                               seconds > 0.f ? "%.0f sec" : "off",
+                               ImGuiSliderFlags_AlwaysClamp)) {
+            s.setLockSeconds(seconds);
         }
     }
 
     row("lock before sleep");
-    checkbox("##lock-before-dpms", s.lockBeforeDpms);
+    settingCheckbox("##lock-before-dpms", s, s.lockBeforeDpms(),
+                    &Settings::setLockBeforeDpms);
     row("osd duration");
-    sliderFloat("##osd", s.osdSeconds, .25f, 5.f, "%.2f sec");
+    settingSliderFloat("##osd", s, s.osdSeconds(), .25f, 5.f, "%.2f sec",
+                       &Settings::setOsdSeconds);
     row("osd fade");
-    sliderFloat("##osd-fade", s.osdFadeSeconds, .05f, 2.f, "%.2f sec");
-    ImGui::EndTable();
-}
-
-void Dialog::pageColor(Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
-
-    row("night light");
-    checkbox("##night", s.nightOn);
-    row("temperature");
-    sliderFloat("##night-k", s.nightK, 2500.f, 6500.f, "%.0f K");
-    row("schedule");
-    checkbox("##night-schedule", s.nightScheduled);
-
-    if (s.nightScheduled.get()) {
-        row("starts");
-        timeSetting("##night-start", s.nightStartMinute);
-        row("ends");
-        timeSetting("##night-end", s.nightEndMinute);
-    }
-
-    ImGui::EndTable();
-}
-
-void Dialog::pageAppearance(Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
-
-    row("variant");
-
-    {
-        constexpr const char* items[] = {"dark", "light", "system"};
-
-        combo("##theme-variant", s.themeVariant, items);
-    }
-
-    row("neutral");
-
-    {
-        ThemeColor color = s.neutral.get();
-
-        if (ImGui::ColorEdit3("##neutral", &color.r, ImGuiColorEditFlags_DisplayRGB)) {
-            s.neutral.set(color);
-        }
-    }
-
-    row("selection");
-
-    {
-        ThemeColor color = s.selection.get();
-
-        if (ImGui::ColorEdit3("##selection", &color.r, ImGuiColorEditFlags_DisplayRGB)) {
-            s.selection.set(color);
-        }
-    }
-
-    row("font");
-    editText("##font", s.fontPath);
-    row("font size");
-    sliderFloat("##font-size", s.fontSize, 8.f, 32.f, "%.0f px");
-    row("icon theme");
-    editText("##icon-theme", s.iconTheme);
-    row("cursor scale");
-    sliderFloat("##cursor-scale", s.cursorScale, .5f, 3.f, "%.2f");
-    row("window shadows");
-    checkbox("##shadows", s.windowShadows);
-
-    if (s.windowShadows.get()) {
-        row("shadow strength");
-        sliderFloat("##shadow-strength", s.shadowStrength, 0.f, 2.f, "%.2f");
-    }
-
-    row("visual bell");
-    checkbox("##visual-bell", s.visualBell);
-
-    if (s.visualBell.get()) {
-        row("bell duration");
-        sliderFloat("##bell-seconds", s.visualBellSeconds, .02f, 1.f, "%.2f sec");
-        row("bell strength");
-        sliderFloat("##bell-strength", s.visualBellStrength, 0.f, 1.f, "%.2f");
-    }
-
-    row("lock blur");
-    checkbox("##lock-blur", s.lockBlur);
-    row("lock tint");
-    sliderFloat("##lock-tint", s.lockTint, 0.f, 1.f, "%.2f");
-    ImGui::EndTable();
-}
-
-void Dialog::pageAudio(Composer& c, Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
-
-    if (c.mixer) {
-        float volume = c.mixer->volume() * 100.f;
-        bool muted = c.mixer->muted();
-
-        row("muted");
-
-        if (ImGui::Checkbox("##muted", &muted)) {
-            c.mixer->setMuted(muted);
-        }
-
-        row("volume");
-
-        if (ImGui::SliderFloat("##volume", &volume, 0.f, 100.f, "%.0f%%", ImGuiSliderFlags_AlwaysClamp)) {
-            c.mixer->setVolume(volume / 100.f);
-        }
-    } else {
-        row("mixer");
-        ImGui::TextDisabled("unavailable");
-    }
-
-    row("key step");
-    sliderFloat("##volume-step", s.volumeStep, .01f, .25f, "%.0f%%");
-    row("backend");
-
-    {
-        constexpr const char* items[] = {"auto", "sndio", "pulse", "disabled"};
-
-        combo("##audio-backend", s.audioBackend, items);
-    }
-
+    settingSliderFloat("##osd-fade", s, s.osdFadeSeconds(), .05f, 2.f,
+                       "%.2f sec", &Settings::setOsdFadeSeconds);
     ImGui::EndTable();
 }
 
@@ -455,61 +405,83 @@ void Dialog::pageInput(Composer& c, Settings& s) {
     }
 
     row("pointer speed");
-    sliderFloat("##pointer-speed", s.pointerSpeed, -1.f, 1.f, "%.2f");
+    settingSliderFloat("##pointer-speed", s, s.pointerSpeed(), -1.f, 1.f,
+                       "%.2f", &Settings::setPointerSpeed);
     row("acceleration");
 
     {
         constexpr const char* items[] = {"adaptive", "flat"};
 
-        combo("##accel-profile", s.pointerAccelProfile, items);
+        settingCombo("##accel-profile", s, s.pointerAccelProfile(), items,
+                     &Settings::setPointerAccelProfile);
     }
 
     row("tap to click");
-    checkbox("##tap", s.tapToClick);
+    settingCheckbox("##tap", s, s.tapToClick(), &Settings::setTapToClick);
     row("natural scroll");
-    checkbox("##natural", s.naturalScroll);
+    settingCheckbox("##natural", s, s.naturalScroll(),
+                    &Settings::setNaturalScroll);
     row("left handed");
-    checkbox("##left-handed", s.leftHanded);
+    settingCheckbox("##left-handed", s, s.leftHanded(),
+                    &Settings::setLeftHanded);
     row("disable while typing");
-    checkbox("##dwt", s.disableWhileTyping);
+    settingCheckbox("##dwt", s, s.disableWhileTyping(),
+                    &Settings::setDisableWhileTyping);
     row("middle emulation");
-    checkbox("##middle", s.middleEmulation);
+    settingCheckbox("##middle", s, s.middleEmulation(),
+                    &Settings::setMiddleEmulation);
     row("click method");
 
     {
-        constexpr const char* items[] = {"auto", "button areas", "clickfinger"};
+        constexpr const char* items[] = {
+            "auto", "button areas", "clickfinger",
+        };
 
-        combo("##click-method", s.touchpadClickMethod, items);
+        settingCombo("##click-method", s, s.touchpadClickMethod(), items,
+                     &Settings::setTouchpadClickMethod);
     }
 
     row("scroll method");
 
     {
-        constexpr const char* items[] = {"auto", "two finger", "edge", "button"};
+        constexpr const char* items[] = {
+            "auto", "two finger", "edge", "button",
+        };
 
-        combo("##scroll-method", s.touchpadScrollMethod, items);
+        settingCombo("##scroll-method", s, s.touchpadScrollMethod(), items,
+                     &Settings::setTouchpadScrollMethod);
     }
 
-    constexpr const char* gestureItems[] = {"none", "next window", "previous window", "launcher", "notifications", "lock"};
+    constexpr const char* gestureItems[] = {
+        "none", "next window", "previous window",
+        "launcher", "notifications", "lock",
+    };
 
     row("swipe left");
-    combo("##swipe-left", s.swipeLeft, gestureItems);
+    settingCombo("##swipe-left", s, s.swipeLeft(), gestureItems,
+                 &Settings::setSwipeLeft);
     row("swipe right");
-    combo("##swipe-right", s.swipeRight, gestureItems);
+    settingCombo("##swipe-right", s, s.swipeRight(), gestureItems,
+                 &Settings::setSwipeRight);
     row("swipe up");
-    combo("##swipe-up", s.swipeUp, gestureItems);
+    settingCombo("##swipe-up", s, s.swipeUp(), gestureItems,
+                 &Settings::setSwipeUp);
     row("swipe down");
-    combo("##swipe-down", s.swipeDown, gestureItems);
+    settingCombo("##swipe-down", s, s.swipeDown(), gestureItems,
+                 &Settings::setSwipeDown);
     row("pinch in");
-    combo("##pinch-in", s.pinchIn, gestureItems);
+    settingCombo("##pinch-in", s, s.pinchIn(), gestureItems,
+                 &Settings::setPinchIn);
     row("pinch out");
-    combo("##pinch-out", s.pinchOut, gestureItems);
+    settingCombo("##pinch-out", s, s.pinchOut(), gestureItems,
+                 &Settings::setPinchOut);
     ImGui::EndTable();
 
-    size_t devices = s.inputDeviceCount.get();
+    size_t devices = s.inputDeviceCount();
 
-    for (size_t i = 0; i < devices && i < sizeof(s.inputDevices) / sizeof(*s.inputDevices); i++) {
-        InputDeviceSettings value = s.inputDevices[i].get();
+    for (size_t i = 0;
+         i < devices && i < Settings::inputDeviceCapacity; i++) {
+        InputDeviceSettings value = s.inputDevice(i);
 
         ImGui::PushID((int)i);
 
@@ -520,7 +492,9 @@ void Dialog::pageInput(Composer& c, Settings& s) {
                 ImGui::Checkbox("pointer speed", &value.pointerSpeedSet);
 
                 if (value.pointerSpeedSet) {
-                    ImGui::SliderFloat("##device-speed", &value.pointerSpeed, -1.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+                    ImGui::SliderFloat("##device-speed", &value.pointerSpeed,
+                                       -1.f, 1.f, "%.2f",
+                                       ImGuiSliderFlags_AlwaysClamp);
                 }
 
                 ImGui::Checkbox("natural scroll", &value.naturalScrollSet);
@@ -538,7 +512,7 @@ void Dialog::pageInput(Composer& c, Settings& s) {
                 }
             }
 
-            s.inputDevices[i].set(value);
+            s.setInputDevice(i, value);
             ImGui::TreePop();
         }
 
@@ -546,56 +520,20 @@ void Dialog::pageInput(Composer& c, Settings& s) {
     }
 }
 
-void Dialog::pageKeyboard(Composer& c, Settings& s) {
-    if (!beginRows()) {
+void Dialog::pageShortcuts(Composer&, Settings& s) {
+    if (!ImGui::BeginTable(
+            "shortcuts", 2,
+            ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
         return;
     }
 
-    if (c.kb && c.wayland) {
-        row("active layout");
+    ImGui::TableSetupColumn("binding", ImGuiTableColumnFlags_WidthStretch,
+                            1.f);
+    ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch,
+                            2.f);
 
-        for (u32 i = 0; i < c.kb->layoutCount(); i++) {
-            StringView layout = c.kb->layoutName(i);
-            char name[80];
-
-            copyText(name, layout);
-
-            if (ImGui::RadioButton(name, c.kb->activeLayout() == i)) {
-                c.wayland->setLayout(i);
-            }
-        }
-    }
-
-    row("layouts");
-    editText("##layouts", s.xkbLayouts);
-    row("xkb options");
-    editText("##xkb-options", s.xkbOptions);
-    row("layout scope");
-
-    {
-        constexpr const char* items[] = {"global", "per window"};
-
-        combo("##layout-policy", s.layoutPolicy, items);
-    }
-
-    row("repeat rate");
-    sliderInt("##repeat-rate", s.repeatRate, 1, 100, "%d Hz");
-    row("repeat delay");
-    sliderInt("##repeat-delay", s.repeatDelay, 100, 2000, "%d ms");
-
-    ImGui::EndTable();
-}
-
-void Dialog::pageShortcuts(Settings& s) {
-    if (!ImGui::BeginTable("shortcuts", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
-        return;
-    }
-
-    ImGui::TableSetupColumn("binding", ImGuiTableColumnFlags_WidthStretch, 1.f);
-    ImGui::TableSetupColumn("action", ImGuiTableColumnFlags_WidthStretch, 2.f);
-
-    for (size_t i = 0; i < sizeof(s.shortcuts) / sizeof(*s.shortcuts); i++) {
-        ShortcutBinding binding = s.shortcuts[i].get();
+    for (size_t i = 0; i < Settings::shortcutCount; i++) {
+        ShortcutBinding binding = s.shortcut(i);
         char chord[128];
 
         shortcutName(binding, chord);
@@ -603,13 +541,16 @@ void Dialog::pageShortcuts(Settings& s) {
         ImGui::TableNextRow();
         ImGui::TableSetColumnIndex(0);
 
-        if (ImGui::Button(s.shortcutCapture == (int)i ? "press a key..." : chord, ImVec2(-FLT_MIN, 0.f))) {
-            s.shortcutCapture = (int)i;
+        const char* label = *shortcutCapture == (int)i
+                          ? "press a key..." : chord;
+
+        if (ImGui::Button(label, ImVec2(-FLT_MIN, 0.f))) {
+            *shortcutCapture = (int)i;
         }
 
         if (ImGui::BeginPopupContextItem("binding")) {
             if (ImGui::MenuItem("reset")) {
-                s.shortcuts[i].set(defaultShortcut(i));
+                s.setShortcut(i, generatedShortcutDefault(i));
             }
 
             ImGui::EndPopup();
@@ -623,54 +564,68 @@ void Dialog::pageShortcuts(Settings& s) {
     ImGui::EndTable();
 }
 
-void Dialog::pageNotifications(Settings& s) {
+void Dialog::pageNotifications(Composer&, Settings& s) {
     if (!beginRows()) {
         return;
     }
 
     row("do not disturb");
-    checkbox("##dnd", s.dnd);
+    settingCheckbox("##dnd", s, s.dnd(), &Settings::setDnd);
     row("dnd schedule");
-    checkbox("##dnd-schedule", s.dndScheduled);
+    settingCheckbox("##dnd-schedule", s, s.dndScheduled(),
+                    &Settings::setDndScheduled);
 
-    if (s.dndScheduled.get()) {
+    if (s.dndScheduled()) {
         row("starts");
-        timeSetting("##dnd-start", s.dndStartMinute);
+        settingTime("##dnd-start", s, s.dndStartMinute(),
+                    &Settings::setDndStartMinute);
         row("ends");
-        timeSetting("##dnd-end", s.dndEndMinute);
+        settingTime("##dnd-end", s, s.dndEndMinute(),
+                    &Settings::setDndEndMinute);
     }
 
     row("default timeout");
-    sliderFloat("##notification-timeout", s.notificationSeconds, 1.f, 30.f, "%.1f sec");
+    settingSliderFloat("##notification-timeout", s, s.notificationSeconds(),
+                       1.f, 30.f, "%.1f sec",
+                       &Settings::setNotificationSeconds);
     row("history limit");
-    sliderInt("##notification-history", s.notificationHistory, 0, 1000, "%d");
+    settingSliderInt("##notification-history", s, s.notificationHistory(), 0,
+                     1000, "%d", &Settings::setNotificationHistory);
     row("toast width");
-    sliderFloat("##notification-width", s.notificationWidth, 200.f, 800.f, "%.0f px");
+    settingSliderFloat("##notification-width", s, s.notificationWidth(),
+                       200.f, 800.f, "%.0f px",
+                       &Settings::setNotificationWidth);
     row("toast position");
 
     {
-        constexpr const char* items[] = {"top right", "top left", "bottom right", "bottom left"};
+        constexpr const char* items[] = {
+            "top right", "top left", "bottom right", "bottom left",
+        };
 
-        combo("##toast-position", s.toastPosition, items);
+        settingCombo("##toast-position", s, s.toastPosition(), items,
+                     &Settings::setToastPosition);
     }
 
     row("wifi events");
-    checkbox("##notify-wifi", s.notifyWifi);
+    settingCheckbox("##notify-wifi", s, s.notifyWifi(),
+                    &Settings::setNotifyWifi);
     row("critical notifications");
-    checkbox("##critical", s.allowCriticalNotifications);
+    settingCheckbox("##critical", s, s.allowCriticalNotifications(),
+                    &Settings::setAllowCriticalNotifications);
     ImGui::EndTable();
 
     ImGui::SeparatorText("application rules");
-    size_t count = s.notificationRuleCount.get();
+    size_t count = s.notificationRuleCount();
 
-    for (size_t i = 0; i < count && i < sizeof(s.notificationRules) / sizeof(*s.notificationRules); i++) {
-        NotificationRule rule = s.notificationRules[i].get();
+    for (size_t i = 0;
+         i < count && i < Settings::notificationRuleCapacity; i++) {
+        NotificationRule rule = s.notificationRule(i);
 
         ImGui::PushID((int)i);
         ImGui::SetNextItemWidth(-130.f);
 
         if (ImGui::InputText("##app", rule.app, sizeof(rule.app))) {
-            s.notificationRules[i].set(rule);
+            s.setNotificationRule(i, rule);
         }
 
         ImGui::SameLine();
@@ -682,7 +637,7 @@ void Dialog::pageNotifications(Settings& s) {
 
             if (ImGui::Combo("##policy", &policy, items, 3)) {
                 rule.policy = (NotificationPolicy)policy;
-                s.notificationRules[i].set(rule);
+                s.setNotificationRule(i, rule);
             }
         }
 
@@ -690,10 +645,10 @@ void Dialog::pageNotifications(Settings& s) {
 
         if (ImGui::SmallButton("remove")) {
             for (size_t j = i + 1; j < count; j++) {
-                s.notificationRules[j - 1].set(s.notificationRules[j].get());
+                s.setNotificationRule(j - 1, s.notificationRule(j));
             }
 
-            s.notificationRuleCount.set(count - 1);
+            s.setNotificationRuleCount(count - 1);
             count--;
             i--;
         }
@@ -701,208 +656,21 @@ void Dialog::pageNotifications(Settings& s) {
         ImGui::PopID();
     }
 
-    if (count < sizeof(s.notificationRules) / sizeof(*s.notificationRules) && ImGui::SmallButton("add application rule")) {
-        s.notificationRules[count].set({});
-        s.notificationRuleCount.set(count + 1);
+    if (count < Settings::notificationRuleCapacity
+        && ImGui::SmallButton("add application rule")) {
+        s.setNotificationRule(count, {});
+        s.setNotificationRuleCount(count + 1);
     }
 }
 
-void Dialog::pageDesktop(Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
+void Dialog::draw(Composer& c, Settings& s, int& capture, bool& open) {
+    float uiScale = s.uiScale();
 
-    row("ItemIsMenu primary");
-    checkbox("open DBusMenu", s.trayMenuOnPrimary);
-    row("dock");
-    checkbox("visible##dock", s.dockVisible);
-    row("dock position");
-
-    {
-        constexpr const char* items[] = {"left", "right", "top", "bottom"};
-
-        combo("##dock-position", s.dockPosition, items);
-    }
-
-    row("auto hide");
-    checkbox("##dock-autohide", s.dockAutoHide);
-    row("dock width");
-    sliderFloat("##dock-width", s.dockWidth, 32.f, 128.f, "%.0f px");
-    row("icon size");
-    sliderFloat("##dock-icons", s.dockIconSize, 16.f, 96.f, "%.0f px");
-    row("group windows");
-    checkbox("##dock-group", s.dockGroupWindows);
-    row("show tray");
-    checkbox("##dock-tray", s.dockShowTray);
-    row("merge tray");
-    checkbox("##dock-merge", s.dockMergeTray);
-    row("mru order");
-    checkbox("##dock-mru", s.dockMruOrder);
-    row("active click");
-
-    {
-        constexpr const char* items[] = {"focus", "minimize", "cycle"};
-
-        combo("##dock-click", s.dockClickAction, items);
-    }
-
-    row("pinned apps");
-    editText("##dock-pinned", s.dockPinned);
-    row("top bar");
-    checkbox("visible##topbar", s.topBarVisible);
-    row("focused app id");
-    checkbox("##topbar-app", s.topBarAppId);
-    row("global menu");
-    checkbox("##global-menu", s.topBarGlobalMenu);
-    row("layout indicator");
-    checkbox("##topbar-layout", s.topBarLayout);
-    row("wifi indicator");
-    checkbox("##topbar-wifi", s.topBarWifi);
-    row("battery");
-
-    {
-        constexpr const char* items[] = {"never", "when discharging", "always"};
-
-        combo("##battery", s.topBarBattery, items);
-    }
-
-    row("24 hour clock");
-    checkbox("##clock-24", s.clock24Hour);
-    row("clock date");
-    checkbox("##clock-date", s.clockShowDate);
-    row("clock seconds");
-    checkbox("##clock-seconds", s.clockShowSeconds);
-    row("locale formats");
-    checkbox("##clock-locale", s.clockLocale);
-    row("window docking");
-    checkbox("##window-docking", s.imguiDocking);
-    row("focus");
-
-    {
-        constexpr const char* items[] = {"click", "follows pointer"};
-
-        combo("##focus", s.focusPolicy, items);
-    }
-
-    row("raise on focus");
-    checkbox("##raise", s.raiseOnFocus);
-    row("decorations");
-
-    {
-        constexpr const char* items[] = {"server", "client", "client preference"};
-
-        combo("##decorations", s.decorations, items);
-    }
-
-    row("remember layout");
-    checkbox("##remember-layout", s.rememberWindowLayout);
-    ImGui::EndTable();
-}
-
-void Dialog::pageApplications(Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
-
-    row("terminal");
-    editText("##terminal", s.terminal);
-    row("terminal exec");
-    editText("##terminal-exec", s.terminalExec);
-    row("launcher shell");
-    checkbox("##launcher-shell", s.launcherShellCommands);
-    row("screenshot action");
-
-    {
-        constexpr const char* items[] = {"editor", "save", "copy"};
-
-        combo("##screenshot-action", s.screenshotAction, items);
-    }
-
-    row("screenshot directory");
-    editText("##screenshot-dir", s.screenshotDirectory);
-    row("filename template");
-    editText("##screenshot-name", s.screenshotName);
-    row("format");
-
-    {
-        constexpr const char* items[] = {"jxl", "png"};
-
-        combo("##screenshot-format", s.screenshotFormat, items);
-    }
-
-    row("lossless");
-    checkbox("##screenshot-lossless", s.screenshotLossless);
-
-    if (!s.screenshotLossless.get()) {
-        row("quality");
-        sliderFloat("##screenshot-quality", s.screenshotQuality, 1.f, 100.f, "%.0f%%");
-    }
-
-    row("wifi backend");
-
-    {
-        constexpr const char* items[] = {"auto", "iwd", "NetworkManager", "disabled"};
-
-        combo("##wifi-backend", s.wifiBackend, items);
-    }
-
-    ImGui::EndTable();
-    ImGui::SeparatorText("autostart commands");
-    editTextMultiline("##autostart", s.autostart, ImGui::GetTextLineHeightWithSpacing() * 6.f);
-}
-
-void Dialog::pageAdvanced(Settings& s) {
-    if (!beginRows()) {
-        return;
-    }
-
-    row("direct scanout");
-    checkbox("##direct-scanout", s.directScanout);
-    row("tearing");
-
-    {
-        constexpr const char* items[] = {"deny", "client requested", "always"};
-
-        combo("##tearing", s.tearing, items);
-    }
-
-    row("hardware cursor");
-    checkbox("##hardware-cursor", s.hardwareCursor);
-    row("dithering");
-    checkbox("##dithering", s.dithering);
-    row("unresponsive after");
-    sliderFloat("##anr", s.anrSeconds, 1.f, 60.f, "%.1f sec");
-    row("seat backend");
-
-    {
-        constexpr const char* items[] = {"auto", "libseat", "direct"};
-
-        combo("##seat", s.seatBackend, items);
-    }
-
-    row("pam service");
-    editText("##pam", s.pamService);
-    ImGui::EndTable();
-}
-
-void Dialog::draw(Composer& c, Settings& s, bool& open) {
-    float uiScale = s.uiScale.get();
-    constexpr const char* pages[] = {
-        "display",
-        "color",
-        "appearance",
-        "audio",
-        "input",
-        "keyboard",
-        "shortcuts",
-        "notifications",
-        "desktop",
-        "applications",
-        "advanced",
-    };
-
-    ImGui::SetNextWindowPos(ImVec2(80.f * uiScale, 80.f * uiScale), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(760.f * uiScale, 520.f * uiScale), ImGuiCond_FirstUseEver);
+    shortcutCapture = &capture;
+    ImGui::SetNextWindowPos(ImVec2(80.f * uiScale, 80.f * uiScale),
+                            ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(760.f * uiScale, 520.f * uiScale),
+                             ImGuiCond_FirstUseEver);
 
     if (!ImGui::Begin("settings", &open, ImGuiWindowFlags_NoDocking)) {
         ImGui::End();
@@ -912,8 +680,11 @@ void Dialog::draw(Composer& c, Settings& s, bool& open) {
 
     ImGui::BeginChild("nav", ImVec2(150.f * uiScale, 0.f));
 
-    for (int i = 0; i < (int)(sizeof(pages) / sizeof(*pages)); i++) {
-        if (ImGui::Selectable(pages[i], page == i)) {
+    for (int i = 0;
+         i < (int)(sizeof(generatedSettingsPages)
+                   / sizeof(*generatedSettingsPages));
+         i++) {
+        if (ImGui::Selectable(generatedSettingsPages[i], page == i)) {
             page = i;
         }
     }
@@ -921,49 +692,14 @@ void Dialog::draw(Composer& c, Settings& s, bool& open) {
     ImGui::EndChild();
     ImGui::SameLine();
     ImGui::BeginChild("page");
-
-    switch (page) {
-        case 0:
-            pageDisplay(c, s);
-            break;
-        case 1:
-            pageColor(s);
-            break;
-        case 2:
-            pageAppearance(s);
-            break;
-        case 3:
-            pageAudio(c, s);
-            break;
-        case 4:
-            pageInput(c, s);
-            break;
-        case 5:
-            pageKeyboard(c, s);
-            break;
-        case 6:
-            pageShortcuts(s);
-            break;
-        case 7:
-            pageNotifications(s);
-            break;
-        case 8:
-            pageDesktop(s);
-            break;
-        case 9:
-            pageApplications(s);
-            break;
-        case 10:
-            pageAdvanced(s);
-            break;
-    }
-
+    drawGeneratedPage(c, s);
     ImGui::EndChild();
     ImGui::End();
 }
 
-void drawSettings(Composer& c, Settings& settings, bool toggle, DialogState** state) {
+void drawSettings(Composer& c, Settings& settings, bool toggle,
+                  int& shortcutCapture, DialogState** state) {
     dialog<Dialog>(toggle, state, [&](Dialog& dialog, bool& open) {
-        dialog.draw(c, settings, open);
+        dialog.draw(c, settings, shortcutCapture, open);
     });
 }

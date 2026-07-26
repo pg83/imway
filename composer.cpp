@@ -26,7 +26,8 @@ namespace {
 Composer::Composer(ObjPool* p)
     : pool(p)
 {
-    initializeSettings(settings);
+    settings = Settings::create(*this);
+    applySettingsEnvironment(*settings);
     entry = createInputRouter(*this);
 }
 

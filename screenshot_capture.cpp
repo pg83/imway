@@ -503,7 +503,7 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
 
     StringBuilder scale;
 
-    scale << "IMGUI_SCALE="_sv << (long double)comp->settings.uiScale.get();
+    scale << "IMGUI_SCALE="_sv << (long double)comp->settings->uiScale();
 
     StringBuilder metadata;
     StringBuilder color;
@@ -523,16 +523,23 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
         metadata << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
     }
 
-    const Settings& settings = comp->settings;
-    const char* actionName = settings.screenshotAction.get() == ScreenshotAction::save ? "save" : settings.screenshotAction.get() == ScreenshotAction::copy ? "copy" : "editor";
-    const char* formatName = settings.screenshotFormat.get() == ScreenshotFormat::png ? "png" : "jxl";
+    const Settings& settings = *comp->settings;
+    const char* actionName = settings.screenshotAction() == ScreenshotAction::save
+                           ? "save"
+                           : settings.screenshotAction()
+                                 == ScreenshotAction::copy
+                           ? "copy" : "editor";
+    const char* formatName = settings.screenshotFormat()
+                           == ScreenshotFormat::png ? "png" : "jxl";
 
     action << "IMWAY_SHOT_ACTION="_sv << StringView(actionName);
     format << "IMWAY_SHOT_FORMAT="_sv << StringView(formatName);
-    directory << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory.get();
-    name << "IMWAY_SHOT_NAME="_sv << settings.screenshotName.get();
-    lossless << "IMWAY_SHOT_LOSSLESS="_sv << (settings.screenshotLossless.get() ? 1 : 0);
-    quality << "IMWAY_SHOT_QUALITY="_sv << (long double)settings.screenshotQuality.get();
+    directory << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory();
+    name << "IMWAY_SHOT_NAME="_sv << settings.screenshotName();
+    lossless << "IMWAY_SHOT_LOSSLESS="_sv
+             << (settings.screenshotLossless() ? 1 : 0);
+    quality << "IMWAY_SHOT_QUALITY="_sv
+            << (long double)settings.screenshotQuality();
 
     StringView env[] = {sv(display), sv(scale), sv(color), sv(action), sv(format), sv(directory), sv(name), sv(lossless), sv(quality), sv(metadata)};
     SupervisorSpawn spec;

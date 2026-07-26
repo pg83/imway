@@ -1,17 +1,25 @@
-#include "settings.h"
-
+#include "composer.h"
 #include "listener.h"
+
+#include <std/mem/obj_pool.h>
+
+using namespace stl;
+
+// This regression client links Composer without the UI implementation. Runtime
+// initialization is irrelevant here; generated defaults are what it verifies.
+void applySettingsEnvironment(Settings&) {
+}
 
 namespace {
     struct Probe: Listener {
-        Setting<int>* setting = nullptr;
+        Settings* settings = nullptr;
         int calls = 0;
-        int observed = 0;
+        float observed = 0.f;
         bool remove = false;
 
         void onListen(void*) override {
             calls++;
-            observed = setting->get();
+            observed = settings->uiScale();
 
             if (remove) {
                 unlink();
@@ -19,7 +27,7 @@ namespace {
         }
     };
 
-    struct TextProbe: Listener {
+    struct CountProbe: Listener {
         int calls = 0;
 
         void onListen(void*) override {
@@ -29,58 +37,89 @@ namespace {
 }
 
 int main() {
-    Setting<int> first{7};
-    Setting<int> second{11};
+    ObjPool::Ref pool = ObjPool::fromMemory();
+    Composer& composer = *pool->make<Composer>(pool.mutPtr());
+    Settings& settings = *composer.settings;
     Probe persistent;
     Probe oneShot;
-    Probe other;
+    CountProbe repeat;
+    CountProbe text;
+    CountProbe firstShortcut;
+    CountProbe secondShortcut;
 
-    persistent.setting = &first;
-    oneShot.setting = &first;
+    persistent.settings = &settings;
+    oneShot.settings = &settings;
     oneShot.remove = true;
-    other.setting = &second;
+    settings.addUiScaleListener(&persistent);
+    settings.addUiScaleListener(&oneShot);
+    settings.addRepeatRateListener(&repeat);
 
-    first.changedListeners.pushBack(&persistent);
-    first.changedListeners.pushBack(&oneShot);
-    second.changedListeners.pushBack(&other);
+    settings.setUiScale(1.f);
 
-    if (first.set(7) || persistent.calls || oneShot.calls || other.calls) {
+    if (persistent.calls || oneShot.calls || repeat.calls) {
         return 1;
     }
 
-    if (!first.set(9) || persistent.calls != 1 || oneShot.calls != 1 || persistent.observed != 9 || oneShot.observed != 9 || other.calls) {
+    settings.setUiScale(2.f);
+
+    if (persistent.calls != 1 || oneShot.calls != 1
+        || persistent.observed != 2.f || oneShot.observed != 2.f
+        || repeat.calls) {
         return 2;
     }
 
-    if (!first.set(12) || persistent.calls != 2 || oneShot.calls != 1 || persistent.observed != 12 || other.calls) {
+    settings.setUiScale(3.f);
+
+    if (persistent.calls != 2 || oneShot.calls != 1
+        || persistent.observed != 3.f || repeat.calls) {
         return 3;
     }
 
-    TextSetting text;
-    TextProbe textProbe;
+    settings.setUiScale(9.f);
 
-    text.changedListeners.pushBack(&textProbe);
-
-    if (!text.get().empty() || !text.set(stl::StringView("a text value longer than the old fixed buffer")) || text.get() != stl::StringView("a text value longer than the old fixed buffer") || textProbe.calls != 1) {
+    if (settings.uiScale() != 3.f || persistent.calls != 2) {
         return 4;
     }
 
-    if (text.set(stl::StringView("a text value longer than the old fixed buffer")) || textProbe.calls != 1) {
+    settings.addTerminalListener(&text);
+
+    if (settings.terminal() != StringView("zutty")) {
         return 5;
     }
 
-    if (!text.set(stl::StringView()) || !text.get().empty() || textProbe.calls != 2) {
+    settings.setTerminal(
+        StringView("a text value longer than the old fixed buffer"));
+
+    if (settings.terminal()
+            != StringView("a text value longer than the old fixed buffer")
+        || text.calls != 1) {
         return 6;
     }
 
-    if (text.set(stl::StringView()) || textProbe.calls != 2) {
+    settings.setTerminal(
+        StringView("a text value longer than the old fixed buffer"));
+
+    if (text.calls != 1) {
         return 7;
     }
 
-    TextSetting withDefault{"default"};
+    settings.setTerminal({});
 
-    if (withDefault.get() != stl::StringView("default")) {
+    if (!settings.terminal().empty() || text.calls != 2) {
         return 8;
+    }
+
+    settings.addShortcutListener(0, &firstShortcut);
+    settings.addShortcutListener(1, &secondShortcut);
+    ShortcutBinding binding = settings.shortcut(0);
+
+    binding.keysym++;
+    settings.setShortcut(0, binding);
+
+    if (firstShortcut.calls != 1 || secondShortcut.calls
+        || settings.shortcut(0).keysym != binding.keysym
+        || settings.shortcut(1).action != ShortcutAction::lock) {
+        return 9;
     }
 
     return 0;

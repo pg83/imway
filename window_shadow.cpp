@@ -62,7 +62,7 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
 
     auto& s = *(ShadowSprite*)user;
 
-    if (!s.composer || !s.composer->settings.windowShadows.get()) {
+    if (!s.composer || !s.composer->settings->windowShadows()) {
         return;
     }
 
@@ -99,7 +99,7 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
     float us[4] = {r.uv0.x, r.uv0.x + (r.uv1.x - r.uv0.x) * cut0, r.uv0.x + (r.uv1.x - r.uv0.x) * cut1, r.uv1.x};
     float vs[4] = {r.uv0.y, r.uv0.y + (r.uv1.y - r.uv0.y) * cut0, r.uv0.y + (r.uv1.y - r.uv0.y) * cut1, r.uv1.y};
 
-    float strength = s.composer->settings.shadowStrength.get();
+    float strength = s.composer->settings->shadowStrength();
 
     if (strength < 0.f) {
         strength = 0.f;

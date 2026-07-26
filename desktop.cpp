@@ -377,6 +377,7 @@ namespace {
         bool anrToggle = false;
         Weak<Toplevel> anrTarget;
         bool settingsToggle = false;
+        int shortcutCapture = -1;
         // bar battery widget, /sys-fed; sampled at most once per ~2s
         u64 statMs = 0;
         long batPct = -1; // -1 no battery
@@ -665,7 +666,7 @@ bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
 bool DesktopImpl::swipeBegin(u32) {
     inputActivity();
     swipeDx = swipeDy = 0;
-    swipeOwned = lockState || comp->settings.swipeLeft.get() != GestureAction::none || comp->settings.swipeRight.get() != GestureAction::none || comp->settings.swipeUp.get() != GestureAction::none || comp->settings.swipeDown.get() != GestureAction::none;
+    swipeOwned = lockState || comp->settings->swipeLeft() != GestureAction::none || comp->settings->swipeRight() != GestureAction::none || comp->settings->swipeUp() != GestureAction::none || comp->settings->swipeDown() != GestureAction::none;
 
     return swipeOwned;
 }
@@ -684,9 +685,9 @@ bool DesktopImpl::swipeEnd(bool cancelled) {
 
     if (!cancelled && !lockState && (swipeDx * swipeDx + swipeDy * swipeDy) >= 6400.) {
         if (swipeDx * swipeDx > swipeDy * swipeDy) {
-            gestureAction(swipeDx < 0 ? comp->settings.swipeLeft.get() : comp->settings.swipeRight.get());
+            gestureAction(swipeDx < 0 ? comp->settings->swipeLeft() : comp->settings->swipeRight());
         } else {
-            gestureAction(swipeDy < 0 ? comp->settings.swipeUp.get() : comp->settings.swipeDown.get());
+            gestureAction(swipeDy < 0 ? comp->settings->swipeUp() : comp->settings->swipeDown());
         }
     }
 
@@ -696,7 +697,7 @@ bool DesktopImpl::swipeEnd(bool cancelled) {
 bool DesktopImpl::pinchBegin(u32) {
     inputActivity();
     pinchScale = 1.;
-    pinchOwned = lockState || comp->settings.pinchIn.get() != GestureAction::none || comp->settings.pinchOut.get() != GestureAction::none;
+    pinchOwned = lockState || comp->settings->pinchIn() != GestureAction::none || comp->settings->pinchOut() != GestureAction::none;
 
     return pinchOwned;
 }
@@ -714,9 +715,9 @@ bool DesktopImpl::pinchEnd(bool cancelled) {
 
     if (!cancelled && !lockState) {
         if (pinchScale < .85) {
-            gestureAction(comp->settings.pinchIn.get());
+            gestureAction(comp->settings->pinchIn());
         } else if (pinchScale > 1.15) {
-            gestureAction(comp->settings.pinchOut.get());
+            gestureAction(comp->settings->pinchOut());
         }
     }
 
@@ -744,27 +745,27 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     bool consumed = false;
     u32 mask = keyboard ? keyboard->modMask() : 0;
 
-    if (!locked && comp->settings.shortcutCapture >= 0 && keyboard) {
+    if (!locked && shortcutCapture >= 0 && keyboard) {
         bool modifier = code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL || code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT || code == KEY_LEFTALT || code == KEY_RIGHTALT || code == KEY_LEFTMETA || code == KEY_RIGHTMETA;
 
         if (pressed && code == KEY_ESC) {
-            comp->settings.shortcutCapture = -1;
+            shortcutCapture = -1;
 
             return true;
         }
 
         if (pressed && !modifier) {
-            size_t index = (size_t)comp->settings.shortcutCapture;
+            size_t index = (size_t)shortcutCapture;
 
-            if (index < sizeof(comp->settings.shortcuts) / sizeof(*comp->settings.shortcuts)) {
-                ShortcutBinding binding = comp->settings.shortcuts[index].get();
+            if (index < Settings::shortcutCount) {
+                ShortcutBinding binding = comp->settings->shortcut(index);
 
                 binding.modifiers = mask;
                 binding.keysym = keyboard->keysymBase(code);
-                comp->settings.shortcuts[index].set(binding);
+                comp->settings->setShortcut(index, binding);
             }
 
-            comp->settings.shortcutCapture = -1;
+            shortcutCapture = -1;
 
             return true;
         }
@@ -778,14 +779,14 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         bool up = code == KEY_BRIGHTNESSUP;
 
         if (output->colorState().hdr()) {
-            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? comp->settings.hdrStepNits.get() : -comp->settings.hdrStepNits.get()));
+            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? comp->settings->hdrStepNits() : -comp->settings->hdrStepNits()));
             osdKind = 3;
         } else {
-            output->setBrightness(output->brightness() + (up ? comp->settings.brightnessStep.get() : -comp->settings.brightnessStep.get()));
+            output->setBrightness(output->brightness() + (up ? comp->settings->brightnessStep() : -comp->settings->brightnessStep()));
             osdKind = 2;
         }
 
-        osdMs = nowMsec() + (u64)(comp->settings.osdSeconds.get() * 1000.f);
+        osdMs = nowMsec() + (u64)(comp->settings->osdSeconds() * 1000.f);
         scene->needsFrame = true;
         consumed = true;
     }
@@ -794,7 +795,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         Mixer* mixer = comp->mixer;
 
         if (code == KEY_VOLUMEUP || code == KEY_VOLUMEDOWN) {
-            float delta = code == KEY_VOLUMEUP ? comp->settings.volumeStep.get() : -comp->settings.volumeStep.get();
+            float delta = code == KEY_VOLUMEUP ? comp->settings->volumeStep() : -comp->settings->volumeStep();
             float volume = mixer->volume() + delta;
 
             mixer->setVolume(volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume);
@@ -881,7 +882,7 @@ void DesktopImpl::wifiChanged() {
 
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
-        osdMs = nowMsec() + (u64)(comp->settings.osdSeconds.get() * 1000.f);
+        osdMs = nowMsec() + (u64)(comp->settings->osdSeconds() * 1000.f);
         osdKind = 1;
     }
 
@@ -889,24 +890,24 @@ void DesktopImpl::volumeChanged() {
 }
 
 void DesktopImpl::applyNightLight() {
-    const Settings& settings = comp->settings;
-    bool enabled = settings.nightOn.get();
+    const Settings& settings = *comp->settings;
+    bool enabled = settings.nightOn();
 
-    if (settings.nightScheduled.get()) {
+    if (settings.nightScheduled()) {
         time_t now = time(nullptr);
         tm local{};
 
         localtime_r(&now, &local);
 
         int minute = local.tm_hour * 60 + local.tm_min;
-        int start = settings.nightStartMinute.get();
-        int end = settings.nightEndMinute.get();
+        int start = settings.nightStartMinute();
+        int end = settings.nightEndMinute();
         bool scheduled = start <= end ? minute >= start && minute < end : minute >= start || minute < end;
 
         enabled = enabled || scheduled;
     }
 
-    output->setColorTemp(enabled ? settings.nightK.get() : 0);
+    output->setColorTemp(enabled ? settings.nightK() : 0);
 }
 
 void DesktopImpl::redrawSetting() {
@@ -914,7 +915,7 @@ void DesktopImpl::redrawSetting() {
 }
 
 void DesktopImpl::sdrSettingChanged() {
-    output->setSdrWhite(comp->settings.sdrNits.get());
+    output->setSdrWhite(comp->settings->sdrNits());
     scene->needsFrame = true;
 }
 
@@ -922,7 +923,7 @@ void DesktopImpl::nightSettingChanged() {
     ev_timer_stop(comp->loop, &nightTimer);
     applyNightLight();
 
-    if (comp->settings.nightScheduled.get()) {
+    if (comp->settings->nightScheduled()) {
         ev_timer_set(&nightTimer, 30., 30.);
         ev_timer_start(comp->loop, &nightTimer);
     }
@@ -931,22 +932,22 @@ void DesktopImpl::nightSettingChanged() {
 }
 
 void DesktopImpl::themeSettingChanged() {
-    ThemeColor neutral = comp->settings.neutral.get();
+    ThemeColor neutral = comp->settings->neutral();
 
-    if (comp->settings.themeVariant.get() == ThemeVariant::light) {
+    if (comp->settings->themeVariant() == ThemeVariant::light) {
         neutral.r = 1.f - neutral.r * .28f;
         neutral.g = 1.f - neutral.g * .28f;
         neutral.b = 1.f - neutral.b * .28f;
     }
 
-    comp->theme.setSeeds(neutral, comp->settings.selection.get());
+    comp->theme.setSeeds(neutral, comp->settings->selection());
     scene->needsFrame = true;
 }
 
 void DesktopImpl::updateAutoLock() {
     ev_timer_stop(comp->loop, &autoLockTimer);
 
-    double seconds = comp->settings.lockSeconds.get();
+    double seconds = comp->settings->lockSeconds();
 
     if (!lockState && seconds > 0.) {
         ev_timer_set(&autoLockTimer, seconds, 0.);
@@ -1003,8 +1004,8 @@ void DesktopImpl::gestureAction(GestureAction action) {
 }
 
 bool DesktopImpl::chordAction(u32 mask, u32 sym) {
-    for (Setting<ShortcutBinding>& setting : comp->settings.shortcuts) {
-        const ShortcutBinding& binding = setting.get();
+    for (size_t i = 0; i < Settings::shortcutCount; i++) {
+        const ShortcutBinding& binding = comp->settings->shortcut(i);
 
         if (binding.keysym != sym || (binding.modifiers != ~0u && binding.modifiers != mask)) {
             continue;
@@ -1240,8 +1241,8 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     StringView shellArgs[] = {"sh"_sv, "-c"_sv, cmd};
     StringBuilder terminalScript;
 
-    terminalScript << "exec \"$0\" "_sv << comp.settings.terminalExec.get() << " \"$1\""_sv;
-    StringView terminalArgs[] = {"sh"_sv, "-c"_sv, sv(terminalScript), comp.settings.terminal.get(), cmd};
+    terminalScript << "exec \"$0\" "_sv << comp.settings->terminalExec() << " \"$1\""_sv;
+    StringView terminalArgs[] = {"sh"_sv, "-c"_sv, sv(terminalScript), comp.settings->terminal(), cmd};
     StringBuilder display;
 
     display << "WAYLAND_DISPLAY="_sv << sock;
@@ -1249,7 +1250,7 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     StringView env[] = {sv(display)};
     SupervisorSpawn spawn;
 
-    if (terminal && comp.settings.terminal.get().empty()) {
+    if (terminal && comp.settings->terminal().empty()) {
         return;
     }
 
@@ -1279,8 +1280,8 @@ static StringView wifiGlyph(WifiState s) {
 }
 
 void DesktopImpl::buildUi(Scene& scene) {
-    Settings& settings = comp->settings;
-    float uiScale = settings.uiScale.get();
+    Settings& settings = *comp->settings;
+    float uiScale = settings.uiScale();
 
     if (scene.focusedToplevel && (scene.focusedToplevel->minimized || !scene.focusedToplevel->mapped)) {
         scene.focusedToplevel.reset();
@@ -1324,7 +1325,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
     chromeInfo.layout = StringView(scene.layout);
     chromeInfo.wifi = comp->wifi ? wifiGlyph(comp->wifi->state()) : StringView();
-    chromeInfo.batteryPct = comp->settings.topBarBattery.get() == BatteryDisplay::always ? batPct : comp->settings.topBarBattery.get() == BatteryDisplay::discharging && batDischarging ? batPct : -1;
+    chromeInfo.batteryPct = comp->settings->topBarBattery() == BatteryDisplay::always ? batPct : comp->settings->topBarBattery() == BatteryDisplay::discharging && batDischarging ? batPct : -1;
 
     DesktopChromeResult chromeResult;
 
@@ -1361,7 +1362,8 @@ void DesktopImpl::buildUi(Scene& scene) {
         drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
     }
 
-    drawSettings(*comp, settings, settingsToggle, &settingsState);
+    drawSettings(*comp, settings, settingsToggle, shortcutCapture,
+                 &settingsState);
     drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
     anrToggle = false;
     settingsToggle = false;
@@ -1373,7 +1375,7 @@ void DesktopImpl::buildUi(Scene& scene) {
             osdMs = 0;
         } else {
             float rem = (float)(osdMs - now) / 1000.f;
-            float fade = settings.osdFadeSeconds.get();
+            float fade = settings.osdFadeSeconds();
             float alpha = rem > fade ? 1.f : rem / fade;
 
             if (osdKind == 1 && comp->mixer) {
@@ -1972,13 +1974,14 @@ void DesktopImpl::buildUi(Scene& scene) {
     }
 
     // xdg-system-bell: a brief screen flash on ring, fading over ~150ms
-    if (scene.bellMs && settings.visualBell.get()) {
+    if (scene.bellMs && settings.visualBell()) {
         u64 now = nowMsec();
         u64 age = now >= scene.bellMs ? now - scene.bellMs : 0;
-        u64 duration = (u64)(settings.visualBellSeconds.get() * 1000.f);
+        u64 duration = (u64)(settings.visualBellSeconds() * 1000.f);
 
         if (duration && age < duration) {
-            float a = (1.f - (float)age / (float)duration) * settings.visualBellStrength.get();
+            float a = (1.f - (float)age / (float)duration)
+                    * settings.visualBellStrength();
 
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), ImVec2((float)scene.outW, (float)scene.outH), IM_COL32(255, 255, 255, (int)(a * 255.f)));
             scene.needsFrame = true;
@@ -1995,7 +1998,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 }
 
 void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
-    float uiScale = comp->settings.uiScale.get();
+    float uiScale = comp->settings->uiScale();
     Surface* cs = overClient && scene.cursorSurface && scene.cursorSurface->texture ? scene.cursorSurface : nullptr;
 
     if (cs) {
@@ -2064,7 +2067,7 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
     if (cs) {
         renderer->drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
     } else if (kind != ImGuiMouseCursor_None) {
-        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings.cursorScale.get(), kind);
+        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings->cursorScale(), kind);
     }
 }
 
@@ -2104,25 +2107,25 @@ DesktopImpl::DesktopImpl(Composer& c)
     , renderer(c.renderer)
     , keyboard(c.kb)
     , notifier(c.notifier)
-    , appliedUiScale(c.settings.uiScale.get())
+    , appliedUiScale(c.settings->uiScale())
 {
-    scene->uiScale = c.settings.uiScale.get();
+    scene->uiScale = c.settings->uiScale();
     c.inputSinks.pushFront((InputSink*)this);
     c.mixerListeners.pushBack(c.pool->make<CallDesktopVolume>(this));
     c.wifiListeners.pushBack(c.pool->make<CallDesktopWifi>(this));
     c.outputResizedListeners.pushBack((Listener*)this);
 
-    c.settings.uiScale.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::redrawSetting));
-    c.settings.sdrNits.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::sdrSettingChanged));
-    c.settings.nightOn.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
-    c.settings.nightScheduled.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
-    c.settings.nightStartMinute.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
-    c.settings.nightEndMinute.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
-    c.settings.nightK.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
-    c.settings.neutral.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
-    c.settings.selection.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
-    c.settings.themeVariant.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
-    c.settings.lockSeconds.changedListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::updateAutoLock));
+    c.settings->addUiScaleListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::redrawSetting));
+    c.settings->addSdrNitsListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::sdrSettingChanged));
+    c.settings->addNightOnListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings->addNightScheduledListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings->addNightStartMinuteListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings->addNightEndMinuteListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings->addNightKListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::nightSettingChanged));
+    c.settings->addNeutralListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings->addSelectionListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings->addThemeVariantListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
+    c.settings->addLockSecondsListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::updateAutoLock));
 
     ev_timer_init(&autoLockTimer, autoLockTimerCb, 0., 0.);
     autoLockTimer.data = this;

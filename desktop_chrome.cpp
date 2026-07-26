@@ -4,9 +4,9 @@
 #include "util.h"
 #include "scene.h"
 #include "composer.h"
+#include "imgui_wm.h"
 #include "dbus_menu.h"
 #include "dbus_menu_ui.h"
-#include "imgui_wm.h"
 
 #include <time.h>
 
@@ -14,7 +14,7 @@ using namespace stl;
 
 namespace {
     void drawOuterShadow(Composer& c, bool dock, bool top) {
-        if (!c.settings.windowShadows.get() || !dock || !top || c.settings.dockPosition.get() != DockPosition::left) {
+        if (!c.settings->windowShadows() || !dock || !top || c.settings->dockPosition() != DockPosition::left) {
             return;
         }
 
@@ -38,7 +38,7 @@ namespace {
     }
 
     void drawOuterBorder(Composer& c, ImDrawList& draw) {
-        if (!c.settings.dockVisible.get() || c.settings.dockPosition.get() != DockPosition::left) {
+        if (!c.settings->dockVisible() || c.settings->dockPosition() != DockPosition::left) {
             return;
         }
 
@@ -78,11 +78,11 @@ namespace {
             return;
         }
 
-        if (c.settings.topBarAppId.get() && !info.focusedAppId.empty()) {
+        if (c.settings->topBarAppId() && !info.focusedAppId.empty()) {
             ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
         }
 
-        if (c.settings.topBarGlobalMenu.get() && info.globalMenu && info.globalMenu->ready) {
+        if (c.settings->topBarGlobalMenu() && info.globalMenu && info.globalMenu->ready) {
             drawDBusMenuBar(c, *info.globalMenu);
         }
 
@@ -94,10 +94,10 @@ namespace {
         char clock[128];
         const char* format;
 
-        if (c.settings.clockLocale.get()) {
-            format = c.settings.clockShowDate.get() ? c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%x %H:%M:%S" : "%x %H:%M" : c.settings.clockShowSeconds.get() ? "%x %I:%M:%S %p" : "%x %I:%M %p" : c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%H:%M:%S" : "%H:%M" : c.settings.clockShowSeconds.get() ? "%I:%M:%S %p" : "%I:%M %p";
+        if (c.settings->clockLocale()) {
+            format = c.settings->clockShowDate() ? c.settings->clock24Hour() ? c.settings->clockShowSeconds() ? "%x %H:%M:%S" : "%x %H:%M" : c.settings->clockShowSeconds() ? "%x %I:%M:%S %p" : "%x %I:%M %p" : c.settings->clock24Hour() ? c.settings->clockShowSeconds() ? "%H:%M:%S" : "%H:%M" : c.settings->clockShowSeconds() ? "%I:%M:%S %p" : "%I:%M %p";
         } else {
-            format = c.settings.clockShowDate.get() ? c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%d.%m %H:%M:%S" : "%d.%m %H:%M" : c.settings.clockShowSeconds.get() ? "%d.%m %I:%M:%S %p" : "%d.%m %I:%M %p" : c.settings.clock24Hour.get() ? c.settings.clockShowSeconds.get() ? "%H:%M:%S" : "%H:%M" : c.settings.clockShowSeconds.get() ? "%I:%M:%S %p" : "%I:%M %p";
+            format = c.settings->clockShowDate() ? c.settings->clock24Hour() ? c.settings->clockShowSeconds() ? "%d.%m %H:%M:%S" : "%d.%m %H:%M" : c.settings->clockShowSeconds() ? "%d.%m %I:%M:%S %p" : "%d.%m %I:%M %p" : c.settings->clock24Hour() ? c.settings->clockShowSeconds() ? "%H:%M:%S" : "%H:%M" : c.settings->clockShowSeconds() ? "%I:%M:%S %p" : "%I:%M %p";
         }
 
         strftime(clock, sizeof(clock), format, &local);
@@ -115,7 +115,7 @@ namespace {
 
         float left = x;
 
-        if (c.settings.topBarLayout.get() && !info.layout.empty()) {
+        if (c.settings->topBarLayout() && !info.layout.empty()) {
             float w = ImGui::CalcTextSize((const char*)info.layout.begin(), (const char*)info.layout.end()).x;
 
             left = x - w - style.ItemSpacing.x * 2.f;
@@ -123,7 +123,7 @@ namespace {
             ImGui::TextUnformatted((const char*)info.layout.begin(), (const char*)info.layout.end());
         }
 
-        if (c.settings.topBarBattery.get() != BatteryDisplay::never && info.batteryPct >= 0) {
+        if (c.settings->topBarBattery() != BatteryDisplay::never && info.batteryPct >= 0) {
             auto& stats = sb();
 
             stats << "bat "_sv << info.batteryPct << "%"_sv;
@@ -135,7 +135,7 @@ namespace {
             ImGui::TextUnformatted(stats.cStr());
         }
 
-        if (c.settings.topBarWifi.get() && !info.wifi.empty()) {
+        if (c.settings->topBarWifi() && !info.wifi.empty()) {
             float wifiW = ImGui::CalcTextSize((const char*)info.wifi.begin(), (const char*)info.wifi.end()).x;
             float wifiX = left - wifiW - style.ItemSpacing.x * 2.f;
 
@@ -156,11 +156,11 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     const ImVec4 chrome = ImGui::GetStyleColorVec4(ImGuiCol_WindowBg);
     ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImVec2 mouse = ImGui::GetMousePos();
-    DockPosition position = c.settings.dockPosition.get();
+    DockPosition position = c.settings->dockPosition();
     float extent = dockBarWidth(c);
     bool nearDock = position == DockPosition::left ? mouse.x <= viewport->Pos.x + extent : position == DockPosition::right ? mouse.x >= viewport->Pos.x + viewport->Size.x - extent : position == DockPosition::top ? mouse.y <= viewport->Pos.y + extent : mouse.y >= viewport->Pos.y + viewport->Size.y - extent;
-    bool dockVisible = c.settings.dockVisible.get() && (!c.settings.dockAutoHide.get() || nearDock);
-    bool topVisible = c.settings.topBarVisible.get();
+    bool dockVisible = c.settings->dockVisible() && (!c.settings->dockAutoHide() || nearDock);
+    bool topVisible = c.settings->topBarVisible();
 
     drawOuterShadow(c, dockVisible, topVisible);
 

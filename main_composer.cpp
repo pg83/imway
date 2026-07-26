@@ -50,7 +50,7 @@ using namespace stl;
 
 namespace {
     void runAutostart(Composer& c) {
-        StringView commands = c.settings.autostart.get();
+        StringView commands = c.settings->autostart();
         StringBuilder display;
 
         display << "WAYLAND_DISPLAY="_sv << c.scene->socketName;
@@ -233,20 +233,20 @@ int mainComposer(int argc, char** argv) {
     Composer& c = *pool->make<Composer>(pool.mutPtr());
     struct ev_loop* loop = ev_default_loop(0);
 
-    c.settings.uiScale.set(cfg.uiScale);
-    c.settings.outputName.set(cfg.outputName);
-    c.settings.outputMode.set(cfg.mode);
-    c.settings.xkbLayouts.set(cfg.xkbLayout);
-    c.settings.xkbOptions.set(cfg.xkbOptions);
-    c.settings.fontPath.set(cfg.fontPath);
-    c.settings.dpmsSeconds.set(cfg.dpmsSec);
-    c.settings.hdrEnabled.set(cfg.outputColor.hdrSdrWhiteNits > 0);
-    c.settings.sdrNits.set((float)(cfg.outputColor.hdrSdrWhiteNits > 0 ? cfg.outputColor.hdrSdrWhiteNits : 80.));
-    c.settings.displayMinNits.set((float)cfg.outputColor.displayMinNits);
-    c.settings.displayPeakNits.set((float)cfg.outputColor.displayPeakNits);
-    c.settings.displayMaxFallNits.set((float)cfg.outputColor.displayMaxFallNits);
-    c.settings.outputBpc.set(cfg.outputColor.bpc);
-    c.settings.outputRange.set(cfg.outputColor.range);
+    c.settings->setUiScale(cfg.uiScale);
+    c.settings->setOutputName(cfg.outputName);
+    c.settings->setOutputMode(cfg.mode);
+    c.settings->setXkbLayouts(cfg.xkbLayout);
+    c.settings->setXkbOptions(cfg.xkbOptions);
+    c.settings->setFontPath(cfg.fontPath);
+    c.settings->setDpmsSeconds(cfg.dpmsSec);
+    c.settings->setHdrEnabled(cfg.outputColor.hdrSdrWhiteNits > 0);
+    c.settings->setSdrNits((float)(cfg.outputColor.hdrSdrWhiteNits > 0 ? cfg.outputColor.hdrSdrWhiteNits : 80.));
+    c.settings->setDisplayMinNits((float)cfg.outputColor.displayMinNits);
+    c.settings->setDisplayPeakNits((float)cfg.outputColor.displayPeakNits);
+    c.settings->setDisplayMaxFallNits((float)cfg.outputColor.displayMaxFallNits);
+    c.settings->setOutputBpc(cfg.outputColor.bpc);
+    c.settings->setOutputRange(cfg.outputColor.range);
     c.log = log;
     installExternLogHandlers(c);
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
@@ -262,14 +262,14 @@ int mainComposer(int argc, char** argv) {
         Session* session = nullptr;
 
         if (kms) {
-            if (c.settings.seatBackend.get() == SeatBackend::direct) {
+            if (c.settings->seatBackend() == SeatBackend::direct) {
                 session = Session::createDirect(c);
             } else {
                 try {
                     session = Session::create(c);
                     *log << "imway: libseat session on "_sv << session->seatName() << endL;
                 } catch (...) {
-                    if (c.settings.seatBackend.get() == SeatBackend::libseat) {
+                    if (c.settings->seatBackend() == SeatBackend::libseat) {
                         throw;
                     }
 
@@ -295,14 +295,14 @@ int mainComposer(int argc, char** argv) {
 
         OutputConfiguration outputConfig;
 
-        outputConfig.hdrSdrWhiteNits = c.settings.hdrEnabled.get() ? c.settings.sdrNits.get() : 0.;
-        outputConfig.displayMinNits = c.settings.displayMinNits.get();
-        outputConfig.displayPeakNits = c.settings.displayPeakNits.get();
-        outputConfig.displayMaxFallNits = c.settings.displayMaxFallNits.get();
-        outputConfig.bpc = c.settings.outputBpc.get();
-        outputConfig.range = c.settings.outputRange.get();
+        outputConfig.hdrSdrWhiteNits = c.settings->hdrEnabled() ? c.settings->sdrNits() : 0.;
+        outputConfig.displayMinNits = c.settings->displayMinNits();
+        outputConfig.displayPeakNits = c.settings->displayPeakNits();
+        outputConfig.displayMaxFallNits = c.settings->displayMaxFallNits();
+        outputConfig.bpc = c.settings->outputBpc();
+        outputConfig.range = c.settings->outputRange();
 
-        ::Output* output = device->createOutput(c.settings.outputName.get(), c.settings.outputMode.get(), outputConfig);
+        ::Output* output = device->createOutput(c.settings->outputName(), c.settings->outputMode(), outputConfig);
 
         c.output = output;
 
@@ -328,7 +328,7 @@ int mainComposer(int argc, char** argv) {
             scanoutFormats.pushBack(f);
         });
 
-        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, c.settings.xkbLayouts.get(), c.settings.xkbOptions.get());
+        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, c.settings->xkbLayouts(), c.settings->xkbOptions());
 
         c.kb = kb;
 

@@ -67,11 +67,11 @@ NotifierImpl::NotifierImpl(Composer& comp)
     : c(&comp)
     , loop(comp.loop)
 {
-    comp.settings.dnd.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
-    comp.settings.dndScheduled.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
-    comp.settings.dndStartMinute.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
-    comp.settings.dndEndMinute.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
-    comp.settings.notificationHistory.changedListeners.pushBack(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::trim));
+    comp.settings->addDndListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings->addDndScheduledListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings->addDndStartMinuteListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings->addDndEndMinuteListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
+    comp.settings->addNotificationHistoryListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::trim));
 
     ev_timer_init(&scheduleTimer, scheduleCb, 30., 30.);
     scheduleTimer.data = this;
@@ -106,7 +106,7 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
         return; // sticky
     }
 
-    double sec = expireMs > 0 ? expireMs / 1000.0 : c->settings.notificationSeconds.get();
+    double sec = expireMs > 0 ? expireMs / 1000.0 : c->settings->notificationSeconds();
 
     ev_timer_init(&t.timer, expiryCb, sec, 0.);
     t.timer.data = &t;
@@ -115,7 +115,7 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
 
 // keep history bounded: drop the oldest off-screen toasts past the cap
 void NotifierImpl::trim() {
-    size_t limit = (size_t)c->settings.notificationHistory.get();
+    size_t limit = (size_t)c->settings->notificationHistory();
 
     while (toasts.length() > limit) {
         Toast* victim = nullptr;
@@ -155,14 +155,15 @@ u32 NotifierImpl::post(const Post& p) {
     t->body << p.body;
     t->icon.reset();
     t->icon << p.icon;
-    t->critical = p.critical && c->settings.allowCriticalNotifications.get();
+    t->critical = p.critical && c->settings->allowCriticalNotifications();
     t->fromBus = p.fromBus;
     t->postedMs = nowMsec();
     NotificationPolicy policy = NotificationPolicy::defaultPolicy;
-    size_t rules = c->settings.notificationRuleCount.get();
+    size_t rules = c->settings->notificationRuleCount();
 
-    for (size_t i = 0; i < rules && i < sizeof(c->settings.notificationRules) / sizeof(*c->settings.notificationRules); i++) {
-        const NotificationRule& rule = c->settings.notificationRules[i].get();
+    for (size_t i = 0;
+         i < rules && i < Settings::notificationRuleCapacity; i++) {
+        const NotificationRule& rule = c->settings->notificationRule(i);
 
         if (StringView(rule.app) == p.app) {
             policy = rule.policy;
@@ -244,15 +245,15 @@ bool NotifierImpl::dnd() {
 }
 
 void NotifierImpl::setDnd(bool v) {
-    c->settings.dnd.set(v);
+    c->settings->setDnd(v);
 }
 
 bool NotifierImpl::dndActive() const {
-    if (c->settings.dnd.get()) {
+    if (c->settings->dnd()) {
         return true;
     }
 
-    if (!c->settings.dndScheduled.get()) {
+    if (!c->settings->dndScheduled()) {
         return false;
     }
 
@@ -262,8 +263,8 @@ bool NotifierImpl::dndActive() const {
     localtime_r(&now, &local);
 
     int minute = local.tm_hour * 60 + local.tm_min;
-    int start = c->settings.dndStartMinute.get();
-    int end = c->settings.dndEndMinute.get();
+    int start = c->settings->dndStartMinute();
+    int end = c->settings->dndEndMinute();
 
     return start <= end ? minute >= start && minute < end : minute >= start || minute < end;
 }
