@@ -56,19 +56,31 @@ int main() {
         return 3;
     }
 
-    TextSetting<5> text;
+    TextSetting text;
     TextProbe textProbe;
 
     text.changedListeners.pushBack(&textProbe);
 
-    if (!text.set(stl::StringView("abcdef")) || text.get() != stl::StringView("abcd") || textProbe.calls != 1) {
+    if (!text.get().empty() || !text.set(stl::StringView("a text value longer than the old fixed buffer")) || text.get() != stl::StringView("a text value longer than the old fixed buffer") || textProbe.calls != 1) {
         return 4;
     }
 
-    // The discarded suffix is outside the canonical value and must not
-    // generate another change event.
-    if (text.set(stl::StringView("abcdZZ")) || textProbe.calls != 1) {
+    if (text.set(stl::StringView("a text value longer than the old fixed buffer")) || textProbe.calls != 1) {
         return 5;
+    }
+
+    if (!text.set(stl::StringView()) || !text.get().empty() || textProbe.calls != 2) {
+        return 6;
+    }
+
+    if (text.set(stl::StringView()) || textProbe.calls != 2) {
+        return 7;
+    }
+
+    TextSetting withDefault{"default"};
+
+    if (withDefault.get() != stl::StringView("default")) {
+        return 8;
     }
 
     return 0;

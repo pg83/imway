@@ -7,6 +7,10 @@
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
+namespace stl {
+    class Buffer;
+}
+
 // A setting commits its canonical value before publishing. Each setting owns
 // a distinct removal-safe listener list; there is no aggregate dirty state.
 void publishSettingListeners(stl::IntrusiveList& listeners);
@@ -41,47 +45,18 @@ private:
     T value_{};
 };
 
-template <size_t Capacity>
 struct TextSetting {
-    static_assert(Capacity > 0);
+    TextSetting() noexcept;
+    TextSetting(stl::StringView initial);
+    ~TextSetting() noexcept;
 
-    TextSetting() = default;
-
-    TextSetting(const char* initial) {
-        setInitial(stl::StringView(initial));
-    }
-
-    stl::StringView get() const {
-        return stl::StringView(value_);
-    }
-
-    bool set(stl::StringView value) {
-        size_t length = value.length() < Capacity - 1 ? value.length() : Capacity - 1;
-
-        if (get() == value.prefix(length)) {
-            return false;
-        }
-
-        setInitial(value);
-        publishSettingListeners(changedListeners);
-
-        return true;
-    }
+    stl::StringView get() const noexcept;
+    bool set(stl::StringView value);
 
     stl::IntrusiveList changedListeners;
 
 private:
-    void setInitial(stl::StringView value) {
-        size_t n = value.length() < Capacity - 1 ? value.length() : Capacity - 1;
-
-        for (size_t i = 0; i < n; i++) {
-            value_[i] = (char)value[i];
-        }
-
-        value_[n] = 0;
-    }
-
-    char value_[Capacity] = {};
+    stl::Buffer* value_;
 };
 
 enum class ThemeVariant {
@@ -252,8 +227,8 @@ struct Settings {
     Setting<float> displayMaxFallNits{0.f};
     Setting<u32> outputBpc{0};
     Setting<OutputRange> outputRange{OutputRange::automatic};
-    TextSetting<64> outputName;
-    TextSetting<64> outputMode;
+    TextSetting outputName;
+    TextSetting outputMode;
 
     // color and appearance
     Setting<bool> nightOn{false};
@@ -273,16 +248,16 @@ struct Settings {
     Setting<float> visualBellStrength{.35f};
     Setting<bool> lockBlur{true};
     Setting<float> lockTint{.42f};
-    TextSetting<256> fontPath;
-    TextSetting<64> iconTheme{"hicolor"};
+    TextSetting fontPath;
+    TextSetting iconTheme{"hicolor"};
 
     // audio
     Setting<float> volumeStep{.05f};
     Setting<BackendPreference> audioBackend{BackendPreference::automatic};
 
     // keyboard and input
-    TextSetting<128> xkbLayouts{"us,ru"};
-    TextSetting<128> xkbOptions{"grp:caps_toggle"};
+    TextSetting xkbLayouts{"us,ru"};
+    TextSetting xkbOptions{"grp:caps_toggle"};
     Setting<int> repeatRate{25};
     Setting<int> repeatDelay{600};
     Setting<LayoutPolicy> layoutPolicy{LayoutPolicy::perWindow};
@@ -316,7 +291,7 @@ struct Settings {
     Setting<bool> dockShowTray{true};
     Setting<bool> dockMergeTray{true};
     Setting<bool> dockMruOrder{true};
-    TextSetting<1024> dockPinned;
+    TextSetting dockPinned;
     Setting<DockClickAction> dockClickAction{DockClickAction::focus};
     Setting<bool> topBarVisible{true};
     Setting<bool> topBarAppId{true};
@@ -350,12 +325,12 @@ struct Settings {
     Setting<size_t> notificationRuleCount{0};
 
     // applications and actions
-    TextSetting<128> terminal{"zutty"};
-    TextSetting<128> terminalExec{"-e sh -c"};
-    TextSetting<1024> autostart;
+    TextSetting terminal{"zutty"};
+    TextSetting terminalExec{"-e sh -c"};
+    TextSetting autostart;
     Setting<bool> launcherShellCommands{true};
-    TextSetting<256> screenshotDirectory;
-    TextSetting<128> screenshotName{"imway-%Y%m%d-%H%M%S"};
+    TextSetting screenshotDirectory;
+    TextSetting screenshotName{"imway-%Y%m%d-%H%M%S"};
     Setting<ScreenshotFormat> screenshotFormat{ScreenshotFormat::jxl};
     Setting<ScreenshotAction> screenshotAction{ScreenshotAction::editor};
     Setting<bool> screenshotLossless{true};
@@ -369,7 +344,7 @@ struct Settings {
     Setting<bool> dithering{true};
     Setting<float> anrSeconds{10.f};
     Setting<SeatBackend> seatBackend{SeatBackend::automatic};
-    TextSetting<64> pamService{"login"};
+    TextSetting pamService{"login"};
 };
 
 struct Composer;

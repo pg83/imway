@@ -9,6 +9,8 @@
 #include "keyboard.h"
 #include "imgui_wm.h"
 
+#include <std/lib/buffer.h>
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,22 +101,30 @@ namespace {
         out[n] = 0;
     }
 
-    template <size_t N>
-    bool editText(const char* id, TextSetting<N>& setting) {
-        char text[N];
+    int resizeText(ImGuiInputTextCallbackData* data) {
+        auto& text = *(Buffer*)data->UserData;
 
-        copyText(text, setting.get());
+        text.seekAbsolute((size_t)data->BufTextLen);
+        text.grow((size_t)data->BufSize);
+        data->Buf = text.cStr();
 
-        return ImGui::InputText(id, text, N) && setting.set(StringView(text));
+        return 0;
     }
 
-    template <size_t N>
-    bool editTextMultiline(const char* id, TextSetting<N>& setting, float height) {
-        char text[N];
+    bool editText(const char* id, TextSetting& setting) {
+        Buffer text(setting.get());
+        char* data = text.cStr();
+        bool changed = ImGui::InputText(id, data, text.capacity(), ImGuiInputTextFlags_CallbackResize, resizeText, &text);
 
-        copyText(text, setting.get());
+        return changed && setting.set(StringView((const char*)text.data()));
+    }
 
-        return ImGui::InputTextMultiline(id, text, N, ImVec2(-FLT_MIN, height)) && setting.set(StringView(text));
+    bool editTextMultiline(const char* id, TextSetting& setting, float height) {
+        Buffer text(setting.get());
+        char* data = text.cStr();
+        bool changed = ImGui::InputTextMultiline(id, data, text.capacity(), ImVec2(-FLT_MIN, height), ImGuiInputTextFlags_CallbackResize, resizeText, &text);
+
+        return changed && setting.set(StringView((const char*)text.data()));
     }
 
     bool checkbox(const char* id, Setting<bool>& setting) {
