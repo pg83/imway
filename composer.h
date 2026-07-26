@@ -69,6 +69,8 @@ struct Composer {
     stl::ObjPool* pool = nullptr;
     SmallObjAllocator* alloc = nullptr;
     struct ev_loop* loop = nullptr;
+    // One shared background lane for bounded blocking/CPU work. Subsystems
+    // submit through OffloadJob; they must not create private worker pools.
     stl::ThreadPool* offload = nullptr;
     Scene* scene = nullptr;
 

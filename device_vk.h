@@ -5,6 +5,7 @@
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
+#include <stddef.h>
 #include <vulkan/vulkan.h>
 
 #define VK_CHECK(x) STD_VERIFY((x) == VK_SUCCESS)
@@ -40,9 +41,16 @@ struct DeviceVk {
     VkQueue queue = VK_NULL_HANDLE;
     bool hasDmabuf = false;
     bool hasSyncFd = false;
+    bool tryShmUdmabufImage = false;
+    bool tryShmUdmabufBuffer = false;
+    bool tryShmExternalHost = false;
     u64 renderDev = 0;
     u32 maxImageDim = 0; // limits.maxImageDimension2D, a client-buffer ceiling
+    size_t udmabufSizeLimit = 0;
+    VkDeviceSize hostPointerAlignment = 0;
+    int udmabufFd = -1;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
+    PFN_vkGetMemoryHostPointerPropertiesEXT getMemoryHostPointerProps = nullptr;
     Log* log = nullptr;
     // VK_EXT_debug_utils: loader and validation messages into the log
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;

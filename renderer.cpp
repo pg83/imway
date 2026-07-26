@@ -34,6 +34,7 @@
 #include "fence_poll.h"
 #include "input_sink.h"
 #include "lock_screen.h"
+#include "offload_job.h"
 #include "frame_capture.h"
 #include "render_filter.h"
 #include "window_shadow.h"
@@ -57,6 +58,7 @@
 #include <ev.h>
 #include <math.h>
 #include <time.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +67,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
+#include <drm_fourcc.h>
 #include <linux/dma-buf.h>
+#include <linux/udmabuf.h>
 #include <vulkan/vulkan.h>
 #include <fullscreen.spv.h>
 #include <imgui_impl_vulkan.h>
@@ -73,12 +77,27 @@
 #include <renderer_cursor.spv.h>
 #include <renderer_output.spv.h>
 #include <linux/input-event-codes.h>
+#include <wayland-server-protocol.h>
 #include <xdg-shell-server-protocol.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
 using namespace stl;
 
 struct TextureLease;
+
+struct ShmUpload {
+    VkDevice device = VK_NULL_HANDLE;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    void* map = nullptr;
+    VkDeviceSize sourceOffset = 0;
+    u32 rowLength = 0;
+    bool mapped = false;
+    bool initialized = false;
+
+    ~ShmUpload() noexcept;
+    void finish() noexcept;
+};
 
 // the node links it into the renderer's texture registry
 struct SurfaceTexture: stl::IntrusiveNode {
@@ -95,6 +114,11 @@ struct SurfaceTexture: stl::IntrusiveNode {
     VkBuffer staging = VK_NULL_HANDLE;
     VkDeviceMemory stagingMemory = VK_NULL_HANDLE;
     void* stagingMap = nullptr;
+    FrameResource* lifetime = nullptr;
+    ShmContent* uploadUse = nullptr;
+    VkBuffer uploadBuffer = VK_NULL_HANDLE;
+    VkDeviceSize uploadOffset = 0;
+    u32 uploadRowLength = 0;
     VkDescriptorSet ds = VK_NULL_HANDLE;
     // which pool in the renderer's growable chain ds was allocated from, so it
     // can be returned to the right pool on teardown
@@ -105,6 +129,7 @@ struct SurfaceTexture: stl::IntrusiveNode {
     bool firstUse = true;
     bool external = false;
     bool arenaOwned = false;
+    bool xrgb = false;
 };
 
 // arena-death hook: destroys its texture unless destroyTexture already ran
@@ -192,6 +217,47 @@ namespace {
 
     struct RendererImpl;
 
+    enum class ShmBackend : u8 {
+        UdmabufImage,
+        UdmabufBuffer,
+        ExternalHost,
+        Cpu,
+    };
+
+    struct ShmCache: IntrusiveNode {
+        Weak<RendererImpl> owner;
+        ObjPool* key = nullptr;
+        DmabufBuffer* udmabuf = nullptr;
+        ShmUpload* udmabufUpload = nullptr;
+        ShmUpload* cpuUpload = nullptr;
+
+        ~ShmCache() noexcept;
+    };
+
+    struct ShmState: IntrusiveNode {
+        Weak<RendererImpl> owner;
+        ShmContent* content = nullptr;
+        ShmUpload* upload = nullptr;
+        DmabufBuffer* dmabuf = nullptr;
+        ShmBackend backend = ShmBackend::Cpu;
+        RectI damage;
+        bool prepared = false;
+        bool copyQueued = false;
+        bool copyReady = false;
+        bool failed = false;
+
+        ~ShmState() noexcept;
+    };
+
+    struct ShmCopyTask: IntrusiveNode {
+        Weak<Surface> surface;
+        IntrusivePtr<ShmContent> content;
+        ShmState* state;
+        bool ok = false;
+
+        ShmCopyTask(Surface& surface, ShmContent* content, ShmState* state);
+    };
+
     struct CallOutputResized: Listener {
         RendererImpl* parent;
 
@@ -218,6 +284,13 @@ namespace {
         void (RendererImpl::*callback)();
 
         CallRendererSetting(RendererImpl* p, void (RendererImpl::*cb)());
+        void onListen(void*) override;
+    };
+
+    struct CallShmCopyDone: Listener {
+        RendererImpl* parent;
+
+        CallShmCopyDone(RendererImpl* p);
         void onListen(void*) override;
     };
 
@@ -291,6 +364,7 @@ namespace {
         VkFence fence = VK_NULL_HANDLE;
         bool frameInFlight = false;
         Vector<FrameResource*> inFlightFrames;
+        Vector<ShmContentRef*> inFlightShm;
         VkSampler sampler = VK_NULL_HANDLE;
 
         // surface/icon texture descriptor sets are allocated by VkTexturePool
@@ -330,7 +404,16 @@ namespace {
         float appliedUiScale = 1.f;
         ShadowSprite shadow; // window drop shadows, baked into the font atlas
         Composer* comp = nullptr;
+        DeviceVk* vkDevice = nullptr;
+        Weak<RendererImpl> weak;
         ev_idle fontReloadIdle{};
+        IntrusiveList shmCaches;
+        IntrusiveList shmStates;
+        IntrusiveList shmCopyQueue;
+        ShmCopyTask* shmCopyActive = nullptr;
+        CallShmCopyDone shmCopyDoneListener;
+        ObjPool::Ref shmCopyLifetime;
+        OffloadJob* shmCopyJob = nullptr;
 
         bool forceComposition = false;
         bool lastFrameDirect = false;
@@ -388,7 +471,7 @@ namespace {
         bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
-        RendererImpl(Composer& comp, const DeviceVk& vk, int limit);
+        RendererImpl(Composer& comp, DeviceVk& vk, int limit);
 
         ~RendererImpl() noexcept;
 
@@ -412,13 +495,32 @@ namespace {
         bool cursorPlane(int kind, Surface* cursorSurface, double x, double y, int hotX, int hotY) override;
         void cursorPlaneMove(double x, double y) override;
         void inspectorInfo(InspectorInfo& info) override;
+        ShmCache& shmCache(ShmContent& content);
+        ShmState& shmState(ShmContent& content);
+        bool prepareShm(ShmState& state);
+        bool enqueueShmCopy(Surface& surface, ShmState& state);
+        void startShmCopy();
+        void shmCopyWork();
+        void shmCopyDone();
+        void clearShmCopyTasks();
+        void detachShmState();
+        void holdShmForFrame(ShmContent* content);
+        void releaseInFlightShm();
         void rasterizeShape(int kind, u32* out);
 
         // IconResolver: gen -> texture, textures are born on first use
         u64 iconTexture(const Icon* icon) override;
         SurfaceTexture* makeIconTexture(const u32* argb, int w, int h);
 
+        SurfaceTexture* importDmabufTexture(DmabufBuffer* buffer);
+        bool importDmabuf(Surface& s, DmabufBuffer* buffer);
         bool importDmabuf(Surface& s);
+        DmabufBuffer* makeUdmabuf(ShmContent& content, ShmCache& cache, bool& attempted);
+        ShmUpload* makeUdmabufUpload(ShmContent& content, ShmCache& cache, DmabufBuffer& dmabuf, bool& attempted);
+        ShmUpload* makeExternalHostUpload(ShmState& state, bool& attempted);
+        ShmUpload* makeCpuUpload(ShmContent& content, ShmCache& cache);
+        SurfaceTexture* uploadTexture(Surface& surface, bool xrgb, bool staging);
+        bool uploadShm(Surface& s);
         void uploadSurface(Surface& s);
         void faultSurfaceOwner(Surface& s);
         void destroyTexture(SurfaceTexture* tex);
@@ -485,6 +587,15 @@ namespace {
         (parent->*callback)();
     }
 
+    CallShmCopyDone::CallShmCopyDone(RendererImpl* p)
+        : parent(p)
+    {
+    }
+
+    void CallShmCopyDone::onListen(void*) {
+        parent->shmCopyDone();
+    }
+
     void fontReloadIdleCb(struct ev_loop* loop, ev_idle* idle, int) {
         auto* renderer = (RendererImpl*)idle->data;
 
@@ -509,6 +620,71 @@ namespace {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
     }
 
+    bool failShmForTest(StringView backend) {
+#ifdef IMWAY_FOR_TESTS
+        const char* value = getenv("IMWAY_SHM_FAIL");
+
+        return value && StringView(value) == backend;
+#else
+        (void)backend;
+
+        return false;
+#endif
+    }
+
+    void traceShmBackend(Log& log, StringView backend) {
+#ifdef IMWAY_FOR_TESTS
+        if (getenv("IMWAY_SHM_TRACE")) {
+            log << "imway: wl_shm backend "_sv << backend << endL;
+        }
+#else
+        (void)log;
+        (void)backend;
+#endif
+    }
+
+}
+
+ShmUpload::~ShmUpload() noexcept {
+    finish();
+}
+
+void ShmUpload::finish() noexcept {
+    if (mapped && memory) {
+        vkUnmapMemory(device, memory);
+    }
+
+    if (buffer) {
+        vkDestroyBuffer(device, buffer, nullptr);
+    }
+
+    if (memory) {
+        vkFreeMemory(device, memory, nullptr);
+    }
+
+    map = nullptr;
+    buffer = VK_NULL_HANDLE;
+    memory = VK_NULL_HANDLE;
+    mapped = false;
+}
+
+ShmCopyTask::ShmCopyTask(Surface& s, ShmContent* c, ShmState* st)
+    : content(c)
+    , state(st)
+{
+    surface.bind(s.weak);
+}
+
+ShmCache::~ShmCache() noexcept {
+    if (owner) {
+        unlink();
+    }
+}
+
+ShmState::~ShmState() noexcept {
+    if (owner) {
+        unlink();
+    }
 }
 
 TextureLease::TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*))
@@ -546,7 +722,7 @@ void RenderContext::finish() {
     handled = true;
 }
 
-RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, int limit)
+RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     : loop(comp.loop)
     , pool(comp.pool)
     , scene(comp.scene)
@@ -559,12 +735,45 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, int limit)
     , queue(vk.queue)
     , alloc(comp.alloc)
     , comp(&comp)
+    , vkDevice(&vk)
+    , shmCopyDoneListener(this)
+    , shmCopyLifetime(ObjPool::fromMemory())
     , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
+    weak.anchor(this);
     appliedUiScale = comp.settings->uiScale();
     hasSyncFd = vk.hasSyncFd;
     drmFd = vk.drmFd;
+#ifdef IMWAY_FOR_TESTS
+    if (const char* forced = getenv("IMWAY_SHM_BACKEND")) {
+        StringView backend(forced);
+
+        if (backend == "cpu"_sv) {
+            vk.tryShmUdmabufImage = false;
+            vk.tryShmUdmabufBuffer = false;
+            vk.tryShmExternalHost = false;
+        } else if (backend == "external-host"_sv) {
+            vk.tryShmUdmabufImage = false;
+            vk.tryShmUdmabufBuffer = false;
+        } else if (backend == "udmabuf-buffer"_sv) {
+            vk.tryShmUdmabufImage = false;
+            vk.tryShmExternalHost = false;
+        } else if (backend == "udmabuf-image"_sv) {
+            vk.tryShmUdmabufBuffer = false;
+            vk.tryShmExternalHost = false;
+        }
+
+        *comp.log << "imway: forced shm backend "_sv << backend << endL;
+    }
+
+    if (getenv("IMWAY_SHM_TRACE")) {
+        *comp.log << "imway: wl_shm gates image="_sv << (int)vk.tryShmUdmabufImage << " buffer="_sv << (int)vk.tryShmUdmabufBuffer << " host="_sv << (int)vk.tryShmExternalHost << endL;
+    }
+#endif
+    shmCopyJob = OffloadJob::create(comp, *shmCopyLifetime, [](void* self) {
+        ((RendererImpl*)self)->shmCopyWork();
+    }, this, shmCopyDoneListener);
     comp.iconResolver = this;
     comp.frameListeners.pushFront((Listener*)this);
     comp.frameCapture = (FrameCapture*)this;
@@ -623,6 +832,9 @@ RendererImpl::~RendererImpl() noexcept {
     // right after this destructor); imgui and the churn-class resources
     // (textures, the recreatable syncOut, the present fence) are tied to
     // the impl and go here, everything setup-once sits in the pool
+    shmCopyJob->join();
+    clearShmCopyTasks();
+    shmCopyJob = nullptr;
     vkDeviceWaitIdle(device);
     finishGpuFrame(false);
     ev_idle_stop(loop, &fontReloadIdle);
@@ -636,6 +848,8 @@ RendererImpl::~RendererImpl() noexcept {
         destroyTexture((SurfaceTexture*)textures.mutBack());
     }
 
+    detachShmState();
+    weak.invalidate();
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();
 
@@ -709,7 +923,9 @@ SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
 }
 
 bool RendererImpl::wantFrame() const {
-    return scene->needsFrame || settleFrames > 0;
+    // A pending CPU snapshot has no presentable version yet. Sleeping until
+    // its eventfd completion keeps the prepare watcher from busy-spinning.
+    return !shmCopyActive && (scene->needsFrame || settleFrames > 0);
 }
 
 bool RendererImpl::surfaceVisible(Surface* s) const {
@@ -730,6 +946,24 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
     }
 
     return root == scene->cursorSurface || root == scene->dragIcon.get();
+}
+
+void RendererImpl::holdShmForFrame(ShmContent* content) {
+    for (ShmContentRef* ref : inFlightShm) {
+        if (ref->ptr() == content) {
+            return;
+        }
+    }
+
+    inFlightShm.pushBack(alloc->make<ShmContentRef>(content));
+}
+
+void RendererImpl::releaseInFlightShm() {
+    for (ShmContentRef* ref : inFlightShm) {
+        alloc->release(ref);
+    }
+
+    inFlightShm.clear();
 }
 
 bool RendererImpl::finishGpuFrame(bool wait) {
@@ -792,6 +1026,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     }
 
     inFlightFrames.clear();
+    releaseInFlightShm();
 
     return true;
 }
@@ -858,6 +1093,630 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &mem));
     VK_CHECK(vkBindBufferMemory(device, buf, mem, 0));
     VK_CHECK(vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map));
+}
+
+ShmCache& RendererImpl::shmCache(ShmContent& content) {
+    for (ShmCache* cache : each<ShmCache>(shmCaches)) {
+        if (cache->key == content.storagePool) {
+            return *cache;
+        }
+    }
+
+    ShmCache* cache = content.storagePool->make<ShmCache>();
+
+    cache->owner.bind(weak);
+    cache->key = content.storagePool;
+    shmCaches.pushBack(cache);
+
+    return *cache;
+}
+
+ShmState& RendererImpl::shmState(ShmContent& content) {
+    for (ShmState* state : each<ShmState>(shmStates)) {
+        if (state->content == &content) {
+            return *state;
+        }
+    }
+
+    ShmState* state = content.statePool->make<ShmState>();
+
+    state->owner.bind(weak);
+    state->content = &content;
+    state->damage = content.damage;
+    shmStates.pushBack(state);
+
+    return *state;
+}
+
+DmabufBuffer* RendererImpl::makeUdmabuf(ShmContent& content, ShmCache& cache, bool& attempted) {
+    attempted = false;
+
+    if (cache.udmabuf) {
+        return cache.udmabuf;
+    }
+
+    if (vkDevice->udmabufFd < 0 || content.fd < 0 || content.offset < 0 || content.stride <= 0 || content.height <= 0) {
+        return nullptr;
+    }
+
+    int seals = fcntl(content.fd, F_GET_SEALS);
+
+    if (seals < 0 || !(seals & F_SEAL_SHRINK)) {
+        return nullptr;
+    }
+
+    u64 page = (u64)getpagesize();
+    u64 offset = (u64)content.offset;
+    u64 base = offset / page * page;
+    u64 delta = offset - base;
+    u64 span = (u64)content.stride * (u64)content.height;
+
+    if (span > UINT64_MAX - delta) {
+        return nullptr;
+    }
+
+    u64 needed = delta + span;
+
+    if (needed > UINT64_MAX - (page - 1)) {
+        return nullptr;
+    }
+
+    u64 size = (needed + page - 1) / page * page;
+    struct stat st{};
+
+    if (!size || fstat(content.fd, &st) != 0 || base > (u64)st.st_size || size > (u64)st.st_size - base || (vkDevice->udmabufSizeLimit && size > vkDevice->udmabufSizeLimit)) {
+        return nullptr;
+    }
+
+    attempted = true;
+
+    if (failShmForTest("udmabuf"_sv)) {
+        errno = EIO;
+
+        return nullptr;
+    }
+
+    udmabuf_create create{};
+
+    create.memfd = (u32)content.fd;
+    create.flags = UDMABUF_FLAGS_CLOEXEC;
+    create.offset = base;
+    create.size = size;
+    int fd = ioctl(vkDevice->udmabufFd, UDMABUF_CREATE, &create);
+
+    if (fd < 0) {
+        return nullptr;
+    }
+
+    DmabufBuffer* dmabuf = content.storagePool->make<DmabufBuffer>();
+
+    dmabuf->lifetime = content.storagePool;
+    dmabuf->width = content.width;
+    dmabuf->height = content.height;
+    dmabuf->format = content.format == WL_SHM_FORMAT_XRGB8888 ? kFourccXrgb : kFourccArgb;
+    dmabuf->modifier = DRM_FORMAT_MOD_LINEAR;
+    dmabuf->nplanes = 1;
+    dmabuf->fds[0] = fd;
+    dmabuf->offsets[0] = (u32)delta;
+    dmabuf->strides[0] = (u32)content.stride;
+
+    cache.udmabuf = dmabuf;
+
+    return dmabuf;
+}
+
+ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache, DmabufBuffer& dmabuf, bool& attempted) {
+    attempted = false;
+
+    if (cache.udmabufUpload) {
+        return cache.udmabufUpload;
+    }
+
+    if (content.stride % 4 || dmabuf.offsets[0] % 4) {
+        return nullptr;
+    }
+
+    struct stat st{};
+
+    if (fstat(dmabuf.fds[0], &st) != 0 || st.st_size <= 0) {
+        return nullptr;
+    }
+
+    attempted = true;
+
+    if (failShmForTest("udmabuf-buffer"_sv)) {
+        return nullptr;
+    }
+
+    ShmUpload* upload = content.storagePool->make<ShmUpload>();
+
+    upload->device = device;
+
+    VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+
+    external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+
+    bci.pNext = &external;
+    bci.size = (VkDeviceSize)st.st_size;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    if (vkCreateBuffer(device, &bci, nullptr, &upload->buffer) != VK_SUCCESS) {
+        return nullptr;
+    }
+
+    VkMemoryRequirements req{};
+
+    vkGetBufferMemoryRequirements(device, upload->buffer, &req);
+
+    VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
+
+    if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, dmabuf.fds[0], &fdProps) != VK_SUCCESS) {
+        return nullptr;
+    }
+
+    u32 typeBits = req.memoryTypeBits & fdProps.memoryTypeBits;
+    u32 memoryType = UINT32_MAX;
+
+    for (u32 i = 0; i < 32; i++) {
+        if (typeBits & (1u << i)) {
+            memoryType = i;
+
+            break;
+        }
+    }
+
+    if (memoryType == UINT32_MAX) {
+        return nullptr;
+    }
+
+    int fd = dup(dmabuf.fds[0]);
+
+    if (fd < 0) {
+        return nullptr;
+    }
+
+    VkImportMemoryFdInfoKHR import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};
+
+    import.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+    import.fd = fd;
+
+    VkMemoryDedicatedAllocateInfo dedicated{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+
+    dedicated.pNext = &import;
+    dedicated.buffer = upload->buffer;
+
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+    allocate.pNext = &dedicated;
+    allocate.allocationSize = req.size;
+    allocate.memoryTypeIndex = memoryType;
+
+    if (vkAllocateMemory(device, &allocate, nullptr, &upload->memory) != VK_SUCCESS) {
+        close(fd);
+
+        return nullptr;
+    }
+
+    if (vkBindBufferMemory(device, upload->buffer, upload->memory, 0) != VK_SUCCESS) {
+        return nullptr;
+    }
+
+    upload->sourceOffset = dmabuf.offsets[0];
+    upload->rowLength = (u32)content.stride / 4;
+    upload->initialized = true;
+    cache.udmabufUpload = upload;
+
+    return upload;
+}
+
+ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted) {
+    attempted = false;
+
+    ShmContent& content = *state.content;
+    size_t span = (size_t)content.stride * content.height;
+
+    if (!content.stableMapping || content.stride % 4 || content.offset < 0 || content.offset % 4 || span > content.poolSize || (size_t)content.offset > content.poolSize - span) {
+        return nullptr;
+    }
+
+    uintptr_t pointer = (uintptr_t)content.poolData;
+
+    if (!vkDevice->hostPointerAlignment || pointer % vkDevice->hostPointerAlignment) {
+        return nullptr;
+    }
+
+    for (ShmState* other : each<ShmState>(shmStates)) {
+        if (other != &state && other->prepared && other->backend == ShmBackend::ExternalHost && (other->content->poolData == content.poolData || other->content->fd == content.fd)) {
+            return nullptr;
+        }
+    }
+
+    attempted = true;
+
+    if (failShmForTest("external-host"_sv)) {
+        return nullptr;
+    }
+
+    VkExternalMemoryHandleTypeFlagBits handle = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    VkMemoryHostPointerPropertiesEXT hostProps{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
+    VkResult result = vkDevice->getMemoryHostPointerProps(device, handle, content.poolData, &hostProps);
+
+    if (result != VK_SUCCESS || !hostProps.memoryTypeBits) {
+        *comp->log << "imway: wl_shm external-host pointer is not importable ("_sv << (long)result << ")"_sv << endL;
+
+        return nullptr;
+    }
+
+    ShmUpload* upload = content.statePool->make<ShmUpload>();
+
+    upload->device = device;
+
+    VkExternalMemoryBufferCreateInfo external{VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO};
+
+    external.handleTypes = handle;
+
+    VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+
+    bci.pNext = &external;
+    bci.size = (VkDeviceSize)content.offset + span;
+    bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+
+    result = vkCreateBuffer(device, &bci, nullptr, &upload->buffer);
+
+    if (result != VK_SUCCESS) {
+        *comp->log << "imway: wl_shm external-host vkCreateBuffer failed ("_sv << (long)result << ")"_sv << endL;
+
+        return nullptr;
+    }
+
+    VkMemoryRequirements req{};
+
+    vkGetBufferMemoryRequirements(device, upload->buffer, &req);
+    VkDeviceSize alignment = vkDevice->hostPointerAlignment;
+
+    if (req.size > UINT64_MAX - (alignment - 1)) {
+        attempted = false;
+
+        return nullptr;
+    }
+
+    VkDeviceSize allocationSize = (req.size + alignment - 1) / alignment * alignment;
+
+    if (allocationSize > content.poolSize) {
+        attempted = false;
+
+        return nullptr;
+    }
+
+    u32 memoryType = findMemoryType(req.memoryTypeBits & hostProps.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+
+    if (memoryType == UINT32_MAX) {
+        *comp->log << "imway: wl_shm external-host has no compatible memory type (buffer="_sv << req.memoryTypeBits << " host="_sv << hostProps.memoryTypeBits << ")"_sv << endL;
+
+        return nullptr;
+    }
+
+    VkImportMemoryHostPointerInfoEXT import{VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT};
+
+    import.handleType = handle;
+    import.pHostPointer = content.poolData;
+
+    VkMemoryAllocateInfo allocate{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+    allocate.pNext = &import;
+    allocate.allocationSize = allocationSize;
+    allocate.memoryTypeIndex = memoryType;
+
+    result = vkAllocateMemory(device, &allocate, nullptr, &upload->memory);
+
+    if (result != VK_SUCCESS) {
+        *comp->log << "imway: wl_shm external-host allocation failed ("_sv << (long)result << ")"_sv << endL;
+
+        return nullptr;
+    }
+
+    result = vkBindBufferMemory(device, upload->buffer, upload->memory, 0);
+
+    if (result != VK_SUCCESS) {
+        *comp->log << "imway: wl_shm external-host bind failed ("_sv << (long)result << ")"_sv << endL;
+
+        return nullptr;
+    }
+
+    VkPhysicalDeviceMemoryProperties memoryProps{};
+
+    vkGetPhysicalDeviceMemoryProperties(phys, &memoryProps);
+
+    if (!(memoryProps.memoryTypes[memoryType].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
+        result = vkMapMemory(device, upload->memory, 0, VK_WHOLE_SIZE, 0, &upload->map);
+
+        if (result != VK_SUCCESS) {
+            *comp->log << "imway: wl_shm external-host map failed ("_sv << (long)result << ")"_sv << endL;
+
+            return nullptr;
+        }
+
+        upload->mapped = true;
+
+        VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+
+        range.memory = upload->memory;
+        range.size = VK_WHOLE_SIZE;
+        result = vkFlushMappedMemoryRanges(device, 1, &range);
+
+        if (result != VK_SUCCESS) {
+            *comp->log << "imway: wl_shm external-host flush failed ("_sv << (long)result << ")"_sv << endL;
+
+            return nullptr;
+        }
+    }
+
+    upload->sourceOffset = (VkDeviceSize)content.offset;
+    upload->rowLength = (u32)content.stride / 4;
+    upload->initialized = true;
+
+    return upload;
+}
+
+ShmUpload* RendererImpl::makeCpuUpload(ShmContent& content, ShmCache& cache) {
+    if (cache.cpuUpload) {
+        return cache.cpuUpload;
+    }
+
+    ShmUpload* upload = content.storagePool->make<ShmUpload>();
+
+    upload->device = device;
+
+    try {
+        createHostBuffer((VkDeviceSize)content.width * content.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload->buffer, upload->memory, &upload->map);
+    } catch (...) {
+        return nullptr;
+    }
+
+    upload->mapped = true;
+    upload->rowLength = (u32)content.width;
+    cache.cpuUpload = upload;
+
+    return upload;
+}
+
+bool RendererImpl::prepareShm(ShmState& state) {
+    if (state.prepared) {
+        return true;
+    }
+
+    ShmContent& content = *state.content;
+    ShmCache& cache = shmCache(content);
+    bool attempted = false;
+    bool udmabufSyncFailed = false;
+    DmabufBuffer* dmabuf = nullptr;
+
+    if (vkDevice->tryShmUdmabufImage || vkDevice->tryShmUdmabufBuffer) {
+        dmabuf = makeUdmabuf(content, cache, attempted);
+
+        if (!dmabuf && attempted) {
+            vkDevice->tryShmUdmabufImage = false;
+            vkDevice->tryShmUdmabufBuffer = false;
+            *comp->log << "imway: disabling wl_shm UDMABUF after export failure: "_sv << (const char*)strerror(errno) << endL;
+        }
+    }
+
+    if (dmabuf && vkDevice->tryShmUdmabufImage) {
+        if (failShmForTest("udmabuf-image"_sv) || !importDmabufTexture(dmabuf)) {
+            vkDevice->tryShmUdmabufImage = false;
+            *comp->log << "imway: disabling direct wl_shm UDMABUF sampling after import failure"_sv << endL;
+        } else {
+            if (!content.beginDmabufRead(&content, dmabuf->fds[0])) {
+                vkDevice->tryShmUdmabufImage = false;
+                vkDevice->tryShmUdmabufBuffer = false;
+                udmabufSyncFailed = true;
+                *comp->log << "imway: disabling wl_shm UDMABUF after sync failure: "_sv << (const char*)strerror(errno) << endL;
+            } else {
+                state.backend = ShmBackend::UdmabufImage;
+                state.dmabuf = dmabuf;
+                state.prepared = true;
+                state.copyReady = true;
+                traceShmBackend(*comp->log, "udmabuf-image"_sv);
+
+                return true;
+            }
+        }
+    }
+
+    if (!udmabufSyncFailed && dmabuf && vkDevice->tryShmUdmabufBuffer) {
+        ShmUpload* upload = makeUdmabufUpload(content, cache, *dmabuf, attempted);
+
+        if (!upload && attempted) {
+            vkDevice->tryShmUdmabufBuffer = false;
+            *comp->log << "imway: disabling wl_shm UDMABUF buffer import after failure"_sv << endL;
+        } else if (upload) {
+            if (!content.beginDmabufRead(&content, dmabuf->fds[0])) {
+                vkDevice->tryShmUdmabufImage = false;
+                vkDevice->tryShmUdmabufBuffer = false;
+                udmabufSyncFailed = true;
+                *comp->log << "imway: disabling wl_shm UDMABUF after sync failure: "_sv << (const char*)strerror(errno) << endL;
+            } else {
+                state.backend = ShmBackend::UdmabufBuffer;
+                state.upload = upload;
+                state.prepared = true;
+                state.copyReady = true;
+                traceShmBackend(*comp->log, "udmabuf-buffer"_sv);
+
+                return true;
+            }
+        }
+    }
+
+    if (!udmabufSyncFailed && vkDevice->tryShmExternalHost) {
+        ShmUpload* upload = makeExternalHostUpload(state, attempted);
+
+        if (!upload && attempted) {
+            vkDevice->tryShmExternalHost = false;
+            *comp->log << "imway: disabling wl_shm external-host import after failure"_sv << endL;
+        } else if (upload) {
+            state.backend = ShmBackend::ExternalHost;
+            state.upload = upload;
+            state.prepared = true;
+            state.copyReady = true;
+            traceShmBackend(*comp->log, "external-host"_sv);
+
+            return true;
+        }
+    }
+
+    ShmUpload* upload = makeCpuUpload(content, cache);
+
+    if (!upload) {
+        return false;
+    }
+
+    state.backend = ShmBackend::Cpu;
+    state.upload = upload;
+    state.prepared = true;
+    traceShmBackend(*comp->log, "cpu"_sv);
+
+    if (!upload->initialized || state.damage.empty()) {
+        state.damage = {0, 0, content.width, content.height};
+    }
+
+    return true;
+}
+
+bool RendererImpl::enqueueShmCopy(Surface& surface, ShmState& state) {
+    if (state.copyQueued) {
+        return true;
+    }
+
+    ShmCopyTask* task = alloc->make<ShmCopyTask>(surface, state.content, &state);
+
+    state.copyQueued = true;
+    shmCopyQueue.pushBack(task);
+    startShmCopy();
+
+    return true;
+}
+
+void RendererImpl::startShmCopy() {
+    if (shmCopyActive || shmCopyQueue.empty()) {
+        return;
+    }
+
+    shmCopyActive = (ShmCopyTask*)shmCopyQueue.popFront();
+    shmCopyJob->run();
+}
+
+void RendererImpl::shmCopyWork() {
+    ShmCopyTask& task = *shmCopyActive;
+    ShmState& state = *task.state;
+    ShmContent& content = *task.content;
+    RectI rect = state.damage;
+
+    clipRect(rect, content.width, content.height);
+
+    if (!state.upload || !state.upload->map || rect.empty()) {
+        task.ok = false;
+
+        return;
+    }
+
+#ifdef IMWAY_FOR_TESTS
+    if (const char* text = getenv("IMWAY_SHM_COPY_DELAY_MS")) {
+        unsigned long delay = strtoul(text, nullptr, 10);
+
+        if (delay > 5000) {
+            delay = 5000;
+        }
+
+        usleep(delay * 1000);
+    }
+#endif
+    if (!content.beginAccess(&content)) {
+        task.ok = false;
+
+        return;
+    }
+
+    const u8* src = content.data();
+    auto* dst = (u8*)state.upload->map;
+
+    for (i32 y = rect.y; y < rect.y + rect.h; y++) {
+        memcpy(dst + ((size_t)y * content.width + rect.x) * 4, src + (size_t)y * content.stride + (size_t)rect.x * 4, (size_t)rect.w * 4);
+    }
+
+    task.ok = content.endAccess(&content);
+}
+
+void RendererImpl::shmCopyDone() {
+    ShmCopyTask* task = shmCopyActive;
+
+    shmCopyActive = nullptr;
+
+    if (!task) {
+        return;
+    }
+
+    ShmState* state = task->state;
+    ShmContent* content = task->content.mutPtr();
+
+    state->copyQueued = false;
+
+    if (task->ok) {
+        state->upload->initialized = true;
+        state->copyReady = true;
+    } else {
+        state->failed = true;
+        content->accessFailed(content);
+    }
+
+    if (Surface* surface = task->surface.get(); surface && surface->shm && surface->shm->mutPtr() == content) {
+        surface->dirty = true;
+        scene->needsFrame = true;
+    }
+
+    alloc->release(task);
+    startShmCopy();
+}
+
+void RendererImpl::clearShmCopyTasks() {
+    if (shmCopyActive) {
+        ShmCopyTask* task = shmCopyActive;
+
+        shmCopyActive = nullptr;
+        task->state->copyQueued = false;
+        alloc->release(task);
+    }
+
+    while (!shmCopyQueue.empty()) {
+        auto* task = (ShmCopyTask*)shmCopyQueue.popFront();
+
+        task->state->copyQueued = false;
+        alloc->release(task);
+    }
+}
+
+void RendererImpl::detachShmState() {
+    forEach<ShmState>(shmStates, [](ShmState& state) {
+        if (state.upload) {
+            state.upload->finish();
+        }
+
+        state.owner.reset();
+        state.unlink();
+    });
+    forEach<ShmCache>(shmCaches, [](ShmCache& cache) {
+        if (cache.udmabufUpload) {
+            cache.udmabufUpload->finish();
+        }
+
+        if (cache.cpuUpload) {
+            cache.cpuUpload->finish();
+        }
+
+        cache.owner.reset();
+        cache.unlink();
+    });
 }
 
 void RendererImpl::loadFont() {
@@ -1402,9 +2261,9 @@ void RendererImpl::applyOutputSize() {
 }
 
 void RendererImpl::faultSurfaceOwner(Surface& s) {
-    // a client-sized allocation failed: hand the owner to wayland for a
-    // no_memory disconnect. An unowned surface (cursor, drag icon) just
-    // stays untextured
+    // A client-sized GPU resource failed: hand the owner to Wayland for a
+    // no_memory disconnect. An unowned surface (cursor, drag icon) just stays
+    // untextured.
     Surface* root = s.rootSurface();
 
     if (root && root->toplevel) {
@@ -1413,11 +2272,7 @@ void RendererImpl::faultSurfaceOwner(Surface& s) {
     }
 }
 
-void RendererImpl::uploadSurface(Surface& s) {
-    if (s.width <= 0 || s.height <= 0) {
-        return;
-    }
-
+SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging) {
     SurfaceTexture* tex = s.texture.get();
 
     if (tex && tex->external) {
@@ -1425,12 +2280,10 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex = nullptr;
     }
 
-    if (tex && (tex->w != s.width || tex->h != s.height)) {
+    if (tex && (tex->w != s.width || tex->h != s.height || tex->xrgb != xrgb || (staging && !tex->staging))) {
         releaseSurfaceTexture(s);
         tex = nullptr;
     }
-
-    bool fresh = tex == nullptr;
 
     if (!tex) {
         FrameResource* frame = frameCreate();
@@ -1440,18 +2293,23 @@ void RendererImpl::uploadSurface(Surface& s) {
         tex->arenaOwned = true;
         tex->w = s.width;
         tex->h = s.height;
+        tex->xrgb = xrgb;
+        tex->lifetime = frame;
         s.frame = frame;
 
         try {
             createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
-            createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+
+            if (staging) {
+                createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+            }
         } catch (...) {
             *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
             s.frame = nullptr;
             frameUnref(frame);
             faultSurfaceOwner(s);
 
-            return;
+            return nullptr;
         }
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -1460,7 +2318,19 @@ void RendererImpl::uploadSurface(Surface& s) {
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = kVkFormat;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        vkCreateImageView(device, &vci, nullptr, &tex->view);
+
+        if (xrgb) {
+            vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
+        }
+
+        if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
+            destroyTexture(tex);
+            s.frame = nullptr;
+            frameUnref(frame);
+
+            return nullptr;
+        }
+
         tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
 
         if (!tex->ds) {
@@ -1470,7 +2340,7 @@ void RendererImpl::uploadSurface(Surface& s) {
             s.frame = nullptr;
             frameUnref(frame);
 
-            return;
+            return nullptr;
         }
 
         frame->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
@@ -1478,6 +2348,92 @@ void RendererImpl::uploadSurface(Surface& s) {
         });
         textures.pushBack(tex);
         s.texture.bind(tex->weak);
+    }
+
+    return tex;
+}
+
+bool RendererImpl::uploadShm(Surface& s) {
+    ShmContent* content = s.shm ? s.shm->mutPtr() : nullptr;
+
+    if (!content || s.width <= 0 || s.height <= 0) {
+        return true;
+    }
+
+    ShmState* state = &shmState(*content);
+
+    if (state->failed) {
+        return true;
+    }
+
+    if (!state->prepared && !prepareShm(*state)) {
+        state->failed = true;
+        faultSurfaceOwner(s);
+
+        return true;
+    }
+
+    if (state->backend == ShmBackend::Cpu && !state->copyReady) {
+        enqueueShmCopy(s, *state);
+
+        return state->failed;
+    }
+
+    if (!state->copyReady) {
+        return false;
+    }
+
+    if (state->backend == ShmBackend::UdmabufImage) {
+        if (!importDmabuf(s, state->dmabuf)) {
+            state->failed = true;
+            faultSurfaceOwner(s);
+        }
+
+        s.damage = {};
+        s.damageAll = false;
+
+        return true;
+    }
+
+    bool xrgb = content->format == WL_SHM_FORMAT_XRGB8888;
+    SurfaceTexture* old = s.texture.get();
+    bool fresh = !old || old->external || old->w != s.width || old->h != s.height || old->xrgb != xrgb;
+    SurfaceTexture* tex = uploadTexture(s, xrgb, false);
+
+    if (!tex) {
+        return true;
+    }
+
+    RectI rect = state->damage;
+
+    if (fresh || rect.empty()) {
+        rect = {0, 0, tex->w, tex->h};
+    }
+
+    clipRect(rect, tex->w, tex->h);
+    tex->uploadUse = content;
+    tex->uploadBuffer = state->upload->buffer;
+    tex->uploadOffset = state->upload->sourceOffset;
+    tex->uploadRowLength = state->upload->rowLength;
+    unionRect(tex->uploadRect, rect);
+    tex->needsUpload = true;
+    s.damage = {};
+    s.damageAll = false;
+
+    return true;
+}
+
+void RendererImpl::uploadSurface(Surface& s) {
+    if (s.width <= 0 || s.height <= 0) {
+        return;
+    }
+
+    SurfaceTexture* old = s.texture.get();
+    bool fresh = !old || old->external || old->w != s.width || old->h != s.height || old->xrgb;
+    SurfaceTexture* tex = uploadTexture(s, false, true);
+
+    if (!tex) {
+        return;
     }
 
     RectI r{0, 0, tex->w, tex->h};
@@ -1912,27 +2868,19 @@ void RendererImpl::recordCursorTransform(VkCommandBuffer commands, VkFramebuffer
     vkCmdEndRenderPass(commands);
 }
 
-bool RendererImpl::importDmabuf(Surface& s) {
-    DmabufBuffer* b = s.dmabuf;
-
+SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
     if (!b || !hasDmabuf) {
-        return false;
+        return nullptr;
     }
 
     if (b->nplanes < 1 || b->nplanes > kDmabufMaxPlanes) {
-        return false;
+        return nullptr;
     }
 
     SurfaceTexture* cached = cacheFind(b);
 
-    if (s.texture && s.texture.get() != cached) {
-        releaseSurfaceTexture(s);
-    }
-
     if (cached) {
-        s.texture.bind(cached->weak);
-
-        return true;
+        return cached;
     }
 
     auto* tex = b->lifetime->make<SurfaceTexture>();
@@ -1946,6 +2894,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
     tex->h = b->height;
     tex->external = true;
     tex->arenaOwned = true;
+    tex->lifetime = b->lifetime;
     VkSubresourceLayout planes[kDmabufMaxPlanes] = {};
     bool disjoint = false;
     struct stat firstStat{};
@@ -2009,7 +2958,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
 
     if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
         *(comp->log) << "imway: dmabuf vkCreateImage failed"_sv << endL;
-        return false;
+        return nullptr;
     }
 
     auto pickType = [&](u32 bits, int fd) -> u32 {
@@ -2139,7 +3088,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
             }
         }
 
-        return false;
+        return nullptr;
     }
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -2157,7 +3106,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         *(comp->log) << "imway: dmabuf image view failed"_sv << endL;
         destroyTexture(tex);
 
-        return false;
+        return nullptr;
     }
 
     if (yuv) {
@@ -2168,7 +3117,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
             *(comp->log) << "imway: dmabuf chroma view failed"_sv << endL;
             destroyTexture(tex);
 
-            return false;
+            return nullptr;
         }
     }
 
@@ -2178,7 +3127,7 @@ bool RendererImpl::importDmabuf(Surface& s) {
         // genuine device OOM: drop this import, the surface stays untextured
         destroyTexture(tex);
 
-        return false;
+        return nullptr;
     }
 
     b->lifetime->make<TextureLease>(this, tex, [](void* owner, SurfaceTexture* texture) {
@@ -2186,9 +3135,28 @@ bool RendererImpl::importDmabuf(Surface& s) {
     });
     textures.pushBack(tex);
     dmabufCache.pushBack({b, tex});
+
+    return tex;
+}
+
+bool RendererImpl::importDmabuf(Surface& s, DmabufBuffer* buffer) {
+    SurfaceTexture* tex = importDmabufTexture(buffer);
+
+    if (!tex) {
+        return false;
+    }
+
+    if (s.texture && s.texture.get() != tex) {
+        releaseSurfaceTexture(s);
+    }
+
     s.texture.bind(tex->weak);
 
     return true;
+}
+
+bool RendererImpl::importDmabuf(Surface& s) {
+    return importDmabuf(s, s.dmabuf);
 }
 
 ImVec2 transformedUv(int transform, float x, float y) {
@@ -2631,6 +3599,8 @@ bool RendererImpl::renderFrame(int scanIdx) {
     Vector<VkSemaphore> waits;
     Vector<VkPipelineStageFlags> waitStages;
     Vector<Surface*> explicitSurfaces;
+    Vector<FrameResource*> uploadedFrames;
+    Vector<ShmContent*> uploadedShm;
 
     frameSyncFds.clear();
 
@@ -2801,6 +3771,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
         toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
         externalFirstUses.pushBack(tex);
+
+        if (tex->lifetime && !contains(uploadedFrames, tex->lifetime)) {
+            uploadedFrames.pushBack(tex->lifetime);
+        }
     });
 
     forEach<SurfaceTexture>(textures, [&](SurfaceTexture& value) {
@@ -2808,6 +3782,10 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
         if (!tex->needsUpload) {
             return;
+        }
+
+        if (tex->lifetime && !contains(uploadedFrames, tex->lifetime)) {
+            uploadedFrames.pushBack(tex->lifetime);
         }
 
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -2830,13 +3808,24 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
         VkBufferImageCopy region{};
 
-        region.bufferOffset = ((VkDeviceSize)r.y * tex->w + r.x) * 4;
-        region.bufferRowLength = (u32)tex->w;
+        VkBuffer source = tex->uploadBuffer ? tex->uploadBuffer : tex->staging;
+        u32 rowLength = tex->uploadBuffer ? tex->uploadRowLength : (u32)tex->w;
+
+        region.bufferOffset = (tex->uploadBuffer ? tex->uploadOffset : 0) + ((VkDeviceSize)r.y * rowLength + r.x) * 4;
+        region.bufferRowLength = rowLength;
         region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         region.imageOffset = {r.x, r.y, 0};
         region.imageExtent = {(u32)r.w, (u32)r.h, 1};
-        vkCmdCopyBufferToImage(cmd, tex->staging, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        vkCmdCopyBufferToImage(cmd, source, tex->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
         tex->uploadRect = {};
+
+        if (tex->uploadUse) {
+            uploadedShm.pushBack(tex->uploadUse);
+            tex->uploadUse = nullptr;
+            tex->uploadBuffer = VK_NULL_HANDLE;
+            tex->uploadOffset = 0;
+            tex->uploadRowLength = 0;
+        }
 
         if (tex->mips > 1) {
             // rebuild the mip chain from level 0
@@ -2958,6 +3947,26 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
     vkEndCommandBuffer(cmd);
 
+    for (ShmContent* content : uploadedShm) {
+        holdShmForFrame(content);
+    }
+
+    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+        if (!surfaceVisible(&surface) || !surface.shm) {
+            return;
+        }
+
+        ShmContent* content = surface.shm->mutPtr();
+
+        for (ShmState* state : each<ShmState>(shmStates)) {
+            if (state->content == content && state->backend == ShmBackend::UdmabufImage) {
+                holdShmForFrame(content);
+
+                break;
+            }
+        }
+    });
+
     bool needPresentFence = scanIdx >= 0 && output->supportsRenderFence();
     bool signalOut = hasSyncFd && (needPresentFence || !frameSyncFds.empty());
 
@@ -2973,6 +3982,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     VkResult submitResult = vkQueueSubmit(queue, 1, &si, fence);
 
     if (submitResult != VK_SUCCESS) {
+        releaseInFlightShm();
         *(comp->log) << "imway: Vulkan queue submit failed ("_sv << (long)submitResult << ")"_sv << endL;
         ev_break(loop, EVBREAK_ALL);
 
@@ -2988,6 +3998,22 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
     for (SurfaceTexture* tex : externalFirstUses) {
         tex->firstUse = false;
+    }
+
+    for (FrameResource* frame : uploadedFrames) {
+        if (!contains(inFlightFrames, frame)) {
+            frameRef(frame);
+            inFlightFrames.pushBack(frame);
+        }
+    }
+
+    for (ShmContent* content : uploadedShm) {
+        forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+            if (surface.shm && surface.shm->mutPtr() == content) {
+                alloc->release(surface.shm);
+                surface.shm = nullptr;
+            }
+        });
     }
 
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
@@ -3398,12 +4424,16 @@ void RendererImpl::frameNow() {
     scene->needsFrame = false;
     settleFrames--;
 
+    bool surfacesReady = true;
+
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
         if (s.dirty && s.hasContent) {
             bool ready = true;
 
             if (s.dmabuf) {
                 ready = importDmabuf(s);
+            } else if (s.shm) {
+                ready = uploadShm(s);
             } else {
                 uploadSurface(s);
             }
@@ -3416,9 +4446,14 @@ void RendererImpl::frameNow() {
 
             if (!ready) {
                 scene->needsFrame = true;
+                surfacesReady = false;
             }
         }
     });
+
+    if (!surfacesReady) {
+        return;
+    }
 
     HdrContentMetadata contentMetadata;
     const OutputColorState& outputColor = output->colorState();
@@ -3539,6 +4574,6 @@ void RendererImpl::tick() {
     }
 }
 
-Renderer* Renderer::create(Composer& c, const DeviceVk& vk, int framesLimit) {
+Renderer* Renderer::create(Composer& c, DeviceVk& vk, int framesLimit) {
     return c.pool->make<RendererImpl>(c, vk, framesLimit);
 }

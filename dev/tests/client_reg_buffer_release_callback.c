@@ -1,6 +1,6 @@
 // wl_surface v7 get_release: the compositor must advertise wl_surface >= 7
 // and fire the per-commit release callback when the committed buffer is
-// released. Exercised on an shm buffer (released at commit).
+// released. Exercised on an shm buffer (released after its copy retires).
 
 #define REG_COMPOSITOR_VERSION 7
 #include "wl_util.h"

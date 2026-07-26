@@ -1,6 +1,6 @@
 // Regression: wl_buffer release accounting over rapid commits. Three shm
-// buffers committed back to back must all come back released (shm copies
-// synchronously), and re-attaching the first must still work — a leaked or
+// buffers committed back to back must all come back released after their
+// copies retire, and re-attaching the first must still work — a leaked or
 // double release shows up here.
 
 #include "wl_util.h"

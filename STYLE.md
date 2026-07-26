@@ -129,14 +129,20 @@ functionCall(
 
 ## Errors and client input
 
-- `STD_VERIFY` and `VK_CHECK` throw, and the only catch is around the whole
-  event loop: a failure there ends the session. Use them for our own
-  invariants only — startup, compositor-sized resources, state we created.
-- An allocation or GPU object sized by client input never goes through a
-  throwing macro. Check the result in place and degrade: cap the size before
-  allocating, skip the content with a log line, or disconnect the offending
-  client (`wl_client_post_no_memory`). A client must not be able to reach the
-  top-level catch.
+- Ordinary process-memory allocation failure is not recoverable in our Linux
+  environment. Do not put `new`, `SmallObjAllocator::make`, `ObjPool::make`,
+  or container/buffer growth behind `try`/`catch`, and do not translate their
+  failure to `wl_client_post_no_memory`. If the process cannot allocate its
+  ordinary memory, let the exception reach the top-level handler.
+- Validate and cap client-controlled sizes before allocating. This is input
+  validation, not allocation-failure recovery.
+- Handle failures locally only when the operation has a meaningful recovery
+  path: filesystem and device I/O, explicit kernel mappings/resources,
+  Wayland resource creation, or GPU allocation/import with a real backend
+  fallback. Otherwise let the error end the session.
+- `STD_VERIFY` is for our own invariants. `VK_CHECK` may be caught at a narrow
+  GPU fallback boundary; without such a fallback its failure reaches the
+  top-level handler.
 
 ## Comments and formatting
 

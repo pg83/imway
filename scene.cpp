@@ -2,6 +2,9 @@
 
 #include <unistd.h>
 
+ShmContent::~ShmContent() noexcept {
+}
+
 DmabufBuffer::~DmabufBuffer() noexcept {
     for (int& fd : fds) {
         if (fd >= 0) {

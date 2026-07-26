@@ -40,14 +40,14 @@ int main(void) {
 
     /* small padding, page padding, and a huge 1MB-per-row stride */
     static const int strides[3] = {64 * 4 + 4, 64 * 4 + 4096, 1 << 20};
+    struct wl_buffer* buffers[3];
     for (int i = 0; i < 3; i++) {
-        struct wl_buffer* buf = strided(64, 64, strides[i], 0xff00ff00);
-        wl_buffer_add_listener(buf, &buf_listener, NULL);
-        wl_surface_attach(top.surface, buf, 0, 0);
+        buffers[i] = strided(64, 64, strides[i], 0xff00ff00);
+        wl_buffer_add_listener(buffers[i], &buf_listener, NULL);
+        wl_surface_attach(top.surface, buffers[i], 0, 0);
         wl_surface_damage(top.surface, 0, 0, 64, 64);
         wl_surface_commit(top.surface);
         if (wl_display_roundtrip(wl_dpy) < 0) return 1;
-        wl_buffer_destroy(buf);
     }
     for (int i = 0; i < 100 && releases < 3; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) return 1;
@@ -57,5 +57,6 @@ int main(void) {
         fprintf(stderr, "%d releases, want 3\n", releases);
         return 1;
     }
+    for (int i = 0; i < 3; i++) wl_buffer_destroy(buffers[i]);
     return 0;
 }

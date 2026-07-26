@@ -45,5 +45,5 @@ struct Renderer {
     // gpu-side numbers for the inspector widget
     virtual void inspectorInfo(InspectorInfo& info) = 0;
 
-    static Renderer* create(Composer& c, const DeviceVk& vk, int framesLimit);
+    static Renderer* create(Composer& c, DeviceVk& vk, int framesLimit);
 };

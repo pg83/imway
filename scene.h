@@ -4,11 +4,15 @@
 #include "weak_ptr.h"
 #include "frame_resource.h"
 
+#include <std/ptr/arc.h>
 #include <std/lib/list.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
+#include <std/ptr/intrusive.h>
+
+#include <stddef.h>
 
 struct Composer;
 struct DBusMenu;
@@ -19,6 +23,10 @@ struct Toplevel;
 struct Subsurface;
 struct SurfaceTexture;
 
+namespace stl {
+    class ObjPool;
+}
+
 struct RectI {
     i32 x = 0, y = 0, w = 0, h = 0;
 
@@ -26,6 +34,36 @@ struct RectI {
         return w <= 0 || h <= 0;
     }
 };
+
+// Immutable wl_shm content placed into the scene by Wayland. The renderer
+// owns all preparation/backend state; these callbacks only bracket source
+// access and let the wire-side lifetime track a dmabuf reader.
+struct ShmContent: public stl::ARC {
+    stl::ObjPool* statePool = nullptr;
+    stl::ObjPool* storagePool = nullptr;
+    u8* poolData = nullptr;
+    size_t poolSize = 0;
+    i32 offset = 0;
+    i32 width = 0;
+    i32 height = 0;
+    i32 stride = 0;
+    u32 format = 0;
+    int fd = -1;
+    RectI damage;
+    bool stableMapping = false;
+    bool (*beginAccess)(ShmContent*) = nullptr;
+    bool (*endAccess)(ShmContent*) = nullptr;
+    void (*accessFailed)(ShmContent*) = nullptr;
+    bool (*beginDmabufRead)(ShmContent*, int) = nullptr;
+
+    virtual ~ShmContent() noexcept;
+
+    u8* data() const {
+        return poolData + offset;
+    }
+};
+
+using ShmContentRef = stl::IntrusivePtr<ShmContent>;
 
 void unionRect(RectI& a, const RectI& b);
 void clipRect(RectI& r, i32 w, i32 h);
@@ -97,6 +135,7 @@ struct Surface: SceneNode, GrabNode {
     bool damageAll = false;
     stl::Vector<u8> pixels;
     DmabufBuffer* dmabuf = nullptr;
+    ShmContentRef* shm = nullptr;
     FrameResource* frame = nullptr;
 
     // weak: the renderer invalidates the texture's anchor on destruction,

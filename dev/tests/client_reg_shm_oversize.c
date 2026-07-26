@@ -37,7 +37,12 @@ int main(void) {
         return 1;
     }
 
-    /* a normal commit afterwards must still work */
+    /* Rejected content unmaps the xdg_surface.  Commit its new initial state,
+     * then wait for and acknowledge the fresh configure before remapping. */
+    wl_surface_commit(top.surface);
+    if (wl_display_roundtrip(wl_dpy) < 0) return 1;
+
+    /* a normal remap afterwards must still work */
     wl_surface_attach(top.surface, wl_solid(200, 150, 0xff20c040), 0, 0);
     wl_surface_damage(top.surface, 0, 0, 200, 150);
     wl_surface_commit(top.surface);

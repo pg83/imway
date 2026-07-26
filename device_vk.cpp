@@ -84,6 +84,28 @@ namespace {
 
         return false;
     }
+
+    size_t readUdmabufLimit() {
+        int fd = open("/sys/module/udmabuf/parameters/size_limit_mb", O_RDONLY | O_CLOEXEC);
+
+        if (fd < 0) {
+            return 0;
+        }
+
+        char text[64] = {};
+        ssize_t n = read(fd, text, sizeof(text) - 1);
+
+        close(fd);
+
+        if (n <= 0) {
+            return 0;
+        }
+
+        unsigned long long mb = strtoull(text, nullptr, 10);
+
+        return mb > SIZE_MAX / (1024 * 1024) ? SIZE_MAX : (size_t)mb * 1024 * 1024;
+    }
+
 }
 
 void vkWaitOrDie(VkDevice device, VkFence fence, const char* what) {
@@ -241,21 +263,32 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
     STD_VERIFY(this->queueFamily != UINT32_MAX);
 
     Vector<const char*> devExts;
-    const char* need[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME};
+    const char* dmabufMemoryExts[] = {VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME};
+    bool hasDmabufMemory = true;
 
-    this->hasDmabuf = true;
-
-    for (const char* name : need) {
+    for (const char* name : dmabufMemoryExts) {
         if (!hasExt(this->phys, name)) {
-            this->hasDmabuf = false;
+            hasDmabufMemory = false;
             *log << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
         }
     }
 
-    if (this->hasDmabuf) {
-        for (const char* name : need) {
+    if (hasDmabufMemory) {
+        for (const char* name : dmabufMemoryExts) {
             devExts.pushBack(name);
         }
+    }
+
+    bool hasDrmModifier = hasExt(this->phys, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
+
+    if (!hasDrmModifier) {
+        *log << "imway: vulkan lacks "_sv << StringView(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) << ", dmabuf image import disabled"_sv << endL;
+    }
+
+    this->hasDmabuf = hasDmabufMemory && hasDrmModifier;
+
+    if (this->hasDmabuf) {
+        devExts.pushBack(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
 
         if (hasExt(this->phys, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME)) {
             devExts.pushBack(VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
@@ -281,6 +314,34 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
         }
     }
 
+    bool canImportDmabufBuffer = false;
+
+    if (hasDmabufMemory) {
+        VkPhysicalDeviceExternalBufferInfo bufferInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+        VkExternalBufferProperties bufferProps{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+
+        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bufferInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT;
+        vkGetPhysicalDeviceExternalBufferProperties(this->phys, &bufferInfo, &bufferProps);
+        canImportDmabufBuffer = bufferProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+    }
+
+    if (hasExt(this->phys, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME)) {
+        VkPhysicalDeviceExternalMemoryHostPropertiesEXT host{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT};
+        VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+        VkPhysicalDeviceExternalBufferInfo bufferInfo{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_BUFFER_INFO};
+        VkExternalBufferProperties bufferProps{VK_STRUCTURE_TYPE_EXTERNAL_BUFFER_PROPERTIES};
+
+        props2.pNext = &host;
+        vkGetPhysicalDeviceProperties2(this->phys, &props2);
+        bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+        bufferInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+        vkGetPhysicalDeviceExternalBufferProperties(this->phys, &bufferInfo, &bufferProps);
+        this->hostPointerAlignment = host.minImportedHostPointerAlignment;
+        this->tryShmExternalHost = bufferProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
+        devExts.pushBack(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    }
+
     float prio = 1.f;
     VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
 
@@ -297,16 +358,35 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
     VK_CHECK(vkCreateDevice(this->phys, &dci, nullptr, &this->device));
     vkGetDeviceQueue(this->device, this->queueFamily, 0, &this->queue);
 
-    if (this->hasDmabuf) {
+    if (hasDmabufMemory) {
         this->getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(this->device, "vkGetMemoryFdPropertiesKHR");
 
         if (!this->getMemoryFdProps) {
             this->hasDmabuf = false;
+            canImportDmabufBuffer = false;
         }
     }
+
+    if (this->tryShmExternalHost) {
+        this->getMemoryHostPointerProps = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(this->device, "vkGetMemoryHostPointerPropertiesEXT");
+
+        if (!this->getMemoryHostPointerProps) {
+            this->tryShmExternalHost = false;
+        }
+    }
+
+    this->udmabufFd = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+    this->udmabufSizeLimit = readUdmabufLimit();
+    this->tryShmUdmabufBuffer = canImportDmabufBuffer && this->udmabufFd >= 0;
+    this->tryShmUdmabufImage = this->hasDmabuf && this->udmabufFd >= 0;
 }
 
 DeviceVk::~DeviceVk() noexcept {
+    if (this->udmabufFd >= 0) {
+        close(this->udmabufFd);
+        this->udmabufFd = -1;
+    }
+
     if (this->device) {
         vkDestroyDevice(this->device, nullptr);
     }

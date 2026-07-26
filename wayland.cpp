@@ -40,12 +40,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <xf86drm.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/ioctl.h>
 #include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/eventfd.h>
+#include <linux/dma-buf.h>
 #include <xkbcommon/xkbcommon.h>
 #include <appmenu-server-protocol.h>
 #include <fifo-v1-server-protocol.h>
@@ -103,6 +106,513 @@ namespace {
     struct WaylandImpl;
 
     struct FifoState;
+    struct ShmPool;
+
+    struct ShmMapping: public ARC {
+        u8* data;
+        size_t size;
+        bool stable = false;
+
+        ShmMapping(u8* data, size_t size);
+        ~ShmMapping() noexcept;
+    };
+
+    struct ShmPool: public ARC {
+        wl_resource* resource = nullptr;
+        IntrusivePtr<ShmMapping> mapping;
+        int fd;
+
+        ShmPool(int fd, ShmMapping* mapping);
+        ~ShmPool() noexcept;
+    };
+
+    struct ShmBuffer: public ARC {
+        IntrusivePtr<ShmPool> pool;
+        ObjPool::Ref cacheLifetime;
+        wl_resource* resource = nullptr;
+        i32 offset;
+        i32 width;
+        i32 height;
+        i32 stride;
+        u32 format;
+        int busyUses = 0;
+        int udmabufReaders = 0;
+        bool udmabufCpuAccess = false;
+
+        ShmBuffer(ShmPool* pool, ObjPool* cacheLifetime, i32 offset, i32 width, i32 height, i32 stride, u32 format);
+        ~ShmBuffer() noexcept;
+        u8* data();
+    };
+
+    struct ShmUse: ShmContent {
+        IntrusivePtr<ShmBuffer> buffer;
+        IntrusivePtr<ShmMapping> mapping;
+        wl_resource* releaseCb;
+        int udmabufFd = -1;
+        bool bufferBusy = true;
+        bool udmabufReading = false;
+        bool sourceReleased = false;
+        ObjPool::Ref stateLifetime;
+
+        ShmUse(ShmBuffer* buffer, ShmMapping* mapping, ObjPool* stateLifetime, wl_resource* releaseCb);
+        ~ShmUse() noexcept;
+
+        static ShmContentRef create(ShmBuffer* buffer, wl_resource* releaseCb);
+        bool beginUdmabufRead(int fd);
+        void releaseSource();
+    };
+
+    pthread_once_t sigbusOnce = PTHREAD_ONCE_INIT;
+    pthread_key_t sigbusKey;
+    struct sigaction oldSigbusAction;
+    bool sigbusReady = false;
+
+    struct SigbusAccess {
+        ShmMapping* mapping = nullptr;
+        int count = 0;
+        bool faulted = false;
+    };
+
+    void mappingUpdateStable(ShmPool* pool, ShmMapping* mapping) {
+        struct stat st{};
+        int seals = fcntl(pool->fd, F_GET_SEALS);
+
+        mapping->stable = seals >= 0 && (seals & F_SEAL_SHRINK) && fstat(pool->fd, &st) == 0 && st.st_size >= (off_t)mapping->size;
+    }
+
+    ShmMapping* mappingCreate(int fd, size_t size) {
+        u8* data = (u8*)mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+        if (data == MAP_FAILED) {
+            return nullptr;
+        }
+
+        return new ShmMapping(data, size);
+    }
+
+    void reraiseSigbus() {
+        sigaction(SIGBUS, &oldSigbusAction, nullptr);
+        raise(SIGBUS);
+    }
+
+    void sigbusHandler(int, siginfo_t* info, void*) {
+        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
+        ShmMapping* mapping = access ? access->mapping : nullptr;
+
+        if (!mapping || (u8*)info->si_addr < mapping->data || (u8*)info->si_addr >= mapping->data + mapping->size) {
+            reraiseSigbus();
+
+            return;
+        }
+
+        access->faulted = true;
+
+        if (mmap(mapping->data, mapping->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) {
+            reraiseSigbus();
+        }
+    }
+
+    void destroySigbusAccess(void* data) {
+        free(data);
+    }
+
+    void initSigbus() {
+        struct sigaction action{};
+
+        action.sa_sigaction = sigbusHandler;
+        action.sa_flags = SA_SIGINFO | SA_NODEFER;
+        sigemptyset(&action.sa_mask);
+
+        if (pthread_key_create(&sigbusKey, destroySigbusAccess) != 0) {
+            return;
+        }
+
+        if (sigaction(SIGBUS, &action, &oldSigbusAction) != 0) {
+            pthread_key_delete(sigbusKey);
+
+            return;
+        }
+
+        sigbusReady = true;
+    }
+
+    bool shmMappingBeginAccess(ShmMapping* mapping) {
+        if (pthread_once(&sigbusOnce, initSigbus) != 0 || !sigbusReady) {
+            return false;
+        }
+
+        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
+
+        if (!access) {
+            access = (SigbusAccess*)calloc(1, sizeof(SigbusAccess));
+
+            if (!access || pthread_setspecific(sigbusKey, access) != 0) {
+                free(access);
+
+                return false;
+            }
+        }
+
+        if (access->mapping && access->mapping != mapping) {
+            abort();
+        }
+
+        access->mapping = mapping;
+        access->count++;
+
+        return true;
+    }
+
+    bool shmMappingEndAccess() {
+        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
+
+        if (!access || access->count < 1) {
+            abort();
+        }
+
+        bool ok = !access->faulted;
+
+        access->count--;
+
+        if (!access->count) {
+            access->mapping = nullptr;
+            access->faulted = false;
+        }
+
+        return ok;
+    }
+
+    bool shmBufferBeginAccess(ShmBuffer* buffer) {
+        return shmMappingBeginAccess(buffer->pool->mapping.mutPtr());
+    }
+
+    bool shmBufferEndAccess(ShmBuffer*) {
+        return shmMappingEndAccess();
+    }
+
+    bool shmContentBeginAccess(ShmContent* content) {
+        return shmMappingBeginAccess(((ShmUse*)content)->mapping.mutPtr());
+    }
+
+    bool shmContentEndAccess(ShmContent*) {
+        return shmMappingEndAccess();
+    }
+
+    void shmContentAccessFailed(ShmContent* content) {
+        ShmBuffer* buffer = ((ShmUse*)content)->buffer.mutPtr();
+
+        if (buffer->resource) {
+            wl_resource_post_error(buffer->resource, WL_SHM_ERROR_INVALID_FD, "error accessing SHM buffer");
+        }
+    }
+
+    bool shmContentBeginDmabufRead(ShmContent* content, int fd) {
+        return ((ShmUse*)content)->beginUdmabufRead(fd);
+    }
+
+    void bufferResourceDestroyed(wl_resource* resource) {
+        auto* buffer = (ShmBuffer*)wl_resource_get_user_data(resource);
+
+        buffer->resource = nullptr;
+        RefCountOps<ShmBuffer>::unref(buffer);
+    }
+
+    void bufferDestroy(wl_client*, wl_resource* resource) {
+        wl_resource_destroy(resource);
+    }
+
+    const struct wl_buffer_interface shmBufferImpl = {
+        .destroy = bufferDestroy,
+    };
+
+    void poolCreateBuffer(wl_client* client, wl_resource* resource, u32 id, i32 offset, i32 width, i32 height, i32 stride, u32 format) {
+        auto* pool = (ShmPool*)wl_resource_get_user_data(resource);
+        ShmMapping* mapping = pool->mapping.mutPtr();
+
+        if (format != WL_SHM_FORMAT_ARGB8888 && format != WL_SHM_FORMAT_XRGB8888) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FORMAT, "invalid format 0x%x", format);
+
+            return;
+        }
+
+        size_t span = stride > 0 && height > 0 ? (size_t)stride * height : 0;
+
+        if (offset < 0 || width <= 0 || height <= 0 || stride < width || INT32_MAX / stride < height || span > mapping->size || (size_t)offset > mapping->size - span) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_STRIDE, "invalid width, height or stride (%dx%d, %u)", width, height, stride);
+
+            return;
+        }
+
+        ObjPool::Ref cacheLifetime = ObjPool::fromMemory();
+        IntrusivePtr<ShmBuffer> buffer = new ShmBuffer(pool, cacheLifetime.mutPtr(), offset, width, height, stride, format);
+
+        buffer->resource = wl_resource_create(client, &wl_buffer_interface, 1, id);
+
+        if (!buffer->resource) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        buffer->ref();
+        wl_resource_set_implementation(buffer->resource, &shmBufferImpl, buffer.mutPtr(), bufferResourceDestroyed);
+    }
+
+    void poolDestroy(wl_client*, wl_resource* resource) {
+        wl_resource_destroy(resource);
+    }
+
+    void poolResize(wl_client*, wl_resource* resource, i32 size) {
+        auto* pool = (ShmPool*)wl_resource_get_user_data(resource);
+        ShmMapping* old = pool->mapping.mutPtr();
+
+        if (size <= 0 || (size_t)size < old->size) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "shrinking pool invalid");
+
+            return;
+        }
+
+        if ((size_t)size == old->size) {
+            return;
+        }
+
+        ShmMapping* mapping = mappingCreate(pool->fd, (size_t)size);
+
+        if (!mapping) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap");
+
+            return;
+        }
+
+        mappingUpdateStable(pool, mapping);
+        pool->mapping = mapping;
+    }
+
+    const struct wl_shm_pool_interface shmPoolImpl = {
+        .create_buffer = poolCreateBuffer,
+        .destroy = poolDestroy,
+        .resize = poolResize,
+    };
+
+    void poolResourceDestroyed(wl_resource* resource) {
+        auto* pool = (ShmPool*)wl_resource_get_user_data(resource);
+
+        pool->resource = nullptr;
+        RefCountOps<ShmPool>::unref(pool);
+    }
+
+    void shmCreatePool(wl_client* client, wl_resource* resource, u32 id, int fd, i32 size) {
+        if (size <= 0) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_STRIDE, "invalid size (%d)", size);
+            close(fd);
+
+            return;
+        }
+
+        ShmMapping* mapping = mappingCreate(fd, (size_t)size);
+
+        if (!mapping) {
+            wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap fd %d: %s", fd, strerror(errno));
+            close(fd);
+
+            return;
+        }
+
+        IntrusivePtr<ShmPool> pool = new ShmPool(fd, mapping);
+
+        mappingUpdateStable(pool.mutPtr(), mapping);
+        pool->resource = wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id);
+
+        if (!pool->resource) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        pool->ref();
+        wl_resource_set_implementation(pool->resource, &shmPoolImpl, pool.mutPtr(), poolResourceDestroyed);
+    }
+
+    void shmRelease(wl_client*, wl_resource* resource) {
+        wl_resource_destroy(resource);
+    }
+
+    const struct wl_shm_interface shmImpl = {
+        .create_pool = shmCreatePool,
+        .release = shmRelease,
+    };
+
+    void bindShm(wl_client* client, void*, u32 version, u32 id) {
+        wl_resource* resource = wl_resource_create(client, &wl_shm_interface, version, id);
+
+        if (!resource) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
+        wl_resource_set_implementation(resource, &shmImpl, nullptr, nullptr);
+        wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
+        wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
+    }
+
+    bool initWaylandShm(wl_display* display) {
+        return wl_global_create(display, &wl_shm_interface, 2, nullptr, bindShm) != nullptr;
+    }
+
+    ShmBuffer* shmBufferFromResource(wl_resource* resource) {
+        if (!resource || !wl_resource_instance_of(resource, &wl_buffer_interface, &shmBufferImpl)) {
+            return nullptr;
+        }
+
+        return (ShmBuffer*)wl_resource_get_user_data(resource);
+    }
+
+    ShmMapping::ShmMapping(u8* d, size_t s)
+        : data(d)
+        , size(s)
+    {
+    }
+
+    ShmMapping::~ShmMapping() noexcept {
+        munmap(data, size);
+    }
+
+    ShmPool::ShmPool(int f, ShmMapping* m)
+        : mapping(m)
+        , fd(f)
+    {
+    }
+
+    ShmPool::~ShmPool() noexcept {
+        close(fd);
+    }
+
+    ShmBuffer::ShmBuffer(ShmPool* p, ObjPool* cache, i32 o, i32 w, i32 h, i32 s, u32 f)
+        : pool(p)
+        , cacheLifetime(cache)
+        , offset(o)
+        , width(w)
+        , height(h)
+        , stride(s)
+        , format(f)
+    {
+    }
+
+    ShmBuffer::~ShmBuffer() noexcept {
+    }
+
+    u8* ShmBuffer::data() {
+        return pool->mapping->data + offset;
+    }
+
+    ShmUse::ShmUse(ShmBuffer* b, ShmMapping* m, ObjPool* lifetime, wl_resource* callback)
+        : buffer(b)
+        , mapping(m)
+        , releaseCb(callback)
+        , stateLifetime(lifetime)
+    {
+        statePool = lifetime;
+        storagePool = b->cacheLifetime.mutPtr();
+        poolData = m->data;
+        poolSize = m->size;
+        offset = b->offset;
+        width = b->width;
+        height = b->height;
+        stride = b->stride;
+        format = b->format;
+        fd = b->pool->fd;
+        stableMapping = m->stable;
+        beginAccess = shmContentBeginAccess;
+        endAccess = shmContentEndAccess;
+        accessFailed = shmContentAccessFailed;
+        beginDmabufRead = shmContentBeginDmabufRead;
+        b->busyUses++;
+    }
+
+    ShmUse::~ShmUse() noexcept {
+        releaseSource();
+    }
+
+    ShmContentRef ShmUse::create(ShmBuffer* buffer, wl_resource* releaseCb) {
+        ShmMapping* mapping = buffer->pool->mapping.mutPtr();
+
+        mappingUpdateStable(buffer->pool.mutPtr(), mapping);
+
+        ObjPool::Ref stateLifetime = ObjPool::fromMemory();
+
+        return new ShmUse(buffer, mapping, stateLifetime.mutPtr(), releaseCb);
+    }
+
+    bool ShmUse::beginUdmabufRead(int fd) {
+        if (udmabufReading) {
+            return true;
+        }
+
+        if (!buffer->udmabufReaders) {
+            dma_buf_sync sync{};
+
+            if (!buffer->udmabufCpuAccess) {
+                sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
+
+                if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+                    return false;
+                }
+
+                buffer->udmabufCpuAccess = true;
+            }
+
+            sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
+
+            if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+                return false;
+            }
+
+            buffer->udmabufCpuAccess = false;
+        }
+
+        buffer->udmabufReaders++;
+        udmabufReading = true;
+        udmabufFd = fd;
+
+        return true;
+    }
+
+    void ShmUse::releaseSource() {
+        if (sourceReleased) {
+            return;
+        }
+
+        sourceReleased = true;
+
+        if (udmabufReading) {
+            udmabufReading = false;
+
+            if (--buffer->udmabufReaders == 0) {
+                dma_buf_sync sync{};
+
+                sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
+
+                if (ioctl(udmabufFd, DMA_BUF_IOCTL_SYNC, &sync) == 0) {
+                    buffer->udmabufCpuAccess = true;
+                }
+            }
+        }
+
+        if (bufferBusy) {
+            bufferBusy = false;
+
+            if (--buffer->busyUses == 0 && buffer->resource) {
+                wl_buffer_send_release(buffer->resource);
+            }
+        }
+
+        if (releaseCb) {
+            wl_callback_send_done(releaseCb, 0);
+            wl_resource_destroy(releaseCb);
+            releaseCb = nullptr;
+        }
+    }
 
     void assignText(Buffer& out, StringView value) {
         out.reset();
@@ -361,6 +871,7 @@ namespace {
         bool hasContent = false;
         int width = 0, height = 0;
         Vector<u8> pixels;
+        ShmContentRef* shm = nullptr;
         Vector<wl_resource*> frames;
         DmabufBuffer* dmabuf = nullptr;
         wl_resource* dmabufRes = nullptr;
@@ -1530,6 +2041,15 @@ namespace {
         cache.acq = cache.rel = nullptr;
     }
 
+    void releaseCachedShm(SmallObjAllocator* alloc, CommitCache& cache) {
+        if (!cache.shm) {
+            return;
+        }
+
+        alloc->release(cache.shm);
+        cache.shm = nullptr;
+    }
+
     void dmabufUseBufferDestroyed(wl_listener* l, void*) {
         auto* use = ((DmabufUseDestroyListener*)l)->use;
 
@@ -1553,7 +2073,24 @@ namespace {
         frameUnref(frame);
     }
 
+    void releaseHeldShm(SurfaceImpl& s) {
+        if (!s.shm) {
+            return;
+        }
+
+        s.srv->alloc->release(s.shm);
+        s.shm = nullptr;
+    }
+
     DmabufUse* holdDmabuf(SurfaceImpl& s, wl_resource* buffer, DmabufBuffer* buf, bool addRef = true) {
+        if (!s.dmabuf && s.frame) {
+            FrameResource* frame = s.frame;
+
+            s.texture.reset();
+            s.frame = nullptr;
+            frameUnref(frame);
+        }
+
         releaseHeldDmabuf(s);
 
         FrameResource* frame = frameCreate();
@@ -1714,102 +2251,33 @@ namespace {
         s.pending.inputRegion.append(box->rects.begin(), box->rects.length());
     }
 
-    // false only when the pixel copy itself cannot be allocated: the caller
-    // disconnects the client (weston's rule — a client-sized allocation
-    // must not reach the top-level catch through a throwing macro)
-    bool copyShmBufferTo(WaylandImpl* srv, wl_shm_buffer& shm, int& outW, int& outH, Vector<u8>& out, const RectI* rect) {
+    bool usableShmBuffer(WaylandImpl* srv, const ShmBuffer& shm) {
         Log& log = *srv->composer->log;
-        i32 w = wl_shm_buffer_get_width(&shm);
-        i32 h = wl_shm_buffer_get_height(&shm);
-        i32 stride = wl_shm_buffer_get_stride(&shm);
-        u32 fmt = wl_shm_buffer_get_format(&shm);
 
-        if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
-            log << "imway: unsupported shm format "_sv << fmt << endL;
-            outW = outH = 0;
+        if (shm.format != WL_SHM_FORMAT_ARGB8888 && shm.format != WL_SHM_FORMAT_XRGB8888) {
+            log << "imway: unsupported shm format "_sv << shm.format << endL;
 
-            return true;
+            return false;
         }
 
-        // libwayland validates stride against the pixel width only; a client
-        // can pass stride < w*4 and walk the copy loop past the mmap
-        if (stride < (i64)w * 4) {
-            log << "imway: shm stride "_sv << stride << " < width*4"_sv << endL;
-            outW = outH = 0;
+        if (shm.stride < (i64)shm.width * 4) {
+            log << "imway: shm stride "_sv << shm.stride << " < width*4"_sv << endL;
 
-            return true;
+            return false;
         }
 
-        // wl_shm has no dimension error: a buffer no texture can hold is
-        // capped here, before the pixel copy sizes an allocation by it
-        if (srv->maxImageDim && ((u32)w > srv->maxImageDim || (u32)h > srv->maxImageDim)) {
-            log << "imway: shm buffer "_sv << w << "x"_sv << h << " exceeds the device limit "_sv << srv->maxImageDim << endL;
-            outW = outH = 0;
+        if (srv->maxImageDim && ((u32)shm.width > srv->maxImageDim || (u32)shm.height > srv->maxImageDim)) {
+            log << "imway: shm buffer "_sv << shm.width << "x"_sv << shm.height << " exceeds the device limit "_sv << srv->maxImageDim << endL;
 
-            return true;
-        }
-
-        bool incremental = rect && !rect->empty() && outW == w && outH == h && out.length() == (size_t)w * h * 4;
-
-        outW = w;
-        outH = h;
-
-        wl_shm_buffer_begin_access(&shm);
-
-        auto* src = (const u8*)wl_shm_buffer_get_data(&shm);
-
-        if (incremental) {
-            for (i32 y = rect->y; y < rect->y + rect->h; y++) {
-                memcpy(out.mutData() + ((size_t)y * w + rect->x) * 4, src + (size_t)y * stride + (size_t)rect->x * 4, (size_t)rect->w * 4);
-            }
-        } else {
-            try {
-                out.clear();
-                out.grow((size_t)w * h * 4);
-
-                for (i32 y = 0; y < h; y++) {
-                    out.append(src + (size_t)y * stride, (size_t)w * 4);
-                }
-            } catch (...) {
-                wl_shm_buffer_end_access(&shm);
-                out.clear();
-                outW = outH = 0;
-                log << "imway: shm copy allocation failed ("_sv << w << "x"_sv << h << ")"_sv << endL;
-
-                return false;
-            }
-        }
-
-        wl_shm_buffer_end_access(&shm);
-
-        // the renderer samples the fourth byte as alpha; XRGB leaves it
-        // undefined and clients commonly write zero there
-        if (fmt == WL_SHM_FORMAT_XRGB8888) {
-            i32 y0 = incremental ? rect->y : 0;
-            i32 y1 = incremental ? rect->y + rect->h : h;
-            i32 x0 = incremental ? rect->x : 0;
-            i32 x1 = incremental ? rect->x + rect->w : w;
-
-            for (i32 y = y0; y < y1; y++) {
-                u8* row = out.mutData() + ((size_t)y * w + x0) * 4;
-
-                for (i32 x = x0; x < x1; x++, row += 4) {
-                    row[3] = 0xff;
-                }
-            }
+            return false;
         }
 
         return true;
     }
 
-    void copyShmBuffer(SurfaceImpl& s, wl_shm_buffer* shm, const RectI* rect) {
-        if (!copyShmBufferTo(s.srv, *shm, s.width, s.height, s.pixels, rect)) {
-            wl_client_post_no_memory(wl_resource_get_client(s.res));
-        }
-
-        if (s.width > 0) {
-            s.dirty = true;
-            s.hasContent = true;
+    void postShmAccessError(ShmBuffer* shm) {
+        if (shm->resource) {
+            wl_resource_post_error(shm->resource, WL_SHM_ERROR_INVALID_FD, "error accessing SHM buffer");
         }
     }
 
@@ -1882,6 +2350,7 @@ namespace {
 
         if (cache.valid) {
             releaseHeldDmabuf(s);
+            releaseHeldShm(s);
             s.hasContent = cache.hasContent;
             s.width = cache.width;
             s.height = cache.height;
@@ -1911,6 +2380,12 @@ namespace {
                 cache.dmabuf = nullptr;
                 cache.dmabufRes = nullptr;
                 cache.acq = cache.rel = nullptr;
+            } else if (cache.shm) {
+                s.shm = cache.shm;
+                cache.shm = nullptr;
+                s.pixels.clear();
+                s.dirty = true;
+                s.damageAll = true;
             } else if (cache.hasContent && !cache.pixels.empty()) {
                 s.pixels.xchg(cache.pixels);
                 s.dirty = true;
@@ -2180,9 +2655,9 @@ namespace {
             int bh = validateCurrentSize ? (cache && cache->valid ? cache->height : s.height) : 0;
 
             if (!validateCurrentSize) {
-                if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
-                    bw = wl_shm_buffer_get_width(shm);
-                    bh = wl_shm_buffer_get_height(shm);
+                if (ShmBuffer* shm = shmBufferFromResource(s.pending.buffer)) {
+                    bw = shm->width;
+                    bh = shm->height;
                 } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
                     (void)spb;
                     bw = bh = 1;
@@ -2217,6 +2692,7 @@ namespace {
 
             if (cache) {
                 releaseCachedDmabuf(s.srv, *cache);
+                releaseCachedShm(s.srv->alloc, *cache);
             }
 
             if (!s.pending.buffer) {
@@ -2230,38 +2706,65 @@ namespace {
                     cache->width = cache->height = 0;
                     cache->pixels.clear();
                 } else {
+                    releaseHeldDmabuf(s);
+                    releaseHeldShm(s);
                     s.hasContent = false;
                     s.width = s.height = 0;
                 }
-            } else if (wl_shm_buffer* shm = wl_shm_buffer_get(s.pending.buffer)) {
+            } else if (ShmBuffer* shm = shmBufferFromResource(s.pending.buffer)) {
                 RectI dmg = s.pending.damage;
                 bool all = s.pending.damageAll || dmg.empty();
 
-                clipRect(dmg, wl_shm_buffer_get_width(shm), wl_shm_buffer_get_height(shm));
+                clipRect(dmg, shm->width, shm->height);
 
-                if (cache) {
-                    if (!copyShmBufferTo(s.srv, *shm, cache->width, cache->height, cache->pixels, nullptr)) {
-                        wl_client_post_no_memory(wl_resource_get_client(s.res));
-                    }
+                ShmContentRef* use = nullptr;
+                if (usableShmBuffer(s.srv, *shm)) {
+                    ShmContentRef content = ShmUse::create(shm, s.pending.releaseCb);
 
-                    cache->hasContent = cache->width > 0;
-                    cache->valid = true;
-                } else {
-                    copyShmBuffer(s, shm, all ? nullptr : &dmg);
-
-                    if (all) {
-                        s.damageAll = true;
-                    } else {
-                        unionRect(s.damage, dmg);
-                    }
+                    s.pending.releaseCb = nullptr;
+                    use = s.srv->alloc->make<ShmContentRef>(content);
                 }
 
-                wl_buffer_send_release(s.pending.buffer);
-                // shm is copied out at commit, so its release is immediate
-                fireReleaseCb(s.pending.releaseCb);
+                if (use) {
+                    (*use)->damage = all ? RectI{0, 0, shm->width, shm->height} : dmg;
 
-                if (!cache) {
+                    if (cache) {
+                        cache->shm = use;
+                        cache->width = shm->width;
+                        cache->height = shm->height;
+                        cache->hasContent = true;
+                        cache->pixels.clear();
+                        cache->valid = true;
+                    } else {
+                        releaseHeldDmabuf(s);
+                        releaseHeldShm(s);
+                        s.shm = use;
+                        s.width = shm->width;
+                        s.height = shm->height;
+                        s.pixels.clear();
+                        s.hasContent = true;
+                        s.dirty = true;
+
+                        if (all) {
+                            s.damageAll = true;
+                        } else {
+                            unionRect(s.damage, dmg);
+                        }
+                    }
+                } else if (cache) {
+                    cache->width = cache->height = 0;
+                    cache->hasContent = false;
+                    cache->valid = true;
+                } else {
                     releaseHeldDmabuf(s);
+                    releaseHeldShm(s);
+                    s.width = s.height = 0;
+                    s.hasContent = false;
+                }
+
+                if (!use) {
+                    wl_buffer_send_release(s.pending.buffer);
+                    fireReleaseCb(s.pending.releaseCb);
                 }
             } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
                 if (cache) {
@@ -2284,6 +2787,7 @@ namespace {
 
                 if (!cache) {
                     releaseHeldDmabuf(s);
+                    releaseHeldShm(s);
                 }
             } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
                 if (cache) {
@@ -2313,6 +2817,7 @@ namespace {
                         s.pendAcqTl = s.pendRelTl = nullptr;
                     }
                 } else {
+                    releaseHeldShm(s);
                     DmabufUse* use = holdDmabuf(s, s.pending.buffer, db);
 
                     // the dmabuf releases when the frame that samples it
@@ -2676,6 +3181,7 @@ namespace {
         srv->seat.surfaceGone(s);
 
         releaseHeldDmabuf(*s);
+        releaseHeldShm(*s);
         viewportSurfaceGone(*s);
         alphaModSurfaceGone(*s);
         contentTypeSurfaceGone(*s);
@@ -2980,6 +3486,7 @@ namespace {
         }
 
         releaseCachedDmabuf(sub->srv, sub->cache);
+        releaseCachedShm(sub->srv->alloc, sub->cache);
 
         // the ring nulls the surface's sub back-pointer
         sub->weak.invalidate();
@@ -5723,6 +6230,7 @@ namespace {
             }
 
             releaseCachedDmabuf(s.srv, e->cache);
+            releaseCachedShm(s.srv->alloc, e->cache);
             s.srv->alloc->release(e);
         }
 
@@ -7271,7 +7779,7 @@ namespace {
             return;
         }
 
-        wl_shm_buffer* shm = wl_shm_buffer_get(f.buffer);
+        ShmBuffer* shm = shmBufferFromResource(f.buffer);
         u32 wantW = cs.cursor ? 0 : (u32)srv->scene->outW;
         u32 wantH = cs.cursor ? 0 : (u32)srv->scene->outH;
         Surface* cur = srv->scene->cursorSurface;
@@ -7326,13 +7834,13 @@ namespace {
             }
         }
 
-        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 || (u32)wl_shm_buffer_get_width(shm) != wantW || (u32)wl_shm_buffer_get_height(shm) != wantH || (u32)wl_shm_buffer_get_stride(shm) < wantW * 4) {
+        if (!shm || shm->format != WL_SHM_FORMAT_XRGB8888 || (u32)shm->width != wantW || (u32)shm->height != wantH || (u32)shm->stride < wantW * 4) {
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS);
 
             return;
         }
 
-        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+        size_t stride = (size_t)shm->stride;
 
         if (cs.cursor) {
             auto* cs2 = (SurfaceImpl*)cur;
@@ -7343,15 +7851,26 @@ namespace {
                 return;
             }
 
-            wl_shm_buffer_begin_access(shm);
+            if (!shmBufferBeginAccess(shm)) {
+                postShmAccessError(shm);
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
 
-            auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+                return;
+            }
+
+            u8* dst = shm->data();
 
             for (u32 y = 0; y < wantH; y++) {
                 memcpy(dst + y * stride, cs2->pixels.data() + (size_t)y * wantW * 4, (size_t)wantW * 4);
             }
 
-            wl_shm_buffer_end_access(shm);
+            if (!shmBufferEndAccess(shm)) {
+                postShmAccessError(shm);
+                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+                return;
+            }
+
             f.armed = false;
             captureSendReady(f, wantW, wantH);
 
@@ -7392,7 +7911,7 @@ namespace {
         f.inFlight = false;
 
         auto* rows = (const CaptureRows*)arg;
-        wl_shm_buffer* shm = f.buffer ? wl_shm_buffer_get(f.buffer) : nullptr;
+        ShmBuffer* shm = f.buffer ? shmBufferFromResource(f.buffer) : nullptr;
 
         if (!rows || !shm) {
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
@@ -7400,17 +7919,28 @@ namespace {
             return;
         }
 
-        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+        size_t stride = (size_t)shm->stride;
 
-        wl_shm_buffer_begin_access(shm);
+        if (!shmBufferBeginAccess(shm)) {
+            postShmAccessError(shm);
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
 
-        auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+            return;
+        }
+
+        u8* dst = shm->data();
 
         for (u32 y = 0; y < f.grabH; y++) {
             memcpy(dst + (size_t)y * stride, rows->base + (size_t)y * rows->stride, (size_t)f.grabW * 4);
         }
 
-        wl_shm_buffer_end_access(shm);
+        if (!shmBufferEndAccess(shm)) {
+            postShmAccessError(shm);
+            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
+
+            return;
+        }
+
         f.armed = false;
         captureSendReady(f, f.grabW, f.grabH);
     }
@@ -7452,9 +7982,9 @@ namespace {
             return;
         }
 
-        wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
+        ShmBuffer* shm = shmBufferFromResource(bufferRes);
 
-        if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_XRGB8888 || wl_shm_buffer_get_width(shm) != f->w || wl_shm_buffer_get_height(shm) != f->h || wl_shm_buffer_get_stride(shm) < f->w * 4) {
+        if (!shm || shm->format != WL_SHM_FORMAT_XRGB8888 || shm->width != f->w || shm->height != f->h || shm->stride < f->w * 4) {
             wl_resource_post_error(res, ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER, "buffer does not match the announced constraints");
 
             return;
@@ -7562,7 +8092,7 @@ namespace {
         }
 
         FrameCapture* cap = srv->composer->frameCapture;
-        wl_shm_buffer* shm = wl_shm_buffer_get(f.buffer);
+        ShmBuffer* shm = shmBufferFromResource(f.buffer);
 
         if (!cap || !shm) {
             f.armed = false;
@@ -7593,7 +8123,7 @@ namespace {
         f.inFlight = false;
 
         auto* rows = (const CaptureRows*)arg;
-        wl_shm_buffer* shm = f.buffer ? wl_shm_buffer_get(f.buffer) : nullptr;
+        ShmBuffer* shm = f.buffer ? shmBufferFromResource(f.buffer) : nullptr;
 
         if (!rows || !shm) {
             f.armed = false;
@@ -7602,17 +8132,30 @@ namespace {
             return;
         }
 
-        size_t stride = (size_t)wl_shm_buffer_get_stride(shm);
+        size_t stride = (size_t)shm->stride;
 
-        wl_shm_buffer_begin_access(shm);
+        if (!shmBufferBeginAccess(shm)) {
+            postShmAccessError(shm);
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
 
-        auto* dst = (unsigned char*)wl_shm_buffer_get_data(shm);
+            return;
+        }
+
+        u8* dst = shm->data();
 
         for (int y = 0; y < f.h; y++) {
             memcpy(dst + (size_t)y * stride, rows->base + (size_t)y * rows->stride, (size_t)f.w * 4);
         }
 
-        wl_shm_buffer_end_access(shm);
+        if (!shmBufferEndAccess(shm)) {
+            postShmAccessError(shm);
+            f.armed = false;
+            zwlr_screencopy_frame_v1_send_failed(f.res);
+
+            return;
+        }
+
         f.armed = false;
         zwlr_screencopy_frame_v1_send_flags(f.res, 0);
 
@@ -8653,7 +9196,7 @@ namespace {
             return;
         }
 
-        wl_shm_buffer* shm = wl_shm_buffer_get(bufferRes);
+        ShmBuffer* shm = shmBufferFromResource(bufferRes);
 
         if (!shm) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer must be backed by wl_shm");
@@ -8661,7 +9204,7 @@ namespace {
             return;
         }
 
-        u32 fmt = wl_shm_buffer_get_format(shm);
+        u32 fmt = shm->format;
 
         if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "unsupported icon buffer format");
@@ -8669,8 +9212,8 @@ namespace {
             return;
         }
 
-        int w = wl_shm_buffer_get_width(shm);
-        int h = wl_shm_buffer_get_height(shm);
+        int w = shm->width;
+        int h = shm->height;
 
         if (w <= 0 || h <= 0 || w != h || scale <= 0) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer must be square with a positive scale");
@@ -8678,7 +9221,7 @@ namespace {
             return;
         }
 
-        i32 stride = wl_shm_buffer_get_stride(shm);
+        i32 stride = shm->stride;
 
         if (stride < (i64)w * 4) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer stride is too small");
@@ -8708,9 +9251,13 @@ namespace {
             return;
         }
 
-        wl_shm_buffer_begin_access(shm);
+        if (!shmBufferBeginAccess(shm)) {
+            postShmAccessError(shm);
 
-        const u8* src = (const u8*)wl_shm_buffer_get_data(shm);
+            return;
+        }
+
+        const u8* src = shm->data();
 
         box->pixels.clear();
 
@@ -8718,7 +9265,12 @@ namespace {
             box->pixels.append((const u32*)(src + (size_t)y * stride), (size_t)w);
         }
 
-        wl_shm_buffer_end_access(shm);
+        if (!shmBufferEndAccess(shm)) {
+            box->pixels.clear();
+            postShmAccessError(shm);
+
+            return;
+        }
 
         // icons render as ARGB; XRGB leaves the alpha byte undefined
         if (fmt == WL_SHM_FORMAT_XRGB8888) {
@@ -11724,7 +12276,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
-    wl_display_init_shm(display);
+    STD_VERIFY(initWaylandShm(display));
     createGlobals();
 
     ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
