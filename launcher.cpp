@@ -39,7 +39,7 @@ namespace {
         char query[256] = "";
         long sel = 0;
 
-        StringBuilder blob;
+        Buffer blob;
         Vector<Row> rows;
         // display order: applications first, then the system actions; the
         // split point keeps the two grid groups addressable by one index
@@ -58,7 +58,7 @@ namespace {
 
         void rescan();
         void addAction(StringView name, StringView icon, LauncherAction action);
-        void parseDesktop(StringBuilder& file);
+        void parseDesktop(Buffer& file);
         void refilter();
 
         // pure drawing: state transitions stay in drawLauncher, the only
@@ -97,9 +97,11 @@ bool launcherCommand(StringView appId, Buffer& run, bool& terminal) {
             return;
         }
 
-        StringBuilder path;
+        Buffer path;
+        StringBuilder pathBuilder((Buffer&&)path);
 
-        path << base << "/applications/"_sv << appId << ".desktop"_sv;
+        pathBuilder << base << "/applications/"_sv << appId << ".desktop"_sv;
+        pathBuilder.xchg(path);
         Buffer data;
 
         try {
@@ -111,7 +113,7 @@ bool launcherCommand(StringView appId, Buffer& run, bool& terminal) {
         StringView rest = sv(data);
         bool inSection = false;
         bool isApp = false;
-        StringBuilder exec;
+        Buffer exec;
 
         while (!rest.empty()) {
             StringView line, tail;
@@ -140,7 +142,10 @@ bool launcherCommand(StringView appId, Buffer& run, bool& terminal) {
             }
 
             if (key == "Exec"_sv && exec.empty()) {
-                appendExec(exec, value);
+                StringBuilder builder((Buffer&&)exec);
+
+                appendExec(builder, value);
+                builder.xchg(exec);
             } else if (key == "Type"_sv) {
                 isApp = value == "Application"_sv;
             } else if (key == "Terminal"_sv) {
@@ -171,12 +176,12 @@ void Dialog::addAction(StringView name, StringView icon, LauncherAction action) 
 
     r.name = (u32)blob.used();
     r.nameLen = (u32)name.length();
-    blob << name;
+    blob.append(name.data(), name.length());
     r.exec = (u32)blob.used();
     r.execLen = 0;
     r.icon = (u32)blob.used();
     r.iconLen = (u32)icon.length();
-    blob << icon;
+    blob.append(icon.data(), icon.length());
     r.action = action;
     rows.pushBack(r);
 }
@@ -191,9 +196,11 @@ void Dialog::rescan() {
     sysTotal = (long)rows.length();
 
     forEachXdgDataDir([this](StringView base) {
-        StringBuilder dir;
+        Buffer dir;
+        StringBuilder builder((Buffer&&)dir);
 
-        dir << base << "/applications"_sv;
+        builder << base << "/applications"_sv;
+        builder.xchg(dir);
 
         // missing xdg dirs are normal: listDir throws, skip them
         try {
@@ -202,10 +209,12 @@ void Dialog::rescan() {
                     return;
                 }
 
-                StringBuilder f;
+                Buffer file;
+                StringBuilder builder((Buffer&&)file);
 
-                f << sv(dir) << "/"_sv << e.item;
-                parseDesktop(f);
+                builder << sv(dir) << "/"_sv << e.item;
+                builder.xchg(file);
+                parseDesktop(file);
             });
         } catch (...) {
         }
@@ -216,7 +225,7 @@ void Dialog::rescan() {
     });
 }
 
-void Dialog::parseDesktop(StringBuilder& file) {
+void Dialog::parseDesktop(Buffer& file) {
     Buffer data;
 
     readFileContent(file, data);
@@ -225,7 +234,7 @@ void Dialog::parseDesktop(StringBuilder& file) {
         return;
     }
 
-    StringBuilder name, exec, icon;
+    Buffer name, exec, icon;
     bool inSection = false;
     bool display = true;
     bool isApp = false;
@@ -260,11 +269,14 @@ void Dialog::parseDesktop(StringBuilder& file) {
         }
 
         if (key == "Name"_sv && name.empty()) {
-            name << val;
+            name.append(val.data(), val.length());
         } else if (key == "Exec"_sv && exec.empty()) {
-            appendExec(exec, val);
+            StringBuilder builder((Buffer&&)exec);
+
+            appendExec(builder, val);
+            builder.xchg(exec);
         } else if (key == "Icon"_sv && icon.empty()) {
-            icon << val;
+            icon.append(val.data(), val.length());
         } else if (key == "Type"_sv) {
             isApp = val == "Application"_sv;
         } else if (key == "Terminal"_sv) {
@@ -282,13 +294,13 @@ void Dialog::parseDesktop(StringBuilder& file) {
 
     r.name = (u32)blob.used();
     r.nameLen = (u32)name.used();
-    blob << sv(name);
+    blob.append(name.data(), name.used());
     r.exec = (u32)blob.used();
     r.execLen = (u32)exec.used();
-    blob << sv(exec);
+    blob.append(exec.data(), exec.used());
     r.icon = (u32)blob.used();
     r.iconLen = (u32)icon.used();
-    blob << sv(icon);
+    blob.append(icon.data(), icon.used());
     r.terminal = terminal;
     rows.pushBack(r);
 }

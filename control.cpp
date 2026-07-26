@@ -140,7 +140,7 @@ namespace {
         Scene* scene = nullptr;
         int* fd = nullptr;
         ev_io* io = nullptr;
-        StringBuilder path;
+        Buffer path;
         char line[1024] = "";
         size_t lineLen = 0;
         // the desired size the dump resolves toplevel icons at; the icon-size
@@ -166,7 +166,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     , renderer(c.renderer)
     , scene(c.scene)
 {
-    path << fifoPath;
+    path.append(fifoPath.data(), fifoPath.length());
     unlink(path.cStr());
     STD_VERIFY(mkfifo(path.cStr(), 0600) == 0);
 
@@ -435,7 +435,8 @@ void ControlImpl::dumpState(StringView outPath) {
         return;
     }
 
-    StringBuilder out;
+    Buffer output;
+    StringBuilder out((Buffer&&)output);
 
     forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
         Surface* s = t.surface.get();
@@ -482,9 +483,12 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "hdr metadata="_sv << (int)metadata.hdr << " min="_sv << metadata.minNits << " max="_sv << metadata.maxNits << " max_cll="_sv << metadata.maxCll << " max_fall="_sv << metadata.maxFall << "\n"_sv;
     out << "color_intermediate_bytes="_sv << renderer->colorIntermediateBytes() << "\n"_sv;
 
-    StringBuilder tmpPath;
+    out.xchg(output);
+    Buffer tmpPath;
+    StringBuilder pathBuilder((Buffer&&)tmpPath);
 
-    tmpPath << outPath << ".tmp"_sv;
+    pathBuilder << outPath << ".tmp"_sv;
+    pathBuilder.xchg(tmpPath);
 
     ScopedFD f(open(tmpPath.cStr(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644));
 
@@ -496,7 +500,7 @@ void ControlImpl::dumpState(StringView outPath) {
 
     FDRegular w(f);
 
-    w.write(out.data(), out.used());
+    w.write(output.data(), output.used());
     w.finish();
 
     // the path came over the control FIFO — external input never gets to

@@ -34,9 +34,9 @@ namespace {
 
     struct ItemBox: public StatusNotifierItem {
         StatusNotifierImpl* impl = nullptr;
-        StringBuilder service;
-        StringBuilder path;
-        StringBuilder menuPath;
+        Buffer service;
+        Buffer path;
+        Buffer menuPath;
         // replies still holding `this`; canceled when the item dies
         Vector<DBusPendingCall*> pending;
 
@@ -56,7 +56,7 @@ namespace {
     // the node links it into StatusNotifierImpl::peers
     struct Peer: IntrusiveNode {
         ObjPool* pool = nullptr;
-        StringBuilder name; // the unique bus name
+        Buffer name; // the unique bus name
         // arena members enumerated for the dock; items only die with the
         // peer, so this is a plain collection, not a registry
         Vector<ItemBox*> items;
@@ -93,13 +93,13 @@ namespace {
         void emitItem(const char* member, ItemBox& item);
     };
 
-    StringView text(const StringBuilder& b) {
-        return StringView((const Buffer&)b);
+    StringView text(const Buffer& b) {
+        return sv(b);
     }
 
-    void assign(StringBuilder& out, StringView value) {
+    void assign(Buffer& out, StringView value) {
         out.reset();
-        out << value;
+        out.append(value.data(), value.length());
     }
 
     StringView iterString(DBusMessageIter* it) {
@@ -518,9 +518,11 @@ void StatusNotifierImpl::clearMenu(ItemBox& item) {
 
 void StatusNotifierImpl::emitItem(const char* member, ItemBox& item) {
     DBusMessage* sig = dbus_message_new_signal(kWatcherPath, kWatcher, member);
-    StringBuilder value;
+    Buffer value;
+    StringBuilder builder((Buffer&&)value);
 
-    value << text(item.service) << text(item.path);
+    builder << text(item.service) << text(item.path);
+    builder.xchg(value);
     const char* p = value.cStr();
 
     dbus_message_append_args(sig, DBUS_TYPE_STRING, &p, DBUS_TYPE_INVALID);
@@ -554,12 +556,18 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
         assign(item->path, path);
 
         // the synthetic pixmap keys: service+path is the item's identity
-        StringBuilder key;
+        Buffer key;
 
-        key << service << path << "#icon"_sv;
+        StringBuilder iconKey((Buffer&&)key);
+
+        iconKey << service << path << "#icon"_sv;
+        iconKey.xchg(key);
         item->iconSym = sv(key).hash64();
         key.reset();
-        key << service << path << "#attention"_sv;
+        StringBuilder attentionKey((Buffer&&)key);
+
+        attentionKey << service << path << "#attention"_sv;
+        attentionKey.xchg(key);
         item->attentionIconSym = sv(key).hash64();
         pixmaps.insert(item->iconSym, item);
         pixmaps.insert(item->attentionIconSym, item);
@@ -663,9 +671,11 @@ void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
 
         for (Peer* peer : each<Peer>(peers)) {
             for (ItemBox* item : peer->items) {
-                StringBuilder value;
+                Buffer value;
+                StringBuilder builder((Buffer&&)value);
 
-                value << text(item->service) << text(item->path);
+                builder << text(item->service) << text(item->path);
+                builder.xchg(value);
                 const char* p = value.cStr();
 
                 dbus_message_iter_append_basic(&arr, DBUS_TYPE_STRING, &p);
@@ -702,9 +712,11 @@ void StatusNotifierImpl::watcherGetAll(DBusMessage* msg) {
 
     for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {
-            StringBuilder value;
+            Buffer value;
+            StringBuilder builder((Buffer&&)value);
 
-            value << text(item->service) << text(item->path);
+            builder << text(item->service) << text(item->path);
+            builder.xchg(value);
             const char* p = value.cStr();
 
             dbus_message_iter_append_basic(&arr, DBUS_TYPE_STRING, &p);

@@ -11,10 +11,12 @@ void forEachXdgDataDir(DirVisitorFace& v) {
         v.visit(StringView(home));
     } else if (const char* h = getenv("HOME")) {
         // the visitor formats paths of its own: this one keeps its own
-        StringBuilder p;
+        Buffer path;
+        StringBuilder builder((Buffer&&)path);
 
-        p << h << "/.local/share"_sv;
-        v.visit(sv(p));
+        builder << h << "/.local/share"_sv;
+        builder.xchg(path);
+        v.visit(sv(path));
     }
 
     const char* xdg = getenv("XDG_DATA_DIRS");

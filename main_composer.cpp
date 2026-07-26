@@ -51,9 +51,11 @@ using namespace stl;
 namespace {
     void runAutostart(Composer& c) {
         StringView commands = c.settings->autostart();
-        StringBuilder display;
+        Buffer display;
+        StringBuilder builder((Buffer&&)display);
 
-        display << "WAYLAND_DISPLAY="_sv << c.scene->socketName;
+        builder << "WAYLAND_DISPLAY="_sv << c.scene->socketName;
+        builder.xchg(display);
 
         StringView env[] = {sv(display)};
 
@@ -409,9 +411,11 @@ int mainComposer(int argc, char** argv) {
                 args.pushBack(StringView(*arg));
             }
 
-            StringBuilder display;
+            Buffer display;
+            StringBuilder builder((Buffer&&)display);
 
-            display << "WAYLAND_DISPLAY="_sv << cfg.socketName;
+            builder << "WAYLAND_DISPLAY="_sv << cfg.socketName;
+            builder.xchg(display);
 
             StringView env[] = {sv(display)};
             SupervisorSpawn spawn;

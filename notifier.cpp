@@ -148,13 +148,13 @@ u32 NotifierImpl::post(const Post& p) {
     }
 
     t->app.reset();
-    t->app << p.app;
+    t->app.append(p.app.data(), p.app.length());
     t->summary.reset();
-    t->summary << p.summary;
+    t->summary.append(p.summary.data(), p.summary.length());
     t->body.reset();
-    t->body << p.body;
+    t->body.append(p.body.data(), p.body.length());
     t->icon.reset();
-    t->icon << p.icon;
+    t->icon.append(p.icon.data(), p.icon.length());
     t->critical = p.critical && c->settings->allowCriticalNotifications();
     t->fromBus = p.fromBus;
     t->postedMs = nowMsec();

@@ -7,8 +7,8 @@
 #include <std/lib/list.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
+#include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/str/builder.h>
 
 struct Composer;
 struct DBusMenu;
@@ -200,12 +200,12 @@ struct Toplevel: stl::IntrusiveNode {
     // surface binding them) goes
     Weak<Surface> surface;
     u64 id = 0;
-    stl::StringBuilder title;
-    stl::StringBuilder appId;
+    stl::Buffer title;
+    stl::Buffer appId;
     // xdg-toplevel-tag: a stable machine token for WM rules and the
     // translated description that goes with it
-    stl::StringBuilder tag;
-    stl::StringBuilder tagDescription;
+    stl::Buffer tag;
+    stl::Buffer tagDescription;
 
     // transient parent: xdg_toplevel.set_parent or an xdg-foreign import;
     // the ring clears it when the parent dies, an export revoke resets it

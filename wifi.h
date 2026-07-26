@@ -3,18 +3,18 @@
 #include "visitor.h"
 
 #include <std/sys/types.h>
+#include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/str/builder.h>
 
 struct Composer;
 
 // one visible network; path is the dbus object path, the handle for
 // connect/forget
 struct WifiNetwork {
-    stl::StringBuilder name;
-    stl::StringBuilder path;
-    stl::StringBuilder type; // "psk", "open", "8021x"
-    i16 strength = 0;        // 0..100 percent (normalized by the provider)
+    stl::Buffer name;
+    stl::Buffer path;
+    stl::Buffer type; // "psk", "open", "8021x"
+    i16 strength = 0; // 0..100 percent (normalized by the provider)
     bool connected = false;
     bool known = false;
 };

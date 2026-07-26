@@ -562,7 +562,7 @@ namespace {
         drmModeModeInfo probeModes[32] = {};
 
         u32 connectorId = 0;
-        StringBuilder connectorLabel;
+        Buffer connectorLabel;
         int physicalWmm = 0, physicalHmm = 0;
         u32 crtcId = 0;
         u32 planeId = 0;
@@ -577,7 +577,7 @@ namespace {
         u32 plCrtcX = 0, plCrtcY = 0, plCrtcW = 0, plCrtcH = 0;
 
         // sysfs backlight of the internal panel; empty path = none
-        StringBuilder blPath;
+        Buffer blPath;
         long blMax = 0;
 
         // ddc/ci brightness for external monitors (VCP 0x10 over the
@@ -833,7 +833,7 @@ namespace {
         struct ev_loop* loop = nullptr;
         Session* session = nullptr;
         int fd = -1;
-        StringBuilder path;
+        Buffer path;
         DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         udev* ud = nullptr;
@@ -858,7 +858,7 @@ namespace {
         Renderer* createRenderer(Composer& c, int framesLimit) override;
     };
 
-    int openKmsNode(Session& session, StringView devPath, StringBuilder& outPath, KmsIntercept* intercept) {
+    int openKmsNode(Session& session, StringView devPath, Buffer& outPath, KmsIntercept* intercept) {
         // an interceptor replaces the card node: scenarios drive the KMS
         // state machine without hardware
         if (intercept) {
@@ -868,7 +868,7 @@ namespace {
                 Errno(-fd).raise("kms: fake device"_sv);
             }
 
-            outPath << "fake-kms"_sv;
+            outPath.append("fake-kms", sizeof("fake-kms") - 1);
 
             return fd;
         }
@@ -880,7 +880,7 @@ namespace {
                 Errno(-fd).raise(StringBuilder() << "kms: open "_sv << devPath);
             }
 
-            outPath << devPath;
+            outPath.append(devPath.data(), devPath.length());
 
             return fd;
         }
@@ -902,7 +902,7 @@ namespace {
                 continue;
             }
 
-            outPath << sv(p);
+            outPath.append(p.data(), p.used());
 
             return fd;
         }
@@ -1742,7 +1742,10 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     STD_VERIFY(conn);
 
     connectorId = conn->connector_id;
-    connectorName(conn, connectorLabel);
+    StringBuilder label((Buffer&&)connectorLabel);
+
+    connectorName(conn, label);
+    label.xchg(connectorLabel);
     physicalWmm = conn->mmWidth;
     physicalHmm = conn->mmHeight;
 
@@ -2493,9 +2496,11 @@ void KmsOutput::initBacklight() {
 
     bool internal = conn->connector_type == DRM_MODE_CONNECTOR_eDP || conn->connector_type == DRM_MODE_CONNECTOR_LVDS || conn->connector_type == DRM_MODE_CONNECTOR_DSI;
 
-    StringBuilder connName;
+    Buffer connName;
+    StringBuilder nameBuilder((Buffer&&)connName);
 
-    connectorName(conn, connName);
+    connectorName(conn, nameBuilder);
+    nameBuilder.xchg(connName);
     drmModeFreeConnector(conn);
 
     if (!internal) {
@@ -2510,9 +2515,11 @@ void KmsOutput::initBacklight() {
 
     try {
         listDir("/sys/class/backlight"_sv, [this, &best](const TPathInfo& e) {
-            StringBuilder p;
+            Buffer p;
+            StringBuilder builder((Buffer&&)p);
 
-            p << "/sys/class/backlight/"_sv << e.item << "/type"_sv;
+            builder << "/sys/class/backlight/"_sv << e.item << "/type"_sv;
+            builder.xchg(p);
 
             Buffer t;
 
@@ -2528,7 +2535,10 @@ void KmsOutput::initBacklight() {
             if (score > best) {
                 best = score;
                 blPath.reset();
-                blPath << "/sys/class/backlight/"_sv << e.item;
+                StringBuilder path((Buffer&&)blPath);
+
+                path << "/sys/class/backlight/"_sv << e.item;
+                path.xchg(blPath);
             }
         });
     } catch (...) {
@@ -2570,7 +2580,7 @@ namespace {
 
 void KmsOutput::initDdc(StringView connName) {
     // the connector's i2c bus: /sys/class/drm/<card>-<conn>/ddc/i2c-dev/i2c-N
-    StringBuilder busDev;
+    Buffer busDev;
 
     try {
         listDir("/sys/class/drm"_sv, [connName, &busDev](const TPathInfo& e) {
@@ -2589,14 +2599,19 @@ void KmsOutput::initDdc(StringView connName) {
                 return;
             }
 
-            StringBuilder dir;
+            Buffer dir;
+            StringBuilder builder((Buffer&&)dir);
 
-            dir << "/sys/class/drm/"_sv << e.item << "/ddc/i2c-dev"_sv;
+            builder << "/sys/class/drm/"_sv << e.item << "/ddc/i2c-dev"_sv;
+            builder.xchg(dir);
 
             try {
                 listDir(sv(dir), [&busDev](const TPathInfo& b) {
                     if (busDev.empty() && b.item.startsWith("i2c-"_sv)) {
-                        busDev << "/dev/"_sv << b.item;
+                        StringBuilder builder((Buffer&&)busDev);
+
+                        builder << "/dev/"_sv << b.item;
+                        builder.xchg(busDev);
                     }
                 });
             } catch (...) {

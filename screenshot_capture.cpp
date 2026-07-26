@@ -497,42 +497,90 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     // viewer as fd 3 — a /proc/pid/fd reopen would need write access and
     // dies with ENXIO on dma-bufs anyway
     StringView args[] = {"/proc/self/exe"_sv, "screenshot"_sv, "fd:3"_sv};
-    StringBuilder display;
+    Buffer display;
 
-    display << "WAYLAND_DISPLAY="_sv << comp->scene->socketName;
+    {
+        StringBuilder builder((Buffer&&)display);
 
-    StringBuilder scale;
+        builder << "WAYLAND_DISPLAY="_sv << comp->scene->socketName;
+        builder.xchg(display);
+    }
 
-    scale << "IMGUI_SCALE="_sv << (long double)comp->settings->uiScale();
+    Buffer scale;
 
-    StringBuilder metadata;
-    StringBuilder color;
-    StringBuilder action;
-    StringBuilder format;
-    StringBuilder directory;
-    StringBuilder name;
-    StringBuilder lossless;
-    StringBuilder quality;
+    {
+        StringBuilder builder((Buffer&&)scale);
+
+        builder << "IMGUI_SCALE="_sv << (long double)comp->settings->uiScale();
+        builder.xchg(scale);
+    }
+
+    Buffer metadata;
+    Buffer color;
+    Buffer action;
+    Buffer format;
+    Buffer directory;
+    Buffer name;
+    Buffer lossless;
+    Buffer quality;
     const OutputColorState& shotColor = image ? image->color : output->colorState();
     bool hdr = shotColor.hdr();
     double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
 
-    color << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv << (long double)sdrWhite << ":"_sv << (long double)shotColor.displayMinNits << ":"_sv << (long double)shotColor.displayPeakNits << ":"_sv << (long double)shotColor.displayMaxFallNits;
+    {
+        StringBuilder builder((Buffer&&)color);
+
+        builder << "IMWAY_SHOT_COLOR="_sv << (hdr ? 1 : 0) << ":"_sv << (long double)sdrWhite << ":"_sv << (long double)shotColor.displayMinNits << ":"_sv << (long double)shotColor.displayPeakNits << ":"_sv << (long double)shotColor.displayMaxFallNits;
+        builder.xchg(color);
+    }
 
     if (image) {
-        metadata << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
+        StringBuilder builder((Buffer&&)metadata);
+
+        builder << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
+        builder.xchg(metadata);
     }
 
     const Settings& settings = *comp->settings;
     const char* actionName = settings.screenshotAction() == ScreenshotAction::save ? "save" : settings.screenshotAction() == ScreenshotAction::copy ? "copy" : "editor";
     const char* formatName = settings.screenshotFormat() == ScreenshotFormat::png ? "png" : "jxl";
 
-    action << "IMWAY_SHOT_ACTION="_sv << StringView(actionName);
-    format << "IMWAY_SHOT_FORMAT="_sv << StringView(formatName);
-    directory << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory();
-    name << "IMWAY_SHOT_NAME="_sv << settings.screenshotName();
-    lossless << "IMWAY_SHOT_LOSSLESS="_sv << (settings.screenshotLossless() ? 1 : 0);
-    quality << "IMWAY_SHOT_QUALITY="_sv << (long double)settings.screenshotQuality();
+    {
+        StringBuilder builder((Buffer&&)action);
+
+        builder << "IMWAY_SHOT_ACTION="_sv << StringView(actionName);
+        builder.xchg(action);
+    }
+    {
+        StringBuilder builder((Buffer&&)format);
+
+        builder << "IMWAY_SHOT_FORMAT="_sv << StringView(formatName);
+        builder.xchg(format);
+    }
+    {
+        StringBuilder builder((Buffer&&)directory);
+
+        builder << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory();
+        builder.xchg(directory);
+    }
+    {
+        StringBuilder builder((Buffer&&)name);
+
+        builder << "IMWAY_SHOT_NAME="_sv << settings.screenshotName();
+        builder.xchg(name);
+    }
+    {
+        StringBuilder builder((Buffer&&)lossless);
+
+        builder << "IMWAY_SHOT_LOSSLESS="_sv << (settings.screenshotLossless() ? 1 : 0);
+        builder.xchg(lossless);
+    }
+    {
+        StringBuilder builder((Buffer&&)quality);
+
+        builder << "IMWAY_SHOT_QUALITY="_sv << (long double)settings.screenshotQuality();
+        builder.xchg(quality);
+    }
 
     StringView env[] = {sv(display), sv(scale), sv(color), sv(action), sv(format), sv(directory), sv(name), sv(lossless), sv(quality), sv(metadata)};
     SupervisorSpawn spec;

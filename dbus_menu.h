@@ -2,8 +2,8 @@
 
 #include <std/str/view.h>
 #include <std/sys/types.h>
+#include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/str/builder.h>
 
 struct Composer;
 struct Icon;
@@ -23,9 +23,9 @@ enum class DBusMenuDisposition {
 
 struct DBusMenuItem {
     i32 id = 0;
-    stl::StringBuilder label;
-    stl::StringBuilder shortcut;
-    stl::StringBuilder iconName;
+    stl::Buffer label;
+    stl::Buffer shortcut;
+    stl::Buffer iconName;
     Icon* iconData = nullptr;
     stl::Vector<DBusMenuItem*> children;
     DBusMenuToggle toggle = DBusMenuToggle::none;

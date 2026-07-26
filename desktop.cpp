@@ -383,7 +383,7 @@ namespace {
         u64 statMs = 0;
         long batPct = -1; // -1 no battery
         bool batDischarging = false;
-        StringBuilder batPath;
+        Buffer batPath;
 
         DialogState* calendarState = nullptr;
         bool calendarToggle = false;
@@ -1098,7 +1098,7 @@ void DesktopImpl::sampleStats() {
     // system batteries win over scope=Device ones (hid keyboards/mice) —
     // those ride usb hotplug, so they are a fallback, not the first choice
     if (batPath.empty()) {
-        StringBuilder devBat;
+        Buffer devBat;
 
         try {
             listDir("/sys/class/power_supply"_sv, [this, &content, &devBat](const TPathInfo& e) {
@@ -1106,9 +1106,14 @@ void DesktopImpl::sampleStats() {
                     return;
                 }
 
-                StringBuilder p;
+                Buffer p;
 
-                p << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
+                {
+                    StringBuilder builder((Buffer&&)p);
+
+                    builder << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
+                    builder.xchg(p);
+                }
 
                 if (!readSmallFile(p, content).startsWith("Battery"_sv)) {
                     return;
@@ -1118,7 +1123,10 @@ void DesktopImpl::sampleStats() {
 
                 try {
                     p.reset();
-                    p << "/sys/class/power_supply/"_sv << e.item << "/scope"_sv;
+                    StringBuilder builder((Buffer&&)p);
+
+                    builder << "/sys/class/power_supply/"_sv << e.item << "/scope"_sv;
+                    builder.xchg(p);
                     device = readSmallFile(p, content).startsWith("Device"_sv);
                 } catch (...) {
                     // no scope file: a system battery
@@ -1126,17 +1134,23 @@ void DesktopImpl::sampleStats() {
 
                 if (device) {
                     if (devBat.empty()) {
-                        devBat << "/sys/class/power_supply/"_sv << e.item;
+                        StringBuilder builder((Buffer&&)devBat);
+
+                        builder << "/sys/class/power_supply/"_sv << e.item;
+                        builder.xchg(devBat);
                     }
                 } else {
-                    batPath << "/sys/class/power_supply/"_sv << e.item;
+                    StringBuilder path((Buffer&&)batPath);
+
+                    path << "/sys/class/power_supply/"_sv << e.item;
+                    path.xchg(batPath);
                 }
             });
         } catch (...) {
         }
 
         if (batPath.empty() && !devBat.empty()) {
-            batPath << sv(devBat);
+            batPath.append(devBat.data(), devBat.used());
         }
     }
 
@@ -1240,13 +1254,17 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     }
 
     StringView shellArgs[] = {"sh"_sv, "-c"_sv, cmd};
-    StringBuilder terminalScript;
+    Buffer terminalScript;
+    StringBuilder terminalBuilder((Buffer&&)terminalScript);
 
-    terminalScript << "exec \"$0\" "_sv << comp.settings->terminalExec() << " \"$1\""_sv;
+    terminalBuilder << "exec \"$0\" "_sv << comp.settings->terminalExec() << " \"$1\""_sv;
+    terminalBuilder.xchg(terminalScript);
     StringView terminalArgs[] = {"sh"_sv, "-c"_sv, sv(terminalScript), comp.settings->terminal(), cmd};
-    StringBuilder display;
+    Buffer display;
+    StringBuilder displayBuilder((Buffer&&)display);
 
-    display << "WAYLAND_DISPLAY="_sv << sock;
+    displayBuilder << "WAYLAND_DISPLAY="_sv << sock;
+    displayBuilder.xchg(display);
 
     StringView env[] = {sv(display)};
     SupervisorSpawn spawn;

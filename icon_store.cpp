@@ -86,13 +86,13 @@ namespace {
     // one icon name across the hicolor theme: the fixed-size png rasters plus
     // the scalable svg. Rasterization stays lazy; this only holds paths.
     struct IconSource {
-        StringBuilder* path = nullptr;
+        Buffer* path = nullptr;
         u32 size = 0;
     };
 
     struct IconName {
         stl::Vector<IconSource> pngs;
-        StringBuilder* svg = nullptr;
+        Buffer* svg = nullptr;
     };
 
     void inoCb(struct ev_loop*, ev_io* w, int);
@@ -111,7 +111,7 @@ namespace {
         // eager indexes, so a cold precomputed-symbol lookup can still
         // materialize: hash(lower(fileId)) -> the .desktop Icon= value, and
         // hash(icon basename) -> its png sizes and svg. Rasterization stays lazy.
-        IntMap<StringBuilder*>* desktop = nullptr;
+        IntMap<Buffer*>* desktop = nullptr;
         IntMap<IconName*>* names = nullptr;
 
         // query symbol -> resolved icon, misses cached as nullptr
@@ -130,7 +130,7 @@ namespace {
         void addWatches();
         void buildIndex();
         void indexTheme(StringView base, StringView theme);
-        void addDesktop(StringBuilder& file, StringView fileId);
+        void addDesktop(Buffer& file, StringView fileId);
         IconName& nameEntry(u64 sym);
         void drainInotify();
         void reload();
@@ -161,7 +161,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     , icons(comp.iconPool)
 {
     gen = ObjPool::fromMemoryRaw();
-    desktop = gen->make<IntMap<StringBuilder*>>(gen);
+    desktop = gen->make<IntMap<Buffer*>>(gen);
     names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
@@ -199,9 +199,14 @@ void IconStoreImpl::addWatches() {
     u32 mask = IN_CREATE | IN_DELETE | IN_MOVED_TO | IN_MOVED_FROM | IN_CLOSE_WRITE | IN_ATTRIB;
 
     forEachXdgDataDir([this, mask](StringView base) {
-        StringBuilder p;
+        Buffer p;
 
-        p << base << "/applications"_sv;
+        {
+            StringBuilder builder((Buffer&&)p);
+
+            builder << base << "/applications"_sv;
+            builder.xchg(p);
+        }
         inotify_add_watch(inoFd, p.cStr(), mask);
         p.reset();
         StringView themes[] = {c->settings->iconTheme(), "hicolor"_sv};
@@ -212,7 +217,12 @@ void IconStoreImpl::addWatches() {
             }
 
             p.reset();
-            p << base << "/icons/"_sv << themes[i];
+            {
+                StringBuilder builder((Buffer&&)p);
+
+                builder << base << "/icons/"_sv << themes[i];
+                builder.xchg(p);
+            }
             inotify_add_watch(inoFd, p.cStr(), mask);
 
             try {
@@ -221,9 +231,11 @@ void IconStoreImpl::addWatches() {
                         return;
                     }
 
-                    StringBuilder apps;
+                    Buffer apps;
+                    StringBuilder builder((Buffer&&)apps);
 
-                    apps << sv(p) << "/"_sv << e.item << "/apps"_sv;
+                    builder << sv(p) << "/"_sv << e.item << "/apps"_sv;
+                    builder.xchg(apps);
                     inotify_add_watch(inoFd, apps.cStr(), mask);
                 });
             } catch (...) {
@@ -240,9 +252,11 @@ IconStoreImpl::~IconStoreImpl() noexcept {
 
 void IconStoreImpl::buildIndex() {
     forEachXdgDataDir([this](StringView base) {
-        StringBuilder dir;
+        Buffer dir;
+        StringBuilder builder((Buffer&&)dir);
 
-        dir << base << "/applications"_sv;
+        builder << base << "/applications"_sv;
+        builder.xchg(dir);
 
         // xdg data dirs routinely do not exist: listDir throws, opendir
         // used to shrug — keep shrugging
@@ -252,9 +266,11 @@ void IconStoreImpl::buildIndex() {
                     return;
                 }
 
-                StringBuilder f;
+                Buffer f;
+                StringBuilder builder((Buffer&&)f);
 
-                f << sv(dir) << "/"_sv << e.item;
+                builder << sv(dir) << "/"_sv << e.item;
+                builder.xchg(f);
                 addDesktop(f, e.item.prefix(e.item.length() - 8));
             });
         } catch (...) {
@@ -271,9 +287,11 @@ void IconStoreImpl::buildIndex() {
 }
 
 void IconStoreImpl::indexTheme(StringView base, StringView theme) {
-    StringBuilder dir;
+    Buffer dir;
+    StringBuilder dirBuilder((Buffer&&)dir);
 
-    dir << base << "/icons/"_sv << theme << "/scalable/apps"_sv;
+    dirBuilder << base << "/icons/"_sv << theme << "/scalable/apps"_sv;
+    dirBuilder.xchg(dir);
 
     try {
         listDir(sv(dir), [this, &dir](const TPathInfo& e) {
@@ -284,16 +302,21 @@ void IconStoreImpl::indexTheme(StringView base, StringView theme) {
             IconName& n = nameEntry(e.item.prefix(e.item.length() - 4).hash64());
 
             if (!n.svg) {
-                n.svg = gen->make<StringBuilder>();
-                *n.svg << sv(dir) << "/"_sv << e.item;
+                n.svg = gen->make<Buffer>();
+                StringBuilder path((Buffer&&)*n.svg);
+
+                path << sv(dir) << "/"_sv << e.item;
+                path.xchg(*n.svg);
             }
         });
     } catch (...) {
     }
 
-    StringBuilder root;
+    Buffer root;
+    StringBuilder rootBuilder((Buffer&&)root);
 
-    root << base << "/icons/"_sv << theme;
+    rootBuilder << base << "/icons/"_sv << theme;
+    rootBuilder.xchg(root);
 
     try {
         listDir(sv(root), [this, &root](const TPathInfo& sizeDir) {
@@ -303,9 +326,11 @@ void IconStoreImpl::indexTheme(StringView base, StringView theme) {
                 return;
             }
 
-            StringBuilder apps;
+            Buffer apps;
+            StringBuilder builder((Buffer&&)apps);
 
-            apps << sv(root) << "/"_sv << sizeDir.item << "/apps"_sv;
+            builder << sv(root) << "/"_sv << sizeDir.item << "/apps"_sv;
+            builder.xchg(apps);
 
             try {
                 listDir(sv(apps), [this, &apps, size](const TPathInfo& e) {
@@ -321,9 +346,11 @@ void IconStoreImpl::indexTheme(StringView base, StringView theme) {
                         }
                     }
 
-                    StringBuilder* path = gen->make<StringBuilder>();
+                    Buffer* path = gen->make<Buffer>();
+                    StringBuilder builder((Buffer&&)*path);
 
-                    *path << sv(apps) << "/"_sv << e.item;
+                    builder << sv(apps) << "/"_sv << e.item;
+                    builder.xchg(*path);
                     n.pngs.pushBack({path, size});
                 });
             } catch (...) {
@@ -345,7 +372,7 @@ IconName& IconStoreImpl::nameEntry(u64 sym) {
     return *n;
 }
 
-void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
+void IconStoreImpl::addDesktop(Buffer& file, StringView fileId) {
     Buffer data;
 
     readFileContent(file, data);
@@ -392,9 +419,9 @@ void IconStoreImpl::addDesktop(StringBuilder& file, StringView fileId) {
 
     // first hit wins, matching the name index
     if (!desktop->find(sym)) {
-        StringBuilder* v = gen->make<StringBuilder>();
+        Buffer* v = gen->make<Buffer>();
 
-        *v << value;
+        v->append(value.data(), value.length());
         desktop->insert(sym, v);
     }
 }
@@ -420,7 +447,7 @@ void IconStoreImpl::reload() {
     ObjPool* old = gen;
 
     gen = ObjPool::fromMemoryRaw();
-    desktop = gen->make<IntMap<StringBuilder*>>(gen);
+    desktop = gen->make<IntMap<Buffer*>>(gen);
     names = gen->make<IntMap<IconName*>>(gen);
     cache = gen->make<IntMap<Icon*>>(gen);
     buildIndex();
@@ -567,7 +594,7 @@ Icon* IconStoreImpl::valueIcon(StringView v, u32 bucket) {
 // the indexed namespaces: a case-folded app_id symbol or an icon name
 // symbol. The .desktop mapping wins when a string is both.
 Icon* IconStoreImpl::resolveSym(u64 sym, u32 bucket) {
-    if (StringBuilder** value = desktop->find(sym)) {
+    if (Buffer** value = desktop->find(sym)) {
         return valueIcon(sv(**value), bucket);
     }
 

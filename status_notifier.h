@@ -3,8 +3,8 @@
 #include "visitor.h"
 
 #include <std/sys/types.h>
+#include <std/lib/buffer.h>
 #include <std/lib/vector.h>
-#include <std/str/builder.h>
 
 struct Composer;
 struct DBusMenu;
@@ -27,12 +27,12 @@ struct StatusAction {
 // provider registry; pixmaps stay owned by StatusNotifier, served under the
 // precomputed symbols below (0 = the item never had a pixmap key).
 struct StatusNotifierItem {
-    stl::StringBuilder id;
-    stl::StringBuilder title;
-    stl::StringBuilder desktopEntry;
-    stl::StringBuilder status;
-    stl::StringBuilder iconName;
-    stl::StringBuilder attentionIconName;
+    stl::Buffer id;
+    stl::Buffer title;
+    stl::Buffer desktopEntry;
+    stl::Buffer status;
+    stl::Buffer iconName;
+    stl::Buffer attentionIconName;
 
     u64 iconSym = 0;
     u64 attentionIconSym = 0;

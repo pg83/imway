@@ -49,9 +49,9 @@ namespace {
         ObjPool* pool = nullptr;
         ObjPool* modelPool = nullptr;
         IntMap<DBusMenuItem*>* byId = nullptr;
-        StringBuilder service;
-        StringBuilder path;
-        StringBuilder owner;
+        Buffer service;
+        Buffer path;
+        Buffer owner;
         Vector<Pending*> pending;
         u64 nextSequence = 0;
         u64 newestLayout = 0;
@@ -73,9 +73,9 @@ namespace {
 
     struct Registration {
         u32 window = 0;
-        StringBuilder sender;
-        StringBuilder service;
-        StringBuilder path;
+        Buffer sender;
+        Buffer service;
+        Buffer path;
     };
 
     struct MenusImpl: DBusMenus {
@@ -99,13 +99,13 @@ namespace {
         void emitRegistered(const char* member, const Registration& reg);
     };
 
-    StringView text(const StringBuilder& value) {
-        return StringView((const Buffer&)value);
+    StringView text(const Buffer& value) {
+        return sv(value);
     }
 
-    void assign(StringBuilder& out, StringView value) {
+    void assign(Buffer& out, StringView value) {
         out.reset();
-        out << value;
+        out.append(value.data(), value.length());
     }
 
     StringView iterString(DBusMessageIter* it) {
@@ -185,24 +185,27 @@ namespace {
         }
     }
 
-    void readLabel(StringBuilder& out, StringView raw) {
+    void readLabel(Buffer& out, StringView raw) {
         out.reset();
+        StringBuilder builder((Buffer&&)out);
 
         for (size_t i = 0; i < raw.length(); i++) {
             if (raw[i] != '_') {
-                out << StringView(raw.begin() + i, 1);
+                builder << StringView(raw.begin() + i, 1);
 
                 continue;
             }
 
             if (i + 1 < raw.length() && raw[i + 1] == '_') {
-                out << "_"_sv;
+                builder << "_"_sv;
                 i++;
             }
         }
+
+        builder.xchg(out);
     }
 
-    void readShortcut(StringBuilder& out, DBusMessageIter* value) {
+    void readShortcut(Buffer& out, DBusMessageIter* value) {
         out.reset();
 
         if (dbus_message_iter_get_arg_type(value) != DBUS_TYPE_ARRAY) {
@@ -221,23 +224,26 @@ namespace {
 
         dbus_message_iter_recurse(&alternatives, &parts);
         bool first = true;
+        StringBuilder builder((Buffer&&)out);
 
         while (dbus_message_iter_get_arg_type(&parts) == DBUS_TYPE_STRING) {
             StringView part = iterString(&parts);
 
             if (!first) {
-                out << "+"_sv;
+                builder << "+"_sv;
             }
 
             if (part == "Control"_sv) {
-                out << "Ctrl"_sv;
+                builder << "Ctrl"_sv;
             } else {
-                out << part;
+                builder << part;
             }
 
             first = false;
             dbus_message_iter_next(&parts);
         }
+
+        builder.xchg(out);
     }
 
     Icon* readIcon(MenuImpl& menu, DBusMessageIter* value) {

@@ -446,24 +446,26 @@ namespace {
     // User directory/template, falling back to
     // $XDG_PICTURES_DIR/screenshots/imway-YYYYMMDD-HHMMSS.<format>.
     Buffer destPath() {
-        StringBuilder dir;
+        Buffer dir;
+        StringBuilder builder((Buffer&&)dir);
         const char* configured = getenv("IMWAY_SHOT_DIR");
         const char* base = getenv("XDG_PICTURES_DIR");
 
         if (configured && *configured) {
-            dir << StringView(configured);
+            builder << StringView(configured);
         } else if (base && *base) {
-            dir << StringView(base);
+            builder << StringView(base);
         } else {
             const char* home = getenv("HOME");
 
-            dir << StringView(home ? home : ".") << "/Pictures"_sv;
+            builder << StringView(home ? home : ".") << "/Pictures"_sv;
         }
 
         if (!configured || !*configured) {
-            dir << "/screenshots"_sv;
+            builder << "/screenshots"_sv;
         }
 
+        builder.xchg(dir);
         mkdirs(sv(dir));
 
         time_t t = time(nullptr);

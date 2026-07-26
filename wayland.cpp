@@ -104,6 +104,11 @@ namespace {
 
     struct FifoState;
 
+    void assignText(Buffer& out, StringView value) {
+        out.reset();
+        out.append(value.data(), value.length());
+    }
+
     struct SurfaceDestroyListener {
         wl_listener listener{};
         SurfaceImpl* surface = nullptr;
@@ -210,7 +215,7 @@ namespace {
         wl_client* client = nullptr;
         // weak ring into the surface: nulls itself when the surface dies
         Weak<Surface> surface;
-        StringBuilder appId;
+        Buffer appId;
         u32 serial = 0;
         bool serialSet = false;
         bool surfaceSet = false;
@@ -504,7 +509,7 @@ namespace {
         u32 serial = 0; // count of done events, echoed by the client's commit
 
         bool surroundingSet = false, pendingSurroundingSet = false;
-        StringBuilder surrounding, pendingSurrounding;
+        Buffer surrounding, pendingSurrounding;
         i32 cursor = 0, anchor = 0, pendingCursor = 0, pendingAnchor = 0;
 
         bool contentSet = false, pendingContentSet = false;
@@ -534,9 +539,9 @@ namespace {
         RectI lastRect{-1, -1, -1, -1};
 
         bool commitSet = false;
-        StringBuilder commitStr;
+        Buffer commitStr;
         bool preeditSet = false;
-        StringBuilder preeditStr;
+        Buffer preeditStr;
         i32 preeditBegin = 0, preeditEnd = 0;
         u32 deleteBefore = 0, deleteAfter = 0;
     };
@@ -556,9 +561,9 @@ namespace {
         SandboxDestroyListener destroy;
         WaylandImpl* srv = nullptr;
         wl_client* client = nullptr;
-        StringBuilder engine;
-        StringBuilder appId;
-        StringBuilder instanceId;
+        Buffer engine;
+        Buffer appId;
+        Buffer instanceId;
     };
 
     struct SecurityContext {
@@ -569,9 +574,9 @@ namespace {
         wl_event_source* listenSrc = nullptr;
         wl_event_source* closeSrc = nullptr;
         bool committed = false;
-        StringBuilder engine;
-        StringBuilder appId;
-        StringBuilder instanceId;
+        Buffer engine;
+        Buffer appId;
+        Buffer instanceId;
         bool appIdSet = false;
         bool instanceIdSet = false;
         bool engineSet = false;
@@ -598,7 +603,7 @@ namespace {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         ToplevelImpl* toplevel = nullptr;
-        StringBuilder handle;
+        Buffer handle;
     };
 
     // the node links it into WaylandImpl::foreignImports
@@ -754,7 +759,7 @@ namespace {
     struct IconBox {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
-        StringBuilder name;
+        Buffer name;
         Vector<u32> pixels;
         IntrusiveList bufferWatches;
         int bufferWatchCount = 0;
@@ -3095,8 +3100,7 @@ namespace {
     void toplevelSetTitle(wl_client*, wl_resource* res, const char* title) {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        t->title.reset();
-        t->title << title;
+        assignText(t->title, StringView(title));
         t->srv->scene->needsFrame = true;
 
         if (t->mapped) {
@@ -3107,8 +3111,7 @@ namespace {
     void toplevelSetAppId(wl_client*, wl_resource* res, const char* appId) {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        t->appId.reset();
-        t->appId << appId;
+        assignText(t->appId, StringView(appId));
 
         Buffer low;
 
@@ -3372,7 +3375,7 @@ namespace {
         t->id = srv->nextToplevelId++;
         t->iconSym = StringView((const u8*)&t->id, sizeof(t->id)).hash64();
         t->appIdSym = StringView().hash64();
-        t->title << "(untitled)"_sv;
+        assignText(t->title, "(untitled)"_sv);
         xs->toplevel.bind(t->weak);
         xs->surf()->role = SurfaceRole::xdgToplevel;
         xs->surface->toplevel.bind(t->weak);
@@ -5183,15 +5186,13 @@ namespace {
     // ---- xdg-toplevel-tag ----
     void toplevelTagSetTag(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* tag) {
         if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
-            t->tag.reset();
-            t->tag << tag;
+            assignText(t->tag, StringView(tag));
         }
     }
 
     void toplevelTagSetDescription(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* descr) {
         if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
-            t->tagDescription.reset();
-            t->tagDescription << descr;
+            assignText(t->tagDescription, StringView(descr));
         }
     }
 
@@ -5284,7 +5285,10 @@ namespace {
         u64 random = 0;
 
         STD_VERIFY(getrandom(&random, sizeof(random), 0) == sizeof(random));
-        ex->handle << "imway-"_sv << random << "-"_sv << t->id;
+        StringBuilder handle((Buffer&&)ex->handle);
+
+        handle << "imway-"_sv << random << "-"_sv << t->id;
+        handle.xchg(ex->handle);
         srv->foreignExports.pushBack(ex);
         wl_resource_set_implementation(r, &foreignExportedImpl, ex, foreignExportDestroyed);
         zxdg_exported_v2_send_handle(r, Buffer(sv(ex->handle)).cStr());
@@ -5975,12 +5979,8 @@ namespace {
     }
 
     // ---- text-input-v3 / input-method-v2 / virtual-keyboard-v1 ----
-    static void copyText(StringBuilder& out, const char* s) {
-        out.reset();
-
-        if (s) {
-            out << StringView(s);
-        }
+    static void copyText(Buffer& out, const char* s) {
+        assignText(out, s ? StringView(s) : StringView());
     }
 
     void textInputResourceDestroyed(wl_resource* res) {
@@ -6050,7 +6050,7 @@ namespace {
 
         if (ti->pendingSurroundingSet) {
             ti->surroundingSet = true;
-            copyText(ti->surrounding, Buffer(sv(ti->pendingSurrounding)).cStr());
+            assignText(ti->surrounding, sv(ti->pendingSurrounding));
             ti->cursor = ti->pendingCursor;
             ti->anchor = ti->pendingAnchor;
         }
@@ -6544,9 +6544,9 @@ namespace {
 
         tag->srv = ctx->srv;
         tag->client = client;
-        tag->engine << sv(ctx->engine);
-        tag->appId << sv(ctx->appId);
-        tag->instanceId << sv(ctx->instanceId);
+        assignText(tag->engine, sv(ctx->engine));
+        assignText(tag->appId, sv(ctx->appId));
+        assignText(tag->instanceId, sv(ctx->instanceId));
         tag->destroy.tag = tag;
         tag->destroy.listener.notify = sandboxTagDestroyed;
         wl_client_add_destroy_listener(client, &tag->destroy.listener);
@@ -6608,7 +6608,7 @@ namespace {
         }
 
         ctx->engineSet = true;
-        ctx->engine << StringView(name);
+        assignText(ctx->engine, StringView(name));
     }
 
     void securitySetAppId(wl_client*, wl_resource* res, const char* appId) {
@@ -6621,7 +6621,7 @@ namespace {
         }
 
         ctx->appIdSet = true;
-        ctx->appId << StringView(appId);
+        assignText(ctx->appId, StringView(appId));
     }
 
     void securitySetInstanceId(wl_client*, wl_resource* res, const char* instanceId) {
@@ -6634,7 +6634,7 @@ namespace {
         }
 
         ctx->instanceIdSet = true;
-        ctx->instanceId << StringView(instanceId);
+        assignText(ctx->instanceId, StringView(instanceId));
     }
 
     void securityCommit(wl_client*, wl_resource* res) {
@@ -8639,8 +8639,7 @@ namespace {
             return;
         }
 
-        box->name.reset();
-        box->name << name;
+        assignText(box->name, StringView(name));
     }
 
     void iconAddBuffer(wl_client*, wl_resource* res, wl_resource* bufferRes, i32 scale) {
@@ -8876,8 +8875,7 @@ namespace {
             return;
         }
 
-        request->appId.reset();
-        request->appId << appId;
+        assignText(request->appId, StringView(appId));
     }
 
     void activationTokenSetSurface(wl_client*, wl_resource* res, wl_resource* surfaceRes) {

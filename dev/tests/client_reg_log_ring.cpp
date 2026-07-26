@@ -25,7 +25,7 @@ namespace {
     struct Model {
         // a flat copy of every byte ever written; line starts and lengths
         // follow the same split rule as the implementation
-        StringBuilder bytes;
+        Buffer bytes;
 
         // parallel arrays: start offset into `bytes` and length
         struct Line {
@@ -40,13 +40,13 @@ namespace {
             for (u8 b : chunk) {
                 if (b == '\n') {
                     lines.pushBack({lineStart, bytes.used() - lineStart});
-                    bytes << StringView(&b, 1);
+                    bytes.append(&b, 1);
                     lineStart = bytes.used();
 
                     continue;
                 }
 
-                bytes << StringView(&b, 1);
+                bytes.append(&b, 1);
 
                 if (bytes.used() - lineStart == kLogMaxLine) {
                     // oversized line: split, the continuation starts here
@@ -118,7 +118,7 @@ int main() {
     for (int round = 0; round < 8; round++) {
         Log* log = Log::create(pool.mutPtr(), nullptr);
         Model model;
-        StringBuilder chunk;
+        Buffer chunk;
 
         // newline density decides which eviction dominates: dense newlines
         // hit the kLines cap, sparse ones age lines out of the byte window
@@ -126,6 +126,7 @@ int main() {
 
         for (int step = 0; step < 20000; step++) {
             chunk.reset();
+            StringBuilder chunkBuilder((Buffer&&)chunk);
 
             // a write: random length, random newline density, sometimes
             // pathological shapes
@@ -148,15 +149,16 @@ int main() {
                 u64 r = next();
                 char b = r % nl == 0 ? '\n' : (char)('a' + r % 26);
 
-                chunk << StringView((const u8*)&b, 1);
+                chunkBuilder << StringView((const u8*)&b, 1);
             }
 
             if (shape >= 10 && len && next() % 2) {
                 char nl = '\n';
 
-                chunk << StringView((const u8*)&nl, 1);
+                chunkBuilder << StringView((const u8*)&nl, 1);
             }
 
+            chunkBuilder.xchg(chunk);
             // feed it through the stream operator in random sub-chunks,
             // exercising both the direct-imbue and the writeImpl paths
             StringView rest = sv(chunk);
@@ -178,10 +180,12 @@ int main() {
             // only one that triggers the wrap relocation from imbue
             if (next() % 4 == 0) {
                 u64 v = next();
-                StringBuilder rendered;
+                Buffer rendered;
+                StringBuilder builder((Buffer&&)rendered);
 
                 *log << v << "\n"_sv;
-                rendered << v << "\n"_sv;
+                builder << v << "\n"_sv;
+                builder.xchg(rendered);
                 model.write(sv(rendered));
             }
 
@@ -213,18 +217,20 @@ int main() {
         // long lines interleaved with short ones drive many wraps and
         // relocations right at the physical boundary
         for (int i = 0; i < 40; i++) {
-            StringBuilder line;
+            Buffer line;
+            StringBuilder builder((Buffer&&)line);
             size_t len = i % 2 ? kBuf / 3 : 17;
 
             for (size_t j = 0; j < len; j++) {
                 char b = (char)('A' + (i + j) % 26);
 
-                line << StringView((const u8*)&b, 1);
+                builder << StringView((const u8*)&b, 1);
             }
 
             char nl = '\n';
 
-            line << StringView((const u8*)&nl, 1);
+            builder << StringView((const u8*)&nl, 1);
+            builder.xchg(line);
             *log << sv(line);
             model.write(sv(line));
 

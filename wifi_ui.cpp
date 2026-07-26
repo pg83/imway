@@ -17,7 +17,7 @@ namespace {
         char pass[128] = "";
         // path of the network the passphrase is being typed for; a new
         // request for a different network clears the field
-        StringBuilder passPath;
+        Buffer passPath;
 
         void draw(Composer& c, bool& open);
     };
@@ -76,7 +76,7 @@ void Dialog::draw(Composer& c, bool& open) {
 
             if (sv(passPath) != net) {
                 passPath.reset();
-                passPath << net;
+                passPath.append(net.data(), net.length());
                 pass[0] = 0;
                 ImGui::SetKeyboardFocusHere();
             }

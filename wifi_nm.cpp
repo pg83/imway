@@ -49,12 +49,12 @@ namespace {
     // async reply, since GetAll's reply does not echo which object it was
     struct Ctx {
         NmWifi* w = nullptr;
-        StringBuilder path;
+        Buffer path;
     };
 
     struct Known {
-        StringBuilder ssid;
-        StringBuilder path;
+        Buffer ssid;
+        Buffer path;
     };
 
     DBusHandlerResult onSignal(DBusConnection*, DBusMessage* msg, void* data);
@@ -69,7 +69,7 @@ namespace {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
 
-        StringBuilder devicePath;
+        Buffer devicePath;
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
@@ -86,17 +86,17 @@ namespace {
         ObjPool* committed = nullptr;
 
         bool wantPass = false;
-        StringBuilder passAp;
-        StringBuilder passSsid;
+        Buffer passAp;
+        Buffer passSsid;
 
         // refresh sequencing
         bool inFlight = false;
         bool again = false;
 
         // scratch for the sequence in progress
-        StringBuilder curDevice;
+        Buffer curDevice;
         u32 curState = 0;
-        StringBuilder curActive;
+        Buffer curActive;
         Vector<WifiNetwork*> netBuild;
         Vector<Known*> knownBuild;
         int devPending = 0;
@@ -163,7 +163,7 @@ namespace {
         return StringView(s);
     }
 
-    void readSsid(DBusMessageIter* var, StringBuilder& out) {
+    void readSsid(DBusMessageIter* var, Buffer& out) {
         out.reset();
 
         if (dbus_message_iter_get_arg_type(var) != DBUS_TYPE_ARRAY) {
@@ -178,7 +178,7 @@ namespace {
             u8 b = 0;
 
             dbus_message_iter_get_basic(&bytes, &b);
-            out << StringView(&b, (size_t)1);
+            out.append(&b, 1);
             dbus_message_iter_next(&bytes);
         }
     }
@@ -366,7 +366,7 @@ void NmWifi::refresh() {
 }
 
 void NmWifi::devicesReply(DBusMessage* reply) {
-    Vector<StringBuilder*> paths; // transient; released below
+    Vector<Buffer*> paths; // transient; released below
 
     DBusMessageIter it, var, arr;
 
@@ -377,9 +377,8 @@ void NmWifi::devicesReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = building->make<StringBuilder>();
+                Buffer* p = building->make<Buffer>(iterStr(&arr));
 
-                *p << iterStr(&arr);
                 paths.pushBack(p);
                 dbus_message_iter_next(&arr);
             }
@@ -394,11 +393,11 @@ void NmWifi::devicesReply(DBusMessage* reply) {
 
     devPending = (int)paths.length();
 
-    for (StringBuilder* p : paths) {
+    for (Buffer* p : paths) {
         Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
-        cx->path << sv(*p);
+        cx->path.append(p->data(), p->used());
 
         if (!getAll(sv(*p), kDev, deviceCb, cx)) {
             deviceItemDone();
@@ -419,7 +418,7 @@ void NmWifi::deviceReply(Ctx* cx, DBusMessage* reply) {
 
     // first wifi device wins
     if (type == kDeviceWifi && curDevice.empty()) {
-        curDevice << sv(cx->path);
+        curDevice.append(cx->path.data(), cx->path.used());
         curState = state;
     }
 
@@ -460,7 +459,7 @@ void NmWifi::onDevicesDone() {
 }
 
 void NmWifi::connectionsReply(DBusMessage* reply) {
-    Vector<StringBuilder*> paths; // transient; released below
+    Vector<Buffer*> paths; // transient; released below
 
     DBusMessageIter it, var, arr;
 
@@ -471,9 +470,8 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
             dbus_message_iter_recurse(&var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = building->make<StringBuilder>();
+                Buffer* p = building->make<Buffer>(iterStr(&arr));
 
-                *p << iterStr(&arr);
                 paths.pushBack(p);
                 dbus_message_iter_next(&arr);
             }
@@ -488,11 +486,11 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
 
     knownPending = (int)paths.length();
 
-    for (StringBuilder* p : paths) {
+    for (Buffer* p : paths) {
         Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
-        cx->path << sv(*p);
+        cx->path.append(p->data(), p->used());
 
         Buffer pb(sv(*p));
         DBusMessage* msg = dbus_message_new_method_call(kNm, pb.cStr(), kConnIface, "GetSettings");
@@ -544,7 +542,7 @@ void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
 
                         readSsid(&var, k->ssid);
                         k->path.reset();
-                        k->path << sv(cx->path);
+                        k->path.append(cx->path.data(), cx->path.used());
 
                         if (!k->ssid.empty()) {
                             knownBuild.pushBack(k);
@@ -576,21 +574,22 @@ void NmWifi::onKnownDone() {
 }
 
 void NmWifi::wirelessReply(DBusMessage* reply) {
-    Vector<StringBuilder*> aps; // transient; released below
+    Vector<Buffer*> aps; // transient; released below
 
     eachProp(reply, [&](StringView key, DBusMessageIter* var) {
         if (key == "ActiveAccessPoint"_sv) {
+            StringView active = iterStr(var);
+
             curActive.reset();
-            curActive << iterStr(var);
+            curActive.append(active.data(), active.length());
         } else if (key == "AccessPoints"_sv && dbus_message_iter_get_arg_type(var) == DBUS_TYPE_ARRAY) {
             DBusMessageIter arr;
 
             dbus_message_iter_recurse(var, &arr);
 
             while (dbus_message_iter_get_arg_type(&arr) == DBUS_TYPE_OBJECT_PATH) {
-                StringBuilder* p = building->make<StringBuilder>();
+                Buffer* p = building->make<Buffer>(iterStr(&arr));
 
-                *p << iterStr(&arr);
                 aps.pushBack(p);
                 dbus_message_iter_next(&arr);
             }
@@ -605,11 +604,11 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
 
     apPending = (int)aps.length();
 
-    for (StringBuilder* p : aps) {
+    for (Buffer* p : aps) {
         Ctx* cx = building->make<Ctx>();
 
         cx->w = this;
-        cx->path << sv(*p);
+        cx->path.append(p->data(), p->used());
 
         if (!getAll(sv(*p), kAp, apCb, cx)) {
             apItemDone();
@@ -618,7 +617,7 @@ void NmWifi::wirelessReply(DBusMessage* reply) {
 }
 
 void NmWifi::apReply(Ctx* cx, DBusMessage* reply) {
-    StringBuilder ssid;
+    Buffer ssid;
     u32 strength = 0, wpa = 0, rsn = 0;
 
     eachProp(reply, [&](StringView key, DBusMessageIter* var) {
@@ -637,11 +636,13 @@ void NmWifi::apReply(Ctx* cx, DBusMessage* reply) {
         WifiNetwork* n = building->make<WifiNetwork>();
 
         n->name.reset();
-        n->name << sv(ssid);
+        n->name.append(ssid.data(), ssid.used());
         n->path.reset();
-        n->path << sv(cx->path);
+        n->path.append(cx->path.data(), cx->path.used());
         n->type.reset();
-        n->type << ((wpa || rsn) ? "psk"_sv : "open"_sv);
+        StringView type = (wpa || rsn) ? "psk"_sv : "open"_sv;
+
+        n->type.append(type.data(), type.length());
         n->strength = (i16)strength; // NM reports 0..100
         n->connected = sv(cx->path) == sv(curActive);
         n->known = knownBuilt(sv(ssid)) != nullptr;
@@ -825,9 +826,9 @@ void NmWifi::connect(StringView path) {
 
     wantPass = true;
     passAp.reset();
-    passAp << path;
+    passAp.append(path.data(), path.length());
     passSsid.reset();
-    passSsid << sv(n->name);
+    passSsid.append(n->name.data(), n->name.used());
     notify();
 }
 

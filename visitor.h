@@ -11,7 +11,7 @@
 template <typename T, typename F>
 auto visitEach(F f) {
     // non-const T&, matching listDir: the element is the collection's own,
-    // handed out for reading (StringBuilder::cStr appends a NUL, not const)
+    // handed out for reading (Buffer::cStr appends a NUL, not const)
     return stl::makeVisitor([f](void* p) {
         f(*(T*)p);
     });

@@ -30,9 +30,9 @@ namespace {
     // a network as GetManagedObjects sees it; the ordered list adds strength
     // and order on top
     struct NetInfo {
-        StringBuilder path;
-        StringBuilder name;
-        StringBuilder type;
+        Buffer path;
+        Buffer name;
+        Buffer type;
         bool connected = false;
         bool known = false;
     };
@@ -41,7 +41,7 @@ namespace {
         Composer* c = nullptr;
         DBusConnection* conn = nullptr;
 
-        StringBuilder stationPath;
+        Buffer stationPath;
         WifiState st = WifiState::unavailable;
         WifiState notified = WifiState::unavailable;
 
@@ -58,7 +58,7 @@ namespace {
 
         // pending iwd Agent passphrase call, kept until the ui answers
         DBusMessage* passMsg = nullptr;
-        StringBuilder passNet;
+        Buffer passNet;
 
         IwdWifi(Composer& comp, DBusConnection* c);
         ~IwdWifi() noexcept;
@@ -244,14 +244,18 @@ void IwdWifi::managedReply(DBusMessage* reply) {
                 bool isNetwork = in == "net.connman.iwd.Network"_sv;
 
                 if (isStation) {
+                    StringView value(path);
+
                     stationPath.reset();
-                    stationPath << StringView(path);
+                    stationPath.append(value.data(), value.length());
                 }
 
                 if (isNetwork) {
+                    StringView value(path);
+
                     net = infoGen->make<NetInfo>();
                     net->path.reset();
-                    net->path << StringView(path);
+                    net->path.append(value.data(), value.length());
                     net->name.reset();
                     net->type.reset();
                     net->connected = false;
@@ -289,9 +293,13 @@ void IwdWifi::managedReply(DBusMessage* reply) {
                         stationState = variantStr(&var);
                     } else if (isNetwork && net) {
                         if (k == "Name"_sv) {
-                            net->name << variantStr(&var);
+                            StringView value = variantStr(&var);
+
+                            net->name.append(value.data(), value.length());
                         } else if (k == "Type"_sv) {
-                            net->type << variantStr(&var);
+                            StringView value = variantStr(&var);
+
+                            net->type.append(value.data(), value.length());
                         } else if (k == "Connected"_sv) {
                             net->connected = variantBool(&var);
                         } else if (k == "KnownNetwork"_sv) {
@@ -377,11 +385,11 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
                 WifiNetwork* n = netGen->make<WifiNetwork>();
 
                 n->name.reset();
-                n->name << sv(info->name);
+                n->name.append(info->name.data(), info->name.used());
                 n->path.reset();
-                n->path << sv(info->path);
+                n->path.append(info->path.data(), info->path.used());
                 n->type.reset();
-                n->type << sv(info->type);
+                n->type.append(info->type.data(), info->type.used());
                 // iwd gives dBm*100; map [-90,-50] dBm to 0..100 percent
                 int dbm = strength / 100;
                 int pct = (dbm + 90) * 5 / 2;
@@ -498,7 +506,7 @@ void IwdWifi::agentCall(DBusMessage* msg) {
         passNet.reset();
 
         if (NetInfo* info = infoByPath(StringView(netPath))) {
-            passNet << sv(info->name);
+            passNet.append(info->name.data(), info->name.used());
         }
 
         notify();

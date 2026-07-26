@@ -5,7 +5,7 @@
 #include <std/lib/list.h>
 #include <std/str/view.h>
 #include <std/sys/types.h>
-#include <std/str/builder.h>
+#include <std/lib/buffer.h>
 
 struct Composer;
 
@@ -15,10 +15,10 @@ struct Composer;
 // the node links it into the notifier's history list
 struct Toast: stl::IntrusiveNode {
     u32 id = 0;
-    stl::StringBuilder app;
-    stl::StringBuilder summary;
-    stl::StringBuilder body;
-    stl::StringBuilder icon;
+    stl::Buffer app;
+    stl::Buffer summary;
+    stl::Buffer body;
+    stl::Buffer icon;
     bool critical = false; // urgency 2: never expires, accented
     bool onScreen = false;
     bool fromBus = false; // dbus origin -> NotificationClosed is emitted
