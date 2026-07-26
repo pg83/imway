@@ -191,7 +191,11 @@ settings_gen_impl = "$(B)/generated/settings.gen.cpp"
 settings_gen_dialog = "$(B)/generated/settings.dialog.gen.inc"
 settings_codegen = command(
     name="settings_codegen",
-    inputs=["$(S)/dev/gen_settings.py", "$(S)/dev/settings_def.py"],
+    inputs=[
+        "$(S)/dev/gen_settings.py",
+        "$(S)/dev/settings_def.py",
+        "$(S)/settings.h",
+    ],
     outputs=[settings_gen_header, settings_gen_impl, settings_gen_dialog],
     descr="GEN",
     cmd=[

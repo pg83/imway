@@ -191,7 +191,7 @@ def generate_impl(settings):
                 f"new Buffer(StringView({cpp_string(item['default'])}));")
         out += ["        }"]
 
-    out += ["", "        ~SettingsComponent() noexcept override {"]
+    out += ["", "        ~SettingsComponent() noexcept {"]
     for item in text_items:
         out.append(f"            delete {item['name']}Value;")
     out += ["        }", ""]

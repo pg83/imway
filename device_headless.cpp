@@ -168,16 +168,11 @@ HeadlessOutput::HeadlessOutput(Composer& comp, int width, int height, double ref
     content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
     metadata = hdrOutputMetadata(color, content);
 
-    comp.settings->addHdrEnabledListener(
-        comp.pool->make<CallHeadlessSetting>(this));
-    comp.settings->addSdrNitsListener(
-        comp.pool->make<CallHeadlessSetting>(this));
-    comp.settings->addDisplayMinNitsListener(
-        comp.pool->make<CallHeadlessSetting>(this));
-    comp.settings->addDisplayPeakNitsListener(
-        comp.pool->make<CallHeadlessSetting>(this));
-    comp.settings->addDisplayMaxFallNitsListener(
-        comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addHdrEnabledListener(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addSdrNitsListener(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayMinNitsListener(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayPeakNitsListener(comp.pool->make<CallHeadlessSetting>(this));
+    comp.settings->addDisplayMaxFallNitsListener(comp.pool->make<CallHeadlessSetting>(this));
     comp.settings->addOutputBpcListener(comp.pool->make<CallHeadlessSetting>(this));
     comp.settings->addOutputRangeListener(comp.pool->make<CallHeadlessSetting>(this));
 

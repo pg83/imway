@@ -62,16 +62,13 @@ int main() {
 
     settings.setUiScale(2.f);
 
-    if (persistent.calls != 1 || oneShot.calls != 1
-        || persistent.observed != 2.f || oneShot.observed != 2.f
-        || repeat.calls) {
+    if (persistent.calls != 1 || oneShot.calls != 1 || persistent.observed != 2.f || oneShot.observed != 2.f || repeat.calls) {
         return 2;
     }
 
     settings.setUiScale(3.f);
 
-    if (persistent.calls != 2 || oneShot.calls != 1
-        || persistent.observed != 3.f || repeat.calls) {
+    if (persistent.calls != 2 || oneShot.calls != 1 || persistent.observed != 3.f || repeat.calls) {
         return 3;
     }
 
@@ -87,17 +84,13 @@ int main() {
         return 5;
     }
 
-    settings.setTerminal(
-        StringView("a text value longer than the old fixed buffer"));
+    settings.setTerminal(StringView("a text value longer than the old fixed buffer"));
 
-    if (settings.terminal()
-            != StringView("a text value longer than the old fixed buffer")
-        || text.calls != 1) {
+    if (settings.terminal() != StringView("a text value longer than the old fixed buffer") || text.calls != 1) {
         return 6;
     }
 
-    settings.setTerminal(
-        StringView("a text value longer than the old fixed buffer"));
+    settings.setTerminal(StringView("a text value longer than the old fixed buffer"));
 
     if (text.calls != 1) {
         return 7;
@@ -116,9 +109,7 @@ int main() {
     binding.keysym++;
     settings.setShortcut(0, binding);
 
-    if (firstShortcut.calls != 1 || secondShortcut.calls
-        || settings.shortcut(0).keysym != binding.keysym
-        || settings.shortcut(1).action != ShortcutAction::lock) {
+    if (firstShortcut.calls != 1 || secondShortcut.calls || settings.shortcut(0).keysym != binding.keysym || settings.shortcut(1).action != ShortcutAction::lock) {
         return 9;
     }
 

@@ -26,13 +26,13 @@
 #include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
-#include "settings_ui.h"
 #include "weak_ptr.h"
 #include "inspector.h"
 #include "intr_list.h"
 #include "anr_dialog.h"
 #include "input_sink.h"
 #include "lock_screen.h"
+#include "settings_ui.h"
 #include "icon_provider.h"
 #include "desktop_chrome.h"
 #include "main_supervisor.h"
@@ -1363,8 +1363,7 @@ void DesktopImpl::buildUi(Scene& scene) {
         drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
     }
 
-    drawSettings(*comp, settings, settingsToggle, shortcutCapture,
-                 &settingsState);
+    drawSettings(*comp, settings, settingsToggle, shortcutCapture, &settingsState);
     drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
     anrToggle = false;
     settingsToggle = false;
@@ -1981,8 +1980,7 @@ void DesktopImpl::buildUi(Scene& scene) {
         u64 duration = (u64)(settings.visualBellSeconds() * 1000.f);
 
         if (duration && age < duration) {
-            float a = (1.f - (float)age / (float)duration)
-                    * settings.visualBellStrength();
+            float a = (1.f - (float)age / (float)duration) * settings.visualBellStrength();
 
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), ImVec2((float)scene.outW, (float)scene.outH), IM_COL32(255, 255, 255, (int)(a * 255.f)));
             scene.needsFrame = true;

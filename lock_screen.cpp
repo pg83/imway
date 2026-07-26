@@ -762,9 +762,9 @@ void Dialog::draw(Composer& c, bool& open) {
             ImTextureID background = filter.background();
 
             if (background) {
-            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
-            draw->AddImage(background, min, max);
-            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
+                draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
+                draw->AddImage(background, min, max);
+                draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
             }
         }
 

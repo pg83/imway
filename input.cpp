@@ -141,8 +141,7 @@ namespace {
         StringView id(libinput_device_get_sysname(dev));
         size_t count = settings.inputDeviceCount();
 
-        for (size_t i = 0;
-             i < count && i < Settings::inputDeviceCapacity; i++) {
+        for (size_t i = 0; i < count && i < Settings::inputDeviceCapacity; i++) {
             const InputDeviceSettings& value = settings.inputDevice(i);
 
             if (StringView(value.id) == id) {
@@ -155,27 +154,19 @@ namespace {
 
     void configureDevice(libinput_device* dev, const Settings& settings) {
         const InputDeviceSettings* local = deviceSettings(settings, dev);
-        double speed = local && local->enabled && local->pointerSpeedSet
-                     ? local->pointerSpeed : settings.pointerSpeed();
-        bool natural = local && local->enabled && local->naturalScrollSet
-                     ? local->naturalScroll : settings.naturalScroll();
-        bool left = local && local->enabled && local->leftHandedSet
-                  ? local->leftHanded : settings.leftHanded();
+        double speed = local && local->enabled && local->pointerSpeedSet ? local->pointerSpeed : settings.pointerSpeed();
+        bool natural = local && local->enabled && local->naturalScrollSet ? local->naturalScroll : settings.naturalScroll();
+        bool left = local && local->enabled && local->leftHandedSet ? local->leftHanded : settings.leftHanded();
 
         if (libinput_device_config_tap_get_finger_count(dev) > 0) {
-            libinput_device_config_tap_set_enabled(
-                dev, settings.tapToClick() ? LIBINPUT_CONFIG_TAP_ENABLED
-                                           : LIBINPUT_CONFIG_TAP_DISABLED);
+            libinput_device_config_tap_set_enabled(dev, settings.tapToClick() ? LIBINPUT_CONFIG_TAP_ENABLED : LIBINPUT_CONFIG_TAP_DISABLED);
         }
 
         if (libinput_device_config_accel_is_available(dev)) {
             libinput_device_config_accel_set_speed(dev, speed);
 
             u32 profiles = (u32)libinput_device_config_accel_get_profiles(dev);
-            libinput_config_accel_profile profile
-                = settings.pointerAccelProfile() == PointerAccelProfile::flat
-                ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT
-                : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+            libinput_config_accel_profile profile = settings.pointerAccelProfile() == PointerAccelProfile::flat ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
 
             if (profiles & (u32)profile) {
                 libinput_device_config_accel_set_profile(dev, profile);
@@ -191,41 +182,22 @@ namespace {
         }
 
         if (libinput_device_config_dwt_is_available(dev)) {
-            libinput_device_config_dwt_set_enabled(
-                dev, settings.disableWhileTyping()
-                   ? LIBINPUT_CONFIG_DWT_ENABLED
-                   : LIBINPUT_CONFIG_DWT_DISABLED);
+            libinput_device_config_dwt_set_enabled(dev, settings.disableWhileTyping() ? LIBINPUT_CONFIG_DWT_ENABLED : LIBINPUT_CONFIG_DWT_DISABLED);
         }
 
         if (libinput_device_config_middle_emulation_is_available(dev)) {
-            libinput_device_config_middle_emulation_set_enabled(
-                dev, settings.middleEmulation()
-                   ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED
-                   : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED);
+            libinput_device_config_middle_emulation_set_enabled(dev, settings.middleEmulation() ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED);
         }
 
         u32 clicks = (u32)libinput_device_config_click_get_methods(dev);
-        libinput_config_click_method click
-            = settings.touchpadClickMethod() == TouchpadClickMethod::buttonAreas
-            ? LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS
-            : settings.touchpadClickMethod() == TouchpadClickMethod::clickfinger
-            ? LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER
-            : libinput_device_config_click_get_default_method(dev);
+        libinput_config_click_method click = settings.touchpadClickMethod() == TouchpadClickMethod::buttonAreas ? LIBINPUT_CONFIG_CLICK_METHOD_BUTTON_AREAS : settings.touchpadClickMethod() == TouchpadClickMethod::clickfinger ? LIBINPUT_CONFIG_CLICK_METHOD_CLICKFINGER : libinput_device_config_click_get_default_method(dev);
 
         if (clicks & (u32)click) {
             libinput_device_config_click_set_method(dev, click);
         }
 
         u32 scrolls = (u32)libinput_device_config_scroll_get_methods(dev);
-        libinput_config_scroll_method scroll
-            = settings.touchpadScrollMethod()
-                    == TouchpadScrollMethod::twoFinger
-            ? LIBINPUT_CONFIG_SCROLL_2FG
-            : settings.touchpadScrollMethod() == TouchpadScrollMethod::edge
-            ? LIBINPUT_CONFIG_SCROLL_EDGE
-            : settings.touchpadScrollMethod() == TouchpadScrollMethod::button
-            ? LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN
-            : libinput_device_config_scroll_get_default_method(dev);
+        libinput_config_scroll_method scroll = settings.touchpadScrollMethod() == TouchpadScrollMethod::twoFinger ? LIBINPUT_CONFIG_SCROLL_2FG : settings.touchpadScrollMethod() == TouchpadScrollMethod::edge ? LIBINPUT_CONFIG_SCROLL_EDGE : settings.touchpadScrollMethod() == TouchpadScrollMethod::button ? LIBINPUT_CONFIG_SCROLL_ON_BUTTON_DOWN : libinput_device_config_scroll_get_default_method(dev);
 
         if (scrolls & (u32)scroll) {
             libinput_device_config_scroll_set_method(dev, scroll);
@@ -287,8 +259,7 @@ LibinputSource::LibinputSource(Composer& c)
     c.settings->addInputDeviceCountListener(c.pool->make<CallInputSettings>(this));
 
     for (size_t i = 0; i < Settings::inputDeviceCapacity; i++) {
-        c.settings->addInputDeviceListener(
-            i, c.pool->make<CallInputSettings>(this));
+        c.settings->addInputDeviceListener(i, c.pool->make<CallInputSettings>(this));
     }
 
     ev_io* inputIo = createEvIo(*c.pool, loop);
@@ -408,8 +379,7 @@ void LibinputSource::registerDevice(libinput_device* dev) {
     StringView id(libinput_device_get_sysname(dev));
     size_t count = comp->settings->inputDeviceCount();
 
-    for (size_t i = 0;
-         i < count && i < Settings::inputDeviceCapacity; i++) {
+    for (size_t i = 0; i < count && i < Settings::inputDeviceCapacity; i++) {
         if (StringView(comp->settings->inputDevice(i).id) == id) {
             return;
         }

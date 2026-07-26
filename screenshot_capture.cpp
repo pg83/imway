@@ -524,22 +524,15 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     }
 
     const Settings& settings = *comp->settings;
-    const char* actionName = settings.screenshotAction() == ScreenshotAction::save
-                           ? "save"
-                           : settings.screenshotAction()
-                                 == ScreenshotAction::copy
-                           ? "copy" : "editor";
-    const char* formatName = settings.screenshotFormat()
-                           == ScreenshotFormat::png ? "png" : "jxl";
+    const char* actionName = settings.screenshotAction() == ScreenshotAction::save ? "save" : settings.screenshotAction() == ScreenshotAction::copy ? "copy" : "editor";
+    const char* formatName = settings.screenshotFormat() == ScreenshotFormat::png ? "png" : "jxl";
 
     action << "IMWAY_SHOT_ACTION="_sv << StringView(actionName);
     format << "IMWAY_SHOT_FORMAT="_sv << StringView(formatName);
     directory << "IMWAY_SHOT_DIR="_sv << settings.screenshotDirectory();
     name << "IMWAY_SHOT_NAME="_sv << settings.screenshotName();
-    lossless << "IMWAY_SHOT_LOSSLESS="_sv
-             << (settings.screenshotLossless() ? 1 : 0);
-    quality << "IMWAY_SHOT_QUALITY="_sv
-            << (long double)settings.screenshotQuality();
+    lossless << "IMWAY_SHOT_LOSSLESS="_sv << (settings.screenshotLossless() ? 1 : 0);
+    quality << "IMWAY_SHOT_QUALITY="_sv << (long double)settings.screenshotQuality();
 
     StringView env[] = {sv(display), sv(scale), sv(color), sv(action), sv(format), sv(directory), sv(name), sv(lossless), sv(quality), sv(metadata)};
     SupervisorSpawn spec;

@@ -1,10 +1,10 @@
 #include "dbus_menu_ui.h"
 
-#include "composer.h"
-#include "dbus_menu.h"
 #include "icon.h"
-#include "imgui_wm.h"
 #include "util.h"
+#include "composer.h"
+#include "imgui_wm.h"
+#include "dbus_menu.h"
 
 using namespace stl;
 
@@ -50,10 +50,7 @@ namespace {
         ImVec2 min = ImGui::GetItemRectMin();
         float y = (ImGui::GetItemRectMin().y + ImGui::GetItemRectMax().y - size) * 0.5f;
 
-        ImGui::GetWindowDrawList()->AddImage(
-            (ImTextureID)texture,
-            ImVec2(min.x + ImGui::GetStyle().FramePadding.x, y),
-            ImVec2(min.x + ImGui::GetStyle().FramePadding.x + size, y + size));
+        ImGui::GetWindowDrawList()->AddImage((ImTextureID)texture, ImVec2(min.x + ImGui::GetStyle().FramePadding.x, y), ImVec2(min.x + ImGui::GetStyle().FramePadding.x + size, y + size));
     }
 
     const char* displayLabel(DBusMenuItem& item, bool withIcon) {
@@ -122,8 +119,7 @@ namespace {
                 if (item->toggle == DBusMenuToggle::radio) {
                     ImVec2 max = ImGui::GetItemRectMax();
                     float radius = ImGui::GetFontSize() * 0.23f;
-                    ImVec2 p(max.x - ImGui::GetStyle().FramePadding.x - radius * 2.f,
-                             (ImGui::GetItemRectMin().y + max.y) * 0.5f);
+                    ImVec2 p(max.x - ImGui::GetStyle().FramePadding.x - radius * 2.f, (ImGui::GetItemRectMin().y + max.y) * 0.5f);
                     ImDrawList* draw = ImGui::GetWindowDrawList();
 
                     draw->AddCircle(p, radius, ImGui::GetColorU32(ImGuiCol_Text), 0, 1.5f);

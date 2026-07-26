@@ -3433,14 +3433,14 @@ void RendererImpl::frameNow() {
 
     if (cand) {
         switch (comp->settings->tearing()) {
-        case TearingPolicy::deny:
-            break;
-        case TearingPolicy::client:
-            tearing = cand->tearingAsync;
-            break;
-        case TearingPolicy::always:
-            tearing = true;
-            break;
+            case TearingPolicy::deny:
+                break;
+            case TearingPolicy::client:
+                tearing = cand->tearingAsync;
+                break;
+            case TearingPolicy::always:
+                tearing = true;
+                break;
         }
     }
 

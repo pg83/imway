@@ -4772,12 +4772,12 @@ namespace {
 
     u32 decorationMode(ToplevelImpl& t) {
         switch (t.srv->composer->settings->decorations()) {
-        case DecorationPolicy::client:
-            return ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
-        case DecorationPolicy::clientPreference:
-            return t.requestedDecoration ? t.requestedDecoration : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
-        case DecorationPolicy::server:
-            return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+            case DecorationPolicy::client:
+                return ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
+            case DecorationPolicy::clientPreference:
+                return t.requestedDecoration ? t.requestedDecoration : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+            case DecorationPolicy::server:
+                return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
         }
 
         return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;

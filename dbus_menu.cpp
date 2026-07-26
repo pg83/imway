@@ -1,21 +1,21 @@
 #include "dbus_menu.h"
 
+#include "log.h"
+#include "icon.h"
+#include "util.h"
+#include "scene.h"
 #include "composer.h"
 #include "dbus_conn.h"
-#include "icon.h"
 #include "icon_pool.h"
 #include "intr_list.h"
-#include "log.h"
-#include "scene.h"
 #include "small_obj_allocator.h"
-#include "util.h"
 
 #include <std/ios/sys.h>
-#include <std/mem/obj_pool.h>
 #include <std/sym/i_map.h>
+#include <std/mem/obj_pool.h>
 
-#include <dbus/dbus.h>
 #include <png.h>
+#include <dbus/dbus.h>
 
 using namespace stl;
 
@@ -341,9 +341,7 @@ namespace {
         } else if (key == "toggle-type"_sv) {
             StringView type = iterString(value);
 
-            item.toggle = type == "checkmark"_sv ? DBusMenuToggle::checkmark
-                         : type == "radio"_sv ? DBusMenuToggle::radio
-                         : DBusMenuToggle::none;
+            item.toggle = type == "checkmark"_sv ? DBusMenuToggle::checkmark : type == "radio"_sv ? DBusMenuToggle::radio : DBusMenuToggle::none;
         } else if (key == "toggle-state"_sv) {
             item.toggleState = iterI32(value, -1);
         } else if (key == "children-display"_sv) {
@@ -351,10 +349,7 @@ namespace {
         } else if (key == "disposition"_sv) {
             StringView disposition = iterString(value);
 
-            item.disposition = disposition == "informative"_sv ? DBusMenuDisposition::informative
-                             : disposition == "warning"_sv ? DBusMenuDisposition::warning
-                             : disposition == "alert"_sv ? DBusMenuDisposition::alert
-                             : DBusMenuDisposition::normal;
+            item.disposition = disposition == "informative"_sv ? DBusMenuDisposition::informative : disposition == "warning"_sv ? DBusMenuDisposition::warning : disposition == "alert"_sv ? DBusMenuDisposition::alert : DBusMenuDisposition::normal;
         } else if (key == "shortcut"_sv) {
             readShortcut(item.shortcut, value);
         } else if (key == "icon-name"_sv) {
@@ -510,8 +505,7 @@ void MenuImpl::resolveOwner() {
         return;
     }
 
-    DBusMessage* msg = dbus_message_new_method_call(
-        DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "GetNameOwner");
+    DBusMessage* msg = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "GetNameOwner");
 
     if (!msg) {
         return;

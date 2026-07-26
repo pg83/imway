@@ -161,8 +161,7 @@ u32 NotifierImpl::post(const Post& p) {
     NotificationPolicy policy = NotificationPolicy::defaultPolicy;
     size_t rules = c->settings->notificationRuleCount();
 
-    for (size_t i = 0;
-         i < rules && i < Settings::notificationRuleCapacity; i++) {
+    for (size_t i = 0; i < rules && i < Settings::notificationRuleCapacity; i++) {
         const NotificationRule& rule = c->settings->notificationRule(i);
 
         if (StringView(rule.app) == p.app) {
