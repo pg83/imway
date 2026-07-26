@@ -21,18 +21,20 @@ int main(void) {
     struct wl_buffer* buf = wl_solid(64, 64, 0xff00ff00);
     wl_buffer_add_listener(buf, &buf_listener, NULL);
     for (int i = 0; i < 3; i++) {
+        int expected = releases + 1;
+
         wl_surface_attach(top.surface, buf, 0, 0);
         wl_surface_damage(top.surface, 0, 0, 64, 64);
         wl_surface_commit(top.surface);
-        if (wl_display_roundtrip(wl_dpy) < 0) return 1;
-    }
-    for (int i = 0; i < 100 && releases < 3; i++) {
-        if (wl_display_roundtrip(wl_dpy) < 0) return 1;
-        usleep(20000);
-    }
-    if (releases < 3) {
-        fprintf(stderr, "%d releases, want 3\n", releases);
-        return 1;
+
+        for (int n = 0; n < 100 && releases < expected; n++) {
+            if (wl_display_roundtrip(wl_dpy) < 0) return 1;
+            usleep(20000);
+        }
+        if (releases != expected) {
+            fprintf(stderr, "%d releases, want %d\n", releases, expected);
+            return 1;
+        }
     }
     return 0;
 }

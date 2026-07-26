@@ -16,7 +16,10 @@ screenshot "$XDG_RUNTIME_DIR/before-menu.ppm"
 # The app_id precedes the exported headings. Find File by interaction instead
 # of baking font metrics into the test.
 file_x=
-for x in $(seq 152 8 240); do
+# The default layout lands File at 208; try it first so the conform test does
+# not spend most of its timeout rendering search clicks under a loaded suite.
+# Keep the full sweep as a fallback for different fonts/scales.
+for x in 208 $(seq 152 8 240); do
     click_at "$x" 10
     if grep -q "about 1" "$CLIENT_LOG"; then
         file_x=$x

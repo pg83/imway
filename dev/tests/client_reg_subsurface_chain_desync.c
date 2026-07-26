@@ -18,6 +18,10 @@ static struct wl_surface* chain_surface[MAX_DEPTH];
 static struct wl_subsurface* chain_sub[MAX_DEPTH];
 
 static int run_chain(struct wl_toplevel_ctx* top, int depth, int destroy_topdown) {
+    /* Immutable content may be shared by all surfaces.  Keeping one buffer
+     * makes this a descriptor/tree-depth test rather than an fd-limit test. */
+    struct wl_buffer* pixel = wl_solid(4, 4, 0xff00ff00);
+
     for (int i = 0; i < depth; i++) {
         chain_surface[i] = wl_compositor_create_surface(wl_comp);
         chain_sub[i] = wl_subcompositor_get_subsurface(
@@ -28,7 +32,7 @@ static int run_chain(struct wl_toplevel_ctx* top, int depth, int destroy_topdown
     frame_done = 0;
     for (int i = depth - 1; i >= 0; i--) {
         if (i == depth - 1) wl_surface_frame(chain_surface[i]);
-        wl_surface_attach(chain_surface[i], wl_solid(4, 4, 0xff00ff00), 0, 0);
+        wl_surface_attach(chain_surface[i], pixel, 0, 0);
         wl_surface_commit(chain_surface[i]);
     }
     wl_callback_add_listener(wl_surface_frame(top->surface), &frame_listener, NULL);
@@ -52,6 +56,7 @@ static int run_chain(struct wl_toplevel_ctx* top, int depth, int destroy_topdown
             wl_surface_destroy(chain_surface[i]);
         }
     }
+    wl_buffer_destroy(pixel);
     return wl_display_roundtrip(wl_dpy) < 0 ? 1 : 0;
 }
 
