@@ -32,6 +32,7 @@
 #include <std/str/builder.h>
 #include <std/mem/obj_pool.h>
 
+#include <new>
 #include <ev.h>
 #include <time.h>
 #include <errno.h>
@@ -108,25 +109,30 @@ namespace {
     struct FifoState;
     struct ShmPool;
 
-    struct ShmMapping: public ARC {
+    struct ShmMapping final: public ARC {
+        SmallObjAllocator* alloc;
         u8* data;
         size_t size;
         bool stable = false;
 
-        ShmMapping(u8* data, size_t size);
+        ShmMapping(SmallObjAllocator* alloc, u8* data, size_t size);
         ~ShmMapping() noexcept;
+        void operator delete(ShmMapping* mapping, std::destroying_delete_t) noexcept;
     };
 
-    struct ShmPool: public ARC {
+    struct ShmPool final: public ARC {
+        SmallObjAllocator* alloc;
         wl_resource* resource = nullptr;
         IntrusivePtr<ShmMapping> mapping;
         int fd;
 
-        ShmPool(int fd, ShmMapping* mapping);
+        ShmPool(SmallObjAllocator* alloc, int fd, ShmMapping* mapping);
         ~ShmPool() noexcept;
+        void operator delete(ShmPool* pool, std::destroying_delete_t) noexcept;
     };
 
-    struct ShmBuffer: public ARC {
+    struct ShmBuffer final: public ARC {
+        SmallObjAllocator* alloc;
         IntrusivePtr<ShmPool> pool;
         ObjPool::Ref cacheLifetime;
         wl_resource* resource = nullptr;
@@ -139,12 +145,14 @@ namespace {
         int udmabufReaders = 0;
         bool udmabufCpuAccess = false;
 
-        ShmBuffer(ShmPool* pool, ObjPool* cacheLifetime, i32 offset, i32 width, i32 height, i32 stride, u32 format);
+        ShmBuffer(SmallObjAllocator* alloc, ShmPool* pool, ObjPool* cacheLifetime, i32 offset, i32 width, i32 height, i32 stride, u32 format);
         ~ShmBuffer() noexcept;
+        void operator delete(ShmBuffer* buffer, std::destroying_delete_t) noexcept;
         u8* data();
     };
 
-    struct ShmUse: ShmContent {
+    struct ShmUse final: ShmContent {
+        SmallObjAllocator* alloc;
         IntrusivePtr<ShmBuffer> buffer;
         IntrusivePtr<ShmMapping> mapping;
         wl_resource* releaseCb;
@@ -154,8 +162,9 @@ namespace {
         bool sourceReleased = false;
         ObjPool::Ref stateLifetime;
 
-        ShmUse(ShmBuffer* buffer, ShmMapping* mapping, ObjPool* stateLifetime, wl_resource* releaseCb);
+        ShmUse(SmallObjAllocator* alloc, ShmBuffer* buffer, ShmMapping* mapping, ObjPool* stateLifetime, wl_resource* releaseCb);
         ~ShmUse() noexcept;
+        void operator delete(ShmUse* use, std::destroying_delete_t) noexcept;
 
         static ShmContentRef create(ShmBuffer* buffer, wl_resource* releaseCb);
         bool beginUdmabufRead(int fd);
@@ -180,14 +189,14 @@ namespace {
         mapping->stable = seals >= 0 && (seals & F_SEAL_SHRINK) && fstat(pool->fd, &st) == 0 && st.st_size >= (off_t)mapping->size;
     }
 
-    ShmMapping* mappingCreate(int fd, size_t size) {
+    ShmMapping* mappingCreate(SmallObjAllocator* alloc, int fd, size_t size) {
         u8* data = (u8*)mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
         if (data == MAP_FAILED) {
             return nullptr;
         }
 
-        return new ShmMapping(data, size);
+        return alloc->make<ShmMapping>(alloc, data, size);
     }
 
     void reraiseSigbus() {
@@ -344,7 +353,7 @@ namespace {
         }
 
         ObjPool::Ref cacheLifetime = ObjPool::fromMemory();
-        IntrusivePtr<ShmBuffer> buffer = new ShmBuffer(pool, cacheLifetime.mutPtr(), offset, width, height, stride, format);
+        IntrusivePtr<ShmBuffer> buffer = pool->alloc->make<ShmBuffer>(pool->alloc, pool, cacheLifetime.mutPtr(), offset, width, height, stride, format);
 
         buffer->resource = wl_resource_create(client, &wl_buffer_interface, 1, id);
 
@@ -376,7 +385,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(pool->fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(pool->alloc, pool->fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap");
@@ -402,6 +411,8 @@ namespace {
     }
 
     void shmCreatePool(wl_client* client, wl_resource* resource, u32 id, int fd, i32 size) {
+        auto* alloc = (SmallObjAllocator*)wl_resource_get_user_data(resource);
+
         if (size <= 0) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_STRIDE, "invalid size (%d)", size);
             close(fd);
@@ -409,7 +420,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(alloc, fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap fd %d: %s", fd, strerror(errno));
@@ -418,7 +429,7 @@ namespace {
             return;
         }
 
-        IntrusivePtr<ShmPool> pool = new ShmPool(fd, mapping);
+        IntrusivePtr<ShmPool> pool = alloc->make<ShmPool>(alloc, fd, mapping);
 
         mappingUpdateStable(pool.mutPtr(), mapping);
         pool->resource = wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id);
@@ -442,7 +453,7 @@ namespace {
         .release = shmRelease,
     };
 
-    void bindShm(wl_client* client, void*, u32 version, u32 id) {
+    void bindShm(wl_client* client, void* data, u32 version, u32 id) {
         wl_resource* resource = wl_resource_create(client, &wl_shm_interface, version, id);
 
         if (!resource) {
@@ -451,13 +462,13 @@ namespace {
             return;
         }
 
-        wl_resource_set_implementation(resource, &shmImpl, nullptr, nullptr);
+        wl_resource_set_implementation(resource, &shmImpl, data, nullptr);
         wl_shm_send_format(resource, WL_SHM_FORMAT_ARGB8888);
         wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
     }
 
-    bool initWaylandShm(wl_display* display) {
-        return wl_global_create(display, &wl_shm_interface, 2, nullptr, bindShm) != nullptr;
+    bool initWaylandShm(wl_display* display, SmallObjAllocator* alloc) {
+        return wl_global_create(display, &wl_shm_interface, 2, alloc, bindShm) != nullptr;
     }
 
     ShmBuffer* shmBufferFromResource(wl_resource* resource) {
@@ -468,8 +479,9 @@ namespace {
         return (ShmBuffer*)wl_resource_get_user_data(resource);
     }
 
-    ShmMapping::ShmMapping(u8* d, size_t s)
-        : data(d)
+    ShmMapping::ShmMapping(SmallObjAllocator* a, u8* d, size_t s)
+        : alloc(a)
+        , data(d)
         , size(s)
     {
     }
@@ -478,8 +490,13 @@ namespace {
         munmap(data, size);
     }
 
-    ShmPool::ShmPool(int f, ShmMapping* m)
-        : mapping(m)
+    void ShmMapping::operator delete(ShmMapping* mapping, std::destroying_delete_t) noexcept {
+        mapping->alloc->release(mapping);
+    }
+
+    ShmPool::ShmPool(SmallObjAllocator* a, int f, ShmMapping* m)
+        : alloc(a)
+        , mapping(m)
         , fd(f)
     {
     }
@@ -488,8 +505,13 @@ namespace {
         close(fd);
     }
 
-    ShmBuffer::ShmBuffer(ShmPool* p, ObjPool* cache, i32 o, i32 w, i32 h, i32 s, u32 f)
-        : pool(p)
+    void ShmPool::operator delete(ShmPool* pool, std::destroying_delete_t) noexcept {
+        pool->alloc->release(pool);
+    }
+
+    ShmBuffer::ShmBuffer(SmallObjAllocator* a, ShmPool* p, ObjPool* cache, i32 o, i32 w, i32 h, i32 s, u32 f)
+        : alloc(a)
+        , pool(p)
         , cacheLifetime(cache)
         , offset(o)
         , width(w)
@@ -502,12 +524,17 @@ namespace {
     ShmBuffer::~ShmBuffer() noexcept {
     }
 
+    void ShmBuffer::operator delete(ShmBuffer* buffer, std::destroying_delete_t) noexcept {
+        buffer->alloc->release(buffer);
+    }
+
     u8* ShmBuffer::data() {
         return pool->mapping->data + offset;
     }
 
-    ShmUse::ShmUse(ShmBuffer* b, ShmMapping* m, ObjPool* lifetime, wl_resource* callback)
-        : buffer(b)
+    ShmUse::ShmUse(SmallObjAllocator* a, ShmBuffer* b, ShmMapping* m, ObjPool* lifetime, wl_resource* callback)
+        : alloc(a)
+        , buffer(b)
         , mapping(m)
         , releaseCb(callback)
         , stateLifetime(lifetime)
@@ -534,6 +561,10 @@ namespace {
         releaseSource();
     }
 
+    void ShmUse::operator delete(ShmUse* use, std::destroying_delete_t) noexcept {
+        use->alloc->release(use);
+    }
+
     ShmContentRef ShmUse::create(ShmBuffer* buffer, wl_resource* releaseCb) {
         ShmMapping* mapping = buffer->pool->mapping.mutPtr();
 
@@ -541,7 +572,7 @@ namespace {
 
         ObjPool::Ref stateLifetime = ObjPool::fromMemory();
 
-        return new ShmUse(buffer, mapping, stateLifetime.mutPtr(), releaseCb);
+        return buffer->alloc->make<ShmUse>(buffer->alloc, buffer, mapping, stateLifetime.mutPtr(), releaseCb);
     }
 
     bool ShmUse::beginUdmabufRead(int fd) {
@@ -12276,7 +12307,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
-    STD_VERIFY(initWaylandShm(display));
+    STD_VERIFY(initWaylandShm(display, alloc));
     createGlobals();
 
     ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
