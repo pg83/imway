@@ -187,7 +187,7 @@ imgui = library(
 
 
 settings_gen_header = "$(B)/generated/settings.gen.h"
-settings_gen_impl = "$(B)/generated/settings.gen.cpp"
+settings_gen_impl_include = "$(B)/generated/settings.impl.gen.inc"
 settings_gen_dialog = "$(B)/generated/settings.dialog.gen.inc"
 settings_codegen = command(
     name="settings_codegen",
@@ -196,19 +196,19 @@ settings_codegen = command(
         "$(S)/dev/settings_def.py",
         "$(S)/settings.h",
     ],
-    outputs=[settings_gen_header, settings_gen_impl, settings_gen_dialog],
+    outputs=[settings_gen_header, settings_gen_impl_include, settings_gen_dialog],
     descr="GEN",
     cmd=[
         "python3", "$(S)/dev/gen_settings.py",
         "--schema", "$(S)/dev/settings_def.py",
         "--header", settings_gen_header,
-        "--impl", settings_gen_impl,
+        "--impl", settings_gen_impl_include,
         "--dialog", settings_gen_dialog,
     ],
 )
 
 
-imway_sources = build.glob("$(S)/*.cpp") + [settings_gen_impl]
+imway_sources = build.glob("$(S)/*.cpp")
 
 # the control FIFO harness and the userspace KMS emulator are test tooling:
 # the production binary does not even link them
@@ -337,7 +337,7 @@ for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/
 
     if name == "client_reg_settings":
         test_sources += [
-            settings_gen_impl,
+            "$(S)/settings.cpp",
             "$(S)/composer.cpp",
             "$(S)/input_router.cpp",
             "$(S)/input_sink.cpp",

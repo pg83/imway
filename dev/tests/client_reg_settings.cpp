@@ -3,12 +3,9 @@
 
 #include <std/mem/obj_pool.h>
 
-using namespace stl;
+#include <stdlib.h>
 
-// This regression client links Composer without the UI implementation. Runtime
-// initialization is irrelevant here; generated defaults are what it verifies.
-void applySettingsEnvironment(Settings&) {
-}
+using namespace stl;
 
 namespace {
     struct Probe: Listener {
@@ -37,6 +34,9 @@ namespace {
 }
 
 int main() {
+    unsetenv("IMWAY_TERMINAL");
+    unsetenv("TERMINAL");
+
     ObjPool::Ref pool = ObjPool::fromMemory();
     Composer& composer = *pool->make<Composer>(pool.mutPtr());
     Settings& settings = *composer.settings;
