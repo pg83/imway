@@ -156,19 +156,11 @@ struct InputDeviceSettings {
 };
 
 struct Composer;
-struct DialogState;
 struct Listener;
 
 struct Settings {
-    virtual ~Settings() = default;
-
 #include "settings.gen.h"
-
     static Settings* create(Composer& composer);
 };
 
 void applySettingsEnvironment(Settings& settings);
-
-// Plain pool-owned ImGui dialog. nullptr state means closed; toggle flips it.
-void drawSettings(Composer& c, Settings& settings, bool toggle,
-                  int& shortcutCapture, DialogState** state);

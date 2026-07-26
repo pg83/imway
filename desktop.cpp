@@ -26,6 +26,7 @@
 #include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
+#include "settings_ui.h"
 #include "weak_ptr.h"
 #include "inspector.h"
 #include "intr_list.h"
