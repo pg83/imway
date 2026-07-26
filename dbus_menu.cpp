@@ -780,8 +780,8 @@ MenusImpl::MenusImpl(Composer& c)
 }
 
 MenusImpl::~MenusImpl() noexcept {
-    while (MenuImpl* menu = (MenuImpl*)menus.front()) {
-        disconnect(menu);
+    while (!menus.empty()) {
+        disconnect((MenuImpl*)menus.mutFront());
     }
 
     for (Registration* registration : registrations) {

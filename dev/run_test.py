@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import shlex
 import shutil
 import stat
@@ -98,6 +99,22 @@ def dump_stacks(pid: int, path: str) -> None:
         out = f"gdb dump failed: {e}\n"
     with open(path, "w") as f:
         f.write(out)
+
+
+def signal_group(pid: int, signum: int) -> None:
+    try:
+        os.killpg(pid, signum)
+    except ProcessLookupError:
+        pass
+
+
+def first_child(pid: int) -> int:
+    try:
+        with open(f"/proc/{pid}/task/{pid}/children") as f:
+            children = f.read().split()
+        return int(children[0]) if children else 0
+    except (OSError, ValueError):
+        return 0
 
 
 def tail(path: str, n: int = 25) -> str:
@@ -204,6 +221,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         # point at addresses that fail fast, imway-env can override
         AUDIODEVICE="snd@127.0.0.1,9/0",
         PULSE_SERVER="unix:/nonexistent-imway-test",
+        # The build runner may itself be killed. The compositor supervisor
+        # then tears down its isolated process group instead of escaping it.
+        IMWAY_SUPERVISOR_DIE_WITH_PARENT="1",
     )
     env.update(meta["env"])
 
@@ -225,6 +245,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     proc = subprocess.Popen(
         [imway, "--device", "headless", "--socket", "imway-test", "--control", ctl] + meta["args"],
         cwd=rt, env=env, stdout=logf, stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
     env["IMWAY_PID"] = str(proc.pid)
 
@@ -240,7 +261,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
             break
         time.sleep(0.05)
     if not ready:
-        proc.kill()
+        signal_group(proc.pid, signal.SIGKILL)
         proc.wait()
         logf.close()
         stop_bus()
@@ -287,9 +308,10 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         died = proc.poll() is not None
         expected_exit_missing = not died
 
+    composer_pid = first_child(proc.pid)
     terminated_by_runner = not died
     if terminated_by_runner:
-        proc.terminate()
+        signal_group(proc.pid, signal.SIGTERM)
     hung = False
 
     patience = time.monotonic() + 3.0
@@ -297,15 +319,18 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         time.sleep(0.05)
 
     if proc.poll() is None:
-        dump_stacks(proc.pid, os.path.join(rt, "gdb-stacks.txt"))
+        dump_stacks(composer_pid or proc.pid, os.path.join(rt, "gdb-stacks.txt"))
         end = time.monotonic() + 5.0
         while time.monotonic() < end and proc.poll() is None:
             time.sleep(0.05)
         if proc.poll() is None:
             hung = True
-            proc.kill()
+            signal_group(proc.pid, signal.SIGKILL)
 
     comp_rc = proc.wait()
+    # The supervisor waits for the compositor, but an app may deliberately
+    # ignore SIGTERM. Nothing from a completed scenario may retain the group.
+    signal_group(proc.pid, signal.SIGKILL)
     logf.close()
 
     def finish(status: str, detail: str = "") -> dict:

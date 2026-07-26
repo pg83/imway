@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/prctl.h>
 #include <sys/socket.h>
 
 using namespace stl;
@@ -30,10 +31,20 @@ namespace {
     };
 
     volatile sig_atomic_t processGroup = -1;
+    volatile sig_atomic_t terminating = 0;
 
     void terminate(int signal) {
+        if (terminating) {
+            return;
+        }
+
+        terminating = signal;
         kill(-(pid_t)processGroup, signal);
-        _exit(128 + signal);
+    }
+
+    void parentDied(int) {
+        kill(-(pid_t)processGroup, SIGKILL);
+        _exit(137);
     }
 
     bool installSignals() {
@@ -54,6 +65,35 @@ namespace {
         action.sa_flags = SA_NOCLDWAIT | SA_NOCLDSTOP;
 
         return sigaction(SIGCHLD, &action, nullptr) == 0 && sigaction(SIGPIPE, &action, nullptr) == 0;
+    }
+
+    bool followParent() {
+        if (!getenv("IMWAY_SUPERVISOR_DIE_WITH_PARENT")) {
+            return true;
+        }
+
+        unsetenv("IMWAY_SUPERVISOR_DIE_WITH_PARENT");
+
+        struct sigaction action{};
+
+        sigemptyset(&action.sa_mask);
+        action.sa_handler = parentDied;
+
+        if (sigaction(SIGUSR1, &action, nullptr) != 0) {
+            return false;
+        }
+
+        pid_t parent = getppid();
+
+        if (prctl(PR_SET_PDEATHSIG, SIGUSR1) != 0) {
+            return false;
+        }
+
+        if (getppid() != parent) {
+            parentDied(SIGUSR1);
+        }
+
+        return true;
     }
 
     [[noreturn]] void finish(int code) {
@@ -79,6 +119,12 @@ namespace {
         }
     }
 
+    void dieWithSupervisor(pid_t supervisor) {
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != supervisor) {
+            _exit(126);
+        }
+    }
+
     bool startComposer(int argc, char** argv, int pipe) {
         Vector<char*> args((size_t)argc + 2);
 
@@ -91,6 +137,7 @@ namespace {
 
         args.pushBack(nullptr);
 
+        pid_t supervisor = getpid();
         pid_t pid = fork();
 
         if (pid != 0) {
@@ -98,6 +145,7 @@ namespace {
         }
 
         resetSignals();
+        dieWithSupervisor(supervisor);
 
         if (dup2(pipe, 3) < 0 || fcntl(3, F_SETFD, 0) < 0) {
             _exit(126);
@@ -108,6 +156,7 @@ namespace {
     }
 
     void spawnApp(char** args, char** env, int passFd) {
+        pid_t supervisor = getpid();
         pid_t pid = fork();
 
         if (pid != 0) {
@@ -119,6 +168,7 @@ namespace {
         }
 
         resetSignals();
+        dieWithSupervisor(supervisor);
 
         int nullFd = open("/dev/null", O_RDWR | O_CLOEXEC);
 
@@ -294,7 +344,7 @@ int mainSupervisor(int argc, char** argv) {
 
     processGroup = (sig_atomic_t)getpgrp();
 
-    if (!installSignals()) {
+    if (!installSignals() || !followParent()) {
         return 1;
     }
 

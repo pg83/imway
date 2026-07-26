@@ -36,15 +36,32 @@ await 100 supervisor_child_reaped || {
 
 expect_alive "compositor followed an ordinary spawned child"
 
+composer_pid=$(cat "/proc/$IMWAY_PID/task/$IMWAY_PID/children")
+composer_pid=${composer_pid%% *}
+kill -STOP "$composer_pid"
 kill -TERM "$IMWAY_PID"
+
+sleep 0.2
+expect_alive "supervisor exited before its stopped compositor"
+kill -CONT "$composer_pid"
 
 supervisor_gone() {
     ! kill -0 "$IMWAY_PID" 2>/dev/null ||
         [[ "$(awk '{print $3}' "/proc/$IMWAY_PID/stat" 2>/dev/null || true)" == Z ]]
 }
 
+composer_gone() {
+    ! kill -0 "$composer_pid" 2>/dev/null ||
+        [[ "$(awk '{print $3}' "/proc/$composer_pid/stat" 2>/dev/null || true)" == Z ]]
+}
+
 await 100 supervisor_gone || {
     echo "supervisor stayed alive after composer exit"
+    exit 1
+}
+
+await 100 composer_gone || {
+    echo "composer survived its supervisor"
     exit 1
 }
 
