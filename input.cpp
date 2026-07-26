@@ -3,11 +3,10 @@
 #include "log.h"
 #include "util.h"
 #include "scene.h"
+#include "pooled.h"
 #include "session.h"
 #include "composer.h"
 #include "listener.h"
-#include "pooled_ev.h"
-#include "pooled_fd.h"
 #include "input_sink.h"
 #include "log_extern.h"
 
@@ -234,15 +233,26 @@ LibinputSource::LibinputSource(Composer& c)
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
-    if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
-        pooledFD(*c.pool, inoFd);
-        ev_io* inotifyIo = createEvIo(*c.pool, loop);
+    if (inoFd >= 0) {
+        int heldFd = inoFd;
 
+        pooledGuard(*c.pool, [heldFd] {
+            close(heldFd);
+        });
+    }
+
+    if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
+        ev_io* inotifyIo = c.pool->make<ev_io>();
+        struct ev_loop* heldLoop = loop;
+
+        pooledGuard(*c.pool, [heldLoop, inotifyIo] {
+            if (ev_is_active(inotifyIo)) {
+                ev_io_stop(heldLoop, inotifyIo);
+            }
+        });
         ev_io_init(inotifyIo, inotifyCb, inoFd, EV_READ);
         inotifyIo->data = this;
         ev_io_start(loop, inotifyIo);
-    } else if (inoFd >= 0) {
-        pooledFD(*c.pool, inoFd);
     }
 
     c.sessionEnabledListeners.pushBack(c.pool->make<CallInputSessionEnabled>(this));
@@ -262,8 +272,14 @@ LibinputSource::LibinputSource(Composer& c)
         c.settings->addInputDeviceListener(i, c.pool->make<CallInputSettings>(this));
     }
 
-    ev_io* inputIo = createEvIo(*c.pool, loop);
+    ev_io* inputIo = c.pool->make<ev_io>();
+    struct ev_loop* heldLoop = loop;
 
+    pooledGuard(*c.pool, [heldLoop, inputIo] {
+        if (ev_is_active(inputIo)) {
+            ev_io_stop(heldLoop, inputIo);
+        }
+    });
     ev_io_init(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
     inputIo->data = this;
     ev_io_start(loop, inputIo);

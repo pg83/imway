@@ -10,8 +10,6 @@
 #include "listener.h"
 #include "renderer.h"
 #include "intr_list.h"
-#include "pooled_ev.h"
-#include "pooled_fd.h"
 #include "input_sink.h"
 #include "kms_intercept.h"
 
@@ -179,8 +177,25 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
         unlink(Buffer(stored).cStr());
     });
 
-    fd = pooledFD(pool, -1);
-    io = createEvIo(pool, loop);
+    fd = pool.make<int>(-1);
+    int* heldFd = fd;
+
+    pooledGuard(pool, [heldFd] {
+        if (*heldFd >= 0) {
+            close(*heldFd);
+        }
+    });
+
+    io = pool.make<ev_io>();
+    struct ev_loop* heldLoop = loop;
+    ev_io* heldIo = io;
+
+    pooledGuard(pool, [heldLoop, heldIo] {
+        if (ev_is_active(heldIo)) {
+            ev_io_stop(heldLoop, heldIo);
+        }
+    });
+
     *fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     STD_VERIFY(*fd >= 0);
 

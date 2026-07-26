@@ -6,7 +6,6 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
-#include "pooled_ev.h"
 
 #if __has_include(<sndio.h>)
 
@@ -67,7 +66,15 @@ SndioMixer::SndioMixer(Composer& comp, struct sioctl_hdl* h)
     pooledGuard(*comp.pool, [h] {
         sioctl_close(h);
     });
-    io = createEvIo(*comp.pool, comp.loop);
+    io = comp.pool->make<ev_io>();
+    struct ev_loop* heldLoop = comp.loop;
+    ev_io* heldIo = io;
+
+    pooledGuard(*comp.pool, [heldLoop, heldIo] {
+        if (ev_is_active(heldIo)) {
+            ev_io_stop(heldLoop, heldIo);
+        }
+    });
     sioctl_ondesc(hdl, onDesc, this);
     sioctl_onval(hdl, onVal, this);
     rearm();

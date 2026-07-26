@@ -1,7 +1,7 @@
 #include "fence_poll.h"
 
+#include "pooled.h"
 #include "listener.h"
-#include "pooled_ev.h"
 
 #include <std/mem/obj_pool.h>
 
@@ -37,7 +37,15 @@ FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, VkDevice d, VkFen
     , fence(f)
     , done(&listener)
 {
-    timer = createEvTimer(pool, loop);
+    timer = pool.make<ev_timer>();
+    struct ev_loop* heldLoop = loop;
+    ev_timer* heldTimer = timer;
+
+    pooledGuard(pool, [heldLoop, heldTimer] {
+        if (ev_is_active(heldTimer)) {
+            ev_timer_stop(heldLoop, heldTimer);
+        }
+    });
     ev_timer_init(timer, fencePollCb, 0.001, 0.001);
     timer->data = this;
 }

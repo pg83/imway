@@ -4,10 +4,10 @@
 #include "util.h"
 #include "scene.h"
 #include "output.h"
+#include "pooled.h"
 #include "composer.h"
 #include "listener.h"
 #include "device_vk.h"
-#include "pooled_ev.h"
 #include "fence_poll.h"
 #include "offload_job.h"
 #include "main_supervisor.h"
@@ -170,7 +170,15 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
     fileJob = OffloadJob::create(c, [](void* self) {
         ((ScreenshotCaptureImpl*)self)->buildFileWork();
     }, this, *c.pool->make<CallShotFileDone>(this));
-    retireTimer = createEvTimer(*c.pool, c.loop);
+    retireTimer = c.pool->make<ev_timer>();
+    struct ev_loop* heldLoop = c.loop;
+    ev_timer* heldTimer = retireTimer;
+
+    pooledGuard(*c.pool, [heldLoop, heldTimer] {
+        if (ev_is_active(heldTimer)) {
+            ev_timer_stop(heldLoop, heldTimer);
+        }
+    });
     ev_timer_init(retireTimer, retireTimerCb, 0.001, 0.001);
     retireTimer->data = this;
 }

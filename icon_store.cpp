@@ -4,11 +4,10 @@
 #include "icon.h"
 #include "util.h"
 #include "scene.h"
+#include "pooled.h"
 #include "composer.h"
 #include "listener.h"
 #include "icon_pool.h"
-#include "pooled_ev.h"
-#include "pooled_fd.h"
 #include "xdg_utils.h"
 #include "icon_provider.h"
 
@@ -175,13 +174,32 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
 
     addWatches();
 
-    pooledFD(*c->pool, inoFd);
-    ev_io* ino = createEvIo(*c->pool, loop);
+    int heldFd = inoFd;
 
+    pooledGuard(*c->pool, [heldFd] {
+        close(heldFd);
+    });
+
+    ev_io* ino = c->pool->make<ev_io>();
+    struct ev_loop* heldLoop = loop;
+
+    pooledGuard(*c->pool, [heldLoop, ino] {
+        if (ev_is_active(ino)) {
+            ev_io_stop(heldLoop, ino);
+        }
+    });
     ev_io_init(ino, inoCb, inoFd, EV_READ);
     ino->data = this;
     ev_io_start(loop, ino);
-    reloadTimer = createEvTimer(*c->pool, loop);
+
+    reloadTimer = c->pool->make<ev_timer>();
+    ev_timer* heldTimer = reloadTimer;
+
+    pooledGuard(*c->pool, [heldLoop, heldTimer] {
+        if (ev_is_active(heldTimer)) {
+            ev_timer_stop(heldLoop, heldTimer);
+        }
+    });
     ev_timer_init(reloadTimer, reloadCb, 0.5, 0.5);
     reloadTimer->data = this;
 }

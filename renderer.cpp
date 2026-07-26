@@ -30,7 +30,6 @@
 #include "icon_pool.h"
 #include "inspector.h"
 #include "intr_list.h"
-#include "pooled_ev.h"
 #include "anr_dialog.h"
 #include "fence_poll.h"
 #include "input_sink.h"
@@ -581,21 +580,39 @@ RendererImpl::RendererImpl(Composer& comp, const DeviceVk& vk, int limit)
     shotCapture = ScreenshotCapture::create(comp, vk, 0, 0, fmt, *comp.pool->make<CallScreenshotReady>(this));
 
     if (output->vsynced()) {
-        ev_prepare* prepare = createEvPrepare(*pool, loop);
+        ev_prepare* prepare = pool->make<ev_prepare>();
+        struct ev_loop* heldLoop = loop;
 
+        pooledGuard(*pool, [heldLoop, prepare] {
+            if (ev_is_active(prepare)) {
+                ev_prepare_stop(heldLoop, prepare);
+            }
+        });
         ev_prepare_init(prepare, prepareCb);
         prepare->data = this;
         ev_prepare_start(loop, prepare);
     } else {
-        ev_timer* frameTimer = createEvTimer(*pool, loop);
+        ev_timer* frameTimer = pool->make<ev_timer>();
+        struct ev_loop* heldLoop = loop;
 
+        pooledGuard(*pool, [heldLoop, frameTimer] {
+            if (ev_is_active(frameTimer)) {
+                ev_timer_stop(heldLoop, frameTimer);
+            }
+        });
         ev_timer_init(frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
         frameTimer->data = this;
         ev_timer_start(loop, frameTimer);
     }
 
-    ev_timer* clockTimer = createEvTimer(*pool, loop);
+    ev_timer* clockTimer = pool->make<ev_timer>();
+    struct ev_loop* heldLoop = loop;
 
+    pooledGuard(*pool, [heldLoop, clockTimer] {
+        if (ev_is_active(clockTimer)) {
+            ev_timer_stop(heldLoop, clockTimer);
+        }
+    });
     ev_timer_init(clockTimer, clockTimerCb, 1., 1.);
     clockTimer->data = this;
     ev_timer_start(loop, clockTimer);

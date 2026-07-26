@@ -1,8 +1,8 @@
 #include "offload_job.h"
 
+#include "pooled.h"
 #include "composer.h"
 #include "listener.h"
-#include "pooled_ev.h"
 
 #include <std/thr/pool.h>
 #include <std/sys/atomic.h>
@@ -45,7 +45,15 @@ OffloadJobImpl::OffloadJobImpl(Composer& comp, ObjPool& owner, void (*w)(void*),
     , self(s)
     , done(&listener)
 {
-    io = createEvIo(owner, comp.loop);
+    io = owner.make<ev_io>();
+    struct ev_loop* heldLoop = comp.loop;
+    ev_io* heldIo = io;
+
+    pooledGuard(owner, [heldLoop, heldIo] {
+        if (ev_is_active(heldIo)) {
+            ev_io_stop(heldLoop, heldIo);
+        }
+    });
     ev_io_init(io, offloadJobCb, fd.fd(), EV_READ);
     io->data = this;
     ev_io_start(comp.loop, io);

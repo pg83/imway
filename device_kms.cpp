@@ -12,8 +12,6 @@
 #include "renderer.h"
 #include "device_vk.h"
 #include "intr_list.h"
-#include "pooled_ev.h"
-#include "pooled_fd.h"
 #include "robustness.h"
 #include "offload_job.h"
 #include "kms_intercept.h"
@@ -920,7 +918,12 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     , session(comp.session)
 {
     fd = openKmsNode(*session, devPath, path, comp.kmsIntercept);
-    pooledSessionFD(*pool, *session, fd);
+    Session* heldSession = session;
+    int heldFd = fd;
+
+    pooledGuard(*pool, [heldSession, heldFd] {
+        heldSession->closeDevice(heldFd);
+    });
 
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
@@ -933,8 +936,15 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         });
     }
 
-    ev_io* drmIo = createEvIo(*pool, loop);
+    ev_io* drmIo = pool->make<ev_io>();
 
+    struct ev_loop* heldLoop = loop;
+
+    pooledGuard(*pool, [heldLoop, drmIo] {
+        if (ev_is_active(drmIo)) {
+            ev_io_stop(heldLoop, drmIo);
+        }
+    });
     ev_io_init(drmIo, drmIoCb, fd, EV_READ);
     drmIo->data = (void*)(intptr_t)fd;
     ev_io_start(loop, drmIo);
@@ -960,8 +970,13 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         });
         udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
         udev_monitor_enable_receiving(mon);
-        ev_io* udevIo = createEvIo(*pool, loop);
+        ev_io* udevIo = pool->make<ev_io>();
 
+        pooledGuard(*pool, [heldLoop, udevIo] {
+            if (ev_is_active(udevIo)) {
+                ev_io_stop(heldLoop, udevIo);
+            }
+        });
         ev_io_init(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
         udevIo->data = this;
         ev_io_start(loop, udevIo);
@@ -2650,8 +2665,21 @@ void KmsOutput::initDdc(StringView connName) {
 
     ddcMax = max;
     ddcCur = cur;
-    pooledFD(*pool, ddcFd);
-    ddcTimer = createEvTimer(*pool, loop);
+    int heldFd = ddcFd;
+
+    pooledGuard(*pool, [heldFd] {
+        close(heldFd);
+    });
+
+    ddcTimer = pool->make<ev_timer>();
+    struct ev_loop* heldLoop = loop;
+    ev_timer* heldTimer = ddcTimer;
+
+    pooledGuard(*pool, [heldLoop, heldTimer] {
+        if (ev_is_active(heldTimer)) {
+            ev_timer_stop(heldLoop, heldTimer);
+        }
+    });
     *(c->log) << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
 

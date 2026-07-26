@@ -2,7 +2,7 @@
 
 #include "log.h"
 #include "util.h"
-#include "pooled_ev.h"
+#include "pooled.h"
 #include "small_obj_allocator.h"
 
 #include <std/ios/sys.h>
@@ -66,8 +66,14 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* 
     dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
     dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, timeoutToggle, this, nullptr);
 
-    ev_prepare* prepare = createEvPrepare(*pool, loop);
+    ev_prepare* prepare = pool->make<ev_prepare>();
+    struct ev_loop* heldLoop = loop;
 
+    pooledGuard(*pool, [heldLoop, prepare] {
+        if (ev_is_active(prepare)) {
+            ev_prepare_stop(heldLoop, prepare);
+        }
+    });
     ev_prepare_init(prepare, prepareCb);
     prepare->data = this;
     ev_prepare_start(loop, prepare);

@@ -5,13 +5,13 @@
 #include "scene.h"
 #include "device.h"
 #include "output.h"
+#include "pooled.h"
 #include "session.h"
 #include "composer.h"
 #include "listener.h"
 #include "renderer.h"
 #include "device_vk.h"
 #include "intr_list.h"
-#include "pooled_fd.h"
 #include "frame_listener.h"
 
 #include <std/sys/fd.h>
@@ -424,7 +424,9 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
             if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
                 syncFd = fd;
                 vk->drmFd = fd;
-                pooledFD(*pool, fd);
+                pooledGuard(*pool, [fd] {
+                    close(fd);
+                });
             } else {
                 close(fd);
             }
