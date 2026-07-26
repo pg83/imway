@@ -3,6 +3,8 @@
 // and the packed-color conventions.
 #include "theme.h"
 
+#include "imgui_wm.h"
+
 #include <math.h>
 #include <stdio.h>
 
@@ -17,6 +19,10 @@ namespace {
 
     bool sameColor(const ThemeColor& a, const ThemeColor& b) {
         return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a;
+    }
+
+    bool sameColor(const ImVec4& a, const ThemeColor& b) {
+        return a.x == b.r && a.y == b.g && a.z == b.b && a.w == b.a;
     }
 
     bool rampOk(const ThemePalette& p, const char* name) {
@@ -63,6 +69,20 @@ int main() {
 
     if (!channelsSane(a.accent) || !channelsSane(a.desktop)) {
         fprintf(stderr, "derived accent/desktop out of range\n");
+        return 1;
+    }
+
+    ImGuiStyle style;
+
+    applyImGuiTheme(style, a);
+
+    if (!sameColor(style.Colors[ImGuiCol_Tab], a.selection[2]) || !sameColor(style.Colors[ImGuiCol_TitleBgActive], a.selection[3]) || !sameColor(style.Colors[ImGuiCol_TabSelected], a.selection[4])) {
+        fprintf(stderr, "focused tab roles do not preserve inactive/title/selected contrast\n");
+        return 1;
+    }
+
+    if (!sameColor(style.Colors[ImGuiCol_TabDimmed], a.neutral[1]) || !sameColor(style.Colors[ImGuiCol_TitleBg], a.neutral[2]) || !sameColor(style.Colors[ImGuiCol_TabDimmedSelected], a.neutral[3])) {
+        fprintf(stderr, "dimmed tab roles do not preserve inactive/title/selected contrast\n");
         return 1;
     }
 

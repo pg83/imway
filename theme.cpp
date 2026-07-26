@@ -260,9 +260,9 @@ void applyImGuiTheme(ImGuiStyle& style, const Theme& theme) {
     c[ImGuiCol_InputTextCursor] = im(theme.selection[6]);
     c[ImGuiCol_TabHovered] = c[ImGuiCol_HeaderHovered];
     c[ImGuiCol_Tab] = im(theme.selection[2]);
-    c[ImGuiCol_TabSelected] = im(theme.selection[3]);
+    c[ImGuiCol_TabSelected] = im(theme.selection[4]);
     c[ImGuiCol_TabSelectedOverline] = im(theme.accent);
-    c[ImGuiCol_TabDimmed] = im(theme.neutral[2]);
+    c[ImGuiCol_TabDimmed] = im(theme.neutral[1]);
     c[ImGuiCol_TabDimmedSelected] = im(theme.neutral[3]);
     c[ImGuiCol_TabDimmedSelectedOverline] = im(themeAlpha(theme.accent, 0.f));
     c[ImGuiCol_DockingPreview] = im(themeAlpha(theme.selection[5], 0.70f));
