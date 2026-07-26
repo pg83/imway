@@ -1149,10 +1149,8 @@ namespace {
         void updateDpms();
         void updateRepeat();
         void updateKeymap();
-        void updateFractionalScale();
         void updateDecorations();
         void updateAnrTimer();
-        u32 preferredScale() const;
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
@@ -7893,7 +7891,11 @@ namespace {
         s->fracRes = fres;
         wl_resource_set_implementation(fres, &fracImpl, s, fracResourceDestroyed);
 
-        wp_fractional_scale_v1_send_preferred_scale(fres, s->srv->preferredScale());
+        // --scale controls compositor chrome, not the Wayland output's
+        // logical coordinate space. Advertising it here makes clients
+        // supersample every surface while wl_output and xdg-output remain
+        // scale 1.
+        wp_fractional_scale_v1_send_preferred_scale(fres, 120);
     }
 
     const struct wp_fractional_scale_manager_v1_interface fracManagerImpl = {
@@ -11588,30 +11590,6 @@ void SeatState::toplevelGone(Toplevel* t) {
     updateShortcutInhibit();
 }
 
-u32 WaylandImpl::preferredScale() const {
-    float scale = composer->settings->uiScale();
-
-    if (scale < 1.f / 120.f) {
-        scale = 1.f / 120.f;
-    } else if (scale > 100.f) {
-        scale = 100.f;
-    }
-
-    return (u32)(scale * 120.f + .5f);
-}
-
-void WaylandImpl::updateFractionalScale() {
-    u32 scale = preferredScale();
-
-    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
-        auto& impl = (SurfaceImpl&)surface;
-
-        if (impl.fracRes) {
-            wp_fractional_scale_v1_send_preferred_scale(impl.fracRes, scale);
-        }
-    });
-}
-
 void WaylandImpl::updateRepeat() {
     int rate = composer->settings->repeatRate();
     int delay = composer->settings->repeatDelay();
@@ -11772,7 +11750,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.settings->addRepeatDelayListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
     comp.settings->addXkbLayoutsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
     comp.settings->addXkbOptionsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
-    comp.settings->addUiScaleListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateFractionalScale));
     comp.settings->addDecorationsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
     comp.settings->addAnrSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
@@ -13253,8 +13230,6 @@ void WaylandImpl::inputActivity() {
 }
 
 bool WaylandImpl::pointerMotion(PointerMotionEvent& ev) {
-    activity();
-
     if (ev.kind == PointerMotionKind::relative) {
         seat.handleRelMotion(ev.dx, ev.dy, ev.dxRaw, ev.dyRaw);
     }
@@ -13267,14 +13242,12 @@ bool WaylandImpl::pointerMotion(PointerMotionEvent& ev) {
 }
 
 bool WaylandImpl::button(u32 btn, bool pressed) {
-    activity();
     seat.handleButton(btn, pressed);
 
     return true;
 }
 
 bool WaylandImpl::key(u32 code, bool pressed) {
-    activity();
     seat.handleKey(code, pressed);
     syncKeyboardCapture();
 
@@ -13282,21 +13255,18 @@ bool WaylandImpl::key(u32 code, bool pressed) {
 }
 
 bool WaylandImpl::scroll(const ScrollEvent& ev) {
-    activity();
     seat.handleScroll(ev);
 
     return true;
 }
 
 bool WaylandImpl::tabletTool(const TabletToolEvent& ev) {
-    activity();
     seat.handleTablet(ev);
 
     return true;
 }
 
 bool WaylandImpl::swipeBegin(u32 fingers) {
-    activity();
     seat.handleSwipeBegin(fingers);
 
     return true;
@@ -13315,7 +13285,6 @@ bool WaylandImpl::swipeEnd(bool cancelled) {
 }
 
 bool WaylandImpl::pinchBegin(u32 fingers) {
-    activity();
     seat.handlePinchBegin(fingers);
 
     return true;
@@ -13334,7 +13303,6 @@ bool WaylandImpl::pinchEnd(bool cancelled) {
 }
 
 bool WaylandImpl::holdBegin(u32 fingers) {
-    activity();
     seat.handleHoldBegin(fingers);
 
     return true;

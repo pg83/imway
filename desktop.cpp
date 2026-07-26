@@ -957,10 +957,6 @@ void DesktopImpl::updateAutoLock() {
 }
 
 void DesktopImpl::inputActivity() {
-    if (comp->wayland) {
-        comp->wayland->inputActivity();
-    }
-
     updateAutoLock();
 }
 

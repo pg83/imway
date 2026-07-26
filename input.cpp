@@ -151,11 +151,15 @@ namespace {
         return nullptr;
     }
 
+    bool inputToggle(InputToggle value, bool defaultValue) {
+        return value == InputToggle::enabled || (value == InputToggle::automatic && defaultValue);
+    }
+
     void configureDevice(libinput_device* dev, const Settings& settings) {
         const InputDeviceSettings* local = deviceSettings(settings, dev);
         double speed = local && local->enabled && local->pointerSpeedSet ? local->pointerSpeed : settings.pointerSpeed();
-        bool natural = local && local->enabled && local->naturalScrollSet ? local->naturalScroll : settings.naturalScroll();
-        bool left = local && local->enabled && local->leftHandedSet ? local->leftHanded : settings.leftHanded();
+        bool natural = local && local->enabled && local->naturalScrollSet ? local->naturalScroll : inputToggle(settings.naturalScroll(), libinput_device_config_scroll_get_default_natural_scroll_enabled(dev));
+        bool left = local && local->enabled && local->leftHandedSet ? local->leftHanded : inputToggle(settings.leftHanded(), libinput_device_config_left_handed_get_default(dev));
 
         if (libinput_device_config_tap_get_finger_count(dev) > 0) {
             libinput_device_config_tap_set_enabled(dev, settings.tapToClick() ? LIBINPUT_CONFIG_TAP_ENABLED : LIBINPUT_CONFIG_TAP_DISABLED);
@@ -165,7 +169,7 @@ namespace {
             libinput_device_config_accel_set_speed(dev, speed);
 
             u32 profiles = (u32)libinput_device_config_accel_get_profiles(dev);
-            libinput_config_accel_profile profile = settings.pointerAccelProfile() == PointerAccelProfile::flat ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT : LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE;
+            libinput_config_accel_profile profile = settings.pointerAccelProfile() == PointerAccelProfile::flat ? LIBINPUT_CONFIG_ACCEL_PROFILE_FLAT : settings.pointerAccelProfile() == PointerAccelProfile::adaptive ? LIBINPUT_CONFIG_ACCEL_PROFILE_ADAPTIVE : libinput_device_config_accel_get_default_profile(dev);
 
             if (profiles & (u32)profile) {
                 libinput_device_config_accel_set_profile(dev, profile);
@@ -181,11 +185,15 @@ namespace {
         }
 
         if (libinput_device_config_dwt_is_available(dev)) {
-            libinput_device_config_dwt_set_enabled(dev, settings.disableWhileTyping() ? LIBINPUT_CONFIG_DWT_ENABLED : LIBINPUT_CONFIG_DWT_DISABLED);
+            bool enabled = inputToggle(settings.disableWhileTyping(), libinput_device_config_dwt_get_default_enabled(dev));
+
+            libinput_device_config_dwt_set_enabled(dev, enabled ? LIBINPUT_CONFIG_DWT_ENABLED : LIBINPUT_CONFIG_DWT_DISABLED);
         }
 
         if (libinput_device_config_middle_emulation_is_available(dev)) {
-            libinput_device_config_middle_emulation_set_enabled(dev, settings.middleEmulation() ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED);
+            bool enabled = inputToggle(settings.middleEmulation(), libinput_device_config_middle_emulation_get_default_enabled(dev));
+
+            libinput_device_config_middle_emulation_set_enabled(dev, enabled ? LIBINPUT_CONFIG_MIDDLE_EMULATION_ENABLED : LIBINPUT_CONFIG_MIDDLE_EMULATION_DISABLED);
         }
 
         u32 clicks = (u32)libinput_device_config_click_get_methods(dev);

@@ -49,6 +49,14 @@
 using namespace stl;
 
 namespace {
+    void seedOutputMode(Scene& scene, const ::Output& output) {
+        scene.outW = output.width();
+        scene.outH = output.height();
+        scene.workW = scene.outW;
+        scene.workH = scene.outH;
+        scene.hz = output.refresh();
+    }
+
     void runAutostart(Composer& c) {
         StringView commands = c.settings->autostart();
         Buffer display;
@@ -317,6 +325,9 @@ int mainComposer(int argc, char** argv) {
         scene->socketName = cfg.socketName;
 
         STD_VERIFY(output->start());
+        // Constructors need the real dimensions and refresh, but the public
+        // announcement stays at the end after every resize listener exists.
+        seedOutputMode(*scene, *output);
 
         Vector<DmabufFormat> formats;
 

@@ -354,21 +354,26 @@ void Dialog::pageInput(Composer& c, Settings& s) {
     row("acceleration");
 
     {
-        constexpr const char* items[] = {"adaptive", "flat"};
+        constexpr const char* items[] = {"auto", "adaptive", "flat"};
 
         settingCombo("##accel-profile", s, s.pointerAccelProfile(), items, &Settings::setPointerAccelProfile);
     }
 
     row("tap to click");
     settingCheckbox("##tap", s, s.tapToClick(), &Settings::setTapToClick);
-    row("natural scroll");
-    settingCheckbox("##natural", s, s.naturalScroll(), &Settings::setNaturalScroll);
-    row("left handed");
-    settingCheckbox("##left-handed", s, s.leftHanded(), &Settings::setLeftHanded);
-    row("disable while typing");
-    settingCheckbox("##dwt", s, s.disableWhileTyping(), &Settings::setDisableWhileTyping);
-    row("middle emulation");
-    settingCheckbox("##middle", s, s.middleEmulation(), &Settings::setMiddleEmulation);
+
+    {
+        constexpr const char* items[] = {"auto", "enabled", "disabled"};
+
+        row("natural scroll");
+        settingCombo("##natural", s, s.naturalScroll(), items, &Settings::setNaturalScroll);
+        row("left handed");
+        settingCombo("##left-handed", s, s.leftHanded(), items, &Settings::setLeftHanded);
+        row("disable while typing");
+        settingCombo("##dwt", s, s.disableWhileTyping(), items, &Settings::setDisableWhileTyping);
+        row("middle emulation");
+        settingCombo("##middle", s, s.middleEmulation(), items, &Settings::setMiddleEmulation);
+    }
     row("click method");
 
     {

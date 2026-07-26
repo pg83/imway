@@ -48,8 +48,15 @@ enum class LayoutPolicy {
 };
 
 enum class PointerAccelProfile {
+    automatic,
     adaptive,
     flat,
+};
+
+enum class InputToggle {
+    automatic,
+    enabled,
+    disabled,
 };
 
 enum class TouchpadClickMethod {

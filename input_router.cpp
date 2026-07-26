@@ -1,5 +1,6 @@
 #include "input_router.h"
 
+#include "wayland.h"
 #include "composer.h"
 #include "intr_list.h"
 #include "input_sink.h"
@@ -19,6 +20,7 @@ namespace {
 
         InputRouter(Composer& c);
 
+        void activity();
         bool pointerMotion(PointerMotionEvent& ev) override;
         bool button(u32 evdevBtn, bool pressed) override;
         bool key(u32 evdevCode, bool pressed) override;
@@ -40,7 +42,15 @@ InputRouter::InputRouter(Composer& c)
 {
 }
 
+void InputRouter::activity() {
+    if (comp->wayland) {
+        comp->wayland->inputActivity();
+    }
+}
+
 bool InputRouter::pointerMotion(PointerMotionEvent& ev) {
+    activity();
+
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->pointerMotion(ev)) {
             return true;
@@ -51,6 +61,8 @@ bool InputRouter::pointerMotion(PointerMotionEvent& ev) {
 }
 
 bool InputRouter::button(u32 evdevBtn, bool pressed) {
+    activity();
+
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->button(evdevBtn, pressed)) {
             return true;
@@ -61,6 +73,8 @@ bool InputRouter::button(u32 evdevBtn, bool pressed) {
 }
 
 bool InputRouter::key(u32 evdevCode, bool pressed) {
+    activity();
+
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->key(evdevCode, pressed)) {
             return true;
@@ -71,6 +85,8 @@ bool InputRouter::key(u32 evdevCode, bool pressed) {
 }
 
 bool InputRouter::scroll(const ScrollEvent& ev) {
+    activity();
+
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->scroll(ev)) {
             return true;
@@ -81,6 +97,8 @@ bool InputRouter::scroll(const ScrollEvent& ev) {
 }
 
 bool InputRouter::tabletTool(const TabletToolEvent& ev) {
+    activity();
+
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->tabletTool(ev)) {
             return true;
@@ -91,6 +109,8 @@ bool InputRouter::tabletTool(const TabletToolEvent& ev) {
 }
 
 bool InputRouter::swipeBegin(u32 fingers) {
+    activity();
+
     if (InputSink* owner = swipeOwner.get()) {
         owner->swipeEnd(true);
     }
@@ -109,6 +129,8 @@ bool InputRouter::swipeBegin(u32 fingers) {
 }
 
 bool InputRouter::swipeUpdate(double dx, double dy) {
+    activity();
+
     if (!swipeOwner.get()) {
         swipeOwner.reset();
 
@@ -136,6 +158,8 @@ bool InputRouter::swipeUpdate(double dx, double dy) {
 }
 
 bool InputRouter::swipeEnd(bool cancelled) {
+    activity();
+
     if (!swipeOwner.get()) {
         swipeOwner.reset();
 
@@ -164,6 +188,8 @@ bool InputRouter::swipeEnd(bool cancelled) {
 }
 
 bool InputRouter::pinchBegin(u32 fingers) {
+    activity();
+
     if (InputSink* owner = pinchOwner.get()) {
         owner->pinchEnd(true);
     }
@@ -182,6 +208,8 @@ bool InputRouter::pinchBegin(u32 fingers) {
 }
 
 bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotation) {
+    activity();
+
     if (!pinchOwner.get()) {
         pinchOwner.reset();
 
@@ -209,6 +237,8 @@ bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotatio
 }
 
 bool InputRouter::pinchEnd(bool cancelled) {
+    activity();
+
     if (!pinchOwner.get()) {
         pinchOwner.reset();
 
@@ -237,6 +267,8 @@ bool InputRouter::pinchEnd(bool cancelled) {
 }
 
 bool InputRouter::holdBegin(u32 fingers) {
+    activity();
+
     if (InputSink* owner = holdOwner.get()) {
         owner->holdEnd(true);
     }
@@ -255,6 +287,8 @@ bool InputRouter::holdBegin(u32 fingers) {
 }
 
 bool InputRouter::holdEnd(bool cancelled) {
+    activity();
+
     if (!holdOwner.get()) {
         holdOwner.reset();
 

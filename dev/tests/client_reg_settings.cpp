@@ -113,5 +113,9 @@ int main() {
         return 9;
     }
 
+    if (settings.pointerAccelProfile() != PointerAccelProfile::automatic || settings.naturalScroll() != InputToggle::automatic || settings.leftHanded() != InputToggle::automatic || settings.disableWhileTyping() != InputToggle::automatic || settings.middleEmulation() != InputToggle::automatic) {
+        return 10;
+    }
+
     return 0;
 }
