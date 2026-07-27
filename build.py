@@ -197,7 +197,7 @@ settings_codegen = command(
         "$(S)/settings.h",
     ],
     outputs=[settings_gen_header, settings_gen_impl_include, settings_gen_dialog],
-    descr="GEN",
+    descr="GN",
     cmd=[
         "python3", "$(S)/dev/gen_settings.py",
         "--schema", "$(S)/dev/settings_def.py",
@@ -407,7 +407,7 @@ for scenario in scenarios:
             outputs=[out],
             deps=node_deps,
             cmd=cmd,
-            descr="TEST",
+            descr="TS",
             color="cyan",
         ))
 
@@ -425,6 +425,6 @@ if test_nodes:
         outputs=["$(B)/test-results/verdict.txt"],
         deps=test_nodes,
         cmd=verdict_cmd,
-        descr="VERDICT",
+        descr="OK",
         color="light-green",
     )
