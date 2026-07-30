@@ -3,19 +3,12 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
-    # Pinned to the commit recorded in .gitmodules.
-    libstd = {
-      url = "github:pg83/std/08cfcdfd638d12f7730a2e379b0cd0c40d2d612c";
-      flake = false;
-    };
   };
 
   outputs =
     {
       self,
       nixpkgs,
-      libstd,
     }:
     let
       inherit (nixpkgs) lib;
@@ -102,14 +95,6 @@
           version = versionFromFlake;
 
           src = self;
-
-          # Flake source checkouts do not include git submodules.
-          postUnpack = ''
-            mkdir -p "$sourceRoot/third_party"
-            rm -rf "$sourceRoot/third_party/libstd"
-            cp -a ${libstd} "$sourceRoot/third_party/libstd"
-            chmod -R u+w "$sourceRoot/third_party"
-          '';
 
           dontConfigure = true;
 
