@@ -1208,7 +1208,13 @@ int FakeKms::dumbMemFd(unsigned long long off) {
 // caller (libdrm included) to them before musl's archive members are even
 // considered. Non-fake fds forward through the raw syscall, bit for bit.
 
-extern "C" int ioctl(int fd, int req, ...) {
+#ifdef __GLIBC__
+using IoctlRequest = unsigned long;
+#else
+using IoctlRequest = int;
+#endif
+
+extern "C" int ioctl(int fd, IoctlRequest req, ...) {
     va_list ap;
 
     va_start(ap, req);
@@ -1218,10 +1224,10 @@ extern "C" int ioctl(int fd, int req, ...) {
     va_end(ap);
 
     if (g && g->clientFd >= 0 && fd == g->clientFd) {
-        return (int)g->fakeIoctl((unsigned long)(unsigned int)req, arg);
+        return (int)g->fakeIoctl((unsigned long)req, arg);
     }
 
-    long rc = syscall(SYS_ioctl, fd, (unsigned long)(unsigned int)req, arg);
+    long rc = syscall(SYS_ioctl, fd, (unsigned long)req, arg);
 
     return (int)rc;
 }

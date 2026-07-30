@@ -4,32 +4,19 @@ import fnmatch
 import os
 
 
+std_build = os.path.join("third_party", "libstd", "build.py")
+
+
 flags.allow({
     "runs": {"descr": "runs per test scenario", "default": "3"},
     "filter": {"descr": "glob restricting which test scenarios build", "default": ""},
     "allow_flaky": {"descr": "treat flaky tests as a warning, not a failure"},
-    "sanitizers": {"descr": "instrument build (address,undefined or thread)", "default": ""},
 })
 
 
 build.cflags += ["-O2", "-g"]
 build.cxxflags += ["-std=c++23"]
 build.cppflags += ["-DGLFW_INCLUDE_NONE"]
-
-sanitizers = [value for value in str(flags.sanitizers).split(",") if value]
-unknown_sanitizers = set(sanitizers) - {"address", "undefined", "thread"}
-
-if unknown_sanitizers or ("thread" in sanitizers and len(sanitizers) != 1):
-    raise ValueError("-Dsanitizers must be address,undefined or thread")
-
-if sanitizers:
-    sanitizer_flag = "-fsanitize=" + ",".join(sanitizers)
-
-    build.cflags += [sanitizer_flag, "-fno-omit-frame-pointer"]
-    build.ldflags += [sanitizer_flag]
-
-    if "undefined" in sanitizers:
-        build.cflags += ["-fno-sanitize-recover=all"]
 
 build.includes += [
     "$(S)/third_party/imgui",
@@ -43,6 +30,7 @@ build.includes += [
 wayland_server = pkg_config("wayland-server")
 wayland_client = pkg_config("wayland-client")
 drm = pkg_config("libdrm")
+drm_amdgpu = pkg_config("libdrm_amdgpu")
 libinput = pkg_config("libinput")
 udev = pkg_config("libudev")
 xkb = pkg_config("xkbcommon")
@@ -59,7 +47,8 @@ sndio = pkg_config("sndio", required=False)
 pulse = pkg_config("libpulse", required=False)
 pam = pkg_config("pam", required=False)
 
-system = dependency(ldflags=["-lev", "-lstd", "-lcrypt"])
+libstd = import_build(std_build, "libstd.a", extra_cflags=["-Wno-error"])
+system = dependency(ldflags=["-lev", "-lcrypt"])
 # Vulkan's canonical `VkFoo info{VK_STRUCTURE_TYPE_FOO}` initialization zeros
 # the remaining aggregate fields by design; Clang otherwise diagnoses every
 # such declaration under -Wextra.
@@ -216,7 +205,7 @@ prod_sources = [s for s in imway_sources
                 if not s.endswith("/control.cpp") and not s.endswith("/kms_fake.cpp")]
 
 imway_deps = [
-    settings_codegen, imgui, protocols,
+    settings_codegen, imgui, protocols, libstd,
     wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
     png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse, pam,
 ]
@@ -304,7 +293,10 @@ tests = []
 for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
     test_sources = [source]
-    test_deps = [client_protocols, wayland_client, drm, dbus]
+    test_deps = [client_protocols, wayland_client, drm, dbus, libstd]
+
+    if name == "client_reg_yuv_dmabuf":
+        test_deps.append(drm_amdgpu)
 
     if name == "client_reg_screenshot_copy":
         test_deps += [jxl, png]

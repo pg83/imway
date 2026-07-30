@@ -1,0 +1,320 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Build package
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.build \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/build.log" \
+            --title "Build" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-log
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests:
+    name: Tests
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Run full test suite
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.tests \
+            2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests.log" \
+            --title "Tests" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-log
+          path: ${{ runner.temp }}/tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  coverage:
+    name: Coverage
+    needs: tests
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Run full test suite with coverage
+        run: |
+          set -o pipefail
+          nix build -L \
+            --out-link "$RUNNER_TEMP/coverage-result" \
+            .#checks.x86_64-linux.coverage \
+            2>&1 | tee "$RUNNER_TEMP/coverage.log"
+
+      - name: Prepare coverage report
+        run: |
+          mkdir -p "$RUNNER_TEMP/coverage-report"
+          cp -a "$RUNNER_TEMP/coverage-result/." \
+            "$RUNNER_TEMP/coverage-report/"
+          {
+            echo "## LLVM coverage"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/coverage-report/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload browsable coverage report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-report
+          path: ${{ runner.temp }}/coverage-report
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 9
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          use_oidc: true
+          files: ${{ runner.temp }}/coverage-report/coverage.info
+          disable_search: true
+          fail_ci_if_error: true
+          name: linux-clang
+          verbose: true
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/coverage.log" \
+            --title "Coverage" \
+            --reproduce "nix build -L -o result-coverage .#checks.x86_64-linux.coverage"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-log
+          path: ${{ runner.temp }}/coverage.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  build-asan:
+    name: Build ASan
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Build package with ASan
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.build-asan \
+            2>&1 | tee "$RUNNER_TEMP/build-asan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/build-asan.log" \
+            --title "Build ASan" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build-asan"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-asan-log
+          path: ${{ runner.temp }}/build-asan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-asan:
+    name: Tests ASan
+    needs: [tests, build-asan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Run full test suite with ASan
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.tests-asan \
+            2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-asan.log" \
+            --title "Tests ASan" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests-asan"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-asan-log
+          path: ${{ runner.temp }}/tests-asan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  build-ubsan:
+    name: Build UBSan
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Build package with UBSan
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.build-ubsan \
+            2>&1 | tee "$RUNNER_TEMP/build-ubsan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/build-ubsan.log" \
+            --title "Build UBSan" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build-ubsan"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: build-ubsan-log
+          path: ${{ runner.temp }}/build-ubsan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-ubsan:
+    name: Tests UBSan
+    needs: [tests, build-ubsan]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
+        with:
+          enable_kvm: false
+
+      - name: Run full test suite with UBSan
+        run: |
+          set -o pipefail
+          nix build -L --no-link \
+            .#checks.x86_64-linux.tests-ubsan \
+            2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-ubsan.log" \
+            --title "Tests UBSan" \
+            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests-ubsan"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-ubsan-log
+          path: ${{ runner.temp }}/tests-ubsan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
