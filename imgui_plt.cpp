@@ -147,6 +147,8 @@ namespace {
         void key(const plt::KeyInput& input) override;
         void text(const plt::TextInput& input) override;
         void preedit(StringView text, i32 cursorBegin, i32 cursorEnd) override;
+        void drop(StringView text) override;
+        void dropPath(StringView path) override;
         void pointerMotion(const plt::PointerMotionInput& input) override;
         void pointerButton(const plt::PointerButtonInput& input) override;
         void scroll(const plt::ScrollInput& input) override;
@@ -302,6 +304,14 @@ namespace {
 
     void ImGuiPltImpl::preedit(StringView, i32, i32) {
         // no composition preview: ImGui widgets have no preedit rendering
+    }
+
+    void ImGuiPltImpl::drop(StringView) {
+        // drops never reach the sink: WindowOptions::drop stays null
+    }
+
+    void ImGuiPltImpl::dropPath(StringView) {
+        // drops never reach the sink: WindowOptions::drop stays null
     }
 
     void ImGuiPltImpl::pointerMotion(const plt::PointerMotionInput& input) {

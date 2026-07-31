@@ -6,6 +6,7 @@
 #include <std/sys/types.h>
 
 namespace plt {
+    struct DropTarget;
     struct InputSink;
 
     enum class RenderBackend : u8 {
@@ -99,6 +100,8 @@ namespace plt {
         InputSink* input = nullptr;
         WindowEvents* events = nullptr;
         FrameCallback* frame = nullptr;
+        // Null leaves the window rejecting every drag.
+        DropTarget* drop = nullptr;
     };
 
     struct Window {
@@ -126,6 +129,10 @@ namespace plt {
         // The regular clipboard.
         virtual Clipboard* secondary() = 0;
         virtual void requestPointerIcon(PointerIcon icon) = 0;
+        // Opens uri with the desktop's default handler for its scheme. The
+        // launch is fire-and-forget: failures surface only in the desktop
+        // environment, never back to the caller.
+        virtual void requestOpenUri(stl::StringView uri) = 0;
         // Caret rectangle in surface pixels. Input methods position their
         // candidate window next to it (text-input-v3 cursor rectangle on
         // Wayland, firstRectForCharacterRange on macOS).

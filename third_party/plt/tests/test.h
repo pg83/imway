@@ -1,5 +1,6 @@
 #pragma once
 
+#include "drop.h"
 #include "input.h"
 #include "platform.h"
 #include "poller.h"
@@ -55,6 +56,16 @@ namespace plt::test {
         TextInputCommitString,
         TextInputCommitInvalid,
         RemoveSeat,
+        DragEnter,
+        DragEnterUtf8String,
+        DragEnterUriList,
+        DragMotion,
+        DragDrop,
+        DragLeave,
+        DragData,
+        DragUriData,
+        QueryDragAccept,
+        QueryDragFinish,
         CursorShapeV1,
         QuerySelectionSerial,
         QueryTextInput,
@@ -84,7 +95,7 @@ namespace plt::test {
     stl::Buffer repeated(size_t size, u8 value);
 
     struct Client {
-        explicit Client(int controlFd, u32 width = 800, u32 minimum = 1, WindowEvents* events = nullptr, InputSink* input = nullptr, bool waitForConfigure = true, FrameCallback* frame = nullptr);
+        explicit Client(int controlFd, u32 width = 800, u32 minimum = 1, WindowEvents* events = nullptr, InputSink* input = nullptr, bool waitForConfigure = true, FrameCallback* frame = nullptr, DropTarget* drop = nullptr);
 
         int controlFd;
         stl::ObjPool::Ref owner;
@@ -167,6 +178,18 @@ namespace plt::test {
             ++preeditCount;
         }
 
+        void drop(stl::StringView text) override {
+            lastDrop.reset();
+            lastDrop.append(text.data(), text.length());
+            ++dropCount;
+        }
+
+        void dropPath(stl::StringView path) override {
+            lastPaths.append(path.data(), path.length());
+            lastPaths.append("\n", 1);
+            ++pathCount;
+        }
+
         void pointerMotion(const PointerMotionInput& input) override {
             lastMotion = input;
             ++motionCount;
@@ -213,6 +236,10 @@ namespace plt::test {
         i32 lastPreeditCursorBegin = -1;
         i32 lastPreeditCursorEnd = -1;
         u32 preeditCount = 0;
+        stl::Buffer lastDrop;
+        u32 dropCount = 0;
+        stl::Buffer lastPaths;
+        u32 pathCount = 0;
         PointerMotionInput lastMotion;
         PointerButtonInput lastButton;
         ScrollInput lastScroll;
@@ -278,4 +305,10 @@ namespace plt::test {
     bool textInput(int fd);
     bool cursorShapes(int fd);
     bool cursorShapesV1(int fd);
+    bool textDrop(int fd);
+    bool utf8StringDrop(int fd);
+    bool uriListDrop(int fd);
+    bool rawDropApi(int fd);
+    bool rejectedDrag(int fd);
+    bool cancelledDrag(int fd);
 }

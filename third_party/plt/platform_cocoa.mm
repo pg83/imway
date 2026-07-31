@@ -1,5 +1,6 @@
 #include "platform_cocoa.h"
 
+#include "drop.h"
 #include "input.h"
 #include "poller.h"
 #include "window.h"
@@ -76,6 +77,9 @@ void cocoaPointerImpl(void* owner, NSEvent* event);
 void cocoaButtonImpl(void* owner, NSEvent* event, bool pressed);
 void cocoaScrollImpl(void* owner, NSEvent* event);
 void cocoaPointerPresenceImpl(void* owner, bool present);
+NSDragOperation cocoaDragOverImpl(void* owner, id<NSDraggingInfo> sender);
+void cocoaDragExitedImpl(void* owner);
+BOOL cocoaPerformDropImpl(void* owner, id<NSDraggingInfo> sender);
 void cocoaFileDescriptorReady(CFFileDescriptorRef descriptor, CFOptionFlags types, void* owner);
 void cocoaTimerReady(CFRunLoopTimerRef timer, void* owner);
 
@@ -83,7 +87,7 @@ void cocoaTimerReady(CFRunLoopTimerRef timer, void* owner);
 @property(nonatomic, assign) void* owner;
 @end
 
-@interface PltView: NSView <NSTextInputClient> {
+@interface PltView: NSView <NSTextInputClient, NSDraggingDestination> {
     NSMutableAttributedString* markedText_;
     NSRange selectedTextRange_;
     NSMutableSet<NSNumber*>* composedKeys_;
@@ -176,6 +180,28 @@ void cocoaTimerReady(CFRunLoopTimerRef timer, void* owner);
     self.tracking = [[NSTrackingArea alloc] initWithRect:self.bounds options:NSTrackingMouseEnteredAndExited | NSTrackingMouseMoved | NSTrackingActiveInKeyWindow owner:self userInfo:nil];
     [self addTrackingArea:self.tracking];
     [super updateTrackingAreas];
+}
+
+- (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
+    return cocoaDragOverImpl(self.owner, sender);
+}
+
+- (NSDragOperation)draggingUpdated:(id<NSDraggingInfo>)sender {
+    return cocoaDragOverImpl(self.owner, sender);
+}
+
+- (void)draggingExited:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    cocoaDragExitedImpl(self.owner);
+}
+
+- (BOOL)prepareForDragOperation:(id<NSDraggingInfo>)sender {
+    (void)sender;
+    return YES;
+}
+
+- (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
+    return cocoaPerformDropImpl(self.owner, sender);
 }
 
 - (void)keyDown:(NSEvent*)event {
@@ -371,6 +397,30 @@ namespace {
     struct WindowImpl;
     struct ClipboardOperation;
 
+    const StringView uriListMime(u8"text/uri-list");
+    const StringView utf8Mime(u8"text/plain;charset=utf-8");
+
+    // The DropOffer view over one dragging pasteboard, valid for the
+    // duration of a DropTarget callback. Pasteboard types map onto mimes:
+    // strings arrive as utf-8 text, file URLs as a text/uri-list.
+    struct CocoaDropOffer final: public DropOffer {
+        size_t formats() const override;
+        StringView format(size_t index) const override;
+
+        bool text = false;
+        bool files = false;
+    };
+
+    struct CocoaDrop final: public Drop {
+        DropOffer* what() override;
+        void read(StringView mime, ClipboardRead& read) override;
+
+        CocoaDropOffer* view = nullptr;
+        NSPasteboard* pasteboard = nil;
+        bool taken = false;
+        bool success = false;
+    };
+
     struct ArmedFD {
         ArmedFD(PollFD fd, PollCallback* callback, CFFileDescriptorRef descriptor, CFRunLoopSourceRef source);
         ~ArmedFD();
@@ -456,6 +506,7 @@ namespace {
         Clipboard* primary() override;
         Clipboard* secondary() override;
         void requestPointerIcon(PointerIcon icon) override;
+        void requestOpenUri(StringView uri) override;
         void requestTextInputRect(i32 x, i32 y, u32 width, u32 height) override;
         RenderContext renderContext() const override;
 
@@ -482,6 +533,9 @@ namespace {
         void emitText(NSString* string, u16 modifiers);
         NSPoint pointerPosition(NSEvent* event) const;
         void writePasteboard(NSPasteboard* pasteboard, StringView content);
+        NSDragOperation dragOver(id<NSDraggingInfo> sender);
+        void dragExited();
+        BOOL performDrop(id<NSDraggingInfo> sender);
         void removeClipboardOperation(ClipboardOperation& operation);
         void applySizeConstraints();
 
@@ -489,6 +543,7 @@ namespace {
         InputSink* input = nullptr;
         WindowEvents* events = nullptr;
         FrameCallback* frame = nullptr;
+        DropTarget* dropTarget = nullptr;
         NSWindow* window = nil;
         PltView* view = nil;
         PltWindowDelegate* delegate = nil;
@@ -880,6 +935,7 @@ WindowImpl::WindowImpl(PlatformImpl& platform_, const WindowOptions& options)
     , input(options.input)
     , events(options.events)
     , frame(options.frame)
+    , dropTarget(options.drop)
 {
     primaryPasteboard.window = this;
     primaryPasteboard.primary = true;
@@ -895,6 +951,7 @@ WindowImpl::WindowImpl(PlatformImpl& platform_, const WindowOptions& options)
     view.layerContentsRedrawPolicy = NSViewLayerContentsRedrawDuringViewResize;
     window.contentView = view;
     window.acceptsMouseMovedEvents = YES;
+    [view registerForDraggedTypes:@[ NSPasteboardTypeString, NSPasteboardTypeFileURL ]];
     requestTitle(options.title);
     requestMinimumSize(options.minimumWidth, options.minimumHeight);
     // Prefer the view display link: it runs on the main run loop and follows
@@ -1102,6 +1159,108 @@ WindowInfo WindowImpl::info() const {
     };
 }
 
+size_t CocoaDropOffer::formats() const {
+    return (size_t)(text) + (size_t)(files);
+}
+
+StringView CocoaDropOffer::format(size_t index) const {
+    if (files && index == 0) {
+        return uriListMime;
+    }
+    return utf8Mime;
+}
+
+DropOffer* CocoaDrop::what() {
+    return view;
+}
+
+void CocoaDrop::read(StringView mime, ClipboardRead& read) {
+    if (taken) {
+        read.done(false);
+        return;
+    }
+    taken = true;
+    if (view->files && mime == uriListMime) {
+        NSArray<NSURL*>* const urls = [pasteboard readObjectsForClasses:@[ [NSURL class] ] options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+        Buffer list;
+        for (NSURL* url in urls) {
+            NSData* const encoded = [url.absoluteString dataUsingEncoding:NSUTF8StringEncoding];
+            if (encoded != nil && encoded.length != 0) {
+                list.append(encoded.bytes, encoded.length);
+                list.append("\r\n", 2);
+            }
+        }
+        if (list.empty()) {
+            read.done(false);
+            return;
+        }
+        success = read.data(StringView(list));
+        read.done(success);
+        return;
+    }
+    if (view->text && mime == utf8Mime) {
+        NSString* const value = [pasteboard stringForType:NSPasteboardTypeString];
+        NSData* const data = value == nil ? nil : [value dataUsingEncoding:NSUTF8StringEncoding];
+        if (data == nil) {
+            read.done(false);
+            return;
+        }
+        bool accepted = true;
+        if (data.length != 0) {
+            accepted = read.data(StringView((const u8*)(data.bytes), data.length));
+        }
+        success = accepted;
+        read.done(accepted);
+        return;
+    }
+    read.done(false);
+}
+
+NSDragOperation WindowImpl::dragOver(id<NSDraggingInfo> sender) {
+    if (dropTarget == nullptr) {
+        return NSDragOperationNone;
+    }
+    NSPasteboard* const pasteboard = [sender draggingPasteboard];
+    CocoaDropOffer offer;
+    offer.text = [pasteboard availableTypeFromArray:@[ NSPasteboardTypeString ]] != nil;
+    offer.files = [pasteboard canReadObjectForClasses:@[ [NSURL class] ] options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+    NSPoint point = [view convertPoint:[sender draggingLocation] fromView:nil];
+    point.y = view.bounds.size.height - point.y;
+    point = [view convertPointToBacking:point];
+    const DropReply reply = dropTarget->dragOver(offer, (i32)(point.x), (i32)(point.y));
+    bool known = false;
+    for (size_t index = 0; index != offer.formats(); ++index) {
+        if (offer.format(index) == reply.mime) {
+            known = true;
+        }
+    }
+    if (reply.mime.empty() || !known || reply.action == DropAction::None) {
+        return NSDragOperationNone;
+    }
+    return reply.action == DropAction::Move ? NSDragOperationMove : NSDragOperationCopy;
+}
+
+void WindowImpl::dragExited() {
+    if (dropTarget != nullptr) {
+        dropTarget->dragLeft();
+    }
+}
+
+BOOL WindowImpl::performDrop(id<NSDraggingInfo> sender) {
+    if (dropTarget == nullptr) {
+        return NO;
+    }
+    NSPasteboard* const pasteboard = [sender draggingPasteboard];
+    CocoaDropOffer offer;
+    offer.text = [pasteboard availableTypeFromArray:@[ NSPasteboardTypeString ]] != nil;
+    offer.files = [pasteboard canReadObjectForClasses:@[ [NSURL class] ] options:@{NSPasteboardURLReadingFileURLsOnlyKey : @YES}];
+    CocoaDrop drop;
+    drop.view = &offer;
+    drop.pasteboard = pasteboard;
+    dropTarget->dropped(drop);
+    return drop.success ? YES : NO;
+}
+
 void WindowImpl::writePasteboard(NSPasteboard* pasteboard, StringView content) {
     [pasteboard clearContents];
     NSString* value = stringFromView(content);
@@ -1149,6 +1308,17 @@ void WindowImpl::removeClipboardOperation(ClipboardOperation& operation) {
 
 void WindowImpl::requestPointerIcon(PointerIcon icon) {
     [pointerCursor(icon) set];
+}
+
+void WindowImpl::requestOpenUri(StringView uri) {
+    NSString* const text = [[NSString alloc] initWithBytes:uri.data() length:uri.length() encoding:NSUTF8StringEncoding];
+    if (text == nil) {
+        return;
+    }
+    NSURL* const url = [NSURL URLWithString:text];
+    if (url != nil) {
+        [[NSWorkspace sharedWorkspace] openURL:url];
+    }
 }
 
 RenderContext WindowImpl::renderContext() const {
@@ -1578,6 +1748,18 @@ void cocoaScrollImpl(void* owner, NSEvent* event) {
 
 void cocoaPointerPresenceImpl(void* owner, bool present) {
     ((WindowImpl*)(owner))->pointerPresence(present);
+}
+
+NSDragOperation cocoaDragOverImpl(void* owner, id<NSDraggingInfo> sender) {
+    return ((WindowImpl*)(owner))->dragOver(sender);
+}
+
+void cocoaDragExitedImpl(void* owner) {
+    ((WindowImpl*)(owner))->dragExited();
+}
+
+BOOL cocoaPerformDropImpl(void* owner, id<NSDraggingInfo> sender) {
+    return ((WindowImpl*)(owner))->performDrop(sender);
 }
 
 void cocoaFileDescriptorReady(CFFileDescriptorRef descriptor, CFOptionFlags types, void* owner) {
