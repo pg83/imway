@@ -17,7 +17,7 @@ await 10 test -e "$responsive" || {
     exit 1
 }
 
-await 100 in_log "toplevel imway screenshot () mapped"
+await 100 in_log "toplevel imway screenshot (imway-screenshot) mapped"
 
 w=$(dump_field "title=imway screenshot" client_w)
 h=$(dump_field "title=imway screenshot" client_h)

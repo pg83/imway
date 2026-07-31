@@ -5,7 +5,7 @@ set -euo pipefail
 
 ctl "key 99 press"
 ctl "key 99 release"
-await 100 in_log "toplevel imway screenshot () mapped"
+await 100 in_log "toplevel imway screenshot (imway-screenshot) mapped"
 sleep 0.5
 
 x=$(dump_field "title=imway screenshot" x)

@@ -17,9 +17,10 @@ flags.allow({
 
 build.cflags += ["-O2", "-g"]
 build.cxxflags += ["-std=c++23"]
-build.cppflags += ["-DGLFW_INCLUDE_NONE"]
 
 build.includes += [
+    # <plt/...>: the vendored platform layer's headers by their namespaced path
+    "$(S)/third_party",
     "$(S)/third_party/imgui",
     "$(B)/generated",
     "$(B)/protocols",
@@ -37,7 +38,6 @@ udev = pkg_config("libudev")
 xkb = pkg_config("xkbcommon")
 seat = pkg_config("libseat")
 dbus = pkg_config("dbus-1")
-glfw = pkg_config("glfw3")
 png = pkg_config("libpng")
 jxl = pkg_config("libjxl")
 lcms = pkg_config("lcms2")
@@ -49,11 +49,50 @@ pulse = pkg_config("libpulse", required=False)
 pam = pkg_config("pam", required=False)
 
 libstd = import_build(std_build, "libstd.a", extra_cflags=["-Wno-error"])
+
+# libplt.a carries its own copies of the generated wayland interface tables,
+# and imway's protocol archive defines the same symbols for the server side.
+# Renaming plt's copies at its import keeps both archives linkable without
+# touching the vendored sources; core wl_* interfaces stay with libwayland.
+plt_interface_renames = [
+    f"-D{name}_interface=plt_{name}_interface"
+    for name in [
+        "wp_cursor_shape_device_v1",
+        "wp_cursor_shape_manager_v1",
+        "wp_fractional_scale_manager_v1",
+        "wp_fractional_scale_v1",
+        "wp_viewport",
+        "wp_viewporter",
+        "xdg_activation_token_v1",
+        "xdg_activation_v1",
+        "xdg_popup",
+        "xdg_positioner",
+        "xdg_surface",
+        "xdg_toplevel",
+        "xdg_wm_base",
+        "zwp_primary_selection_device_manager_v1",
+        "zwp_primary_selection_device_v1",
+        "zwp_primary_selection_offer_v1",
+        "zwp_primary_selection_source_v1",
+        "zwp_tablet_manager_v2",
+        "zwp_tablet_pad_group_v2",
+        "zwp_tablet_pad_ring_v2",
+        "zwp_tablet_pad_strip_v2",
+        "zwp_tablet_pad_v2",
+        "zwp_tablet_seat_v2",
+        "zwp_tablet_tool_v2",
+        "zwp_tablet_v2",
+        "zwp_text_input_manager_v3",
+        "zwp_text_input_v3",
+        "zxdg_decoration_manager_v1",
+        "zxdg_toplevel_decoration_v1",
+    ]
+]
 plt = import_build(
     plt_build,
     "libplt.a",
     extra_cflags=["-Wno-error"],
-    extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd"],
+    extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd", *plt_interface_renames],
 )
 system = dependency(ldflags=["-lev", "-lcrypt"])
 # Vulkan's canonical `VkFoo info{VK_STRUCTURE_TYPE_FOO}` initialization zeros
@@ -178,7 +217,7 @@ for shader, stage in [
 imgui = library(
     name="imgui",
     srcs=build.glob("$(S)/third_party/imgui/*.cpp"),
-    deps=[vulkan, glfw, wayland_client],
+    deps=[vulkan],
 )
 
 
@@ -213,7 +252,7 @@ prod_sources = [s for s in imway_sources
 
 imway_deps = [
     settings_codegen, imgui, protocols, plt, libstd,
-    wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
+    wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus,
     png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse, pam,
 ]
 

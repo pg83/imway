@@ -17,21 +17,24 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <float.h>
-#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/sysmacros.h>
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#define GLFW_EXPOSE_NATIVE_WAYLAND
-#include <GLFW/glfw3native.h>
-#include <wayland-client.h>
+// vulkan_wayland.h only names these through pointers
+struct wl_display;
+struct wl_surface;
+
+#define VK_USE_PLATFORM_WAYLAND_KHR
+#include <vulkan/vulkan.h>
+
+#include <plt/window.h>
+#include <plt/platform.h>
 
 #include "imgui_wm.h"
-#include <imgui_impl_glfw.h>
+#include "imgui_plt.h"
 #include <imgui_impl_vulkan.h>
 
 #include <fullscreen.spv.h>
@@ -44,12 +47,12 @@
 
 using namespace stl;
 
-// imway screenshot <path>: a standalone GLFW+Vulkan imgui client. On KMS the
+// imway screenshot <path>: a standalone plt+Vulkan imgui client. On KMS the
 // path names an owned scanout DMA-BUF and metadata comes through the
 // environment; headless uses a self-describing IMW1 memfd. The HDR viewer
 // decodes the shared PQ image into an FP16 linear-BT.2020/nits target, blends
-// ImGui there, then encodes the result to its PQ swapchain. Save/Copy still
-// reads only the selected source region. GLFW owns window/input.
+// ImGui there, then encodes the result to its PQ swapchain. Save still
+// reads only the selected source region. plt owns window/input.
 
 namespace {
     // a screenshot-specific exception carrying a human message; raised by fail()
@@ -489,201 +492,7 @@ namespace {
         return Buffer(sv(StringBuilder() << sv(dir) << "/"_sv << StringView(stamp) << extension));
     }
 
-    // ---- wayland clipboard ----
-    // glfw only speaks the text clipboard, so image/jxl and the compatibility
-    // image/png go on the Wayland selection directly. Bind wl_seat and
-    // wl_data_device_manager off GLFW's display, then keep the source alive
-    // until the selection is taken over — the same contract wl-copy honors.
-    struct Clip {
-        wl_seat* seat = nullptr;
-        wl_pointer* pointer = nullptr;
-        wl_keyboard* keyboard = nullptr;
-        wl_data_device_manager* ddm = nullptr;
-        wl_data_device* device = nullptr;
-        wl_data_source* source = nullptr;
-        Buffer png; // must outlive the source: send() can fire anytime
-        Buffer jxl;
-        u32 serial = 0;
-        bool cancelled = false;
-    } gClip;
-
-    void clipPointerEnter(void*, wl_pointer*, u32 serial, wl_surface*, wl_fixed_t, wl_fixed_t) {
-        gClip.serial = serial;
-    }
-
-    void clipPointerLeave(void*, wl_pointer*, u32, wl_surface*) {
-    }
-
-    void clipPointerMotion(void*, wl_pointer*, u32, wl_fixed_t, wl_fixed_t) {
-    }
-
-    void clipPointerButton(void*, wl_pointer*, u32 serial, u32, u32, u32) {
-        gClip.serial = serial;
-    }
-
-    void clipPointerAxis(void*, wl_pointer*, u32, u32, wl_fixed_t) {
-    }
-
-    void clipPointerFrame(void*, wl_pointer*) {
-    }
-
-    void clipPointerAxisSource(void*, wl_pointer*, u32) {
-    }
-
-    void clipPointerAxisStop(void*, wl_pointer*, u32, u32) {
-    }
-
-    void clipPointerAxisDiscrete(void*, wl_pointer*, u32, i32) {
-    }
-
-    const wl_pointer_listener clipPointerListener = {
-        .enter = clipPointerEnter,
-        .leave = clipPointerLeave,
-        .motion = clipPointerMotion,
-        .button = clipPointerButton,
-        .axis = clipPointerAxis,
-        .frame = clipPointerFrame,
-        .axis_source = clipPointerAxisSource,
-        .axis_stop = clipPointerAxisStop,
-        .axis_discrete = clipPointerAxisDiscrete,
-    };
-
-    void clipKeyboardKeymap(void*, wl_keyboard*, u32, i32 fd, u32) {
-        close(fd);
-    }
-
-    void clipKeyboardEnter(void*, wl_keyboard*, u32 serial, wl_surface*, wl_array*) {
-        gClip.serial = serial;
-    }
-
-    void clipKeyboardLeave(void*, wl_keyboard*, u32, wl_surface*) {
-    }
-
-    void clipKeyboardKey(void*, wl_keyboard*, u32 serial, u32, u32, u32) {
-        gClip.serial = serial;
-    }
-
-    void clipKeyboardModifiers(void*, wl_keyboard*, u32, u32, u32, u32, u32) {
-    }
-
-    void clipKeyboardRepeatInfo(void*, wl_keyboard*, i32, i32) {
-    }
-
-    const wl_keyboard_listener clipKeyboardListener = {
-        .keymap = clipKeyboardKeymap,
-        .enter = clipKeyboardEnter,
-        .leave = clipKeyboardLeave,
-        .key = clipKeyboardKey,
-        .modifiers = clipKeyboardModifiers,
-        .repeat_info = clipKeyboardRepeatInfo,
-    };
-
-    void clipSeatCapabilities(void*, wl_seat* seat, u32 caps) {
-        if ((caps & WL_SEAT_CAPABILITY_POINTER) && !gClip.pointer) {
-            gClip.pointer = wl_seat_get_pointer(seat);
-            wl_pointer_add_listener(gClip.pointer, &clipPointerListener, nullptr);
-        }
-
-        if ((caps & WL_SEAT_CAPABILITY_KEYBOARD) && !gClip.keyboard) {
-            gClip.keyboard = wl_seat_get_keyboard(seat);
-            wl_keyboard_add_listener(gClip.keyboard, &clipKeyboardListener, nullptr);
-        }
-    }
-
-    void clipSeatName(void*, wl_seat*, const char*) {
-    }
-
-    const wl_seat_listener clipSeatListener = {
-        .capabilities = clipSeatCapabilities,
-        .name = clipSeatName,
-    };
-
-    void clipReg(void*, wl_registry* reg, u32 name, const char* iface, u32 ver) {
-        if (StringView(iface) == "wl_seat"_sv) {
-            gClip.seat = (wl_seat*)wl_registry_bind(reg, name, &wl_seat_interface, ver < 5 ? ver : 5);
-            wl_seat_add_listener(gClip.seat, &clipSeatListener, nullptr);
-        } else if (StringView(iface) == "wl_data_device_manager"_sv) {
-            gClip.ddm = (wl_data_device_manager*)wl_registry_bind(reg, name, &wl_data_device_manager_interface, ver < 3 ? ver : 3);
-        }
-    }
-
-    const wl_registry_listener clipRegListener = {clipReg, [](void*, wl_registry*, u32) {}};
-
-    void clipSend(void*, wl_data_source*, const char* mime, int32_t fd) {
-        ScopedFD sfd(fd);
-
-        try {
-            FDPipe out(sfd);
-
-            const Buffer& data = StringView(mime) == "image/jxl"_sv ? gClip.jxl : gClip.png;
-
-            out.write(data.data(), data.length());
-        } catch (...) {
-            // the paste target may close its end early (EPIPE) — nothing to do
-        }
-    }
-
-    void clipCancelled(void*, wl_data_source* src) {
-        // another client took the selection — drop the source and let us exit
-        wl_data_source_destroy(src);
-        gClip.source = nullptr;
-        gClip.cancelled = true;
-    }
-
-    const wl_data_source_listener clipSourceListener = {
-        .target = [](void*, wl_data_source*, const char*) {},
-        .send = clipSend,
-        .cancelled = clipCancelled,
-        .dnd_drop_performed = [](void*, wl_data_source*) {},
-        .dnd_finished = [](void*, wl_data_source*) {},
-        .action = [](void*, wl_data_source*, u32) {},
-    };
-
-    void initClipboard() {
-        wl_display* dpy = glfwGetWaylandDisplay();
-        wl_registry* reg = wl_display_get_registry(dpy);
-
-        wl_registry_add_listener(reg, &clipRegListener, nullptr);
-        wl_display_roundtrip(dpy);
-        wl_display_roundtrip(dpy);
-        wl_registry_destroy(reg);
-
-        if (gClip.seat && gClip.ddm) {
-            gClip.device = wl_data_device_manager_get_data_device(gClip.ddm, gClip.seat);
-            wl_display_roundtrip(dpy);
-        }
-    }
-
-    // Put the encoded JXL and PNG fallback on the clipboard and service
-    // Wayland events until ownership is lost. The window is hidden by now.
-    void copyToClipboard(GLFWwindow* window) {
-        wl_display* dpy = glfwGetWaylandDisplay();
-
-        if (!gClip.device || !gClip.serial) {
-            fail("no wayland clipboard"_sv);
-        }
-
-        gClip.source = wl_data_device_manager_create_data_source(gClip.ddm);
-        wl_data_source_add_listener(gClip.source, &clipSourceListener, nullptr);
-        wl_data_source_offer(gClip.source, "image/jxl");
-        wl_data_source_offer(gClip.source, "image/png");
-        gClip.cancelled = false;
-        wl_data_device_set_selection(gClip.device, gClip.source, gClip.serial);
-        wl_display_flush(dpy);
-
-        // Selection serials are accepted only while their client owns keyboard
-        // focus. Publish first, then hide and hand focus to the paste target.
-        glfwHideWindow(window);
-
-        // linger as the clipboard owner until another client takes over
-        while (!gClip.cancelled) {
-            if (wl_display_dispatch(dpy) < 0) {
-                break; // compositor went away
-            }
-        }
-    }
-
-    // ---- vulkan plumbing (mirrors imgui's glfw+vulkan example) ----
+    // ---- vulkan plumbing (mirrors imgui's vulkan example) ----
     VkAllocationCallbacks* gAlloc = nullptr;
     VkInstance gInstance = VK_NULL_HANDLE;
     VkPhysicalDevice gPhys = VK_NULL_HANDLE;
@@ -1683,20 +1492,22 @@ namespace {
 
     constexpr int kZoomMin = 10, kZoomMax = 400, kZoomStep = 10;
 
-    void clampWindowSize(int& w, int& h) {
-        if (GLFWmonitor* mon = glfwGetPrimaryMonitor()) {
-            if (const GLFWvidmode* vm = glfwGetVideoMode(mon)) {
-                int maxW = vm->width * 9 / 10;
-                int maxH = vm->height * 9 / 10;
+    // clamp to 90% of the output; zero screen dimensions mean the output
+    // announcement has not arrived and the size stays as computed
+    void clampWindowSize(const plt::WindowInfo& info, int& w, int& h) {
+        if (info.screenPixelWidth == 0 || info.screenPixelHeight == 0) {
+            return;
+        }
 
-                if (w > maxW) {
-                    w = maxW;
-                }
+        int maxW = (int)info.screenPixelWidth * 9 / 10;
+        int maxH = (int)info.screenPixelHeight * 9 / 10;
 
-                if (h > maxH) {
-                    h = maxH;
-                }
-            }
+        if (w > maxW) {
+            w = maxW;
+        }
+
+        if (h > maxH) {
+            h = maxH;
         }
     }
 
@@ -1711,8 +1522,6 @@ namespace {
         if (h < minH) {
             h = minH;
         }
-
-        clampWindowSize(w, h);
     }
 
     // nudge the zoom by delta% (clamped); any change drops the selection
@@ -1730,7 +1539,7 @@ namespace {
         v.crop.clear();
     }
 
-    // left control panel: zoom on top, then Save/Copy/Reset in one row, then
+    // left control panel: zoom on top, then Save/Reset in one row, then
     // the selection readout. writes the chosen action into result.
     void drawPanel(Viewer& v, int& result, bool& reset) {
         Crop& crop = v.crop;
@@ -1746,20 +1555,12 @@ namespace {
 
         ImGui::Spacing();
 
-        // three equal buttons across the panel width
+        // two equal buttons across the panel width
         float avail = ImGui::GetContentRegionAvail().x;
-        float bw = (avail - ImGui::GetStyle().ItemSpacing.x * 2.f) / 3.f;
+        float bw = (avail - ImGui::GetStyle().ItemSpacing.x) / 2.f;
 
         if (ImGui::Button("Save", ImVec2(bw, 0)) || ImGui::IsKeyPressed(ImGuiKey_Enter) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter)) {
             result = 1;
-        }
-
-        ImGui::SameLine();
-
-        bool ctrlC = ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C);
-
-        if (ImGui::Button("Copy", ImVec2(bw, 0)) || ctrlC) {
-            result = 2;
         }
 
         ImGui::SameLine();
@@ -1882,9 +1683,8 @@ namespace {
         }
     }
 
-    // draw the whole cropper; returns 1 = save, 2 = copy, -1 = cancel,
-    // 0 = keep going
-    int drawUi(GLFWwindow* window, const Image& img, Texture& tex, Viewer& v) {
+    // draw the whole cropper; returns 1 = save, -1 = cancel, 0 = keep going
+    int drawUi(plt::Window& window, const Image& img, Texture& tex, Viewer& v) {
         ImGuiViewport* vp = ImGui::GetMainViewport();
 
         ImGui::SetNextWindowPos(vp->Pos);
@@ -1933,7 +1733,9 @@ namespace {
             int w, h;
 
             initialWindowSize(img, ImGui::GetStyle(), w, h);
-            glfwSetWindowSize(window, w, h);
+            clampWindowSize(window.info(), w, h);
+            // requestResize speaks pixels and converts to logical itself
+            window.requestResize((u32)w, (u32)h);
         }
 
         return result;
@@ -1978,62 +1780,101 @@ namespace {
         return result;
     }
 
-    // the vulkan/imgui frame loop: pump events, resize the swapchain on demand,
-    // and call draw() each frame until it returns a nonzero action (window close
-    // counts as exit). draw() is the cropper or the error panel.
-    template <typename Draw>
-    int runLoop(GLFWwindow* window, Draw draw) {
+    // the vulkan/imgui frame driver behind plt's inverted loop: plt calls
+    // frame() for every granted frame; it resizes the swapchain on demand,
+    // draws the cropper or the error panel and re-requests the next frame.
+    // A nonzero draw result (window close counts as exit) stops the
+    // platform loop and lands in action.
+    struct FrameDriver final: plt::FrameCallback, plt::WindowEvents {
+        plt::Platform* platform = nullptr;
+        plt::Window* window = nullptr;
+        ImGuiPlt* imgui = nullptr;
+        const Image* img = nullptr;
+        Texture* tex = nullptr;
+        Viewer* view = nullptr;
+        // non-empty switches the ui to the error panel
+        const Buffer* error = nullptr;
         int action = 0;
 
-        while (!glfwWindowShouldClose(window) && action == 0) {
-            glfwPollEvents();
+        bool frame(const plt::WindowInfo& info) override;
+        void close() override;
+    };
 
-            int nw, nh;
+    bool FrameDriver::frame(const plt::WindowInfo& info) {
+        int nw = (int)info.width;
+        int nh = (int)info.height;
 
-            glfwGetFramebufferSize(window, &nw, &nh);
+        if (nw <= 0 || nh <= 0) {
+            window->requestFrame();
 
-            if (nw > 0 && nh > 0 && (gRebuild || gWin.Width != nw || gWin.Height != nh)) {
-                if (gLinearHdr) {
-                    vkDeviceWaitIdle(gDevice);
-                }
-                ImGui_ImplVulkan_SetMinImageCount(gMinImageCount);
-                ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, &gWin, gQueueFamily, gAlloc, nw, nh, gMinImageCount, 0);
-                if (gLinearHdr) {
-                    createSceneTarget((u32)nw, (u32)nh);
-                }
-                gWin.FrameIndex = 0;
-                gRebuild = false;
-            }
-
-            if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) {
-                ImGui_ImplGlfw_Sleep(10);
-
-                continue;
-            }
-
-            ImGui_ImplVulkan_NewFrame();
-            ImGui_ImplGlfw_NewFrame();
-            ImGui::NewFrame();
-
-            action = draw();
-
-            ImGui::Render();
-
-            ImDrawData* dd = ImGui::GetDrawData();
-            bool minimized = dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0;
-
-            gWin.ClearValue.color.float32[0] = 0.1f;
-            gWin.ClearValue.color.float32[1] = 0.1f;
-            gWin.ClearValue.color.float32[2] = 0.1f;
-            gWin.ClearValue.color.float32[3] = 1.0f;
-
-            if (!minimized) {
-                frameRender(dd);
-                framePresent();
-            }
+            return false;
         }
 
-        return action ? action : -1; // closing the window means exit
+        if (gRebuild || gWin.Width != nw || gWin.Height != nh) {
+            if (gLinearHdr) {
+                vkDeviceWaitIdle(gDevice);
+            }
+
+            ImGui_ImplVulkan_SetMinImageCount(gMinImageCount);
+            ImGui_ImplVulkanH_CreateOrResizeWindow(gInstance, gPhys, gDevice, &gWin, gQueueFamily, gAlloc, nw, nh, gMinImageCount, 0);
+
+            if (gLinearHdr) {
+                createSceneTarget((u32)nw, (u32)nh);
+            }
+
+            gWin.FrameIndex = 0;
+            gRebuild = false;
+        }
+
+        ImGui_ImplVulkan_NewFrame();
+        imgui->newFrame(*window);
+        ImGui::NewFrame();
+
+        int result = error->empty() ? drawUi(*window, *img, *tex, *view) : drawError(sv(*error));
+
+        ImGui::Render();
+
+        ImDrawData* dd = ImGui::GetDrawData();
+        bool minimized = dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0;
+
+        gWin.ClearValue.color.float32[0] = 0.1f;
+        gWin.ClearValue.color.float32[1] = 0.1f;
+        gWin.ClearValue.color.float32[2] = 0.1f;
+        gWin.ClearValue.color.float32[3] = 1.0f;
+
+        if (!minimized) {
+            frameRender(dd);
+            framePresent();
+        }
+
+        if (result != 0) {
+            action = result;
+            platform->stop();
+        } else {
+            // imgui animates every frame while interactive; plt paces this
+            // through the compositor's frame callbacks
+            window->requestFrame();
+        }
+
+        // a swapchain-rebuild frame presented nothing: returning false makes
+        // plt retry instead of waiting on a frame callback that never comes
+        return !minimized && !gRebuild;
+    }
+
+    void FrameDriver::close() {
+        action = -1;
+        platform->stop();
+    }
+
+    // show the window (idempotent) and run the platform loop until a draw
+    // verdict or the close button stops it
+    int runUi(FrameDriver& driver) {
+        driver.action = 0;
+        driver.window->requestShow();
+        driver.window->requestFrame();
+        driver.platform->run();
+
+        return driver.action ? driver.action : -1;
     }
 
     // the crop rect in image px, with the empty-selection-is-whole-frame rule
@@ -2053,8 +1894,6 @@ namespace {
 }
 
 int mainScreenshot(StringView path) {
-    signal(SIGPIPE, SIG_IGN); // a paste target closing its pipe must not kill us
-
     if (const char* s = getenv("IMGUI_SCALE")) {
         double v = parseFloat(StringView(s));
 
@@ -2078,18 +1917,6 @@ int mainScreenshot(StringView path) {
         errText = Buffer(Exception::current());
     }
 
-    glfwSetErrorCallback([](int e, const char* d) {
-        sysE << "imway screenshot: GLFW "_sv << (i64)e << ": "_sv << StringView(d) << endL;
-    });
-
-    if (!glfwInit()) {
-        sysE << "imway screenshot: no display"_sv << endL;
-
-        return 1;
-    }
-
-    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-
     // Prepare the exact style that drawUi will use before sizing the native
     // window. drawUi holds WindowPadding at zero while creating both children,
     // so only SameLine's ItemSpacing separates the panel and image viewport.
@@ -2100,54 +1927,76 @@ int mainScreenshot(StringView path) {
         uiStyle.ScaleAllSizes(gUiScale);
     }
 
-    // Open at the image's on-screen size (50% zoom) plus the actual ImGui
-    // chrome. A bare error panel gets a small fixed size. Clamp to 90% of the
-    // monitor.
-    int winW, winH;
-
-    if (loaded) {
-        initialWindowSize(img, uiStyle, winW, winH);
-    } else {
-        winW = (int)(480.f * gUiScale);
-        winH = (int)(180.f * gUiScale);
-
-        clampWindowSize(winW, winH);
-    }
-
-    GLFWwindow* window = glfwCreateWindow(winW, winH, "imway screenshot", nullptr, nullptr);
-
-    if (!window || !glfwVulkanSupported()) {
-        sysE << "imway screenshot: no vulkan window"_sv << endL;
-
-        return 1;
-    }
-
     int rc = 0;
 
     try {
         // pooled unwind: every stage registers its teardown right after it
         // succeeds, so the arena's LIFO death replays the epilogue in order
         // and an exception mid-setup unwinds exactly the completed stages.
-        // tex outlives the pool: its guard reads it at pool-death time
+        // tex outlives the pool: its guard reads it at pool-death time;
+        // driver outlives it too: the dying window still points at it
         Texture tex;
+        FrameDriver driver;
         ObjPool::Ref shot = ObjPool::fromMemory();
 
-        pooledGuard(*shot, [window] {
-            glfwDestroyWindow(window);
-        });
+        // the platform, the input bridge and the window live in the same
+        // arena: LIFO death tears the window down after every vulkan guard
+        // below and before the platform it belongs to
+        plt::Platform& platform = *plt::Platform::create(*shot);
+        ImGuiPlt& imgui = *ImGuiPlt::create(*shot);
 
-        u32 nexts = 0;
-        const char** exts = glfwGetRequiredInstanceExtensions(&nexts);
+        // Open at the image's on-screen size (50% zoom) plus the actual
+        // ImGui chrome. A bare error panel gets a small fixed size. Clamp
+        // to 90% of the output.
+        int winW, winH;
 
-        setupVulkan(*shot, exts, nexts, img);
+        if (loaded) {
+            initialWindowSize(img, uiStyle, winW, winH);
+        } else {
+            winW = (int)(480.f * gUiScale);
+            winH = (int)(180.f * gUiScale);
+        }
+
+        plt::WindowOptions options;
+
+        options.appId = "imway-screenshot"_sv;
+        options.title = "imway screenshot"_sv;
+        options.width = (u32)winW;
+        options.height = (u32)winH;
+        options.input = imgui.sink();
+        options.events = &driver;
+        options.frame = &driver;
+
+        plt::Window& window = *platform.createWindow(*shot, options);
+
+        // the output size arrived with the platform's registry roundtrips;
+        // only a window can report it, so the clamp lands as a resize
+        int clampedW = winW, clampedH = winH;
+
+        clampWindowSize(window.info(), clampedW, clampedH);
+
+        if (clampedW != winW || clampedH != winH) {
+            window.requestResize((u32)clampedW, (u32)clampedH);
+        }
+
+        const char* exts[] = {VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME};
+
+        setupVulkan(*shot, exts, 2, img);
+
+        plt::RenderContext render = window.renderContext();
+        VkWaylandSurfaceCreateInfoKHR sci{VK_STRUCTURE_TYPE_WAYLAND_SURFACE_CREATE_INFO_KHR};
+
+        sci.display = (wl_display*)render.connection;
+        sci.surface = (wl_surface*)render.window;
 
         VkSurfaceKHR surface;
 
-        vkc(glfwCreateWindowSurface(gInstance, window, gAlloc, &surface));
+        vkc(vkCreateWaylandSurfaceKHR(gInstance, &sci, gAlloc, &surface));
 
-        int fbw, fbh;
+        plt::WindowInfo bootInfo = window.info();
+        int fbw = (int)bootInfo.width;
+        int fbh = (int)bootInfo.height;
 
-        glfwGetFramebufferSize(window, &fbw, &fbh);
         setupVulkanWindow(*shot, surface, fbw, fbh, loaded && img.color.hdr());
 
         if (loaded && img.color.hdr()) {
@@ -2161,11 +2010,6 @@ int mainScreenshot(StringView path) {
         });
         ImGui::GetIO().IniFilename = nullptr;
         ImGui::GetStyle() = uiStyle;
-
-        ImGui_ImplGlfw_InitForVulkan(window, true);
-        pooledGuard(*shot, [] {
-            ImGui_ImplGlfw_Shutdown();
-        });
 
         ImGui_ImplVulkan_InitInfo ii = {};
 
@@ -2192,7 +2036,6 @@ int mainScreenshot(StringView path) {
             ImGui_ImplVulkan_Shutdown();
         });
         ImGui_ImplVulkan_SetSdrWhite(img.color.hdr() ? (float)img.color.sdrWhiteNits : 203.f);
-        initClipboard();
 
         if (loaded) {
             // registered before the import so a mid-import throw still
@@ -2229,48 +2072,47 @@ int mainScreenshot(StringView path) {
 
         Viewer view; // zoom 50%, no selection (whole frame) until the user drags
 
+        driver.platform = &platform;
+        driver.window = &window;
+        driver.imgui = &imgui;
+        driver.img = &img;
+        driver.tex = &tex;
+        driver.view = &view;
+        driver.error = &errText;
+
         // interactive phase: the cropper, or the error panel if the load failed
         int action = 0;
         StringView configuredAction(getenv("IMWAY_SHOT_ACTION") ? getenv("IMWAY_SHOT_ACTION") : "editor");
 
         if (loaded && errText.empty() && configuredAction == "save"_sv) {
-            glfwHideWindow(window);
+            // non-interactive: encode straight from the texture, the window
+            // never maps. "copy" lands in the editor below until the
+            // clipboard path returns.
             action = 1;
-        } else if (loaded && errText.empty() && configuredAction == "copy"_sv) {
-            action = 2;
         } else {
-            action = runLoop(window, [&] {
-                return errText.empty() ? drawUi(window, img, tex, view) : drawError(sv(errText));
-            });
+            action = runUi(driver);
         }
 
-        // action phase: encode + save/copy; a failure switches to the error panel
-        if (loaded && errText.empty() && (action == 1 || action == 2)) {
+        // action phase: encode + save; a failure switches to the error panel
+        if (loaded && errText.empty() && action == 1) {
             try {
                 int x0, y0, x1, y1;
 
                 cropRegion(img, view.crop, x0, y0, x1, y1);
 
-                if (action == 1) {
-                    Buffer encoded;
-                    bool png = getenv("IMWAY_SHOT_FORMAT") && StringView(getenv("IMWAY_SHOT_FORMAT")) == "png"_sv;
+                Buffer encoded;
+                bool png = getenv("IMWAY_SHOT_FORMAT") && StringView(getenv("IMWAY_SHOT_FORMAT")) == "png"_sv;
 
-                    if (png) {
-                        encodeSelection(img, tex, x0, y0, x1, y1, encoded);
-                    } else {
-                        encodeJxlSelection(img, tex, x0, y0, x1, y1, encoded);
-                    }
-
-                    Buffer dest = destPath();
-
-                    saveFile(encoded, sv(dest));
-                    sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
+                if (png) {
+                    encodeSelection(img, tex, x0, y0, x1, y1, encoded);
                 } else {
-                    encodeJxlSelection(img, tex, x0, y0, x1, y1, gClip.jxl);
-                    encodeSelection(img, tex, x0, y0, x1, y1, gClip.png);
-                    // nothing left to show; hold the selection with no window
-                    copyToClipboard(window);
+                    encodeJxlSelection(img, tex, x0, y0, x1, y1, encoded);
                 }
+
+                Buffer dest = destPath();
+
+                saveFile(encoded, sv(dest));
+                sysO << "imway screenshot: saved "_sv << sv(dest) << endL;
             } catch (ShotError& e) {
                 errText = Buffer(e.description());
             } catch (...) {
@@ -2278,10 +2120,8 @@ int mainScreenshot(StringView path) {
             }
 
             if (!errText.empty()) {
-                glfwShowWindow(window);
-                runLoop(window, [&] {
-                    return drawError(sv(errText));
-                });
+                // a save-mode window was never shown; runUi maps it now
+                runUi(driver);
             }
         }
 
@@ -2293,8 +2133,6 @@ int mainScreenshot(StringView path) {
         sysE << "imway screenshot: "_sv << Exception::current() << endL;
         rc = 1;
     }
-
-    glfwTerminate();
 
     if (img.dmaFd >= 0) {
         close(img.dmaFd);

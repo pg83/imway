@@ -8,7 +8,7 @@ set -euo pipefail
 ctl "key 99 press"
 ctl "key 99 release"
 
-await 100 in_log "toplevel imway screenshot () mapped"
+await 100 in_log "toplevel imway screenshot (imway-screenshot) mapped"
 
 w=$(dump_field "title=imway screenshot" client_w)
 h=$(dump_field "title=imway screenshot" client_h)
