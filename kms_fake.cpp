@@ -1093,7 +1093,12 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
 
     long rc;
 
-    switch (req) {
+    // The kernel compares only the low 32 bits of an ioctl request. Callers
+    // disagree about the rest: musl's _IOC yields a negative int for _IOWR
+    // (dir bits reach the sign bit), so a libc-prototyped caller arrives
+    // sign-extended while Mesa's raw-syscall path arrives zero-extended.
+    // Truncate before dispatch so both spellings hit the same case.
+    switch ((u32)req) {
         case DRM_IOCTL_VERSION:
             rc = emuVersion((drm_version*)arg);
             break;
@@ -1168,7 +1173,7 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
                 rc = rawIoctl(renderFd, req, arg);
                 rc = rc == 0 ? 0 : -errno;
             } else {
-                sysE << "fake-kms: unhandled drm ioctl nr "_sv << (i64)_IOC_NR(req) << endL;
+                sysE << "fake-kms: unhandled drm ioctl nr "_sv << (i64)_IOC_NR(req) << " type "_sv << (i64)_IOC_TYPE(req) << " size "_sv << (i64)_IOC_SIZE(req) << " dir "_sv << (i64)_IOC_DIR(req) << endL;
                 rc = -ENOTTY;
             }
 
