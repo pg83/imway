@@ -286,68 +286,258 @@ namespace {
         dl->AddLine(ImVec2(p.x + x0 * s, p.y + y0 * s), ImVec2(p.x + x1 * s, p.y + y1 * s), col, th * s);
     }
 
-    void drawMouseCursor(ImDrawList* dl, ImVec2 p, float s, ImGuiMouseCursor c) {
+    // an outlined stroke in the polygon cursors' black-under-white look
+    void cursorLine(ImDrawList* dl, ImVec2 p, float s, float x0, float y0, float x1, float y1, float th) {
+        cursorStroke(dl, p, s, x0, y0, x1, y1, IM_COL32_BLACK, th + 2.f);
+        cursorStroke(dl, p, s, x0, y0, x1, y1, IM_COL32_WHITE, th);
+    }
+
+    // the animated ring shared by wait and progress
+    void cursorSpinner(ImDrawList* dl, ImVec2 p, float s) {
+        float a0 = (float)(nowMsec() % 1000) * 0.0062831853f;
+        float a1 = a0 + 5.2f;
+
+        dl->PathArcTo(p, 6.5f * s, a0, a1);
+        dl->PathStroke(IM_COL32_BLACK, ImDrawFlags_None, 3.6f * s);
+        dl->PathArcTo(p, 6.5f * s, a0, a1);
+        dl->PathStroke(IM_COL32_WHITE, ImDrawFlags_None, 1.8f * s);
+    }
+
+    // a question glyph centered at (cx, cy) in cursor units: the badge on
+    // help and dnd-ask
+    void cursorQuestion(ImDrawList* dl, ImVec2 p, float s, float cx, float cy) {
+        ImVec2 loop(p.x + cx * s, p.y + (cy - 2.2f) * s);
+
+        for (int pass = 0; pass < 2; pass++) {
+            dl->PathArcTo(loop, 2.8f * s, -3.3161f, 1.0472f);
+            dl->PathLineTo(ImVec2(p.x + cx * s, p.y + (cy + 1.6f) * s));
+            dl->PathStroke(pass ? IM_COL32_WHITE : IM_COL32_BLACK, ImDrawFlags_None, (pass ? 1.4f : 3.f) * s);
+        }
+
+        dl->AddCircleFilled(ImVec2(p.x + cx * s, p.y + (cy + 4.6f) * s), 1.9f * s, IM_COL32_BLACK);
+        dl->AddCircleFilled(ImVec2(p.x + cx * s, p.y + (cy + 4.6f) * s), 1.1f * s, IM_COL32_WHITE);
+    }
+
+    // the I-beam behind text and vertical-text; flip transposes the axes
+    void cursorBeam(ImDrawList* dl, ImVec2 p, float s, bool flip) {
+        static const float seg[3][4] = {{-2.5f, -8.f, 2.5f, -8.f}, {0.f, -8.f, 0.f, 8.f}, {-2.5f, 8.f, 2.5f, 8.f}};
+
+        for (int pass = 0; pass < 2; pass++) {
+            for (int i = 0; i < 3; i++) {
+                float x0 = flip ? seg[i][1] : seg[i][0];
+                float y0 = flip ? seg[i][0] : seg[i][1];
+                float x1 = flip ? seg[i][3] : seg[i][2];
+                float y1 = flip ? seg[i][2] : seg[i][3];
+
+                cursorStroke(dl, p, s, x0, y0, x1, y1, pass ? IM_COL32_WHITE : IM_COL32_BLACK, pass ? 1.4f : 3.4f);
+            }
+        }
+    }
+
+    void cursorSlashCircle(ImDrawList* dl, ImVec2 p, float s) {
+        dl->AddCircle(p, 7.5f * s, IM_COL32_BLACK, 0, 4.f * s);
+        dl->AddCircle(p, 7.5f * s, IM_COL32_WHITE, 0, 2.f * s);
+        cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_BLACK, 4.f);
+        cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_WHITE, 2.f);
+    }
+
+    // the magnifier behind zoom-in/zoom-out
+    void cursorLens(ImDrawList* dl, ImVec2 p, float s, bool plus) {
+        cursorStroke(dl, p, s, 4.6f, 4.6f, 10.f, 10.f, IM_COL32_BLACK, 4.4f);
+        cursorStroke(dl, p, s, 4.6f, 4.6f, 10.f, 10.f, IM_COL32_WHITE, 2.2f);
+        dl->AddCircle(p, 6.5f * s, IM_COL32_BLACK, 0, 3.6f * s);
+        dl->AddCircle(p, 6.5f * s, IM_COL32_WHITE, 0, 1.8f * s);
+        cursorLine(dl, p, s, -3.f, 0.f, 3.f, 0.f, 1.2f);
+
+        if (plus) {
+            cursorLine(dl, p, s, 0.f, -3.f, 0.f, 3.f, 1.2f);
+        }
+    }
+
+    void drawCursorKind(ImDrawList* dl, ImVec2 p, float s, CursorKind kind) {
         // NB: AddConcavePolyFilled wants this winding, reversed it fills the convex hull
         static const ImVec2 arrow[] = {{12.2f, 11.8f}, {6.8f, 11.8f}, {9.5f, 17.8f}, {6.9f, 18.9f}, {4.2f, 12.9f}, {0.f, 16.5f}, {0.f, 0.f}};
         static const ImVec2 ns[] = {{0.f, -9.f}, {4.5f, -4.5f}, {1.7f, -4.5f}, {1.7f, 4.5f}, {4.5f, 4.5f}, {0.f, 9.f}, {-4.5f, 4.5f}, {-1.7f, 4.5f}, {-1.7f, -4.5f}, {-4.5f, -4.5f}};
+        // single-headed arrow pointing up, stem reaching past the hotspot
+        static const ImVec2 dir[] = {{0.f, -9.f}, {4.5f, -4.5f}, {1.7f, -4.5f}, {1.7f, 2.5f}, {-1.7f, 2.5f}, {-1.7f, -4.5f}, {-4.5f, -4.5f}};
         static const ImVec2 hand[] = {{0.f, 0.f}, {2.6f, 0.f}, {2.6f, 5.5f}, {4.f, 4.f}, {6.f, 4.f}, {7.6f, 5.6f}, {7.6f, 10.f}, {5.6f, 14.5f}, {-0.5f, 14.5f}, {-3.4f, 10.5f}, {-3.4f, 6.5f}, {-1.6f, 4.8f}, {0.f, 6.f}};
+        // an open palm with finger notches, and the same hand closed
+        static const ImVec2 palm[] = {{-6.f, 0.f}, {-5.f, -5.f}, {-3.2f, -3.6f}, {-2.6f, -7.2f}, {-0.6f, -5.6f}, {0.2f, -8.f}, {2.4f, -6.f}, {3.6f, -3.f}, {6.f, -4.6f}, {6.6f, 2.f}, {4.f, 7.f}, {-3.f, 7.f}, {-6.f, 3.f}};
+        static const ImVec2 fist[] = {{-6.f, -1.f}, {-4.f, -4.f}, {-1.f, -5.f}, {3.f, -5.f}, {6.f, -3.f}, {6.6f, 3.f}, {4.f, 6.f}, {-3.f, 6.f}, {-6.f, 3.f}};
         const float R = 0.70710678f;
 
-        switch (c) {
-            case ImGuiMouseCursor_None:
+        switch (kind) {
+            case CursorKind::hidden:
                 return;
-            case ImGuiMouseCursor_TextInput:
-                cursorStroke(dl, p, s, -2.5f, -8.f, 2.5f, -8.f, IM_COL32_BLACK, 3.4f);
-                cursorStroke(dl, p, s, 0.f, -8.f, 0.f, 8.f, IM_COL32_BLACK, 3.4f);
-                cursorStroke(dl, p, s, -2.5f, 8.f, 2.5f, 8.f, IM_COL32_BLACK, 3.4f);
-                cursorStroke(dl, p, s, -2.5f, -8.f, 2.5f, -8.f, IM_COL32_WHITE, 1.4f);
-                cursorStroke(dl, p, s, 0.f, -8.f, 0.f, 8.f, IM_COL32_WHITE, 1.4f);
-                cursorStroke(dl, p, s, -2.5f, 8.f, 2.5f, 8.f, IM_COL32_WHITE, 1.4f);
+            case CursorKind::text:
+                cursorBeam(dl, p, s, false);
                 return;
-            case ImGuiMouseCursor_ResizeNS:
+            case CursorKind::verticalText:
+                cursorBeam(dl, p, s, true);
+                return;
+            case CursorKind::crosshair:
+                cursorLine(dl, p, s, -9.f, 0.f, 9.f, 0.f, 1.4f);
+                cursorLine(dl, p, s, 0.f, -9.f, 0.f, 9.f, 1.4f);
+                return;
+            case CursorKind::cell:
+                cursorLine(dl, p, s, -8.f, 0.f, 8.f, 0.f, 2.6f);
+                cursorLine(dl, p, s, 0.f, -8.f, 0.f, 8.f, 2.6f);
+                return;
+            case CursorKind::nResize:
+                cursorPoly(dl, dir, 7, p, s, 1.f, 0.f);
+                return;
+            case CursorKind::eResize:
+                cursorPoly(dl, dir, 7, p, s, 0.f, 1.f);
+                return;
+            case CursorKind::sResize:
+                cursorPoly(dl, dir, 7, p, s, -1.f, 0.f);
+                return;
+            case CursorKind::wResize:
+                cursorPoly(dl, dir, 7, p, s, 0.f, -1.f);
+                return;
+            case CursorKind::neResize:
+                cursorPoly(dl, dir, 7, p, s, R, R);
+                return;
+            case CursorKind::nwResize:
+                cursorPoly(dl, dir, 7, p, s, R, -R);
+                return;
+            case CursorKind::seResize:
+                cursorPoly(dl, dir, 7, p, s, -R, -R);
+                return;
+            case CursorKind::swResize:
+                cursorPoly(dl, dir, 7, p, s, -R, R);
+                return;
+            case CursorKind::nsResize:
                 cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
                 return;
-            case ImGuiMouseCursor_ResizeEW:
+            case CursorKind::ewResize:
                 cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
                 return;
-            case ImGuiMouseCursor_ResizeNESW:
+            case CursorKind::neswResize:
                 cursorPoly(dl, ns, 10, p, s, R, R);
                 return;
-            case ImGuiMouseCursor_ResizeNWSE:
+            case CursorKind::nwseResize:
                 cursorPoly(dl, ns, 10, p, s, R, -R);
                 return;
-            case ImGuiMouseCursor_ResizeAll:
+            case CursorKind::colResize:
+                cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
+                cursorLine(dl, p, s, 0.f, -8.f, 0.f, 8.f, 2.f);
+                return;
+            case CursorKind::rowResize:
+                cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
+                cursorLine(dl, p, s, -8.f, 0.f, 8.f, 0.f, 2.f);
+                return;
+            case CursorKind::move:
+            case CursorKind::allResize:
                 cursorPoly(dl, ns, 10, p, s, 1.f, 0.f);
                 cursorPoly(dl, ns, 10, p, s, 0.f, 1.f);
                 return;
-            case ImGuiMouseCursor_Hand:
+            case CursorKind::allScroll:
+                cursorPoly(dl, dir, 7, p, s, 1.f, 0.f);
+                cursorPoly(dl, dir, 7, p, s, 0.f, 1.f);
+                cursorPoly(dl, dir, 7, p, s, -1.f, 0.f);
+                cursorPoly(dl, dir, 7, p, s, 0.f, -1.f);
+                dl->AddCircleFilled(p, 2.6f * s, IM_COL32_BLACK);
+                dl->AddCircleFilled(p, 1.6f * s, IM_COL32_WHITE);
+                return;
+            case CursorKind::pointer:
                 cursorPoly(dl, hand, 13, p, s, 1.f, 0.f);
                 return;
-            case ImGuiMouseCursor_NotAllowed:
-                dl->AddCircle(p, 7.5f * s, IM_COL32_BLACK, 0, 4.f * s);
-                dl->AddCircle(p, 7.5f * s, IM_COL32_WHITE, 0, 2.f * s);
-                cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_BLACK, 4.f);
-                cursorStroke(dl, p, s, -5.3f, -5.3f, 5.3f, 5.3f, IM_COL32_WHITE, 2.f);
+            case CursorKind::dndAsk:
+                cursorPoly(dl, hand, 13, p, s, 1.f, 0.f);
+                cursorQuestion(dl, p, s, 12.5f, 3.f);
                 return;
-            case ImGuiMouseCursor_Wait:
-            case ImGuiMouseCursor_Progress: {
-                float a0 = (float)(nowMsec() % 1000) * 0.0062831853f;
-                float a1 = a0 + 5.2f;
+            case CursorKind::grab:
+                cursorPoly(dl, palm, 13, p, s, 1.f, 0.f);
+                return;
+            case CursorKind::grabbing:
+                cursorPoly(dl, fist, 9, p, s, 1.f, 0.f);
+                return;
+            case CursorKind::notAllowed:
+                cursorSlashCircle(dl, p, s);
+                return;
+            case CursorKind::noDrop:
+                // the slashed circle with the dragged item beside it
+                dl->AddRectFilled(ImVec2(p.x + 7.f * s, p.y - 13.f * s), ImVec2(p.x + 13.f * s, p.y - 7.f * s), IM_COL32_WHITE);
+                dl->AddRect(ImVec2(p.x + 7.f * s, p.y - 13.f * s), ImVec2(p.x + 13.f * s, p.y - 7.f * s), IM_COL32_BLACK, 0.f, 0, 1.2f * s);
+                cursorSlashCircle(dl, p, s);
+                return;
+            case CursorKind::wait:
+                cursorSpinner(dl, p, s);
+                return;
+            case CursorKind::progress:
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                cursorSpinner(dl, ImVec2(p.x + 14.f * s, p.y - 1.f * s), s);
+                return;
+            case CursorKind::zoomIn:
+                cursorLens(dl, p, s, true);
+                return;
+            case CursorKind::zoomOut:
+                cursorLens(dl, p, s, false);
+                return;
+            case CursorKind::help:
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                cursorQuestion(dl, p, s, 15.f, 6.f);
+                return;
+            case CursorKind::contextMenu: {
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                // a menu card with entry lines beside the arrow
+                ImVec2 lo(p.x + 12.f * s, p.y + 1.f * s);
+                ImVec2 hi(p.x + 20.f * s, p.y + 11.f * s);
 
-                if (c == ImGuiMouseCursor_Progress) {
-                    cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
-                    p = ImVec2(p.x + 14.f * s, p.y - 1.f * s);
-                }
-
-                dl->PathArcTo(p, 6.5f * s, a0, a1);
-                dl->PathStroke(IM_COL32_BLACK, ImDrawFlags_None, 3.6f * s);
-                dl->PathArcTo(p, 6.5f * s, a0, a1);
-                dl->PathStroke(IM_COL32_WHITE, ImDrawFlags_None, 1.8f * s);
+                dl->AddRectFilled(lo, hi, IM_COL32_WHITE);
+                dl->AddRect(lo, hi, IM_COL32_BLACK, 0.f, 0, 1.2f * s);
+                cursorStroke(dl, p, s, 13.5f, 3.5f, 18.5f, 3.5f, IM_COL32_BLACK, 1.2f);
+                cursorStroke(dl, p, s, 13.5f, 6.f, 18.5f, 6.f, IM_COL32_BLACK, 1.2f);
+                cursorStroke(dl, p, s, 13.5f, 8.5f, 18.5f, 8.5f, IM_COL32_BLACK, 1.2f);
                 return;
             }
+            case CursorKind::copy:
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                cursorLine(dl, p, s, 12.f, 6.f, 18.f, 6.f, 1.6f);
+                cursorLine(dl, p, s, 15.f, 3.f, 15.f, 9.f, 1.6f);
+                return;
+            case CursorKind::alias:
+                cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
+                // a shortcut badge: a small arrow pointing north-east
+                cursorLine(dl, p, s, 12.f, 10.f, 18.f, 4.f, 1.6f);
+                cursorLine(dl, p, s, 14.f, 4.f, 18.f, 4.f, 1.6f);
+                cursorLine(dl, p, s, 18.f, 4.f, 18.f, 8.f, 1.6f);
+                return;
             default:
                 cursorPoly(dl, arrow, 7, p, s, 1.f, 0.f);
                 return;
+        }
+    }
+
+    // ImGui's own cursor requests (widget hover, resize edges) fold into
+    // the same currency the wayland side speaks
+    CursorKind imguiCursorKind(ImGuiMouseCursor c) {
+        switch (c) {
+            case ImGuiMouseCursor_None:
+                return CursorKind::hidden;
+            case ImGuiMouseCursor_TextInput:
+                return CursorKind::text;
+            case ImGuiMouseCursor_ResizeAll:
+                return CursorKind::move;
+            case ImGuiMouseCursor_ResizeNS:
+                return CursorKind::nsResize;
+            case ImGuiMouseCursor_ResizeEW:
+                return CursorKind::ewResize;
+            case ImGuiMouseCursor_ResizeNESW:
+                return CursorKind::neswResize;
+            case ImGuiMouseCursor_ResizeNWSE:
+                return CursorKind::nwseResize;
+            case ImGuiMouseCursor_Hand:
+                return CursorKind::pointer;
+            case ImGuiMouseCursor_Wait:
+                return CursorKind::wait;
+            case ImGuiMouseCursor_Progress:
+                return CursorKind::progress;
+            case ImGuiMouseCursor_NotAllowed:
+                return CursorKind::notAllowed;
+            default:
+                return CursorKind::def;
         }
     }
 }
@@ -532,7 +722,7 @@ void DesktopImpl::markTreeUnhovered(Surface& s) {
 }
 
 void DesktopImpl::drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale, int kind) {
-    drawMouseCursor(dl, pos, scale, kind);
+    drawCursorKind(dl, pos, scale, (CursorKind)kind);
 }
 
 void DesktopImpl::clampPos() {
@@ -2013,51 +2203,11 @@ void DesktopImpl::buildUi(Scene& scene) {
 void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
     float uiScale = comp->settings->uiScale();
     Surface* cs = overClient && scene.cursorSurface && scene.cursorSurface->texture ? scene.cursorSurface : nullptr;
+    // ImGui's widget-driven choice, unless a hovered client named a shape
+    CursorKind kind = imguiCursorKind(ImGui::GetMouseCursor());
 
-    if (cs) {
-        ImGui::SetMouseCursor(ImGuiMouseCursor_None);
-    } else if (overClient && scene.cursorShape != CursorKind::unset) {
-        ImGuiMouseCursor c = ImGuiMouseCursor_Arrow;
-
-        switch (scene.cursorShape) {
-            case CursorKind::hidden:
-                c = ImGuiMouseCursor_None;
-                break;
-            case CursorKind::text:
-                c = ImGuiMouseCursor_TextInput;
-                break;
-            case CursorKind::hand:
-                c = ImGuiMouseCursor_Hand;
-                break;
-            case CursorKind::grab:
-                c = ImGuiMouseCursor_Hand;
-                break;
-            case CursorKind::move:
-                c = ImGuiMouseCursor_ResizeAll;
-                break;
-            case CursorKind::nsResize:
-                c = ImGuiMouseCursor_ResizeNS;
-                break;
-            case CursorKind::ewResize:
-                c = ImGuiMouseCursor_ResizeEW;
-                break;
-            case CursorKind::neswResize:
-                c = ImGuiMouseCursor_ResizeNESW;
-                break;
-            case CursorKind::nwseResize:
-                c = ImGuiMouseCursor_ResizeNWSE;
-                break;
-            case CursorKind::notAllowed:
-                c = ImGuiMouseCursor_NotAllowed;
-                break;
-            case CursorKind::wait:
-                c = ImGuiMouseCursor_Wait;
-                break;
-            default:
-                break;
-        }
-
-        ImGui::SetMouseCursor(c);
+    if (!cs && overClient && scene.cursorShape != CursorKind::unset) {
+        kind = scene.cursorShape;
     }
 
     if (!scene.drawCursor) {
@@ -2065,22 +2215,21 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
     }
 
     ImVec2 mp = ImGui::GetMousePos();
-    int kind = ImGui::GetMouseCursor();
 
-    if (renderer->cursorPlane(kind, cs, mp.x, mp.y, scene.cursorHotX, scene.cursorHotY)) {
+    if (renderer->cursorPlane((int)kind, cs, mp.x, mp.y, scene.cursorHotX, scene.cursorHotY)) {
         return;
     }
 
 #ifdef IMWAY_FOR_TESTS
     if (getenv("IMWAY_DEBUG_CURSOR") && scene.framesDone % 120 == 0) {
-        *(comp->log) << "cursor dbg: kind "_sv << kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
+        *(comp->log) << "cursor dbg: kind "_sv << (int)kind << ", mp "_sv << mp.x << ","_sv << mp.y << ", overClient "_sv << (int)overClient << ", cs "_sv << (int)(cs != nullptr) << ", shape "_sv << (int)scene.cursorShape << endL;
     }
 #endif
 
     if (cs) {
         renderer->drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
-    } else if (kind != ImGuiMouseCursor_None) {
-        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings->cursorScale(), kind);
+    } else if (kind != CursorKind::hidden) {
+        drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings->cursorScale(), (int)kind);
     }
 }
 

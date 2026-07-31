@@ -361,20 +361,48 @@ struct Popup: stl::IntrusiveNode {
     bool grab = false;
 };
 
+// mirrors the wp_cursor_shape_device_v1 shape values one to one, so the
+// validated wire value casts straight into the enum; unset = 0 sits below
+// the protocol range, hidden is compositor-internal state above it
 enum class CursorKind {
     unset,
-    hidden,
     def,
+    contextMenu,
+    help,
+    pointer,
+    progress,
+    wait,
+    cell,
+    crosshair,
     text,
-    hand,
-    grab,
+    verticalText,
+    alias,
+    copy,
     move,
-    nsResize,
+    noDrop,
+    notAllowed,
+    grab,
+    grabbing,
+    eResize,
+    nResize,
+    neResize,
+    nwResize,
+    sResize,
+    seResize,
+    swResize,
+    wResize,
     ewResize,
+    nsResize,
     neswResize,
     nwseResize,
-    notAllowed,
-    wait,
+    colResize,
+    rowResize,
+    allScroll,
+    zoomIn,
+    zoomOut,
+    dndAsk,
+    allResize,
+    hidden,
 };
 
 struct Scene {

@@ -9958,49 +9958,17 @@ namespace {
         }
     }
 
+    // the scene's CursorKind mirrors the wire shape values one to one; the
+    // anchors below catch any drift between the enum and the protocol
+    static_assert((u32)CursorKind::def == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT, "CursorKind drifted from the wire values");
+    static_assert((u32)CursorKind::text == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT, "CursorKind drifted from the wire values");
+    static_assert((u32)CursorKind::grabbing == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING, "CursorKind drifted from the wire values");
+    static_assert((u32)CursorKind::zoomOut == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT, "CursorKind drifted from the wire values");
+    static_assert((u32)CursorKind::allResize == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE, "CursorKind drifted from the wire values");
+
     CursorKind cursorKindFromShape(u32 shape) {
-        switch (shape) {
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT:
-                return CursorKind::text;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER:
-                return CursorKind::hand;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING:
-                return CursorKind::grab;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE:
-                return CursorKind::move;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK:
-                return CursorKind::hand;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ROW_RESIZE:
-                return CursorKind::nsResize;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COL_RESIZE:
-                return CursorKind::ewResize;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE:
-                return CursorKind::neswResize;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE:
-                return CursorKind::nwseResize;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NO_DROP:
-                return CursorKind::notAllowed;
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT:
-            case WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_PROGRESS:
-                return CursorKind::wait;
-            default:
-                return CursorKind::def;
-        }
+        // set_shape already validated the value against the bound version
+        return (CursorKind)shape;
     }
 
     void cursorShapeDeviceSetShape(wl_client* client, wl_resource* res, u32 serial, u32 shape) {

@@ -429,13 +429,13 @@ namespace {
         int hwCapW = 0, hwCapH = 0;
         int hwHotX = 0, hwHotY = 0;
         bool hwVisible = false;
-        int hwKind = -2;       // ImGuiMouseCursor of the uploaded image; -2 nothing, -3 client surface
+        int hwKind = -2;       // CursorKind of the uploaded image; -2 nothing, -3 client surface
         int pendingShape = -1; // shape waiting for end-of-frame rasterization
         // weak: identity of the uploaded cursor surface; a recycled
         // allocation must not read as "already uploaded"
         Weak<Surface> hwSurf;
         bool hwSurfStale = false;
-        Vector<u32> hwShapeCache[ImGuiMouseCursor_COUNT];
+        Vector<u32> hwShapeCache[(int)CursorKind::hidden];
         Vector<u32> hwScratch;
 
         // one-off offscreen rendering of cursor shapes
@@ -3389,15 +3389,15 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         return false;
     }
 
-    if (kind == ImGuiMouseCursor_None) {
+    if (kind == (int)CursorKind::hidden) {
         hwVisible = false;
         output->setCursorPos(0, 0, false);
 
         return true;
     }
 
-    if (kind < 0 || kind >= ImGuiMouseCursor_COUNT) {
-        kind = ImGuiMouseCursor_Arrow;
+    if (kind <= (int)CursorKind::unset || kind >= (int)CursorKind::hidden) {
+        kind = (int)CursorKind::def;
     }
 
     if (hwKind != kind) {
