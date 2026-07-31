@@ -5,6 +5,7 @@ import os
 
 
 std_build = os.path.join("third_party", "libstd", "build.py")
+plt_build = os.path.join("third_party", "plt", "build.py")
 
 
 flags.allow({
@@ -48,6 +49,12 @@ pulse = pkg_config("libpulse", required=False)
 pam = pkg_config("pam", required=False)
 
 libstd = import_build(std_build, "libstd.a", extra_cflags=["-Wno-error"])
+plt = import_build(
+    plt_build,
+    "libplt.a",
+    extra_cflags=["-Wno-error"],
+    extra_cppflags=["-Dno_vendored_std", "-I$(S)/../libstd"],
+)
 system = dependency(ldflags=["-lev", "-lcrypt"])
 # Vulkan's canonical `VkFoo info{VK_STRUCTURE_TYPE_FOO}` initialization zeros
 # the remaining aggregate fields by design; Clang otherwise diagnoses every
@@ -205,7 +212,7 @@ prod_sources = [s for s in imway_sources
                 if not s.endswith("/control.cpp") and not s.endswith("/kms_fake.cpp")]
 
 imway_deps = [
-    settings_codegen, imgui, protocols, libstd,
+    settings_codegen, imgui, protocols, plt, libstd,
     wayland_server, wayland_client, drm, libinput, udev, xkb, seat, dbus, glfw,
     png, jxl, lcms, display_info, vulkan, lunasvg, system, sndio, pulse, pam,
 ]
@@ -216,11 +223,9 @@ imway = program(
     deps=imway_deps,
 )
 
-# same compositor, rebuilt for the tests (IMWAY_FOR_TESTS): the small-object
-# allocator poisons memory on alloc/free, the test-only env knobs compile in,
-# and frame pointers are kept so gdb can walk a hung compositor's stack. The
-# integration tests run against this binary so a use-after-free or
-# use-before-init surfaces as a crash
+# same compositor, rebuilt for the tests (IMWAY_FOR_TESTS): the test-only env
+# knobs compile in, and frame pointers are kept so gdb can walk a hung
+# compositor's stack
 imway_test = program(
     name="imway_test",
     output="$(B)/imway_test",

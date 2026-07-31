@@ -9,6 +9,7 @@
 
 namespace stl {
     class ObjPool;
+    class SmallObjAllocator;
     struct ThreadPool;
 }
 
@@ -34,7 +35,6 @@ struct Renderer;
 struct Desktop;
 struct Scene;
 struct Session;
-struct SmallObjAllocator;
 struct StatusNotifier;
 struct Supervisor;
 struct Wayland;
@@ -67,7 +67,7 @@ struct Composer {
     // logs through it from its first line
     Log* log = nullptr;
     stl::ObjPool* pool = nullptr;
-    SmallObjAllocator* alloc = nullptr;
+    stl::SmallObjAllocator* alloc = nullptr;
     struct ev_loop* loop = nullptr;
     // One shared background lane for bounded blocking/CPU work. Subsystems
     // submit through OffloadJob; they must not create private worker pools.

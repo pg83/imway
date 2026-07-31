@@ -22,7 +22,6 @@
 #include "frame_capture.h"
 #include "icon_provider.h"
 #include "frame_listener.h"
-#include "small_obj_allocator.h"
 
 #include <std/ios/sys.h>
 #include <std/str/view.h>
@@ -31,6 +30,7 @@
 #include <std/dbg/verify.h>
 #include <std/str/builder.h>
 #include <std/mem/obj_pool.h>
+#include <std/mem/small_obj_allocator.h>
 
 #include <new>
 #include <ev.h>

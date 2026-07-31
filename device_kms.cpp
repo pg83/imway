@@ -16,7 +16,6 @@
 #include "offload_job.h"
 #include "kms_intercept.h"
 #include "frame_listener.h"
-#include "small_obj_allocator.h"
 
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
@@ -33,6 +32,7 @@
 #include <std/ios/fs_utils.h>
 #include <std/mem/obj_pool.h>
 #include <std/sys/event_fd.h>
+#include <std/mem/small_obj_allocator.h>
 
 #include <ev.h>
 #include <math.h>

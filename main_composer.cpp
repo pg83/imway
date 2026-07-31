@@ -28,7 +28,6 @@
 #include "scene.h"
 #include "status_notifier.h"
 #include "session.h"
-#include "small_obj_allocator.h"
 #include "util.h"
 #include "wayland.h"
 #include "wifi.h"
@@ -42,6 +41,7 @@
 #include <std/ios/sys.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
+#include <std/mem/small_obj_allocator.h>
 #include <std/str/builder.h>
 #include <std/sys/throw.h>
 #include <std/thr/pool.h>

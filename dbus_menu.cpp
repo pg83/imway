@@ -8,11 +8,11 @@
 #include "dbus_conn.h"
 #include "icon_pool.h"
 #include "intr_list.h"
-#include "small_obj_allocator.h"
 
 #include <std/ios/sys.h>
 #include <std/sym/i_map.h>
 #include <std/mem/obj_pool.h>
+#include <std/mem/small_obj_allocator.h>
 
 #include <png.h>
 #include <dbus/dbus.h>

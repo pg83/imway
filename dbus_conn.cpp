@@ -3,10 +3,10 @@
 #include "log.h"
 #include "util.h"
 #include "pooled.h"
-#include "small_obj_allocator.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
+#include <std/mem/small_obj_allocator.h>
 
 #include <ev.h>
 #include <dbus/dbus.h>

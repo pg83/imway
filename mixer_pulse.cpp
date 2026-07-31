@@ -6,7 +6,8 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
-#include "small_obj_allocator.h"
+
+#include <std/mem/small_obj_allocator.h>
 
 #if __has_include(<pulse/pulseaudio.h>)
 

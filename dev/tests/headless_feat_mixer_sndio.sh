@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-wrap: unshare -rm sh -c 'mount -t tmpfs tmpfs /var/run && exec "$@"' --
+# imway-wrap: unshare -rm sh -c 'mkdir -p /var/run && mount -t tmpfs tmpfs /var/run && exec "$@"' --
 # imway-env: AUDIODEVICE=snd/0
 # imway-pre: printf 'pcm.!hw {\n@args [ CARD DEV SUBDEV ]\n@args.CARD { type string default "0" }\n@args.DEV { type integer default 0 }\n@args.SUBDEV { type integer default 0 }\ntype null\n}\n' > null.conf; base=$(strings "$(command -v sndiod)" | grep -m1 "^/ix/store/.*share/alsa$"); unshare -U -f sh -c "(ALSA_CONFIG_PATH=$base/alsa.conf:$PWD/null.conf timeout 120 sndiod -dd -f rsnd/0 -U 0 >sndiod.log 2>&1 &)"; for i in $(seq 50); do ls /var/run/sndiod-*/sock0 >/dev/null 2>&1 && break; sleep 0.1; done; d=$(ls -d /var/run/sndiod-* 2>/dev/null | head -1); [ -n "$d" ] && ln -sfn "${d##*/}" /var/run/sndiod && [ -S /var/run/sndiod/sock0 ] || { echo "private sndiod did not come up"; cat sndiod.log 2>/dev/null; exit 1; }
 # Volume through a private sndiod: the whole run lives in its own mount
