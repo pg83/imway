@@ -1,5 +1,7 @@
 #pragma once
 
+#include "clipboard.h"
+
 #include <std/str/view.h>
 #include <std/sys/types.h>
 
@@ -18,9 +20,49 @@ namespace plt {
         void* window;
     };
 
+    // The union of the wp_cursor_shape_device_v1 shapes and the public
+    // NSCursor cursors, collapsed where both platforms mean the same thing
+    // (pointer covers pointingHandCursor, grab covers openHandCursor, and so
+    // on). A backend without a native cursor for a value substitutes the
+    // closest one it has.
     enum class PointerIcon : u8 {
+        Default,
+        ContextMenu,
+        Help,
+        Pointer,
+        Progress,
+        Wait,
+        Cell,
+        Crosshair,
         Text,
-        Link
+        VerticalText,
+        Alias,
+        Copy,
+        Move,
+        NoDrop,
+        NotAllowed,
+        Grab,
+        Grabbing,
+        ResizeEast,
+        ResizeNorth,
+        ResizeNorthEast,
+        ResizeNorthWest,
+        ResizeSouth,
+        ResizeSouthEast,
+        ResizeSouthWest,
+        ResizeWest,
+        ResizeEastWest,
+        ResizeNorthSouth,
+        ResizeNorthEastSouthWest,
+        ResizeNorthWestSouthEast,
+        ResizeColumn,
+        ResizeRow,
+        AllScroll,
+        ZoomIn,
+        ZoomOut,
+        DndAsk,
+        ResizeAll,
+        DisappearingItem
     };
 
     struct WindowInfo {
@@ -45,14 +87,6 @@ namespace plt {
     struct FrameCallback {
         // Returns true when a frame was submitted for presentation.
         virtual bool frame(const WindowInfo& info) = 0;
-    };
-
-    struct ClipboardRead {
-        // chunk is valid only for the duration of this call. Returning false
-        // stops the transfer and completes it with success=false.
-        virtual bool data(stl::StringView chunk) = 0;
-        // Called exactly once unless the transfer is cancelled.
-        virtual void done(bool success) = 0;
     };
 
     struct WindowOptions {
@@ -84,16 +118,13 @@ namespace plt {
         virtual void requestMinimumSize(u32 width, u32 height) = 0;
         virtual void requestResizeUnit(u32 width, u32 height, u32 baseWidth, u32 baseHeight) = 0;
 
-        // On macOS "primary" maps to the Find pasteboard: the platform has no
-        // primary selection, and the Find pasteboard is the closest persistent
-        // per-application slot. Reads may therefore observe search-field text.
-        virtual void requestReadPrimary(ClipboardRead& read) = 0;
-        virtual void requestReadClipboard(ClipboardRead& read) = 0;
-        // After this returns, read receives no more callbacks for cancelled transfers.
-        virtual void cancelClipboardRead(ClipboardRead& read) = 0;
-        virtual void requestWritePrimary(stl::StringView content) = 0;
-        virtual void requestWriteClipboard(stl::StringView content) = 0;
-        virtual void requestWriteClipboard(stl::StringView mime, stl::StringView content) = 0;
+        // The primary selection. On macOS it maps to the Find pasteboard: the
+        // platform has no primary selection, and the Find pasteboard is the
+        // closest persistent per-application slot. Reads may therefore observe
+        // search-field text.
+        virtual Clipboard* primary() = 0;
+        // The regular clipboard.
+        virtual Clipboard* secondary() = 0;
         virtual void requestPointerIcon(PointerIcon icon) = 0;
         // Caret rectangle in surface pixels. Input methods position their
         // candidate window next to it (text-input-v3 cursor rectangle on

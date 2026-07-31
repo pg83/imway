@@ -138,6 +138,7 @@ namespace {
 
     ImGuiKey printableKey(u32 codepoint);
     int mouseButtonIndex(plt::PointerButton button);
+    plt::PointerIcon pointerIcon(ImGuiMouseCursor cursor);
 
     struct ImGuiPltImpl final: ImGuiPlt, plt::InputSink {
         plt::InputSink* sink() override;
@@ -154,6 +155,9 @@ namespace {
         void flush() override;
 
         u64 frameNs = 0;
+        // plt windows start with the Text icon; the first newFrame pushes
+        // the ImGui choice (normally Default) by differing from it
+        plt::PointerIcon icon = plt::PointerIcon::Text;
     };
 
     // ImGui keys name US-layout positions, so the layout-independent base
@@ -200,6 +204,33 @@ namespace {
         }
     }
 
+    plt::PointerIcon pointerIcon(ImGuiMouseCursor cursor) {
+        switch (cursor) {
+            case ImGuiMouseCursor_TextInput:
+                return plt::PointerIcon::Text;
+            case ImGuiMouseCursor_ResizeAll:
+                return plt::PointerIcon::ResizeAll;
+            case ImGuiMouseCursor_ResizeNS:
+                return plt::PointerIcon::ResizeNorthSouth;
+            case ImGuiMouseCursor_ResizeEW:
+                return plt::PointerIcon::ResizeEastWest;
+            case ImGuiMouseCursor_ResizeNESW:
+                return plt::PointerIcon::ResizeNorthEastSouthWest;
+            case ImGuiMouseCursor_ResizeNWSE:
+                return plt::PointerIcon::ResizeNorthWestSouthEast;
+            case ImGuiMouseCursor_Hand:
+                return plt::PointerIcon::Pointer;
+            case ImGuiMouseCursor_Wait:
+                return plt::PointerIcon::Wait;
+            case ImGuiMouseCursor_Progress:
+                return plt::PointerIcon::Progress;
+            case ImGuiMouseCursor_NotAllowed:
+                return plt::PointerIcon::NotAllowed;
+            default:
+                return plt::PointerIcon::Default;
+        }
+    }
+
     int mouseButtonIndex(plt::PointerButton button) {
         switch (button) {
             case plt::PointerButton::Primary:
@@ -236,6 +267,13 @@ namespace {
 
         io.DeltaTime = frameNs && now > frameNs ? (float)(now - frameNs) / 1e9f : 1.f / 60.f;
         frameNs = now;
+
+        plt::PointerIcon wanted = pointerIcon(ImGui::GetMouseCursor());
+
+        if (wanted != icon) {
+            icon = wanted;
+            window.requestPointerIcon(icon);
+        }
     }
 
     void ImGuiPltImpl::key(const plt::KeyInput& input) {

@@ -12,15 +12,15 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "viewporter-client-protocol-code.h"
 #include "xdg-activation-v1-client-protocol.h"
-#include "tablet-unstable-v2-client-protocol.h"
 #include "fractional-scale-v1-client-protocol.h"
-#include "cursor-shape-v1-client-protocol-code.h"
+#include "tablet-unstable-v2-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
-#include "xdg-activation-v1-client-protocol-code.h"
 #include "tablet-unstable-v2-client-protocol-code.h"
+#include "cursor-shape-v1-client-protocol-code.h"
+#include "xdg-activation-v1-client-protocol-code.h"
 #include "fractional-scale-v1-client-protocol-code.h"
-#include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol-code.h"
+#include "xdg-decoration-unstable-v1-client-protocol.h"
 #include "primary-selection-unstable-v1-client-protocol.h"
 #include "xdg-decoration-unstable-v1-client-protocol-code.h"
 #include "primary-selection-unstable-v1-client-protocol-code.h"
@@ -33,22 +33,21 @@
 #include <std/lib/vector.h>
 #include <std/thr/poll_fd.h>
 #include <std/mem/obj_pool.h>
-#include <std/mem/small_obj_allocator.h>
 
 #include <cerrno>
 #include <poll.h>
 #include <climits>
 #include <cstdlib>
 #include <fcntl.h>
+#include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
-#include <pthread.h>
 #include <sys/mman.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 #include <linux/input-event-codes.h>
-#include <xkbcommon/xkbcommon-compose.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
+#include <xkbcommon/xkbcommon-compose.h>
 
 using namespace stl;
 using namespace plt;
@@ -112,12 +111,13 @@ namespace {
         const char* mime() const;
     };
 
-    struct SelectionContent {
-        SelectionContent(StringView mime, StringView content);
+    struct ClipboardImpl final: public Clipboard {
+        void read(ClipboardRead& read) override;
+        void write(StringView content) override;
+        void cancel(ClipboardRead& read) override;
 
-        SelectionContent* next = nullptr;
-        Buffer mime;
-        Buffer content;
+        WindowImpl* window = nullptr;
+        bool primary = false;
     };
 
     struct WindowImpl final: public Window, public TimerCallback {
@@ -140,12 +140,8 @@ namespace {
         void requestMinimumSize(u32 width, u32 height) override;
         void requestResizeUnit(u32 width, u32 height, u32 baseWidth, u32 baseHeight) override;
         WindowInfo info() const override;
-        void requestReadPrimary(ClipboardRead& read) override;
-        void requestReadClipboard(ClipboardRead& read) override;
-        void cancelClipboardRead(ClipboardRead& read) override;
-        void requestWritePrimary(StringView content) override;
-        void requestWriteClipboard(StringView content) override;
-        void requestWriteClipboard(StringView mime, StringView content) override;
+        Clipboard* primary() override;
+        Clipboard* secondary() override;
         void requestPointerIcon(PointerIcon icon) override;
         void requestTextInputRect(i32 x, i32 y, u32 width, u32 height) override;
         RenderContext renderContext() const override;
@@ -182,6 +178,8 @@ namespace {
         struct wp_fractional_scale_v1* fractionalScale = nullptr;
         struct wl_callback* frameCallback = nullptr;
         struct xdg_activation_token_v1* activationToken = nullptr;
+        ClipboardImpl primarySelection;
+        ClipboardImpl clipboardSelection;
         Buffer title;
         u32 logicalWidth = 1;
         u32 logicalHeight = 1;
@@ -253,9 +251,6 @@ namespace {
         void applyClipboardSelection();
         void applyPrimarySelection();
         void setClipboard(StringView content);
-        void setClipboard(StringView mime, StringView content);
-        void clearClipboard();
-        const SelectionContent* clipboardContent(StringView mime) const;
         void setPrimary(StringView content);
         void setCursor(WindowImpl& window);
         void activate(WindowImpl& window);
@@ -272,8 +267,6 @@ namespace {
         void textInputRectChanged(WindowImpl& window, bool commit);
 
         PollerImpl* poller_ = nullptr;
-        ObjPool::Ref smallObjectPool_;
-        SmallObjAllocator* smallObjects_ = nullptr;
         struct wl_display* display = nullptr;
         struct wl_registry* registry = nullptr;
         struct wl_compositor* compositor = nullptr;
@@ -293,6 +286,7 @@ namespace {
         struct xdg_activation_v1* activation = nullptr;
         struct wp_cursor_shape_manager_v1* cursorShapeManager = nullptr;
         struct wp_cursor_shape_device_v1* cursorShapeDevice = nullptr;
+        u32 cursorShapeVersion = 0;
         struct wl_output* output = nullptr;
         struct zwp_text_input_manager_v3* textInputManager = nullptr;
         struct zwp_text_input_v3* textInput = nullptr;
@@ -330,7 +324,7 @@ namespace {
         Offer clipboardOffer;
         Offer pendingPrimaryOffer;
         Offer primaryOffer;
-        SelectionContent* clipboardContents = nullptr;
+        Buffer clipboardContent;
         Buffer primaryContent;
         SelectionTransfer* transfers = nullptr;
         bool clipboardPending = false;
@@ -532,14 +526,9 @@ namespace {
     void dataSourceTarget(void*, struct wl_data_source*, const char*) {
     }
 
-    void dataSourceSend(void* data, struct wl_data_source*, const char* mime, int fd) {
+    void dataSourceSend(void* data, struct wl_data_source*, const char*, int fd) {
         PlatformImpl& platform = *(PlatformImpl*)(data);
-        const SelectionContent* const content = platform.clipboardContent(StringView(mime));
-        if (content == nullptr) {
-            close(fd);
-            return;
-        }
-        platform.writeSelection(fd, StringView(content->content));
+        platform.writeSelection(fd, StringView(platform.clipboardContent));
     }
 
     void dataSourceCancelled(void* data, struct wl_data_source* source) {
@@ -1030,12 +1019,98 @@ namespace {
         .language = [](void*, struct zwp_text_input_v3*, const char*) {},
         .preedit_hint = [](void*, struct zwp_text_input_v3*, u32, u32, u32) {},
     };
-}
 
-SelectionContent::SelectionContent(StringView mime_, StringView content_)
-    : mime(mime_)
-    , content(content_)
-{
+    u32 cursorShape(PointerIcon icon, u32 version) {
+        switch (icon) {
+            case PointerIcon::Default:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT;
+            case PointerIcon::ContextMenu:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CONTEXT_MENU;
+            case PointerIcon::Help:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_HELP;
+            case PointerIcon::Pointer:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER;
+            case PointerIcon::Progress:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_PROGRESS;
+            case PointerIcon::Wait:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_WAIT;
+            case PointerIcon::Cell:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CELL;
+            case PointerIcon::Crosshair:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_CROSSHAIR;
+            case PointerIcon::Text:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT;
+            case PointerIcon::VerticalText:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_VERTICAL_TEXT;
+            case PointerIcon::Alias:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALIAS;
+            case PointerIcon::Copy:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COPY;
+            case PointerIcon::Move:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE;
+            case PointerIcon::NoDrop:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NO_DROP;
+            case PointerIcon::NotAllowed:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NOT_ALLOWED;
+            case PointerIcon::Grab:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRAB;
+            case PointerIcon::Grabbing:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_GRABBING;
+            case PointerIcon::ResizeEast:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_E_RESIZE;
+            case PointerIcon::ResizeNorth:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_N_RESIZE;
+            case PointerIcon::ResizeNorthEast:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NE_RESIZE;
+            case PointerIcon::ResizeNorthWest:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NW_RESIZE;
+            case PointerIcon::ResizeSouth:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_S_RESIZE;
+            case PointerIcon::ResizeSouthEast:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SE_RESIZE;
+            case PointerIcon::ResizeSouthWest:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_SW_RESIZE;
+            case PointerIcon::ResizeWest:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_W_RESIZE;
+            case PointerIcon::ResizeEastWest:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_EW_RESIZE;
+            case PointerIcon::ResizeNorthSouth:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NS_RESIZE;
+            case PointerIcon::ResizeNorthEastSouthWest:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NESW_RESIZE;
+            case PointerIcon::ResizeNorthWestSouthEast:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NWSE_RESIZE;
+            case PointerIcon::ResizeColumn:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COL_RESIZE;
+            case PointerIcon::ResizeRow:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ROW_RESIZE;
+            case PointerIcon::AllScroll:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_SCROLL;
+            case PointerIcon::ZoomIn:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_IN;
+            case PointerIcon::ZoomOut:
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ZOOM_OUT;
+            case PointerIcon::DndAsk:
+                // dnd_ask exists since cursor-shape v2; a v1 compositor gets
+                // the copy shape, the usual visual for an undecided drag.
+                if (version >= 2) {
+                    return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DND_ASK;
+                }
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_COPY;
+            case PointerIcon::ResizeAll:
+                // all_resize exists since cursor-shape v2; move is the closest
+                // omnidirectional shape a v1 compositor offers.
+                if (version >= 2) {
+                    return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE;
+                }
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_MOVE;
+            case PointerIcon::DisappearingItem:
+                // Cocoa-only poof cursor: the item vanishes when dropped, so
+                // no-drop carries the closest meaning.
+                return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_NO_DROP;
+        }
+        return WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_DEFAULT;
+    }
 }
 
 void Offer::reset() {
@@ -1216,13 +1291,11 @@ void SelectionTransfer::dispose() {
         fd = -1;
     }
     platform.removeTransfer(*this);
-    platform.smallObjects_->release(this);
+    delete this;
 }
 
 PlatformImpl::PlatformImpl(ObjPool& owner)
     : poller_(owner.make<PollerImpl>(owner))
-    , smallObjectPool_(ObjPool::fromMemory())
-    , smallObjects_(SmallObjAllocator::create(smallObjectPool_.mutPtr()))
 {
     display = wl_display_connect(nullptr);
     if (display == nullptr) {
@@ -1273,7 +1346,6 @@ PlatformImpl::~PlatformImpl() {
     if (clipboardSource != nullptr) {
         wl_data_source_destroy(clipboardSource);
     }
-    clearClipboard();
     if (primarySource != nullptr) {
         zwp_primary_selection_source_v1_destroy(primarySource);
     }
@@ -1427,7 +1499,8 @@ void PlatformImpl::bindRegistry(u32 name, const char* interface, u32 version) {
     } else if (StringView(interface) == StringView(xdg_activation_v1_interface.name)) {
         activation = (struct xdg_activation_v1*)(wl_registry_bind(registry, name, &xdg_activation_v1_interface, 1));
     } else if (StringView(interface) == StringView(wp_cursor_shape_manager_v1_interface.name)) {
-        cursorShapeManager = (struct wp_cursor_shape_manager_v1*)(wl_registry_bind(registry, name, &wp_cursor_shape_manager_v1_interface, 1));
+        cursorShapeVersion = min(version, 2u);
+        cursorShapeManager = (struct wp_cursor_shape_manager_v1*)(wl_registry_bind(registry, name, &wp_cursor_shape_manager_v1_interface, cursorShapeVersion));
     } else if (StringView(interface) == StringView(zwp_text_input_manager_v3_interface.name)) {
         textInputManager = (struct zwp_text_input_manager_v3*)(wl_registry_bind(registry, name, &zwp_text_input_manager_v3_interface, 1));
         createSelectionDevices();
@@ -1998,32 +2071,15 @@ void PlatformImpl::stopRepeat() {
 }
 
 void PlatformImpl::writeSelection(int fd, StringView content) {
-    smallObjects_->make<SelectionTransfer>(*this, fd, nullptr, nullptr, content, true, true)->start();
-}
-
-const SelectionContent* PlatformImpl::clipboardContent(StringView mime) const {
-    for (const SelectionContent* content = clipboardContents; content != nullptr; content = content->next) {
-        if (StringView(content->mime) == mime) {
-            return content;
-        }
-    }
-    return nullptr;
-}
-
-void PlatformImpl::clearClipboard() {
-    while (clipboardContents != nullptr) {
-        SelectionContent* const content = clipboardContents;
-        clipboardContents = content->next;
-        smallObjects_->release(content);
-    }
+    (new SelectionTransfer(*this, fd, nullptr, nullptr, content, true, true))->start();
 }
 
 void PlatformImpl::readSelection(int fd, WindowImpl& window, ClipboardRead& read) {
-    smallObjects_->make<SelectionTransfer>(*this, fd, &window, &read, StringView(), false, true)->start();
+    (new SelectionTransfer(*this, fd, &window, &read, {}, false, true))->start();
 }
 
 void PlatformImpl::completeSelection(WindowImpl& window, ClipboardRead& read, StringView content, bool success) {
-    smallObjects_->make<SelectionTransfer>(*this, -1, &window, &read, content, false, success)->start();
+    (new SelectionTransfer(*this, -1, &window, &read, content, false, success))->start();
 }
 
 void PlatformImpl::cancelSelection(WindowImpl& window, ClipboardRead* read) {
@@ -2055,9 +2111,8 @@ void PlatformImpl::applyClipboardSelection() {
     }
     clipboardSource = wl_data_device_manager_create_data_source(dataDeviceManager);
     wl_data_source_add_listener(clipboardSource, &dataSourceListener, this);
-    for (SelectionContent* content = clipboardContents; content != nullptr; content = content->next) {
-        wl_data_source_offer(clipboardSource, content->mime.cStr());
-    }
+    wl_data_source_offer(clipboardSource, "text/plain;charset=utf-8");
+    wl_data_source_offer(clipboardSource, "text/plain");
     wl_data_device_set_selection(dataDevice, clipboardSource, latestSerial);
     clipboardPending = false;
     flushDisplay();
@@ -2080,28 +2135,8 @@ void PlatformImpl::applyPrimarySelection() {
 }
 
 void PlatformImpl::setClipboard(StringView content) {
-    clearClipboard();
-    clipboardContents = smallObjects_->make<SelectionContent>(utf8Mime, content);
-    clipboardContents->next = smallObjects_->make<SelectionContent>(plainMime, content);
-    clipboardPending = true;
-    applyClipboardSelection();
-}
-
-void PlatformImpl::setClipboard(StringView mime, StringView content) {
-    SelectionContent* stored = nullptr;
-    for (SelectionContent* current = clipboardContents; current != nullptr; current = current->next) {
-        if (StringView(current->mime) == mime) {
-            stored = current;
-            break;
-        }
-    }
-    if (stored == nullptr) {
-        stored = smallObjects_->make<SelectionContent>(mime, content);
-        stored->next = clipboardContents;
-        clipboardContents = stored;
-    } else {
-        stored->content = Buffer(content);
-    }
+    clipboardContent.reset();
+    clipboardContent.append(content.data(), content.length());
     clipboardPending = true;
     applyClipboardSelection();
 }
@@ -2120,8 +2155,7 @@ void PlatformImpl::setCursor(WindowImpl& window) {
     if (cursorShapeDevice == nullptr || pointerGrab.focusTarget() != &window || pointerEnterSerial == 0) {
         return;
     }
-    const u32 shape = window.cursor == PointerIcon::Link ? WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_POINTER : WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT;
-    wp_cursor_shape_device_v1_set_shape(cursorShapeDevice, pointerEnterSerial, shape);
+    wp_cursor_shape_device_v1_set_shape(cursorShapeDevice, pointerEnterSerial, cursorShape(window.cursor, cursorShapeVersion));
 }
 
 void PlatformImpl::activate(WindowImpl& window) {
@@ -2266,6 +2300,9 @@ WindowImpl::WindowImpl(PlatformImpl& platform_, const WindowOptions& options)
     , minimumWidth(max(1u, options.minimumWidth))
     , minimumHeight(max(1u, options.minimumHeight))
 {
+    primarySelection.window = this;
+    primarySelection.primary = true;
+    clipboardSelection.window = this;
     surface = wl_compositor_create_surface(platform.compositor);
     if (surface == nullptr) {
         fail(u8"wl_compositor_create_surface failed");
@@ -2592,40 +2629,41 @@ void WindowImpl::receive(Offer& offer, bool primary, ClipboardRead& read) {
     platform.readSelection(pipes[0], *this, read);
 }
 
-void WindowImpl::requestReadPrimary(ClipboardRead& read) {
-    if (platform.primarySource != nullptr) {
-        platform.completeSelection(*this, read, StringView(platform.primaryContent), true);
-    } else {
-        receive(platform.primaryOffer, true, read);
-    }
+Clipboard* WindowImpl::primary() {
+    return &primarySelection;
 }
 
-void WindowImpl::requestReadClipboard(ClipboardRead& read) {
-    if (platform.clipboardSource != nullptr) {
-        const SelectionContent* content = platform.clipboardContent(utf8Mime);
-        if (content == nullptr) {
-            content = platform.clipboardContent(plainMime);
+Clipboard* WindowImpl::secondary() {
+    return &clipboardSelection;
+}
+
+void ClipboardImpl::read(ClipboardRead& read) {
+    PlatformImpl& platform = window->platform;
+    if (primary) {
+        if (platform.primarySource != nullptr) {
+            platform.completeSelection(*window, read, StringView(platform.primaryContent), true);
+        } else {
+            window->receive(platform.primaryOffer, true, read);
         }
-        platform.completeSelection(*this, read, content == nullptr ? StringView() : StringView(content->content), content != nullptr);
     } else {
-        receive(platform.clipboardOffer, false, read);
+        if (platform.clipboardSource != nullptr) {
+            platform.completeSelection(*window, read, StringView(platform.clipboardContent), true);
+        } else {
+            window->receive(platform.clipboardOffer, false, read);
+        }
     }
 }
 
-void WindowImpl::cancelClipboardRead(ClipboardRead& read) {
-    platform.cancelSelection(*this, &read);
+void ClipboardImpl::write(StringView content) {
+    if (primary) {
+        window->platform.setPrimary(content);
+    } else {
+        window->platform.setClipboard(content);
+    }
 }
 
-void WindowImpl::requestWritePrimary(StringView content) {
-    platform.setPrimary(content);
-}
-
-void WindowImpl::requestWriteClipboard(StringView content) {
-    platform.setClipboard(content);
-}
-
-void WindowImpl::requestWriteClipboard(StringView mime, StringView content) {
-    platform.setClipboard(mime, content);
+void ClipboardImpl::cancel(ClipboardRead& read) {
+    window->platform.cancelSelection(*window, &read);
 }
 
 void WindowImpl::requestPointerIcon(PointerIcon icon) {

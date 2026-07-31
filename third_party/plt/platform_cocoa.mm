@@ -7,18 +7,18 @@
 #include "timer_queue.h"
 
 #include <std/sys/crt.h>
+#include <std/dbg/verify.h>
 #include <std/sym/i_map.h>
 #include <std/alg/minmax.h>
-#include <std/dbg/verify.h>
 #include <std/lib/buffer.h>
 #include <std/thr/poll_fd.h>
 #include <std/mem/obj_pool.h>
-#include <std/mem/small_obj_allocator.h>
 
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
 #import <CoreVideo/CVDisplayLink.h>
 #import <IOKit/hidsystem/IOLLEvent.h>
+#import <QuartzCore/CADisplayLink.h>
 #import <QuartzCore/CALayer.h>
 
 #include <errno.h>
@@ -371,10 +371,6 @@ namespace {
     struct WindowImpl;
     struct ClipboardOperation;
 
-    const StringView utf8Mime(u8"text/plain;charset=utf-8");
-    const StringView plainMime(u8"text/plain");
-    const StringView pngMime(u8"image/png");
-
     struct ArmedFD {
         ArmedFD(PollFD fd, PollCallback* callback, CFFileDescriptorRef descriptor, CFRunLoopSourceRef source);
         ~ArmedFD();
@@ -412,14 +408,6 @@ namespace {
         WriteClipboard,
     };
 
-    struct SelectionContent {
-        SelectionContent(StringView mime, StringView content);
-
-        SelectionContent* next = nullptr;
-        Buffer mime;
-        Buffer content;
-    };
-
     struct ClipboardOperation final: public TimerCallback {
         ClipboardOperation(WindowImpl& window, ClipboardOperationKind kind, ClipboardRead* read, StringView content);
 
@@ -435,6 +423,15 @@ namespace {
         bool timerArmed = true;
         bool dispatching = false;
         bool cancelled = false;
+    };
+
+    struct ClipboardImpl final: public Clipboard {
+        void read(ClipboardRead& sink) override;
+        void write(StringView content) override;
+        void cancel(ClipboardRead& sink) override;
+
+        WindowImpl* window = nullptr;
+        bool primary = false;
     };
 
     struct WindowImpl final: public Window {
@@ -456,12 +453,8 @@ namespace {
         void requestMinimumSize(u32 width, u32 height) override;
         void requestResizeUnit(u32 width, u32 height, u32 baseWidth, u32 baseHeight) override;
         WindowInfo info() const override;
-        void requestReadPrimary(ClipboardRead& sink) override;
-        void requestReadClipboard(ClipboardRead& sink) override;
-        void cancelClipboardRead(ClipboardRead& sink) override;
-        void requestWritePrimary(StringView content) override;
-        void requestWriteClipboard(StringView content) override;
-        void requestWriteClipboard(StringView mime, StringView content) override;
+        Clipboard* primary() override;
+        Clipboard* secondary() override;
         void requestPointerIcon(PointerIcon icon) override;
         void requestTextInputRect(i32 x, i32 y, u32 width, u32 height) override;
         RenderContext renderContext() const override;
@@ -489,9 +482,6 @@ namespace {
         void emitText(NSString* string, u16 modifiers);
         NSPoint pointerPosition(NSEvent* event) const;
         void writePasteboard(NSPasteboard* pasteboard, StringView content);
-        void writeClipboardPasteboard(NSPasteboard* pasteboard);
-        void clearClipboardContents();
-        void setClipboardContent(StringView mime, StringView content);
         void removeClipboardOperation(ClipboardOperation& operation);
         void applySizeConstraints();
 
@@ -516,7 +506,8 @@ namespace {
         u32 resizeUnitHeight = 1;
         u32 resizeBaseWidth = 0;
         u32 resizeBaseHeight = 0;
-        SelectionContent* clipboardContents = nullptr;
+        ClipboardImpl primaryPasteboard;
+        ClipboardImpl generalPasteboard;
         ClipboardOperation* clipboardOperations = nullptr;
         bool frameRequested = false;
         bool layerFrameRequested = false;
@@ -532,12 +523,120 @@ namespace {
         void stop() override;
 
         PollerImpl* poller_ = nullptr;
-        ObjPool::Ref smallObjectPool_;
-        SmallObjAllocator* smallObjects_ = nullptr;
     };
 
     NSString* stringFromView(StringView value) {
         return [[NSString alloc] initWithBytes:value.data() length:value.length() encoding:NSUTF8StringEncoding];
+    }
+
+    // Mirrors NSCursorFrameResizePosition, whose name cannot appear outside
+    // an @available(macOS 15) scope without an availability warning.
+    constexpr NSUInteger frameResizeTop = 1 << 0;
+    constexpr NSUInteger frameResizeLeft = 1 << 1;
+    constexpr NSUInteger frameResizeBottom = 1 << 2;
+    constexpr NSUInteger frameResizeRight = 1 << 3;
+
+    NSCursor* frameResizeCursor(NSUInteger position, NSCursor* fallback) {
+        if (@available(macOS 15.0, *)) {
+            return [NSCursor frameResizeCursorFromPosition:(NSCursorFrameResizePosition)(position) inDirections:NSCursorFrameResizeDirectionsAll];
+        }
+        return fallback;
+    }
+
+    NSCursor* pointerCursor(PointerIcon icon) {
+        switch (icon) {
+            case PointerIcon::Default:
+                return [NSCursor arrowCursor];
+            case PointerIcon::ContextMenu:
+                return [NSCursor contextualMenuCursor];
+            case PointerIcon::Help:
+                // AppKit has no public help cursor.
+                return [NSCursor arrowCursor];
+            case PointerIcon::Pointer:
+                return [NSCursor pointingHandCursor];
+            case PointerIcon::Progress:
+            case PointerIcon::Wait:
+                // AppKit shows the system busy cursor on its own; a stand-in
+                // does not exist in the public API.
+                return [NSCursor arrowCursor];
+            case PointerIcon::Cell:
+            case PointerIcon::Crosshair:
+                return [NSCursor crosshairCursor];
+            case PointerIcon::Text:
+                return [NSCursor IBeamCursor];
+            case PointerIcon::VerticalText:
+                return [NSCursor IBeamCursorForVerticalLayout];
+            case PointerIcon::Alias:
+                return [NSCursor dragLinkCursor];
+            case PointerIcon::Copy:
+                return [NSCursor dragCopyCursor];
+            case PointerIcon::DndAsk:
+                // The undecided drag has no own cursor; copy is the usual
+                // visual until the target picks the operation.
+                return [NSCursor dragCopyCursor];
+            case PointerIcon::Move:
+            case PointerIcon::AllScroll:
+            case PointerIcon::ResizeAll:
+            case PointerIcon::Grab:
+                // The open hand is the only omnidirectional-manipulation
+                // cursor AppKit offers.
+                return [NSCursor openHandCursor];
+            case PointerIcon::Grabbing:
+                return [NSCursor closedHandCursor];
+            case PointerIcon::NoDrop:
+            case PointerIcon::NotAllowed:
+                return [NSCursor operationNotAllowedCursor];
+            case PointerIcon::ResizeEast:
+                return [NSCursor resizeRightCursor];
+            case PointerIcon::ResizeNorth:
+                return [NSCursor resizeUpCursor];
+            case PointerIcon::ResizeSouth:
+                return [NSCursor resizeDownCursor];
+            case PointerIcon::ResizeWest:
+                return [NSCursor resizeLeftCursor];
+            case PointerIcon::ResizeEastWest:
+                return [NSCursor resizeLeftRightCursor];
+            case PointerIcon::ResizeNorthSouth:
+                return [NSCursor resizeUpDownCursor];
+            // Diagonal resize cursors are public API only since macOS 15;
+            // older systems fall back to the horizontal resize cursor, the
+            // closest generic resize visual.
+            case PointerIcon::ResizeNorthEast:
+            case PointerIcon::ResizeNorthEastSouthWest:
+                return frameResizeCursor(frameResizeTop | frameResizeRight, [NSCursor resizeLeftRightCursor]);
+            case PointerIcon::ResizeNorthWest:
+            case PointerIcon::ResizeNorthWestSouthEast:
+                return frameResizeCursor(frameResizeTop | frameResizeLeft, [NSCursor resizeLeftRightCursor]);
+            case PointerIcon::ResizeSouthEast:
+                return frameResizeCursor(frameResizeBottom | frameResizeRight, [NSCursor resizeLeftRightCursor]);
+            case PointerIcon::ResizeSouthWest:
+                return frameResizeCursor(frameResizeBottom | frameResizeLeft, [NSCursor resizeLeftRightCursor]);
+            case PointerIcon::ResizeColumn:
+                if (@available(macOS 15.0, *)) {
+                    return [NSCursor columnResizeCursor];
+                }
+                return [NSCursor resizeLeftRightCursor];
+            case PointerIcon::ResizeRow:
+                if (@available(macOS 15.0, *)) {
+                    return [NSCursor rowResizeCursor];
+                }
+                return [NSCursor resizeUpDownCursor];
+            case PointerIcon::ZoomIn:
+                if (@available(macOS 15.0, *)) {
+                    return [NSCursor zoomInCursor];
+                }
+                // No magnifier before macOS 15; the crosshair at least keeps
+                // the aim-at-a-spot meaning.
+                return [NSCursor crosshairCursor];
+            case PointerIcon::ZoomOut:
+                if (@available(macOS 15.0, *)) {
+                    return [NSCursor zoomOutCursor];
+                }
+                return [NSCursor crosshairCursor];
+            case PointerIcon::DisappearingItem:
+                return [NSCursor disappearingItemCursor];
+        }
+        return [NSCursor arrowCursor];
     }
 
     CVReturn displayLinkCallback(CVDisplayLinkRef, const CVTimeStamp*, const CVTimeStamp*, CVOptionFlags, CVOptionFlags*, void* context) {
@@ -560,18 +659,10 @@ namespace {
 
 PlatformImpl::PlatformImpl(ObjPool& owner)
     : poller_(owner.make<PollerImpl>(owner))
-    , smallObjectPool_(ObjPool::fromMemory())
-    , smallObjects_(SmallObjAllocator::create(smallObjectPool_.mutPtr()))
 {
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [NSApp finishLaunching];
-}
-
-SelectionContent::SelectionContent(StringView mime_, StringView content_)
-    : mime(mime_)
-    , content(content_)
-{
 }
 
 Window* PlatformImpl::createWindow(ObjPool& owner, const WindowOptions& options) {
@@ -739,13 +830,8 @@ void ClipboardOperation::ready() {
 
     const bool primary = kind == ClipboardOperationKind::ReadPrimary || kind == ClipboardOperationKind::WritePrimary;
     NSPasteboard* const pasteboard = primary ? [NSPasteboard pasteboardWithName:NSPasteboardNameFind] : [NSPasteboard generalPasteboard];
-    if (kind == ClipboardOperationKind::WritePrimary) {
+    if (kind == ClipboardOperationKind::WritePrimary || kind == ClipboardOperationKind::WriteClipboard) {
         window.writePasteboard(pasteboard, StringView(content));
-        dispose();
-        return;
-    }
-    if (kind == ClipboardOperationKind::WriteClipboard) {
-        window.writeClipboardPasteboard(pasteboard);
         dispose();
         return;
     }
@@ -786,7 +872,7 @@ void ClipboardOperation::dispose() {
         timerArmed = false;
     }
     window.removeClipboardOperation(*this);
-    window.platform.smallObjects_->release(this);
+    delete this;
 }
 
 WindowImpl::WindowImpl(PlatformImpl& platform_, const WindowOptions& options)
@@ -795,6 +881,9 @@ WindowImpl::WindowImpl(PlatformImpl& platform_, const WindowOptions& options)
     , events(options.events)
     , frame(options.frame)
 {
+    primaryPasteboard.window = this;
+    primaryPasteboard.primary = true;
+    generalPasteboard.window = this;
     const NSRect frame = NSMakeRect(0, 0, max(1u, options.width), max(1u, options.height));
     window = [[NSWindow alloc] initWithContentRect:frame styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable backing:NSBackingStoreBuffered defer:NO];
     delegate = [PltWindowDelegate new];
@@ -842,7 +931,6 @@ WindowImpl::~WindowImpl() {
     while (clipboardOperations != nullptr) {
         clipboardOperations->cancel();
     }
-    clearClipboardContents();
     if (displayLinkTarget != nil) {
         displayLinkTarget->gate.detach();
     }
@@ -1020,76 +1108,32 @@ void WindowImpl::writePasteboard(NSPasteboard* pasteboard, StringView content) {
     [pasteboard setString:value == nil ? @"" : value forType:NSPasteboardTypeString];
 }
 
-void WindowImpl::writeClipboardPasteboard(NSPasteboard* pasteboard) {
-    [pasteboard clearContents];
-    for (SelectionContent* content = clipboardContents; content != nullptr; content = content->next) {
-        const StringView mime(content->mime);
-        if (mime == utf8Mime || mime == plainMime) {
-            NSString* value = stringFromView(StringView(content->content));
-            [pasteboard setString:value == nil ? @"" : value forType:NSPasteboardTypeString];
-            continue;
-        }
-        NSString* const value = stringFromView(mime);
-        NSPasteboardType type = mime == pngMime ? NSPasteboardTypePNG : value;
-        if (type != nil) {
-            NSData* const data = [NSData dataWithBytes:content->content.data() length:content->content.length()];
-            [pasteboard setData:data forType:type];
-        }
-    }
+Clipboard* WindowImpl::primary() {
+    return &primaryPasteboard;
 }
 
-void WindowImpl::clearClipboardContents() {
-    while (clipboardContents != nullptr) {
-        SelectionContent* const content = clipboardContents;
-        clipboardContents = content->next;
-        platform.smallObjects_->release(content);
-    }
+Clipboard* WindowImpl::secondary() {
+    return &generalPasteboard;
 }
 
-void WindowImpl::setClipboardContent(StringView mime, StringView content) {
-    for (SelectionContent* stored = clipboardContents; stored != nullptr; stored = stored->next) {
-        if (StringView(stored->mime) == mime) {
-            stored->content = Buffer(content);
-            return;
-        }
-    }
-    SelectionContent* const stored = platform.smallObjects_->make<SelectionContent>(mime, content);
-    stored->next = clipboardContents;
-    clipboardContents = stored;
+void ClipboardImpl::read(ClipboardRead& sink) {
+    const ClipboardOperationKind kind = primary ? ClipboardOperationKind::ReadPrimary : ClipboardOperationKind::ReadClipboard;
+    new ClipboardOperation(*window, kind, &sink, {});
 }
 
-void WindowImpl::requestReadPrimary(ClipboardRead& sink) {
-    platform.smallObjects_->make<ClipboardOperation>(*this, ClipboardOperationKind::ReadPrimary, &sink, StringView());
+void ClipboardImpl::write(StringView content) {
+    const ClipboardOperationKind kind = primary ? ClipboardOperationKind::WritePrimary : ClipboardOperationKind::WriteClipboard;
+    new ClipboardOperation(*window, kind, nullptr, content);
 }
 
-void WindowImpl::requestReadClipboard(ClipboardRead& sink) {
-    platform.smallObjects_->make<ClipboardOperation>(*this, ClipboardOperationKind::ReadClipboard, &sink, StringView());
-}
-
-void WindowImpl::cancelClipboardRead(ClipboardRead& sink) {
-    for (ClipboardOperation* operation = clipboardOperations; operation != nullptr;) {
+void ClipboardImpl::cancel(ClipboardRead& sink) {
+    for (ClipboardOperation* operation = window->clipboardOperations; operation != nullptr;) {
         ClipboardOperation* const next = operation->next;
         if (operation->read == &sink) {
             operation->cancel();
         }
         operation = next;
     }
-}
-
-void WindowImpl::requestWritePrimary(StringView content) {
-    platform.smallObjects_->make<ClipboardOperation>(*this, ClipboardOperationKind::WritePrimary, nullptr, content);
-}
-
-void WindowImpl::requestWriteClipboard(StringView content) {
-    clearClipboardContents();
-    setClipboardContent(utf8Mime, content);
-    setClipboardContent(plainMime, content);
-    platform.smallObjects_->make<ClipboardOperation>(*this, ClipboardOperationKind::WriteClipboard, nullptr, StringView());
-}
-
-void WindowImpl::requestWriteClipboard(StringView mime, StringView content) {
-    setClipboardContent(mime, content);
-    platform.smallObjects_->make<ClipboardOperation>(*this, ClipboardOperationKind::WriteClipboard, nullptr, StringView());
 }
 
 void WindowImpl::removeClipboardOperation(ClipboardOperation& operation) {
@@ -1104,11 +1148,7 @@ void WindowImpl::removeClipboardOperation(ClipboardOperation& operation) {
 }
 
 void WindowImpl::requestPointerIcon(PointerIcon icon) {
-    if (icon == PointerIcon::Link) {
-        [[NSCursor pointingHandCursor] set];
-    } else {
-        [[NSCursor IBeamCursor] set];
-    }
+    [pointerCursor(icon) set];
 }
 
 RenderContext WindowImpl::renderContext() const {

@@ -11,8 +11,9 @@ namespace plt {
 
 // ImGui platform bindings over plt, replacing imgui_impl_glfw: the sink
 // feeds plt input events into ImGui IO, newFrame syncs the per-frame
-// display metrics. Rendering stays with imgui_impl_vulkan. The ImGui
-// context must exist before the platform loop delivers the first event.
+// display metrics and pushes the ImGui-chosen pointer icon back into the
+// window. Rendering stays with imgui_impl_vulkan. The ImGui context must
+// exist before the platform loop delivers the first event.
 struct ImGuiPlt {
     // hand this to plt::WindowOptions::input when creating the window
     virtual plt::InputSink* sink() = 0;
