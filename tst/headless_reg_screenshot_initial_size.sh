@@ -40,11 +40,17 @@ for d in 20 40 60 80 100; do
 done
 
 ctl "button left release"
-sleep 0.6
 
-rw=$(dump_field "title=imway screenshot" client_w)
-rh=$(dump_field "title=imway screenshot" client_h)
-(( rw > 900 && rh > 430 )) || {
+# transactional resize: the size lands when the viewer answers the drag's
+# configure with a buffer — poll, a loaded rasterizer answers late
+grown=0
+for _ in $(seq 1 30); do
+    sleep 0.2
+    rw=$(dump_field "title=imway screenshot" client_w)
+    rh=$(dump_field "title=imway screenshot" client_h)
+    (( rw > 900 && rh > 430 )) && { grown=1; break; }
+done
+(( grown )) || {
     echo "screenshot window did not grow: ${rw}x${rh}"
     dump_state
     exit 1
