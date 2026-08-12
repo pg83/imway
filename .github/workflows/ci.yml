@@ -71,13 +71,10 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
-          # a render node backs dmabuf fd validation and the KMS emulator's
-          # companion identity; the GPU-less runner gets one from vgem
-          ls /dev/dri/renderD* >/dev/null 2>&1 || {
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-            sudo modprobe vgem
-          }
-          ls /dev/dri/renderD* >/dev/null 2>&1 || { echo "no render node"; exit 1; }
+          # a drm node backs dmabuf fd validation and the KMS emulator's
+          # companion identity: a render node when the kernel offers one,
+          # else the hypervisor's card
+          sudo modprobe vgem 2>/dev/null || true
           ls -l /dev/dri
           sudo chmod 666 /dev/dri/*
           # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
@@ -136,11 +133,7 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
-          ls /dev/dri/renderD* >/dev/null 2>&1 || {
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-            sudo modprobe vgem
-          }
-          ls /dev/dri/renderD* >/dev/null 2>&1 || { echo "no render node"; exit 1; }
+          sudo modprobe vgem 2>/dev/null || true
           sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 
@@ -267,11 +260,7 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
-          ls /dev/dri/renderD* >/dev/null 2>&1 || {
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-            sudo modprobe vgem
-          }
-          ls /dev/dri/renderD* >/dev/null 2>&1 || { echo "no render node"; exit 1; }
+          sudo modprobe vgem 2>/dev/null || true
           sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 
@@ -367,11 +356,7 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
-          ls /dev/dri/renderD* >/dev/null 2>&1 || {
-            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-            sudo modprobe vgem
-          }
-          ls /dev/dri/renderD* >/dev/null 2>&1 || { echo "no render node"; exit 1; }
+          sudo modprobe vgem 2>/dev/null || true
           sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 

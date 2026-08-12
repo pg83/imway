@@ -1295,6 +1295,18 @@ int FakeKms::openDevice() {
         render = open(path, O_RDWR | O_CLOEXEC);
     }
 
+    // no render node (a virtual host): a card node still answers the fstat
+    // identity and caps; every modeset ioctl stays emulated, and syncobj
+    // forwards fail cleanly into "no explicit sync"
+    for (int i = 0; i < 8 && render < 0; i++) {
+        char path[32] = "/dev/dri/card";
+        int n = (int)strlen(path);
+
+        path[n] = (char)('0' + i);
+        path[n + 1] = 0;
+        render = open(path, O_RDWR | O_CLOEXEC);
+    }
+
     if (render < 0) {
         close(pipeFds[0]);
         close(pipeFds[1]);

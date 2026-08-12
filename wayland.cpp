@@ -9622,6 +9622,23 @@ namespace {
     }
 
     bool dmabufFdsImportable(WaylandImpl& srv, const DmabufBuffer& b) {
+        for (int i = 0; i < b.nplanes; i++) {
+            // only a real dma-buf answers its sync ioctl: ENOTTY marks an
+            // imposter fd (a plain memfd) before any driver sees it
+            dma_buf_sync sync{};
+
+            sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ;
+
+            if (ioctl(b.fds[i], DMA_BUF_IOCTL_SYNC, &sync) != 0) {
+                if (errno == ENOTTY || errno == EBADF) {
+                    return false;
+                }
+            } else {
+                sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+                ioctl(b.fds[i], DMA_BUF_IOCTL_SYNC, &sync);
+            }
+        }
+
         if (srv.drmFd < 0) {
             return true;
         }
@@ -9630,6 +9647,12 @@ namespace {
             u32 handle = 0;
 
             if (drmPrimeFDToHandle(srv.drmFd, b.fds[i], &handle) != 0) {
+                // an unauthenticated card fd cannot judge (EACCES); only a
+                // clean driver verdict rejects
+                if (errno == EACCES || errno == EPERM) {
+                    continue;
+                }
+
                 return false;
             }
 

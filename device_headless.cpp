@@ -437,6 +437,16 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
             }
         }
 
+        // no render node at all (a virtual host): a card node still gives
+        // the device a drm identity for fd validation and dmabuf feedback
+        for (int i = 0; i < 8 && syncFd < 0 && fallback < 0; i++) {
+            auto& pth = sb();
+
+            pth << "/dev/dri/card"_sv << i;
+
+            fallback = open(pth.cStr(), O_RDWR | O_CLOEXEC);
+        }
+
         primeFd = syncFd >= 0 ? syncFd : fallback;
 
         if (fallback >= 0 && fallback != primeFd) {
@@ -464,7 +474,21 @@ bool HeadlessDevice::explicitSyncSupported() const {
 }
 
 unsigned long long HeadlessDevice::renderDevice() const {
-    return vk->renderDev;
+    if (vk->renderDev) {
+        return vk->renderDev;
+    }
+
+    // a software vulkan device has no drm identity of its own; the opened
+    // node's identity feeds dmabuf feedback so the global can offer v4+
+    if (primeFd >= 0) {
+        struct stat st{};
+
+        if (fstat(primeFd, &st) == 0) {
+            return st.st_rdev;
+        }
+    }
+
+    return 0;
 }
 
 u32 HeadlessDevice::maxImageSize() const {
