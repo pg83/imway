@@ -146,10 +146,10 @@ jobs:
           mkdir -p "$RUNNER_TEMP/profiles"
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%16m.profraw"
           {
-            python3 ./build -B .build-coverage -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .build-coverage -j "$(nproc)" -k &&
-            python3 ./build -B .build-coverage -j 2 -k -Druns=1 test &&
-            bash dev/ci_coverage.sh .build-coverage "$RUNNER_TEMP/profiles"
+            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k &&
+            python3 ./build -B .b-cov -j 2 -k -Druns=1 test &&
+            bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
       - name: Publish coverage summary
@@ -187,7 +187,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/coverage.log" \
             --title "Coverage" \
-            --reproduce "./build -B .build-coverage -Druns=1 test"
+            --reproduce "./build -B .b-cov -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
@@ -272,9 +272,9 @@ jobs:
           export LDFLAGS="-fsanitize=address"
           export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
           {
-            python3 ./build -B .build-tests-asan -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .build-tests-asan -j "$(nproc)" -k &&
-            python3 ./build -B .build-tests-asan -j 2 -k -Druns=1 test
+            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k &&
+            python3 ./build -B .b-ta -j 2 -k -Druns=1 test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
@@ -283,7 +283,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-asan.log" \
             --title "Tests ASan" \
-            --reproduce "CFLAGS/-fsanitize=address ./build -B .build-tests-asan -Druns=1 test"
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
@@ -368,9 +368,9 @@ jobs:
           export LDFLAGS="-fsanitize=undefined"
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           {
-            python3 ./build -B .build-tests-ubsan -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .build-tests-ubsan -j "$(nproc)" -k &&
-            python3 ./build -B .build-tests-ubsan -j 2 -k -Druns=1 test
+            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k &&
+            python3 ./build -B .b-tu -j 2 -k -Druns=1 test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
       - name: Summarize failure
@@ -379,7 +379,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-ubsan.log" \
             --title "Tests UBSan" \
-            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .build-tests-ubsan -Druns=1 test"
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
