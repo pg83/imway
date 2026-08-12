@@ -65,6 +65,11 @@ profiles=("$profile_dir/$build_id"-*.profraw)
     after=$(ls "$profile_dir" | grep -c "^$build_id" || true)
     echo "run_test probe: composer profiles before=$before after=$after" >&2
     python3 -c "import json; r = json.load(open('$rtdir/shm.json')); print('run_test probe verdict:', r['status'], r.get('detail', ''))" >&2 || true
+    # and through the graph runner itself: runs=2 makes run1 a fresh node
+    before=$(ls "$profile_dir" | grep -c "^$build_id" || true)
+    python3 ./build -B "$build_dir" -j 1 -k -Druns=2 -Dfilter='headless_shm' test >&2 || true
+    after=$(ls "$profile_dir" | grep -c "^$build_id" || true)
+    echo "graph-node probe: composer profiles before=$before after=$after" >&2
     exit 1
 }
 
