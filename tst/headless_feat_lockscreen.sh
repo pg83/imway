@@ -52,8 +52,10 @@ rm -f "$XDG_RUNTIME_DIR/auth-pending.txt"
 ctl "dump $XDG_RUNTIME_DIR/auth-pending.txt"
 await 8 test -e "$XDG_RUNTIME_DIR/auth-pending.txt" ||
     { echo "event loop blocked during authentication"; exit 1; }
-await 50 in_log "lockscreen rejected" || { echo "invalid password was not checked"; exit 1; }
-await 50 in_log "lockscreen refocused" || { echo "password field did not refocus"; exit 1; }
+# the delayed auth job shares the single offload thread with screenshot
+# readbacks; under a loaded software rasterizer its turn can come late
+await 100 in_log "lockscreen rejected" || { echo "invalid password was not checked"; exit 1; }
+await 100 in_log "lockscreen refocused" || { echo "password field did not refocus"; exit 1; }
 screenshot "$XDG_RUNTIME_DIR/rejected.ppm"
 kill -0 "$CLIENT_PID" || { echo "invalid password unlocked"; exit 1; }
 
@@ -61,8 +63,9 @@ for _ in 1 2 3; do
     ctl "key 45 press"; ctl "key 45 release" # KEY_X
     sleep 0.2
 done
+sleep 0.5 # let ImGui's trickle queue consume every x before Enter
 ctl "key 28 press"; ctl "key 28 release"
-await 50 in_log "lockscreen closed" || { echo "xxx did not close lockscreen"; exit 1; }
+await 100 in_log "lockscreen closed" || { echo "xxx did not close lockscreen"; exit 1; }
 screenshot "$XDG_RUNTIME_DIR/after-xxx.ppm"
 ctl "key 66 press"; ctl "key 66 release"
 
