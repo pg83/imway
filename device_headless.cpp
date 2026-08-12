@@ -133,6 +133,9 @@ namespace {
         DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         int syncFd = -1;
+        // the drm identity fd: the sync-capable node when one exists, else
+        // any render node — enough to authenticate client dmabuf fds
+        int primeFd = -1;
 
         HeadlessDevice(Composer& comp);
         int drmFd() const override;
@@ -407,7 +410,11 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
             formats.pushBack(f);
         });
 
-        // a render node is enough for syncobj ioctls (explicit sync)
+        // explicit sync needs timeline syncobjs on the node; a node without
+        // them (vgem on a virtual test host) still authenticates client
+        // dmabuf fds through the PRIME import probe, so keep one as fallback
+        int fallback = -1;
+
         for (int i = 128; i < 136 && syncFd < 0; i++) {
             auto& pth = sb();
 
@@ -423,19 +430,33 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
 
             if (drmGetCap(fd, DRM_CAP_SYNCOBJ_TIMELINE, &cap) == 0 && cap) {
                 syncFd = fd;
-                vk->drmFd = fd;
-                pooledGuard(*pool, [fd] {
-                    close(fd);
-                });
+            } else if (fallback < 0) {
+                fallback = fd;
             } else {
                 close(fd);
             }
+        }
+
+        primeFd = syncFd >= 0 ? syncFd : fallback;
+
+        if (fallback >= 0 && fallback != primeFd) {
+            close(fallback);
+        }
+
+        if (primeFd >= 0) {
+            vk->drmFd = primeFd;
+
+            int fd = primeFd;
+
+            pooledGuard(*pool, [fd] {
+                close(fd);
+            });
         }
     }
 }
 
 int HeadlessDevice::drmFd() const {
-    return syncFd;
+    return primeFd;
 }
 
 bool HeadlessDevice::explicitSyncSupported() const {
