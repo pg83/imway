@@ -219,6 +219,10 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         IMWAY_LOG=log,
         IMWAY_CLIENT=client,
         IMWAY_CLIENT_LOG=client_log,
+        # shared clients (the render-matrix, probes) live in the build view's
+        # tests dir; scenarios without an own client cannot derive it
+        IMWAY_TESTS_BIN=os.path.join(
+            os.path.dirname(os.path.abspath(imway)), "tests"),
         # hermetic audio: the host's sndiod/pulseaudio must not be a hidden
         # input of every scenario (mixer presence shifts frame counts); both
         # point at addresses that fail fast, imway-env can override

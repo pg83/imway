@@ -79,11 +79,17 @@ bright = [(x, y) for y in range(h) for x in range(58)
           if min(pixel(x, y)) > 180]
 assert bright and max(y for _, y in bright) > h - 58, 'launcher icon does not own the lower-left corner'
 PY
-# the launcher is the bottom slot now; its popup grows upward from the anchor
+# the launcher is the bottom slot now; its popup grows upward from the
+# anchor — poll, the popup needs a composed frame after the click
 click_at 29 770
-screenshot "$XDG_RUNTIME_DIR/launcher.ppm"
-launcher_diff=$(region_diff "$XDG_RUNTIME_DIR/before-launcher.ppm" \
-    "$XDG_RUNTIME_DIR/launcher.ppm" 58 300 430 795)
+launcher_diff=0
+for _ in $(seq 1 20); do
+    screenshot "$XDG_RUNTIME_DIR/launcher.ppm"
+    launcher_diff=$(region_diff "$XDG_RUNTIME_DIR/before-launcher.ppm" \
+        "$XDG_RUNTIME_DIR/launcher.ppm" 58 300 430 795)
+    [[ "$launcher_diff" -gt 1000 ]] && break
+    sleep 0.2
+done
 [[ "$launcher_diff" -gt 1000 ]] || {
     echo "permanent dock icon did not open an anchored launcher ($launcher_diff)"
     exit 1

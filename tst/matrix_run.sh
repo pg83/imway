@@ -13,8 +13,9 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 # every combo shares one client binary, so the runner's name-derived
-# IMWAY_CLIENT is empty here — resolve it against the build dir ourselves
-IMWAY_CLIENT="$(dirname "$0")/../${B:-.build}/tests/client_feat_render_matrix"
+# IMWAY_CLIENT is empty here — the runner hands us the build view's tests
+# dir; the path fallback serves manual runs from the repo root
+IMWAY_CLIENT="${IMWAY_TESTS_BIN:-$(dirname "$0")/../${B:-.build}/tests}/client_feat_render_matrix"
 [[ -x "$IMWAY_CLIENT" ]] || { echo "client_feat_render_matrix is not built"; exit 1; }
 
 s=$1 t=$2 vp=$3 dm=$4
