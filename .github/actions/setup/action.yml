@@ -1,0 +1,71 @@
+name: Set up the imway build environment
+description: >
+  System toolchain and dependencies on ubuntu-24.04: apt packages, clang from
+  apt.llvm.org, and source builds of the few libraries the archive ships too
+  old (wayland-protocols, lunasvg, libdisplay-info).
+
+inputs:
+  llvm:
+    description: LLVM major version to install
+    default: "21"
+
+runs:
+  using: composite
+  steps:
+    - name: Install apt dependencies
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          pkg-config python3 meson ninja-build cmake git ca-certificates curl \
+          glslang-tools hwdata \
+          libwayland-dev libwayland-bin libdrm-dev libinput-dev libudev-dev \
+          libxkbcommon-dev libseat-dev libdbus-1-dev libpng-dev libjxl-dev \
+          liblcms2-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools \
+          libev-dev libpam0g-dev libpulse-dev libsndio-dev sndiod sndio-tools \
+          seatd libcrypt-dev libasound2-data \
+          dbus foot wl-clipboard gdb acl fonts-dejavu-core
+
+    - name: Install clang ${{ inputs.llvm }}
+      shell: bash
+      run: |
+        curl -fsSL https://apt.llvm.org/llvm.sh | sudo bash -s -- ${{ inputs.llvm }}
+        sudo apt-get install -y --no-install-recommends llvm-${{ inputs.llvm }}
+        echo "CC=clang-${{ inputs.llvm }}" >> "$GITHUB_ENV"
+        echo "CXX=clang++-${{ inputs.llvm }}" >> "$GITHUB_ENV"
+        echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig" >> "$GITHUB_ENV"
+
+    - name: Install wayland-protocols 1.49
+      shell: bash
+      run: |
+        curl -fsSL -o wp.tar.gz \
+          https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.49/wayland-protocols-1.49.tar.gz
+        tar xf wp.tar.gz
+        meson setup wayland-protocols-1.49/build wayland-protocols-1.49
+        sudo meson install -C wayland-protocols-1.49/build
+        rm -rf wp.tar.gz wayland-protocols-1.49
+      working-directory: ${{ runner.temp }}
+
+    - name: Install lunasvg 3.5.0
+      shell: bash
+      run: |
+        git clone --depth 1 --branch v3.5.0 --recursive https://github.com/sammycage/lunasvg
+        cmake -S lunasvg -B lunasvg/build -G Ninja \
+          -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON
+        cmake --build lunasvg/build
+        sudo cmake --install lunasvg/build
+        sudo ldconfig
+        rm -rf lunasvg
+      working-directory: ${{ runner.temp }}
+
+    - name: Install libdisplay-info 0.3.0
+      shell: bash
+      run: |
+        curl -fsSL -o ldi.tar.gz \
+          https://gitlab.freedesktop.org/emersion/libdisplay-info/-/archive/0.3.0/libdisplay-info-0.3.0.tar.gz
+        tar xf ldi.tar.gz
+        meson setup libdisplay-info-0.3.0/build libdisplay-info-0.3.0
+        sudo meson install -C libdisplay-info-0.3.0/build
+        sudo ldconfig
+        rm -rf ldi.tar.gz libdisplay-info-0.3.0
+      working-directory: ${{ runner.temp }}

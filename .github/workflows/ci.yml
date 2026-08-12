@@ -19,16 +19,13 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Build package
+      - name: Build imway
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.build \
+          python3 ./build -j "$(nproc)" imway \
             2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: Summarize failure
@@ -37,7 +34,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/build.log" \
             --title "Build" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build"
+            --reproduce "./build imway"
 
       - name: Upload failure log
         if: failure()
@@ -58,20 +55,28 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Allow unprivileged user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prepare the runner for the test environment
+        run: |
+          # nested user namespaces for the sndio scenario's private /var/run
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # dmabuf test buffers come from udmabuf
+          sudo modprobe udmabuf
+          sudo chmod 666 /dev/udmabuf
+          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
+          sudo chmod 666 /dev/tty[0-9]*
+          vulkaninfo --summary || true
 
       - name: Run full test suite
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.tests \
-            2>&1 | tee "$RUNNER_TEMP/tests.log"
+          {
+            python3 ./build -j "$(nproc)" -k imway_test &&
+            python3 ./build -j "$(nproc)" -k &&
+            python3 ./build -j 2 -k -Druns=1 test
+          } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
         if: failure()
@@ -79,7 +84,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
             --title "Tests" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests"
+            --reproduce "./build -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
@@ -103,32 +108,38 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Allow unprivileged user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prepare the runner for the test environment
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe udmabuf
+          sudo chmod 666 /dev/udmabuf
+          sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with coverage
         run: |
           set -o pipefail
-          nix build -L \
-            --out-link "$RUNNER_TEMP/coverage-result" \
-            .#checks.x86_64-linux.coverage \
-            2>&1 | tee "$RUNNER_TEMP/coverage.log"
+          export CFLAGS="-fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -fcoverage-prefix-map=$PWD=."
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
+          mkdir -p "$RUNNER_TEMP/profiles"
+          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%16m.profraw"
+          {
+            python3 ./build -B .build-coverage -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .build-coverage -j "$(nproc)" -k &&
+            python3 ./build -B .build-coverage -j 2 -k -Druns=1 test &&
+            bash dev/ci_coverage.sh .build-coverage "$RUNNER_TEMP/profiles"
+          } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
-      - name: Prepare coverage report
+      - name: Publish coverage summary
         run: |
-          mkdir -p "$RUNNER_TEMP/coverage-report"
-          cp -a "$RUNNER_TEMP/coverage-result/." \
-            "$RUNNER_TEMP/coverage-report/"
           {
             echo "## LLVM coverage"
             echo
             echo '```text'
-            cat "$RUNNER_TEMP/coverage-report/summary.txt"
+            cat .coverage/summary.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -136,7 +147,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
-          path: ${{ runner.temp }}/coverage-report
+          path: .coverage
           if-no-files-found: error
           retention-days: 14
           compression-level: 9
@@ -145,7 +156,7 @@ jobs:
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
         with:
           use_oidc: true
-          files: ${{ runner.temp }}/coverage-report/coverage.info
+          files: .coverage/coverage.info
           disable_search: true
           fail_ci_if_error: true
           name: linux-clang
@@ -157,7 +168,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/coverage.log" \
             --title "Coverage" \
-            --reproduce "nix build -L -o result-coverage .#checks.x86_64-linux.coverage"
+            --reproduce "./build -B .build-coverage -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
@@ -178,16 +189,16 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Build package with ASan
+      - name: Build imway with ASan
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.build-asan \
+          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=address"
+          python3 ./build -B .build-asan -j "$(nproc)" imway \
             2>&1 | tee "$RUNNER_TEMP/build-asan.log"
 
       - name: Summarize failure
@@ -196,7 +207,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/build-asan.log" \
             --title "Build ASan" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build-asan"
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .build-asan imway"
 
       - name: Upload failure log
         if: failure()
@@ -217,20 +228,28 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Allow unprivileged user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prepare the runner for the test environment
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe udmabuf
+          sudo chmod 666 /dev/udmabuf
+          sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with ASan
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.tests-asan \
-            2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
+          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=address"
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+          {
+            python3 ./build -B .build-tests-asan -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .build-tests-asan -j "$(nproc)" -k &&
+            python3 ./build -B .build-tests-asan -j 2 -k -Druns=1 test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
         if: failure()
@@ -238,7 +257,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-asan.log" \
             --title "Tests ASan" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests-asan"
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .build-tests-asan -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
@@ -259,16 +278,16 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Build package with UBSan
+      - name: Build imway with UBSan
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.build-ubsan \
+          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=undefined"
+          python3 ./build -B .build-ubsan -j "$(nproc)" imway \
             2>&1 | tee "$RUNNER_TEMP/build-ubsan.log"
 
       - name: Summarize failure
@@ -277,7 +296,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/build-ubsan.log" \
             --title "Build UBSan" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.build-ubsan"
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .build-ubsan imway"
 
       - name: Upload failure log
         if: failure()
@@ -298,20 +317,28 @@ jobs:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@630ae543ea3a38a9a4166f03376c02c50f408342 # v31.11.0
-        with:
-          enable_kvm: false
+      - name: Set up build environment
+        uses: ./.github/actions/setup
 
-      - name: Allow unprivileged user namespaces
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prepare the runner for the test environment
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo modprobe udmabuf
+          sudo chmod 666 /dev/udmabuf
+          sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with UBSan
         run: |
           set -o pipefail
-          nix build -L --no-link \
-            .#checks.x86_64-linux.tests-ubsan \
-            2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
+          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=undefined"
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          {
+            python3 ./build -B .build-tests-ubsan -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .build-tests-ubsan -j "$(nproc)" -k &&
+            python3 ./build -B .build-tests-ubsan -j 2 -k -Druns=1 test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
       - name: Summarize failure
         if: failure()
@@ -319,7 +346,7 @@ jobs:
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-ubsan.log" \
             --title "Tests UBSan" \
-            --reproduce "nix build -L --no-link .#checks.x86_64-linux.tests-ubsan"
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .build-tests-ubsan -Druns=1 test"
 
       - name: Upload failure log
         if: failure()
