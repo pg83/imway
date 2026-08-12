@@ -378,13 +378,31 @@ def main() -> int:
 
     try:
         meta = parse_header(args.scenario)
+        res = None
 
         if meta.get("wrap") and not os.environ.get("IMWAY_WRAPPED"):
-            os.environ["IMWAY_WRAPPED"] = "1"
-            os.execvp(shlex.split(meta["wrap"])[0],
-                      shlex.split(meta["wrap"]) + [sys.executable] + sys.argv)
+            wrap_cmd = shlex.split(meta["wrap"])
+            # a sandboxed environment (the nix builder) may refuse the wrap's
+            # namespaces outright; that is the environment lacking a
+            # prerequisite — the scenario's exit-127 skip, decided for it
+            try:
+                probe = subprocess.run(
+                    wrap_cmd + ["true"], timeout=15,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                wrap_error = probe.returncode and (
+                    f"rc={probe.returncode}: {last_line(probe.stdout)}")
+            except (OSError, subprocess.TimeoutExpired) as e:
+                wrap_error = str(e)
+            if wrap_error:
+                res = dict(status=SKIP, seconds=0.0,
+                           detail=f"wrap unavailable ({wrap_error})", artifacts={})
+            else:
+                os.environ["IMWAY_WRAPPED"] = "1"
+                os.execvp(wrap_cmd[0], wrap_cmd + [sys.executable] + sys.argv)
 
-        res = run(args.imway, args.scenario, client, meta, args.timeout)
+        if res is None:
+            res = run(args.imway, args.scenario, client, meta, args.timeout)
     except Exception as e:  # never let a runner bug abort the graph
         meta = {"xfail": None}
         res = dict(status=FAIL, seconds=0.0, detail=f"runner error: {e}", artifacts={})
