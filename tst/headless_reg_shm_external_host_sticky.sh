@@ -21,7 +21,12 @@ await 100 in_log "disabling wl_shm external-host import after failure" || {
     cat "$IMWAY_LOG"
     exit 1
 }
-[[ $(grep -c "wl_shm backend cpu" "$IMWAY_LOG") -ge 2 ]] || {
+# the second sealed commit reaches its cpu upload on a later frame
+both_carried() {
+    [[ $(grep -c "wl_shm backend cpu" "$IMWAY_LOG") -ge 2 ]]
+}
+
+await 100 both_carried || {
     echo "CPU fallback did not carry both sealed commits"
     cat "$IMWAY_LOG"
     exit 1
