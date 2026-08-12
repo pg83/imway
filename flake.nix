@@ -191,13 +191,6 @@
             ])
             ++ lib.optionals (sanitizer != null || coverage) [ pkgs.llvmPackages.llvm ];
 
-          postPatch = (old.postPatch or "") + ''
-            # The scenario also runs under the ix environment, whose store has
-            # a different prefix. Point its sndiod ALSA lookup at the Nix store.
-            substituteInPlace tst/headless_feat_mixer_sndio.sh \
-              --replace-fail '^/ix/store/.*share/alsa$' '^/nix/store/.*share/alsa$'
-          '';
-
           FONTCONFIG_FILE = pkgs.makeFontsConf {
             fontDirectories = [ pkgs.dejavu_fonts ];
           };
