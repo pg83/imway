@@ -62,10 +62,14 @@ jobs:
         run: |
           # nested user namespaces for the sndio scenario's private /var/run
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf; the azure kernel keeps it
-          # in the extra-modules package
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          sudo modprobe udmabuf
+          # dmabuf test buffers come from udmabuf (built into the azure
+          # kernel; modprobe is the fallback for modular kernels)
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
           sudo chmod 666 /dev/udmabuf
           # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
           sudo chmod 666 /dev/tty[0-9]*
@@ -116,8 +120,12 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          sudo modprobe udmabuf
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
 
@@ -237,8 +245,12 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          sudo modprobe udmabuf
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
 
@@ -327,8 +339,12 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
-          sudo modprobe udmabuf
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
 
