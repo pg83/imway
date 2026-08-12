@@ -18,6 +18,9 @@
 
 using namespace stl;
 
+// present only in coverage-instrumented builds (see main.cpp)
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+
 namespace {
     constexpr size_t maxPacket = 64 * 1024;
 
