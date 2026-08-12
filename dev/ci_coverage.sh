@@ -45,6 +45,15 @@ profiles=("$profile_dir/$build_id"-*.profraw)
         >"$rtdir/log" 2>&1 || true
     echo "supervisor-mode probe profiles: $(ls "$rtdir" | grep -c '^sup-')" >&2
     tail -3 "$rtdir/log" >&2
+    # and the test runner's actual teardown: SIGTERM to the process group
+    env XDG_RUNTIME_DIR="$rtdir" LLVM_PROFILE_FILE="$rtdir/sig-%b.profraw" \
+        "$binary" --device headless --socket iw-sigprobe >"$rtdir/siglog" 2>&1 &
+    spid=$!
+    sleep 10
+    kill -TERM "-$spid" 2>/dev/null || kill -TERM "$spid" 2>/dev/null || true
+    wait "$spid" 2>/dev/null || true
+    echo "sigterm probe profiles: $(ls "$rtdir" | grep -c '^sig-')" >&2
+    tail -3 "$rtdir/siglog" >&2
     exit 1
 }
 
