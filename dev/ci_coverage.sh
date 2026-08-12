@@ -29,7 +29,9 @@ profiles=("$profile_dir"/*.profraw)
 [[ -e "${profiles[0]}" ]] || { echo "no profiles in $profile_dir" >&2; exit 1; }
 echo "merging ${#profiles[@]} profiles"
 
-"$profdata" merge -sparse "${profiles[@]}" -o "$out/coverage.profdata"
+# clients killed mid-write leave truncated profiles behind; skip those
+# and merge the rest
+"$profdata" merge -sparse -failure-mode=warn "${profiles[@]}" -o "$out/coverage.profdata"
 "$cov" export "$binary" -instr-profile="$out/coverage.profdata" -format=lcov \
     -ignore-filename-regex="$ignore" > "$out/coverage.info"
 "$cov" report "$binary" -instr-profile="$out/coverage.profdata" \
