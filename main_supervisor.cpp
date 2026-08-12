@@ -14,6 +14,7 @@
 #include <unistd.h>
 #include <sys/prctl.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 
 using namespace stl;
 
@@ -125,7 +126,7 @@ namespace {
         }
     }
 
-    bool startComposer(int argc, char** argv, int pipe) {
+    pid_t startComposer(int argc, char** argv, int pipe) {
         Vector<char*> args((size_t)argc + 2);
 
         args.pushBack((char*)"/proc/self/exe");
@@ -141,7 +142,7 @@ namespace {
         pid_t pid = fork();
 
         if (pid != 0) {
-            return pid > 0;
+            return pid;
         }
 
         resetSignals();
@@ -356,7 +357,9 @@ int mainSupervisor(int argc, char** argv) {
         return 1;
     }
 
-    if (!startComposer(argc, argv, pipes[1])) {
+    pid_t composer = startComposer(argc, argv, pipes[1]);
+
+    if (composer <= 0) {
         close(pipes[0]);
         close(pipes[1]);
         return 1;
@@ -370,6 +373,13 @@ int mainSupervisor(int argc, char** argv) {
         size_t got = recvPacket(pipes[0], packet, sizeof(packet), &fd);
 
         if (!got) {
+            // EOF fires when the composer closes the spawn socket, which
+            // happens during its teardown — before its own exit completes.
+            // Outlive it, or whoever supervises us will sweep the process
+            // group out from under a composer still writing at-exit state.
+            while (waitpid(composer, nullptr, 0) < 0 && errno == EINTR) {
+            }
+
             finish(0);
         }
 
