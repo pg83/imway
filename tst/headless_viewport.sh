@@ -6,10 +6,10 @@ set -euo pipefail
 
 start_client
 wait_mapped
-sleep 0.3 # let the committed buffer reach a rendered frame
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
+check() {
+    screenshot "$XDG_RUNTIME_DIR/shot.ppm"
+    python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb')
 assert f.readline().strip() == b'P6'
@@ -24,4 +24,14 @@ print(f"{w}x{h}: magenta={magenta} green={green}")
 assert magenta > 20000, "cropped region not visible / dst not applied (expected ~22500)"
 assert green < 100, "cropped-out part of buffer visible — source not applied"
 PY
+}
+
+# the committed buffer needs a composed frame; poll on a loaded rasterizer,
+# and let the final attempt print the real assertion
+ok=0
+for _ in $(seq 1 20); do
+    sleep 0.2
+    check 2>/dev/null && { ok=1; break; }
+done
+[[ $ok -eq 1 ]] || check
 echo "OK: viewporter crops and scales"
