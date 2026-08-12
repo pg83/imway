@@ -6,7 +6,7 @@ Per-project settings that the shared [STYLE.md](STYLE.md) delegates here.
   `XDG_`, ...) keep their external spelling.
 - **Namespace.** Imway is a program: no project namespace. The vendored
   `plt` platform library keeps its `plt` namespace.
-- **Formatter.** `./style.py` formats every tracked C++ source.
+- **Formatter.** `./dev/style.py` formats every tracked C++ source.
 
 ## Deviations
 

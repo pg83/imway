@@ -194,7 +194,7 @@
           postPatch = (old.postPatch or "") + ''
             # The scenario also runs under the ix environment, whose store has
             # a different prefix. Point its sndiod ALSA lookup at the Nix store.
-            substituteInPlace dev/tests/headless_feat_mixer_sndio.sh \
+            substituteInPlace tst/headless_feat_mixer_sndio.sh \
               --replace-fail '^/ix/store/.*share/alsa$' '^/nix/store/.*share/alsa$'
           '';
 
@@ -222,7 +222,7 @@
             ${lib.optionalString coverage ''
               coverageDirectory="$PWD/.coverage"
               coverageBinary="${buildDirectory}/imway_test"
-              coverageIgnore='(^|/)(dev/tests|third_party/libstd|\.build[^/]*)/|^/nix/store/'
+              coverageIgnore='(^|/)(tst|ext/libstd|\.build[^/]*)/|^/nix/store/'
               mkdir -p "$coverageDirectory/html"
               buildId="$(llvm-readelf -n "$coverageBinary" |
                 sed -n 's/.*Build ID: //p' |

@@ -5,7 +5,7 @@
 # clients are dependencies, so by the time we run they are built. We start a
 # fresh headless compositor in its own scratch dir (TMPDIR == XDG_RUNTIME_DIR
 # == cwd), wait until it is fully up, run the scenario with the environment
-# from dev/tests/lib.sh, and write {status, seconds, detail, ...} to --out.
+# from tst/lib.sh, and write {status, seconds, detail, ...} to --out.
 #
 # We ALWAYS exit 0: a scenario failure is recorded in the JSON, not in the
 # process exit code, so the build graph does not abort and every test still

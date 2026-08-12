@@ -20,5 +20,5 @@ TSAN_OPTIONS='halt_on_error=1:second_deadlock_stack=1' \
 ./build -B .build-tsan -Dsanitizers=thread test
 ```
 
-The checked-out `third_party/libstd` is consumed as the installed `-lstd`
+The checked-out `ext/libstd` is consumed as the installed `-lstd`
 archive, so it remains outside the instrumentation boundary.

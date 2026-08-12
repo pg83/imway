@@ -4,8 +4,8 @@ import fnmatch
 import os
 
 
-std_build = os.path.join("third_party", "libstd", "build.py")
-plt_build = os.path.join("third_party", "plt", "build.py")
+std_build = os.path.join("ext", "libstd", "build.py")
+plt_build = os.path.join("ext", "plt", "build.py")
 
 
 flags.allow({
@@ -20,8 +20,8 @@ build.cxxflags += ["-std=c++23"]
 
 build.includes += [
     # <plt/...>: the vendored platform layer's headers by their namespaced path
-    "$(S)/third_party",
-    "$(S)/third_party/imgui",
+    "$(S)/ext",
+    "$(S)/ext/imgui",
     "$(B)/generated",
     "$(B)/protocols",
     "$(B)/shaders",
@@ -216,7 +216,7 @@ for shader, stage in [
 
 imgui = library(
     name="imgui",
-    srcs=build.glob("$(S)/third_party/imgui/*.cpp"),
+    srcs=build.glob("$(S)/ext/imgui/*.cpp"),
     deps=[vulkan],
 )
 
@@ -334,7 +334,7 @@ client_protocols = library(
 
 
 tests = []
-for source in sorted(build.glob("$(S)/dev/tests/client_*.c") + build.glob("$(S)/dev/tests/client_*.cpp")):
+for source in sorted(build.glob("$(S)/tst/client_*.c") + build.glob("$(S)/tst/client_*.cpp")):
     name = os.path.basename(source).rsplit(".", 1)[0]
     test_sources = [source]
     test_deps = [client_protocols, wayland_client, drm, dbus, libstd]
@@ -403,12 +403,12 @@ install(imway, *tests)
 runs = int(flags.runs)
 test_filter = flags.filter
 
-scenarios = sorted(build.glob("$(S)/dev/tests/headless_*.sh"))
+scenarios = sorted(build.glob("$(S)/tst/headless_*.sh"))
 # every non-scenario file a scenario may source (lib.sh, *_case.sh, *.inc),
 # plus the runner itself: any change to the harness re-runs every test
 harness = sorted(
-    set(build.glob("$(S)/dev/tests/*.sh")) - set(scenarios)
-) + sorted(build.glob("$(S)/dev/tests/*.inc")) + ["$(S)/dev/run_test.py"]
+    set(build.glob("$(S)/tst/*.sh")) - set(scenarios)
+) + sorted(build.glob("$(S)/tst/*.inc")) + ["$(S)/dev/run_test.py"]
 
 client_by_name = {target.name: target for target in tests}
 
