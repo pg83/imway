@@ -20,7 +20,9 @@ cov="llvm-cov-$llvm"
 command -v "$profdata" >/dev/null || { profdata=llvm-profdata; cov=llvm-cov; }
 
 binary="$build_dir/imway_test"
-ignore='(^|/)(tst|ext/libstd|\.build[^/]*)/'
+# our test sources, the vendored stdlib, generated files in any build dir
+# view, and system headers carry no coverage of interest
+ignore='(^|/)(tst|ext/libstd|\.b[^/]*)/|^/usr/'
 out=.coverage
 
 mkdir -p "$out/html"
