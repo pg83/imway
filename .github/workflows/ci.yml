@@ -62,7 +62,9 @@ jobs:
         run: |
           # nested user namespaces for the sndio scenario's private /var/run
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf
+          # dmabuf test buffers come from udmabuf; the azure kernel keeps it
+          # in the extra-modules package
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
           sudo modprobe udmabuf
           sudo chmod 666 /dev/udmabuf
           # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
@@ -114,6 +116,7 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
           sudo modprobe udmabuf
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
@@ -234,6 +237,7 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
           sudo modprobe udmabuf
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
@@ -323,6 +327,7 @@ jobs:
       - name: Prepare the runner for the test environment
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          sudo apt-get install -y "linux-modules-extra-$(uname -r)"
           sudo modprobe udmabuf
           sudo chmod 666 /dev/udmabuf
           sudo chmod 666 /dev/tty[0-9]*
