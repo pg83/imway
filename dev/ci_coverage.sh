@@ -70,6 +70,11 @@ profiles=("$profile_dir/$build_id"-*.profraw)
     python3 ./build -B "$build_dir" -j 1 -k -Druns=2 -Dfilter='headless_shm' test >&2 || true
     after=$(ls "$profile_dir" | grep -c "^$build_id" || true)
     echo "graph-node probe: composer profiles before=$before after=$after" >&2
+    # per-pid naming, no merge pool: separates a lost env from merge
+    # mechanics from a process that never reaches the write
+    env LLVM_PROFILE_FILE="$profile_dir/px-%b-%p.profraw" \
+        python3 ./build -B "$build_dir" -j 1 -k -Druns=3 -Dfilter='headless_shm' test >&2 || true
+    echo "pid-profile probe: total $(ls "$profile_dir" | grep -c '^px-'), composer $(ls "$profile_dir" | grep -c "^px-$build_id")" >&2
     exit 1
 }
 
