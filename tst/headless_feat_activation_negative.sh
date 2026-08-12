@@ -16,9 +16,18 @@ wait_client "thief ready"
 sleep 0.3
 
 # focus the victim with a real click into a corner the thief window does not
-# cover (a color-centroid click can land on the overlapping thief)
-vx=$(dump_field 'app_id=victim' imgx); vy=$(dump_field 'app_id=victim' imgy)
-click_at $((vx + 280)) $((vy + 30))
+# cover (a color-centroid click can land on the overlapping thief). The
+# window geometry is per-frame renderer truth and the layout settles late on
+# a loaded rasterizer — re-read and re-click until the focus actually lands.
+focused=""
+for _ in $(seq 1 10); do
+    vx=$(dump_field 'app_id=victim' imgx); vy=$(dump_field 'app_id=victim' imgy)
+    click_at $((vx + 280)) $((vy + 30))
+    focused=$(dump_field 'app_id=victim' focused)
+    [[ "$focused" == 1 ]] && break
+    sleep 0.5
+done
+[[ "$focused" == 1 ]] || { echo "victim never took focus"; exit 1; }
 wait_client "stole attempt"
 sleep 0.5
 
