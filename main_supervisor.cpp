@@ -104,6 +104,12 @@ namespace {
         sigaddset(&blocked, SIGTERM);
         sigprocmask(SIG_BLOCK, &blocked, nullptr);
         kill(-(pid_t)processGroup, SIGTERM);
+
+        // _exit skips the coverage runtime's at-exit hook
+        if (&__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+
         _exit(code);
     }
 
