@@ -28,8 +28,14 @@ build_id=$("$readelf" -n "$binary" | sed -n 's/.*Build ID: //p' | head -1)
 profiles=("$profile_dir/$build_id"-*.profraw)
 [[ -e "${profiles[0]}" ]] || {
     echo "coverage binary produced no profiles: $binary (build id $build_id)" >&2
-    echo "profile dir contents:" >&2
-    ls "$profile_dir" 2>&1 | head -20 >&2
+    echo "profiles total: $(ls "$profile_dir" | wc -l), distinct ids: $(ls "$profile_dir" | cut -d- -f1 | sort -u | wc -l)" >&2
+    for probe in "$build_dir/tests/client_shm" "$build_dir/imway"; do
+        pid=$("$readelf" -n "$probe" 2>/dev/null | sed -n 's/.*Build ID: //p' | head -1)
+        echo "$probe id $pid, profiles: $(ls "$profile_dir" | grep -c "^$pid")" >&2
+    done
+    # does this very binary flush a profile on a plain clean exit?
+    LLVM_PROFILE_FILE="$profile_dir/probe-%b.profraw" "$binary" screenshot /nonexistent >/dev/null 2>&1 || true
+    echo "direct probe profiles: $(ls "$profile_dir" | grep -c '^probe-')" >&2
     exit 1
 }
 

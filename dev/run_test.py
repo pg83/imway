@@ -257,7 +257,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     env["IMWAY_PID"] = str(proc.pid)
 
     ready = False
-    deadline = time.monotonic() + 10.0
+    # a sanitizer-instrumented compositor on a loaded software-vulkan host
+    # can take well over ten seconds to reach its socket
+    deadline = time.monotonic() + 30.0
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             logf.close()
