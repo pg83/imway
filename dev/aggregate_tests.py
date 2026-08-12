@@ -74,6 +74,11 @@ def main() -> int:
 
         secs = max((r.get("seconds", 0.0) for r in runs), default=0.0)
         note = f"  [xfail: {xfail}]" if xfail else ""
+        if agg == SKIP:
+            # a skip must say what the environment lacked
+            why = next((r.get("detail") for r in runs if r.get("detail")), "")
+            if why:
+                note += f"  [{why}]"
         lines.append(f"  {label:<6} {name} ({secs:.1f}s){note}")
 
         if agg in ("FAIL", "FLAKY"):

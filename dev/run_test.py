@@ -147,7 +147,10 @@ def collect(rt: str, shell_out: str) -> dict[str, str]:
 def run(imway: str, scenario: str, client: str, meta: dict,
         timeout: float) -> dict:
     name = os.path.basename(scenario)[:-3]
-    rt = tempfile.mkdtemp(prefix=f"imway-{name}-")
+    # the scratch dir is XDG_RUNTIME_DIR: its wayland socket path must fit
+    # sun_path (108 bytes), and the build runner's per-node TMPDIR is already
+    # deep — no scenario name in the prefix, the JSON verdict carries it
+    rt = tempfile.mkdtemp(prefix="iw-")
     log = os.path.join(rt, "imway.log")
     ctl = os.path.join(rt, "ctl")
     sock = os.path.join(rt, "imway-test")
