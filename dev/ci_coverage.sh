@@ -22,20 +22,20 @@ out=.coverage
 
 mkdir -p "$out/html"
 
-build_id=$("$readelf" -n "$binary" | sed -n 's/.*Build ID: //p' | head -1)
-[[ -n "$build_id" ]] || { echo "coverage binary has no build ID: $binary" >&2; exit 1; }
+# The profile runtime's %b naming is authoritative and can disagree with
+# what readelf prints; ask the binary itself by flushing one probe profile.
+probe_dir=$(mktemp -d)
+LLVM_PROFILE_FILE="$probe_dir/%b.profraw" "$binary" screenshot /nonexistent >/dev/null 2>&1 || true
+probe=("$probe_dir"/*.profraw)
+[[ -e "${probe[0]}" ]] || { echo "no probe profile from $binary" >&2; exit 1; }
+build_id=$(basename "${probe[0]}" .profraw)
+rm -rf "$probe_dir"
+echo "coverage binary runtime id: $build_id"
 
 profiles=("$profile_dir/$build_id"-*.profraw)
 [[ -e "${profiles[0]}" ]] || {
-    echo "coverage binary produced no profiles: $binary (build id $build_id)" >&2
+    echo "coverage binary produced no profiles: $binary (runtime id $build_id)" >&2
     echo "profiles total: $(ls "$profile_dir" | wc -l), distinct ids: $(ls "$profile_dir" | cut -d- -f1 | sort -u | wc -l)" >&2
-    for probe in "$build_dir/tests/client_shm" "$build_dir/imway"; do
-        pid=$("$readelf" -n "$probe" 2>/dev/null | sed -n 's/.*Build ID: //p' | head -1)
-        echo "$probe id $pid, profiles: $(ls "$profile_dir" | grep -c "^$pid")" >&2
-    done
-    # does this very binary flush a profile on a plain clean exit?
-    LLVM_PROFILE_FILE="$profile_dir/probe-%b.profraw" "$binary" screenshot /nonexistent >/dev/null 2>&1 || true
-    echo "direct probe profiles: $(ls "$profile_dir" | grep -c '^probe-')" >&2
     exit 1
 }
 
