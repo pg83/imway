@@ -245,9 +245,11 @@ int main(int argc, char** argv) {
     wl_display_roundtrip(display);
     if ((pixel_format == DRM_FORMAT_NV12 && !nv12_linear) ||
         (pixel_format == DRM_FORMAT_P010 && !p010_linear)) {
+        // the device cannot import this YUV layout at all (a software
+        // vulkan): the same environment skip as a missing /dev/udmabuf
         fprintf(stderr, "client_reg_yuv_dmabuf: %s+LINEAR not advertised\n",
                 pixel_format == DRM_FORMAT_P010 ? "P010" : "NV12");
-        return 1;
+        return 77;
     }
 
     surface = wl_compositor_create_surface(compositor);

@@ -11,7 +11,7 @@ wait_yuv() {
 
     local rc=0
     wait "$CLIENT_PID" || rc=$?
-    [[ $rc -eq 77 ]] && { echo "SKIP: AMD dma-buf unavailable"; exit 127; }
+    [[ $rc -eq 77 ]] && { echo "SKIP: YUV dma-buf unavailable"; exit 127; }
     echo "client died before mapping (rc=$rc)"
     cat "$CLIENT_LOG"
     exit 1
