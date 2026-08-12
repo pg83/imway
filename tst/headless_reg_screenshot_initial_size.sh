@@ -29,14 +29,19 @@ oh=$(dump_field "title=imway screenshot" h)
 gx=$((x + ow - 1))
 gy=$((y + oh - 1))
 
+# the corner-grip pick runs on last-frame hover: force a rendered frame
+# between the motion and the press, like click_at does, or a loaded
+# rasterizer grabs the bottom edge instead of the corner
 ctl "motion $gx $gy"
-sleep 0.3
+screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+ctl "motion $gx $gy"
+screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
 ctl "button left press"
 sleep 0.2
 
 for d in 20 40 60 80 100; do
     ctl "motion $((gx + d)) $((gy + d / 2))"
-    sleep 0.1
+    screenshot "$XDG_RUNTIME_DIR/_grip.ppm" # one consumed drag step per frame
 done
 
 ctl "button left release"
