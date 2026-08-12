@@ -18,7 +18,7 @@ runs:
         sudo apt-get update
         sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
           pkg-config python3 meson ninja-build cmake git ca-certificates curl \
-          glslang-tools hwdata \
+          glslang-tools hwdata libffi-dev libexpat1-dev libxml2-dev \
           libwayland-dev libwayland-bin libdrm-dev libinput-dev libudev-dev \
           libxkbcommon-dev libseat-dev libdbus-1-dev libpng-dev libjxl-dev \
           liblcms2-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools \
@@ -35,13 +35,26 @@ runs:
         echo "CXX=clang++-${{ inputs.llvm }}" >> "$GITHUB_ENV"
         echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/share/pkgconfig" >> "$GITHUB_ENV"
 
+    - name: Install wayland 1.26.0
+      shell: bash
+      run: |
+        curl -fsSL -o wayland.tar.gz \
+          https://gitlab.freedesktop.org/wayland/wayland/-/archive/1.26.0/wayland-1.26.0.tar.gz
+        tar xf wayland.tar.gz
+        meson setup wayland-1.26.0/build wayland-1.26.0 \
+          -Ddocumentation=false -Dtests=false
+        sudo meson install -C wayland-1.26.0/build
+        sudo ldconfig
+        rm -rf wayland.tar.gz wayland-1.26.0
+      working-directory: ${{ runner.temp }}
+
     - name: Install wayland-protocols 1.49
       shell: bash
       run: |
         curl -fsSL -o wp.tar.gz \
           https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.49/wayland-protocols-1.49.tar.gz
         tar xf wp.tar.gz
-        meson setup wayland-protocols-1.49/build wayland-protocols-1.49
+        meson setup wayland-protocols-1.49/build wayland-protocols-1.49 -Dtests=false
         sudo meson install -C wayland-protocols-1.49/build
         rm -rf wp.tar.gz wayland-protocols-1.49
       working-directory: ${{ runner.temp }}
