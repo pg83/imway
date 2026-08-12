@@ -36,6 +36,15 @@ profiles=("$profile_dir/$build_id"-*.profraw)
 [[ -e "${profiles[0]}" ]] || {
     echo "coverage binary produced no profiles: $binary (runtime id $build_id)" >&2
     echo "profiles total: $(ls "$profile_dir" | wc -l), distinct ids: $(ls "$profile_dir" | cut -d- -f1 | sort -u | wc -l)" >&2
+    # replicate the supervisor->composer chain with a frames-limited
+    # self-exit: does THAT flush a profile?
+    rtdir=$(mktemp -d /tmp/iwprobe.XXXXXX)
+    chmod 700 "$rtdir"
+    env XDG_RUNTIME_DIR="$rtdir" LLVM_PROFILE_FILE="$rtdir/sup-%b.profraw" \
+        timeout 60 "$binary" --device headless --socket iw-covprobe --frames 5 \
+        >"$rtdir/log" 2>&1 || true
+    echo "supervisor-mode probe profiles: $(ls "$rtdir" | grep -c '^sup-')" >&2
+    tail -3 "$rtdir/log" >&2
     exit 1
 }
 
