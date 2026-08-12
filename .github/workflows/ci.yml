@@ -71,6 +71,14 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
+          # a render node backs dmabuf fd validation and the KMS emulator's
+          # companion identity; the GPU-less runner gets one from vgem
+          [ -e /dev/dri ] || {
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe vgem
+          }
+          ls -l /dev/dri
+          sudo chmod 666 /dev/dri/*
           # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
           sudo chmod 666 /dev/tty[0-9]*
           vulkaninfo --summary || true
@@ -127,6 +135,11 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
+          [ -e /dev/dri ] || {
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe vgem
+          }
+          sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with coverage
@@ -252,6 +265,11 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
+          [ -e /dev/dri ] || {
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe vgem
+          }
+          sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with ASan
@@ -346,6 +364,11 @@ jobs:
             exit 1
           }
           sudo chmod 666 /dev/udmabuf
+          [ -e /dev/dri ] || {
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe vgem
+          }
+          sudo chmod 666 /dev/dri/*
           sudo chmod 666 /dev/tty[0-9]*
 
       - name: Run full test suite with UBSan
