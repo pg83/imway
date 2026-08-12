@@ -38,7 +38,7 @@ runs:
     - name: Install wayland 1.26.0
       shell: bash
       run: |
-        curl -fsSL -o wayland.tar.gz \
+        curl -fsSL --retry 5 --retry-all-errors -o wayland.tar.gz \
           https://gitlab.freedesktop.org/wayland/wayland/-/archive/1.26.0/wayland-1.26.0.tar.gz
         tar xf wayland.tar.gz
         meson setup wayland-1.26.0/build wayland-1.26.0 \
@@ -51,7 +51,7 @@ runs:
     - name: Install wayland-protocols 1.49
       shell: bash
       run: |
-        curl -fsSL -o wp.tar.gz \
+        curl -fsSL --retry 5 --retry-all-errors -o wp.tar.gz \
           https://gitlab.freedesktop.org/wayland/wayland-protocols/-/archive/1.49/wayland-protocols-1.49.tar.gz
         tar xf wp.tar.gz
         meson setup wayland-protocols-1.49/build wayland-protocols-1.49 -Dtests=false
@@ -74,7 +74,7 @@ runs:
     - name: Install libdisplay-info 0.3.0
       shell: bash
       run: |
-        curl -fsSL -o ldi.tar.gz \
+        curl -fsSL --retry 5 --retry-all-errors -o ldi.tar.gz \
           https://gitlab.freedesktop.org/emersion/libdisplay-info/-/archive/0.3.0/libdisplay-info-0.3.0.tar.gz
         tar xf ldi.tar.gz
         meson setup libdisplay-info-0.3.0/build libdisplay-info-0.3.0
