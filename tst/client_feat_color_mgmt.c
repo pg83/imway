@@ -86,7 +86,9 @@ int main(void) {
     // are visible after conversion
     wl_make_toplevel(&top, "client_feat_color_mgmt", 300, 200, COLOR_PIXEL);
     printf("client_feat_color_mgmt: raw\n");
-    pump(1000);
+    // hold the raw phase long enough for the scenario's screenshot round
+    // trip even on a loaded software rasterizer
+    pump(3000);
 
     // build the requested image description and attach it to the surface
 #ifdef COLOR_WINDOWS_BT2100

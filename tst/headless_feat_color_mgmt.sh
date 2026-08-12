@@ -26,9 +26,15 @@ PY
 
 start_client
 wait_client "raw"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/raw.ppm"
-read -r r1 g1 b1 n1 < <(sample "$XDG_RUNTIME_DIR/raw.ppm")
+# the raw fill needs a composed frame; poll within the client's raw hold —
+# a loaded software rasterizer takes a while to get there
+n1=0
+for _ in $(seq 1 12); do
+    sleep 0.2
+    screenshot "$XDG_RUNTIME_DIR/raw.ppm"
+    read -r r1 g1 b1 n1 < <(sample "$XDG_RUNTIME_DIR/raw.ppm")
+    [[ "$n1" -gt 5000 ]] && break
+done
 [[ "$n1" -gt 5000 ]] || { echo "raw surface not found (n=$n1)"; cat "$CLIENT_LOG"; exit 1; }
 
 wait_client "managed"

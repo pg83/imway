@@ -130,7 +130,9 @@ int main(void) {
     attach_stripes(overlay, 0);
     wl_surface_commit(top.surface);
     printf("client_reg_color_alpha: sdr-alpha\n");
-    pump(1000);
+    // hold the phase long enough for the scenario's screenshot round trip
+    // even on a loaded software rasterizer
+    pump(3000);
 
     struct wp_image_description_creator_params_v1* params =
         wp_color_manager_v1_create_parametric_creator(cm);

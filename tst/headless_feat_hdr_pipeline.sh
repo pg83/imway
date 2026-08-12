@@ -32,19 +32,32 @@ PY
 
 start_client
 wait_client "raw"
-sleep 0.3
-x=$(dump_field 'app_id=client_feat_color_mgmt' imgx)
-y=$(dump_field 'app_id=client_feat_color_mgmt' imgy)
-w=$(dump_field 'app_id=client_feat_color_mgmt' client_w)
-h=$(dump_field 'app_id=client_feat_color_mgmt' client_h)
-screenshot "$XDG_RUNTIME_DIR/raw.ppm"
-read -r rr rg rb rn < <(surface_color "$XDG_RUNTIME_DIR/raw.ppm" "$x" "$y" "$w" "$h")
+# the raw fill needs a composed frame; poll within the client's raw hold —
+# a loaded software rasterizer takes a while to get there. The window
+# geometry is per-frame renderer truth, so refresh it each attempt.
+rn=0
+for _ in $(seq 1 12); do
+    sleep 0.2
+    x=$(dump_field 'app_id=client_feat_color_mgmt' imgx)
+    y=$(dump_field 'app_id=client_feat_color_mgmt' imgy)
+    w=$(dump_field 'app_id=client_feat_color_mgmt' client_w)
+    h=$(dump_field 'app_id=client_feat_color_mgmt' client_h)
+    screenshot "$XDG_RUNTIME_DIR/raw.ppm"
+    read -r rr rg rb rn < <(surface_color "$XDG_RUNTIME_DIR/raw.ppm" "$x" "$y" "$w" "$h")
+    [[ "$rn" -gt 40000 ]] && break
+done
 [[ "$rn" -gt 40000 ]] || { echo "raw surface not found"; exit 1; }
 
 wait_client "managed"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/hdr.ppm"
-read -r hr hg hb hn < <(surface_color "$XDG_RUNTIME_DIR/hdr.ppm" "$x" "$y" "$w" "$h")
+# the converted frame follows the commit; poll until the surface samples
+# at the managed values
+hn=0
+for _ in $(seq 1 20); do
+    sleep 0.2
+    screenshot "$XDG_RUNTIME_DIR/hdr.ppm"
+    read -r hr hg hb hn < <(surface_color "$XDG_RUNTIME_DIR/hdr.ppm" "$x" "$y" "$w" "$h")
+    [[ "$hn" -gt 40000 && $((hr - 180)) -ge -3 && $((hr - 180)) -le 3 ]] && break
+done
 [[ "$hn" -gt 40000 ]] || { echo "HDR surface not found"; exit 1; }
 
 echo "legacy SDR in PQ=($rr,$rg,$rb); managed PQ=($hr,$hg,$hb)"
