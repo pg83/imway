@@ -54,6 +54,13 @@ profiles=("$profile_dir/$build_id"-*.profraw)
     wait "$spid" 2>/dev/null || true
     echo "sigterm probe profiles: $(ls "$rtdir" | grep -c '^sig-')" >&2
     tail -3 "$rtdir/siglog" >&2
+    # the whole real harness: one run_test invocation end to end
+    before=$(ls "$profile_dir" | grep -c "^$build_id" || true)
+    python3 dev/run_test.py --scenario tst/headless_shm.sh --imway "$binary" \
+        --client "$build_dir/tests/client_shm" --out "$rtdir/shm.json" || true
+    after=$(ls "$profile_dir" | grep -c "^$build_id" || true)
+    echo "run_test probe: composer profiles before=$before after=$after" >&2
+    python3 -c "import json; r = json.load(open('$rtdir/shm.json')); print('run_test probe verdict:', r['status'], r.get('detail', ''))" >&2 || true
     exit 1
 }
 
