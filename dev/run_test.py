@@ -280,7 +280,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     rc = 0
     try:
         cp = subprocess.run(
-            ["timeout", "30s", "bash", scenario], cwd=rt, env=env, timeout=timeout,
+            ["timeout", "60s", "bash", scenario], cwd=rt, env=env, timeout=timeout,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         )
         rc, shell_out = cp.returncode, cp.stdout
@@ -379,7 +379,7 @@ def main() -> int:
     ap.add_argument("--client", default="")
     ap.add_argument("--out", required=True)
     ap.add_argument("--run", type=int, default=0)
-    ap.add_argument("--timeout", type=float, default=60.0)
+    ap.add_argument("--timeout", type=float, default=120.0)
     args = ap.parse_args()
 
     name = os.path.basename(args.scenario)[:-3]

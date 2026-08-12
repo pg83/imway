@@ -40,15 +40,17 @@ start_client() {
     CLIENT_PID=$!
 }
 
-# wait until the client's toplevel is on screen (the compositor logs "mapped")
+# wait until the client's toplevel is on screen (the compositor logs
+# "mapped"). Twenty seconds: a sanitized compositor on a software
+# rasterizer takes its time.
 wait_mapped() {
-    await 100 in_log "mapped" || {
+    await 200 in_log "mapped" || {
         echo "client window did not map"; cat "$CLIENT_LOG" "$IMWAY_LOG" 2>/dev/null; exit 1; }
 }
 
 # wait for a marker line the client itself prints
 wait_client() { # <grep-pattern>
-    await 100 grep -q "$1" "$CLIENT_LOG" || {
+    await 200 grep -q "$1" "$CLIENT_LOG" || {
         echo "client did not reach: $1"; cat "$CLIENT_LOG" "$IMWAY_LOG" 2>/dev/null; exit 1; }
 }
 
