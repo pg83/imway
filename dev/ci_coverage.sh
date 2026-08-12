@@ -26,7 +26,12 @@ build_id=$("$readelf" -n "$binary" | sed -n 's/.*Build ID: //p' | head -1)
 [[ -n "$build_id" ]] || { echo "coverage binary has no build ID: $binary" >&2; exit 1; }
 
 profiles=("$profile_dir/$build_id"-*.profraw)
-[[ -e "${profiles[0]}" ]] || { echo "coverage binary produced no profiles: $binary" >&2; exit 1; }
+[[ -e "${profiles[0]}" ]] || {
+    echo "coverage binary produced no profiles: $binary (build id $build_id)" >&2
+    echo "profile dir contents:" >&2
+    ls "$profile_dir" 2>&1 | head -20 >&2
+    exit 1
+}
 
 "$profdata" merge -sparse "${profiles[@]}" -o "$out/coverage.profdata"
 "$cov" export "$binary" -instr-profile="$out/coverage.profdata" -format=lcov \
