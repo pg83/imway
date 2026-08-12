@@ -5,10 +5,10 @@ set -euo pipefail
 
 start_client
 wait_mapped
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
+check() {
+    screenshot "$XDG_RUNTIME_DIR/shot.ppm"
+    python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
 w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
@@ -20,4 +20,14 @@ bh = max(y for _, y in pts) - min(y for _, y in pts) + 1
 print(f"green bbox={bw}x{bh}")
 assert 90 <= bw <= 110 and 90 <= bh <= 110, f"scale-2 buffer did not halve to ~100x100 (got {bw}x{bh})"
 PY
+}
+
+# the committed buffer needs a composed frame; poll on a loaded rasterizer,
+# and let the final attempt print the real assertion
+ok=0
+for _ in $(seq 1 20); do
+    sleep 0.2
+    check 2>/dev/null && { ok=1; break; }
+done
+[[ $ok -eq 1 ]] || check
 echo "OK: buffer_scale 2 rendered the buffer at logical half size"
