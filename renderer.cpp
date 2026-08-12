@@ -857,6 +857,12 @@ RendererImpl::~RendererImpl() noexcept {
         vkDestroySemaphore(device, syncOut, nullptr);
     }
 
+    for (VkSemaphore sem : syncWaitPool) {
+        if (sem) {
+            vkDestroySemaphore(device, sem, nullptr);
+        }
+    }
+
     for (VkFramebuffer fb : scanFbs) {
         vkDestroyFramebuffer(device, fb, nullptr);
     }
@@ -2081,13 +2087,8 @@ void RendererImpl::setup() {
     pooledGuard(*pool, [this] {
         vkDestroySampler(device, sampler, nullptr);
     });
-    pooledGuard(*pool, [this] {
-        for (VkSemaphore sem : syncWaitPool) {
-            if (sem) {
-                vkDestroySemaphore(device, sem, nullptr);
-            }
-        }
-    });
+    // syncWaitPool is destroyed in ~RendererImpl: a pooled guard runs after
+    // the renderer's own disposer, when the vector's storage is gone
 
     // the hardware-cursor objects are created at most once; destroying a
     // null handle is a no-op on the paths without a cursor plane

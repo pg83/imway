@@ -43,6 +43,7 @@ int main(void) {
         fprintf(stderr, "unexpected error after extra fd\n");
         return 1;
     }
+    wl_proxy_destroy(pool);
     wl_display_disconnect(wl_dpy);
     return 0;
 }

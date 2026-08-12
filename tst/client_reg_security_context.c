@@ -91,6 +91,7 @@ int main(void) {
         return 1;
     }
 
+    wl_registry_destroy(sb_reg);
     wl_display_disconnect(sb);
     printf("security-context done\n");
     fflush(stdout);

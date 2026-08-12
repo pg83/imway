@@ -37,6 +37,9 @@
 #endif
 
 __attribute__((unused)) static struct wl_display* wl_dpy;
+// kept reachable so a client that disconnects cleanly does not turn the
+// boot registry into a leak-sanitizer report
+__attribute__((unused)) static struct wl_registry* wl_reg;
 __attribute__((unused)) static struct wl_compositor* wl_comp;
 __attribute__((unused)) static struct wl_subcompositor* wl_subcomp;
 __attribute__((unused)) static struct wl_shm* wl_shm_g;
@@ -312,8 +315,8 @@ static int wl_boot(void) {
         fprintf(stderr, "cannot connect to compositor\n");
         return 1;
     }
-    struct wl_registry* reg = wl_display_get_registry(wl_dpy);
-    wl_registry_add_listener(reg, &wl_reg_listener, NULL);
+    wl_reg = wl_display_get_registry(wl_dpy);
+    wl_registry_add_listener(wl_reg, &wl_reg_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!wl_comp || !wl_shm_g || !wl_wm) {
         fprintf(stderr, "missing core globals (compositor=%p shm=%p wm_base=%p)\n", (void*)wl_comp, (void*)wl_shm_g, (void*)wl_wm);
