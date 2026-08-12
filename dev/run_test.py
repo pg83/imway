@@ -175,7 +175,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
  'http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd'>
 <busconfig>
   <type>session</type>
-  <listen>unix:tmpdir={rt}</listen>
+  <listen>unix:path={rt}/bus</listen>
   <auth>EXTERNAL</auth>
   <policy context="default">
     <allow send_destination="*" eavesdrop="true"/>
