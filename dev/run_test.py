@@ -203,6 +203,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
                 pass
             bus_pid = 0
 
+    input_dir = os.path.join(rt, "input")
+    os.makedirs(input_dir, exist_ok=True)
+
     env.update(
         XDG_RUNTIME_DIR=rt,
         WAYLAND_DISPLAY="imway-test",
@@ -222,6 +225,11 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         # The build runner may itself be killed. The compositor then dies
         # with it, and its children with the compositor.
         IMWAY_DIE_WITH_PARENT="1",
+        # Hermetic input: libinput reads its evdev nodes from here, so a
+        # scenario's virtual device belongs to its own compositor and no
+        # test opens the machine's real keyboard and mouse. A scenario that
+        # wants a device drops one in; the directory is empty otherwise.
+        IMWAY_INPUT_DIR=input_dir,
     )
     env.update(meta["env"])
 

@@ -63,7 +63,10 @@ namespace {
         Session* session = nullptr;
         libinput* li = nullptr;
 
-        // hotplug: inotify on /dev/input, one bit + device slot per eventN
+        // the directory the evdev nodes live in; /dev/input outside a test
+        const char* dir = nullptr;
+
+        // hotplug: inotify on that directory, one bit + device slot per eventN
         int inoFd = -1;
         u64 pathBits = 0;
         libinput_device* pathDevs[64] = {};
@@ -213,8 +216,23 @@ namespace {
 }
 
 // path backend only: the udev one needs a running udevd for enumeration AND
-// hotplug; a direct /dev/input scan plus inotify behaves the same either way
+// hotplug; a direct scan of the node directory plus inotify behaves the same
+// either way
 namespace {
+    // Which directory the evdev nodes are read from. A test run points this
+    // at a scratch directory of its own, so a scenario's virtual device
+    // belongs to its compositor alone and no test ever grabs the machine's
+    // real keyboard and mouse.
+    const char* inputDir() {
+#ifdef IMWAY_FOR_TESTS
+        if (const char* dir = getenv("IMWAY_INPUT_DIR")) {
+            return dir;
+        }
+#endif
+
+        return "/dev/input";
+    }
+
     void libinputLog(struct libinput* li, enum libinput_log_priority, const char* fmt, va_list args) {
         auto* source = (LibinputSource*)libinput_get_user_data(li);
 
@@ -227,6 +245,7 @@ LibinputSource::LibinputSource(Composer& c)
     , loop(c.loop)
     , session(c.session)
 {
+    dir = inputDir();
     li = libinput_path_create_context(&liIface, this);
     STD_VERIFY(li);
     libinput_log_set_handler(li, libinputLog);
@@ -249,7 +268,7 @@ LibinputSource::LibinputSource(Composer& c)
         });
     }
 
-    if (inoFd >= 0 && inotify_add_watch(inoFd, "/dev/input", IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
+    if (inoFd >= 0 && inotify_add_watch(inoFd, dir, IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
         ev_io* inotifyIo = c.pool->make<ev_io>();
         struct ev_loop* heldLoop = loop;
 
@@ -302,7 +321,7 @@ bool LibinputSource::pathAdd(int n) {
 
     auto& p = sb();
 
-    p << "/dev/input/event"_sv << n;
+    p << StringView(dir) << "/event"_sv << n;
 
     if (!libinput_path_add_device(li, p.cStr())) {
         return false;
