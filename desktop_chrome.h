@@ -22,6 +22,11 @@ struct DesktopChromeResult {
     bool wifi = false;
     float launcherX = -1.f;
     float launcherY = -1.f;
+    // the wifi glyph's rectangle in output pixels, for the state dump
+    float wifiX0 = -1.f;
+    float wifiY0 = -1.f;
+    float wifiX1 = -1.f;
+    float wifiY1 = -1.f;
     char launchApp[128] = "";
 };
 

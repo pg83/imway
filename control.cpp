@@ -10,6 +10,7 @@
 #include "listener.h"
 #include "renderer.h"
 #include "settings.h"
+#include "imgui_wm.h"
 #include "intr_list.h"
 #include "input_sink.h"
 #include "kms_intercept.h"
@@ -497,6 +498,17 @@ void ControlImpl::dumpState(StringView outPath) {
         out << "\n"_sv;
     });
 
+    // the compositor's own ImGui windows drawn last frame, so a scenario
+    // can aim clicks at a dialog from its rectangle
+    if (ImGuiContext* g = ImGui::GetCurrentContext()) {
+        for (ImGuiWindow* w : g->Windows) {
+            if (w->WasActive && !w->Hidden && !(w->Flags & ImGuiWindowFlags_ChildWindow)) {
+                out << "imgui name="_sv << StringView(w->Name) << " x="_sv << (int)w->Pos.x << " y="_sv << (int)w->Pos.y << " w="_sv << (int)w->Size.x << " h="_sv << (int)w->Size.y << "\n"_sv;
+            }
+        }
+    }
+
+    out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
     out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
     out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;

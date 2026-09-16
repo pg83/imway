@@ -1535,6 +1535,10 @@ void DesktopImpl::buildUi(Scene& scene) {
     DesktopChromeResult chromeResult;
 
     drawDesktopChrome(*comp, chromeInfo, chromeResult);
+    scene.wifiGlyph[0] = chromeResult.wifiX0;
+    scene.wifiGlyph[1] = chromeResult.wifiY0;
+    scene.wifiGlyph[2] = chromeResult.wifiX1;
+    scene.wifiGlyph[3] = chromeResult.wifiY1;
 
     if (chromeResult.launcher) {
         launcherX = chromeResult.launcherX;

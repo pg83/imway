@@ -141,6 +141,10 @@ namespace {
 
             ImGui::SameLine(wifiX);
             ImGui::TextUnformatted((const char*)info.wifi.begin(), (const char*)info.wifi.end());
+            result.wifiX0 = ImGui::GetItemRectMin().x;
+            result.wifiY0 = ImGui::GetItemRectMin().y;
+            result.wifiX1 = ImGui::GetItemRectMax().x;
+            result.wifiY1 = ImGui::GetItemRectMax().y;
 
             if (ImGui::IsItemClicked()) {
                 result.wifi = true;

@@ -450,6 +450,9 @@ struct Scene {
     // renderer when a client's texture cannot be built, drained by wayland
     // into a no_memory disconnect of the owner
     stl::Vector<u64> renderFaults;
+    // the bar's wifi glyph rectangle (x0 y0 x1 y1, -1 when absent), written
+    // by the desktop each frame; surfaced through the state dump
+    float wifiGlyph[4] = {-1.f, -1.f, -1.f, -1.f};
     bool kbCaptured = false;
     bool ptrCaptured = false;
     bool shortcutsInhibited = false;
