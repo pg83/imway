@@ -3,7 +3,14 @@
 `./build test` builds the dedicated `imway_test` compositor and runs every
 `headless_*.sh` scenario in a fresh runtime directory. The default is three
 runs per scenario; use `-Druns=1` for a quick pass or
-`-Dfilter='headless_kms_*'` to select a group.
+`-Dfilter='headless_kms_*'` to select a group. On an IX machine
+`dev/test_ix.sh -Druns=1 -Dfilter=...` runs them with the libraries and the
+shell tools the scenarios need.
+
+The CI workflow takes the same filter on a manual dispatch:
+`gh workflow run ci.yml -f filter='headless_reg_positioner_*'` builds and
+runs just that group, which is the quick way to check one scenario without
+the full suite.
 
 The cache is content-addressed, so instrumented and regular objects remain
 distinct even in one build directory. The commands below use named directories

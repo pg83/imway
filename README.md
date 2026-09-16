@@ -89,6 +89,9 @@ list for Ubuntu 24.04.
 The build tool is `build.py` on top of the shared graph runner; objects
 are cached by content. `./build -j N` sets parallelism. With nix, `nix
 build` produces the package and `nix develop` a shell with the toolchain.
+On an [IX](https://github.com/pg83/ix) machine `dev/build_ix.sh` and
+`dev/test_ix.sh` supply the same libraries the `bin/imway` recipe uses and
+pass their arguments through to `./build`.
 
 Tests are shell scenarios under `tst/` driving a headless compositor
 through a control FIFO, each with a small Wayland client written in C. See
