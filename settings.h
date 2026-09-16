@@ -171,3 +171,10 @@ struct Settings {
 };
 
 void applySettingsEnvironment(Settings& settings);
+
+#ifdef IMWAY_FOR_TESTS
+// test build only: one setting by its schema key, the generated text setter
+// behind both the control FIFO's `set` and the IMWAY_SETTINGS environment.
+// Enums take their ordinal, booleans true/false or 1/0.
+bool applySettingText(Settings& settings, stl::StringView key, stl::StringView value);
+#endif

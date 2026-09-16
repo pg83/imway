@@ -8,6 +8,7 @@
 #include "pooled.h"
 #include "composer.h"
 #include "listener.h"
+#include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
 #include "imgui_wm.h"
@@ -158,9 +159,6 @@ namespace {
     void controlIoCb(struct ev_loop*, ev_io* w, int) {
         ((ControlImpl*)w->data)->handleInput();
     }
-
-    // `set KEY VALUE`: every scalar and text setting by its schema key
-#include "settings.control.gen.inc"
 }
 
 ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
@@ -438,6 +436,24 @@ void ControlImpl::handleLine(StringView cmd) {
         // exit, no hang
         *(comp->log) << "imway: vulkan device lost, exiting"_sv << endL;
         exit(1);
+    } else if (verb == "notify"_sv) {
+        // `notify APP REPLACES CRITICAL SUMMARY`: the internal producers'
+        // entry point, so a scenario can drive the notifier without a bus
+        StringView app, replaces, critical, summary, rest;
+
+        if (comp->notifier && args.split(' ', app, rest) && rest.split(' ', replaces, rest) && rest.split(' ', critical, summary)) {
+            Post p;
+
+            p.app = app;
+            p.summary = summary;
+            p.body = "from the control fifo"_sv;
+            p.critical = critical == "1"_sv;
+            p.replacesId = (u32)replaces.stou();
+
+            *(comp->log) << "imway: control: notification "_sv << comp->notifier->post(p) << endL;
+        }
+
+        comp->scene->needsFrame = true;
     } else if (verb == "set"_sv) {
         StringView key, value;
 
@@ -508,6 +524,19 @@ void ControlImpl::dumpState(StringView outPath) {
         }
     }
 
+    int activeToasts = 0;
+    int keptToasts = 0;
+
+    if (comp->notifier) {
+        comp->notifier->active([&activeToasts](Toast&) {
+            activeToasts++;
+        });
+        comp->notifier->history([&keptToasts](Toast&) {
+            keptToasts++;
+        });
+    }
+
+    out << "notifications active="_sv << activeToasts << " history="_sv << keptToasts << "\n"_sv;
     out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
     out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
     out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
