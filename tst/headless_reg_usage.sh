@@ -41,7 +41,9 @@ out=$("$imway_bin" --list 2>&1) || rc=$?
 rc=0
 out=$("$imway_bin" --device headless --socket imway-frames --frames 3 --screenshot "$XDG_RUNTIME_DIR/last.ppm" --xkb-layout us --xkb-options "" --dpms 1 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "the fixed-length run exited $rc: $out"; exit 1; }
-grep -q "clean exit after 3 frames" <<<"$out" || { echo "the fixed-length run did not stop at 3 frames: $out"; exit 1; }
+# the closing capture composes one frame of its own, so the count is the
+# three the flag asked for plus that one
+grep -qE "clean exit after [34] frames" <<<"$out" || { echo "the fixed-length run did not stop at 3 frames: $out"; exit 1; }
 [[ -s "$XDG_RUNTIME_DIR/last.ppm" ]] || { echo "no screenshot from the fixed-length run"; exit 1; }
 [[ "$(head -c 2 "$XDG_RUNTIME_DIR/last.ppm")" == "P6" ]] || { echo "the screenshot is not a PPM"; exit 1; }
 

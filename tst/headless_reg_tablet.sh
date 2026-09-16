@@ -18,7 +18,9 @@ cy=$((y + 60))
 # event lands before the frame that moves the hover, the follow-up motion
 # (as any real pen stream has) is what enters the surface
 ctl "tablet proximity_in $cx $cy"
-sleep 0.3
+# the hover follows the pen one frame behind, so compose one here instead
+# of hoping the compositor had a reason to
+screenshot "$XDG_RUNTIME_DIR/_hover.ppm"
 ctl "tablet motion $cx $cy"
 wait_client "prox_in"
 wait_client "motion 50 60"

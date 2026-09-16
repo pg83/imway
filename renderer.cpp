@@ -4114,12 +4114,13 @@ bool RendererImpl::readbackLastFrame() {
 }
 
 bool RendererImpl::screenshot(StringView path) {
-    if (lastFrameDirect) {
-        forceComposition = true;
-        scene->needsFrame = true;
-        frameNow();
-        forceComposition = false;
-    }
+    // Compose now, always: the readback below returns the last frame, and
+    // whatever a client committed since then would be missing from it. A
+    // direct-scanout frame has nothing to read back at all.
+    forceComposition = true;
+    scene->needsFrame = true;
+    frameNow();
+    forceComposition = false;
 
     if (!haveFrame) {
         return false;
