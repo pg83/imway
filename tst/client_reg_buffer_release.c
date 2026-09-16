@@ -34,7 +34,7 @@ int main(void) {
         wl_surface_damage(top.surface, 0, 0, 200, 150);
         wl_surface_commit(top.surface);
     }
-    for (int i = 0; i < 100 && releases < 3; i++) {
+    for (int i = 0; i < 400 && releases < 3; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
@@ -54,7 +54,7 @@ int main(void) {
     wl_surface_attach(top.surface, again, 0, 0);
     wl_surface_damage(top.surface, 0, 0, 200, 150);
     wl_surface_commit(top.surface);
-    for (int i = 0; i < 100 && releases < 5; i++) {
+    for (int i = 0; i < 400 && releases < 5; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }

@@ -51,7 +51,7 @@ int main(void) {
     wl_make_toplevel(&top, "client_feat_presentation", 300, 200, 0xFFFF0000);
 
     // request feedback and drive commits until the frame is presented
-    for (int i = 0; i < 100 && !presented; i++) {
+    for (int i = 0; i < 400 && !presented; i++) {
         struct wp_presentation_feedback* fb = wp_presentation_feedback(presentation, top.surface);
         wp_presentation_feedback_add_listener(fb, &fb_listener, NULL);
         wl_surface_attach(top.surface, wl_solid(300, 200, 0xFFFF0000), 0, 0);

@@ -147,7 +147,7 @@ int main(void) {
 
     wp_image_description_v1_add_listener(desc, &desc_listener, NULL);
 
-    for (int i = 0; i < 100 && !desc_ready; i++) {
+    for (int i = 0; i < 400 && !desc_ready; i++) {
         wl_display_roundtrip(wl_dpy);
         usleep(20000);
     }

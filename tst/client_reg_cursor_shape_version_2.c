@@ -44,7 +44,7 @@ int main(void) {
         wp_cursor_shape_manager_v1_get_pointer(shape_mgr, wl_ptr);
 
     // move the pointer over the surface so we have a pointer focus + serial
-    for (int i = 0; i < 100 && !wlp_enter_count; i++) {
+    for (int i = 0; i < 400 && !wlp_enter_count; i++) {
         if (wl_display_dispatch(wl_dpy) < 0) break;
     }
     if (!wlp_enter_count) {

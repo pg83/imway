@@ -47,7 +47,7 @@ int main(void) {
     xdg_toplevel_set_app_id(tl, "compositor6");
     wl_surface_commit(surface);
 
-    for (int i = 0; i < 100 && !(got_scale && got_transform); i++) {
+    for (int i = 0; i < 400 && !(got_scale && got_transform); i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }

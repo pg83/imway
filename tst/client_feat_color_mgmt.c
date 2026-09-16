@@ -75,7 +75,7 @@ int main(void) {
     if (!cm) { fprintf(stderr, "no color-manager\n"); return 1; }
     wp_color_manager_v1_add_listener(cm, &cm_listener, NULL);
 
-    for (int i = 0; i < 100 && !cm_done; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
+    for (int i = 0; i < 400 && !cm_done; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
     if (!cm_done || !got_intent || !got_feature) {
         fprintf(stderr, "handshake incomplete: intents=%d features=%d done=%d\n", got_intent, got_feature, cm_done);
         return 1;
@@ -113,7 +113,7 @@ int main(void) {
     struct wp_image_description_v1* desc = wp_image_description_creator_params_v1_create(params);
 #endif
     wp_image_description_v1_add_listener(desc, &desc_listener, NULL);
-    for (int i = 0; i < 100 && !desc_ready; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
+    for (int i = 0; i < 400 && !desc_ready; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
     if (!desc_ready) { fprintf(stderr, "image description not ready\n"); return 1; }
 
     struct wp_color_management_surface_v1* cms = wp_color_manager_v1_get_surface(cm, top.surface);

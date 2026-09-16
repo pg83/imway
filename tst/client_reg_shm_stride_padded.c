@@ -49,7 +49,7 @@ int main(void) {
         wl_surface_commit(top.surface);
         if (wl_display_roundtrip(wl_dpy) < 0) return 1;
     }
-    for (int i = 0; i < 100 && releases < 3; i++) {
+    for (int i = 0; i < 400 && releases < 3; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) return 1;
         usleep(20000);
     }

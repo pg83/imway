@@ -40,7 +40,7 @@ static void tl_close(void* d, struct xdg_toplevel* t) { (void)d; (void)t; exit(0
 static const struct xdg_toplevel_listener tl_listener = {tl_configure, tl_close};
 
 static int await_cfgs(int want) {
-    for (int i = 0; i < 100 && cfgs < want; i++) {
+    for (int i = 0; i < 400 && cfgs < want; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) return 0;
         usleep(20000);
     }

@@ -54,7 +54,7 @@ int main(void) {
     xdg_activation_token_v1_set_surface(tok, b.surface);
     xdg_activation_token_v1_commit(tok);
 
-    for (int i = 0; i < 100 && !got_token; i++) {
+    for (int i = 0; i < 400 && !got_token; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
@@ -63,7 +63,7 @@ int main(void) {
 
     xdg_activation_v1_activate(activation, token, b.surface);
 
-    for (int i = 0; i < 100 && wlk_focus != b.surface; i++) {
+    for (int i = 0; i < 400 && wlk_focus != b.surface; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }

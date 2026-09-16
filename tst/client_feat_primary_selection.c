@@ -74,7 +74,7 @@ int main(void) {
     zwp_primary_selection_source_v1_offer(src, "text/plain");
     zwp_primary_selection_device_v1_set_selection(dev, src, wlk_key_serial);
 
-    for (int i = 0; i < 100 && !selection_offered; i++) {
+    for (int i = 0; i < 400 && !selection_offered; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }

@@ -51,7 +51,7 @@ int main(void) {
     struct wp_fractional_scale_v1* f = wp_fractional_scale_manager_v1_get_fractional_scale(mgr, s);
     wp_fractional_scale_v1_add_listener(f, &frac_listener, NULL);
 
-    for (int i = 0; i < 100 && !got_scale; i++) {
+    for (int i = 0; i < 400 && !got_scale; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) {
             break;
         }

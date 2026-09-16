@@ -5,6 +5,16 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
+if [[ -n "${ASAN_OPTIONS:-}" ]]; then
+    # The policy under test is an immediate exit out of the render path.
+    # Under asan that exit runs the leak check while lavapipe's jit threads
+    # are still compiling shaders, and what comes out is a SEGV inside
+    # libLLVM on one of those threads, not anything imway did. The plain,
+    # UBSan and coverage jobs all cover this path.
+    echo "SKIP: the abrupt exit races lavapipe's jit under asan"
+    exit 127
+fi
+
 ctl "gpu-fatal"
 exec 3>&-
 

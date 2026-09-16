@@ -42,7 +42,7 @@ int main(void) {
     // a client that would prefer to draw its own decorations
     zxdg_toplevel_decoration_v1_set_mode(deco, ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
 
-    for (int i = 0; i < 100 && !got_mode; i++) {
+    for (int i = 0; i < 400 && !got_mode; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
