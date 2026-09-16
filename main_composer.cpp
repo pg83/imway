@@ -130,17 +130,43 @@ namespace {
 
 #if defined(IMWAY_FOR_TESTS) && !defined(IMWAY_SANITIZED)
     // A crash in the test build names itself: the scenario runner folds the
-    // compositor's stderr into imway.log, so the frames land in the verdict
-    // next to the log instead of leaving a bare rc=-11 behind. Only the
-    // faults nothing else claims (wayland.cpp owns SIGBUS for shm reads).
-    void crashHandler(int sig) {
-        static const char head[] = "imway: fatal signal, stack follows\n";
+    // compositor's stderr into imway.log, so the signal and its address land
+    // in the verdict instead of a bare rc=-11. Only the faults nothing else
+    // claims (wayland.cpp owns SIGBUS for shm reads). Nothing here may
+    // allocate or take a lock: write(2) and hand-rolled digits only, and the
+    // frames come out only when the faulting code carries unwind info —
+    // a fault inside the driver's jitted code walks nowhere.
+    void crashWrite(const char* text, size_t length) {
+        (void)!write(2, text, length);
+    }
 
-        (void)!write(2, head, sizeof(head) - 1);
+    void crashNumber(unsigned long value, int base) {
+        char digits[32];
+        size_t at = sizeof(digits);
+
+        do {
+            digits[--at] = "0123456789abcdef"[value % (unsigned)base];
+            value /= (unsigned)base;
+        } while (value && at);
+
+        crashWrite(digits + at, sizeof(digits) - at);
+    }
+
+    void crashHandler(int sig, siginfo_t* info, void*) {
+        crashWrite("imway: fatal signal ", 20);
+        crashNumber((unsigned long)sig, 10);
+        crashWrite(" at 0x", 6);
+        crashNumber((unsigned long)(info ? info->si_addr : nullptr), 16);
+        crashWrite(", stack follows\n", 16);
 #if __has_include(<execinfo.h>)
         void* frames[64];
+        int count = backtrace(frames, 64);
 
-        backtrace_symbols_fd(frames, backtrace(frames, 64), 2);
+        if (count > 0) {
+            backtrace_symbols_fd(frames, count, 2);
+        } else {
+            crashWrite("imway: no unwind info at the fault\n", 35);
+        }
 #endif
         signal(sig, SIG_DFL);
         raise(sig);
@@ -148,9 +174,14 @@ namespace {
 
     void installCrashHandler() {
         static const int fatal[] = {SIGSEGV, SIGILL, SIGFPE, SIGABRT};
+        struct sigaction action{};
+
+        action.sa_sigaction = crashHandler;
+        action.sa_flags = SA_SIGINFO;
+        sigemptyset(&action.sa_mask);
 
         for (size_t i = 0; i < sizeof(fatal) / sizeof(fatal[0]); i++) {
-            signal(fatal[i], crashHandler);
+            sigaction(fatal[i], &action, nullptr);
         }
     }
 #endif
