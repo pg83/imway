@@ -46,10 +46,14 @@ await 50 leader_is order-b order-a || {
     exit 1
 }
 
-screenshot "$XDG_RUNTIME_DIR/bar-b.ppm"
-bar_diff=$(region_diff "$XDG_RUNTIME_DIR/bar-a.ppm" "$XDG_RUNTIME_DIR/bar-b.ppm" 58 0 300 25)
-[[ "$bar_diff" -gt 5 ]] || {
-    echo "bar app_id did not change with the focus ($bar_diff)"
+# the readback can still carry the frame from before the switch, so poll
+bar_changed() {
+    screenshot "$XDG_RUNTIME_DIR/bar-b.ppm" || return 1
+    [[ "$(region_diff "$XDG_RUNTIME_DIR/bar-a.ppm" "$XDG_RUNTIME_DIR/bar-b.ppm" 58 0 300 25)" -gt 5 ]]
+}
+
+await 30 bar_changed || {
+    echo "bar app_id did not change with the focus"
     exit 1
 }
 

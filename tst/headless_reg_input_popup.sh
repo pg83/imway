@@ -6,8 +6,14 @@ set -euo pipefail
 
 start_client
 wait_client "input-popup done"
-sleep 0.3
-dump_state | grep -q 'ime popup=1' || {
+
+# the client prints as soon as it commits; the compositor may not have
+# placed the popup yet
+popup_placed() {
+    dump_state | grep -q 'ime popup=1'
+}
+
+await 50 popup_placed || {
     echo "the input-method popup was not placed in the scene"
     dump_state
     exit 1
