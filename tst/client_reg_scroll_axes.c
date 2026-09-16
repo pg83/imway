@@ -121,18 +121,20 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     printf("scroll axes ready\n");
 
-    /* the scenario points at the window, then scrolls */
-    for (int i = 0; i < 400 && !enters; i++) {
+    /* The scenario points at the window. Either pointer object seeing the
+     * enter proves the focus arrived: the helper binds its own at wl_seat 5
+     * and this client added one at the top version. */
+    for (int i = 0; i < 400 && !enters && !wlp_enter_count; i++) {
         wl_display_roundtrip(wl_dpy);
         usleep(20000);
     }
 
-    if (!enters) {
+    if (!enters && !wlp_enter_count) {
         fprintf(stderr, "the pointer never entered\n");
         return 1;
     }
 
-    printf("pointer entered\n");
+    printf("pointer entered (own=%d helper=%d)\n", enters, wlp_enter_count);
 
     /* wheel notches on both axes, then a finger scroll, then the stops */
     for (int i = 0; i < 400 && !(stop_v && stop_h); i++) {

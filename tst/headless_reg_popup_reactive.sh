@@ -9,8 +9,15 @@ start_client
 wait_client "popup mapped"
 wait_mapped
 
+# the client prints as soon as it commits; wait for the compositor to have
+# placed the popup before reading where it landed
+popup_placed() {
+    [[ -n "$(dump_field '^popup' y)" ]]
+}
+
+await 50 popup_placed || { echo "no popup in the dump"; dump_state; exit 1; }
+
 before=$(dump_field '^popup' y)
-[[ -n "$before" ]] || { echo "no popup in the dump"; dump_state; exit 1; }
 
 ctl "set desktop.dock_position 3" # bottom
 await 20 in_log "control: set desktop.dock_position" || { echo "settings are not reachable"; exit 1; }

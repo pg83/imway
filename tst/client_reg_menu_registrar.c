@@ -4,13 +4,11 @@
  * asks the registrar to list its menus, asks about a window nobody
  * registered, and finally unregisters. */
 
-#include <dbus/dbus.h>
+#include "wl_util.h"
 
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
+#include <appmenu-client-protocol.h>
+
+#include <dbus/dbus.h>
 
 static DBusConnection* bus;
 static uint32_t layout_revision = 1;
@@ -253,6 +251,20 @@ static int menus_contain(DBusMessage* reply, uint32_t window) {
     return found;
 }
 
+static struct org_kde_kwin_appmenu_manager* appmenu_manager;
+
+static void extra_global(void* d, struct wl_registry* r, uint32_t name,
+                         const char* iface, uint32_t ver) {
+    (void)d;
+    if (!strcmp(iface, org_kde_kwin_appmenu_manager_interface.name))
+        appmenu_manager = wl_registry_bind(r, name, &org_kde_kwin_appmenu_manager_interface,
+                                          ver < 2 ? ver : 2);
+}
+static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
+    (void)d; (void)r; (void)n;
+}
+static const struct wl_registry_listener extra_listener = {extra_global, extra_remove};
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -296,8 +308,38 @@ int main(void) {
     dbus_message_unref(reply);
     puts("window registered");
 
+    /* A registration alone is bookkeeping; the compositor pulls a menu for a
+     * window it can see. Map one and point it at this service. */
+    if (wl_boot()) {
+        fprintf(stderr, "no wayland display\n");
+        return 2;
+    }
+
+    struct wl_registry* registry = wl_display_get_registry(wl_dpy);
+
+    wl_registry_add_listener(registry, &extra_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+
+    if (!appmenu_manager) {
+        fprintf(stderr, "no appmenu manager\n");
+        return 2;
+    }
+
+    struct wl_toplevel_ctx top;
+
+    wl_make_toplevel(&top, "menu-registrar", 400, 300, 0xFF505060);
+
+    struct org_kde_kwin_appmenu* appmenu =
+        org_kde_kwin_appmenu_manager_create(appmenu_manager, top.surface);
+
+    org_kde_kwin_appmenu_set_address(appmenu, "org.example.ImwayMenuRegistrar", kMenuPath);
+    wl_surface_commit(top.surface);
+    wl_display_roundtrip(wl_dpy);
+    puts("window mapped");
+
     /* the compositor pulls the layout in; serve it */
-    for (int i = 0; i < 100 && !layouts_served; i++) {
+    for (int i = 0; i < 200 && !layouts_served; i++) {
+        wl_display_roundtrip(wl_dpy);
         dbus_connection_read_write_dispatch(bus, 50);
     }
 
@@ -339,6 +381,7 @@ int main(void) {
     emit_properties_removed();
 
     for (int i = 0; i < 40; i++) {
+        wl_display_roundtrip(wl_dpy);
         dbus_connection_read_write_dispatch(bus, 50);
     }
 
@@ -349,6 +392,7 @@ int main(void) {
     if (reply) dbus_message_unref(reply);
 
     for (int i = 0; i < 20; i++) {
+        wl_display_roundtrip(wl_dpy);
         dbus_connection_read_write_dispatch(bus, 50);
     }
 

@@ -8,6 +8,7 @@ set -euo pipefail
 
 start_client
 wait_client "window registered"
+wait_client "window mapped"
 wait_client "layout served 1"
 wait_client "menus listed"
 wait_client "stranger refused"
