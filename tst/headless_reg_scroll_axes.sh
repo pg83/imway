@@ -9,7 +9,11 @@ start_client
 wait_client "scroll axes ready"
 wait_mapped
 
+# The hover is picked from the last composed frame, so a bare motion is not
+# enough: click_at moves, composes, nudges and composes again.
 point_at_color 32 192 32 || { echo "the client window was not found"; exit 1; }
+read -r cx cy < <(centroid "$XDG_RUNTIME_DIR/_pt.ppm" 32 192 32)
+click_at "$cx" "$cy"
 wait_client "pointer entered"
 
 ctl "scroll 2"
