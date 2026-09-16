@@ -1705,6 +1705,9 @@ namespace {
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
 
+        // stop every sandbox listener and free the contexts nothing refers to
+        void stopSecurityContexts() noexcept;
+
         void run() override;
         void inputActivity() override;
         void setLayout(u32 group) override;
@@ -12405,9 +12408,18 @@ WaylandImpl::~WaylandImpl() noexcept {
         ev_signal_stop(loop, &sigTerm);
     }
 
+    stopSecurityContexts();
+
+    if (display) {
+        wl_display_destroy(display);
+        display = nullptr;
+    }
+}
+
+void WaylandImpl::stopSecurityContexts() noexcept {
     // active event sources are not freed by wl_display_destroy: stop every
     // sandbox listener first; a context whose object still exists is
-    // released by the resource destroy hook below
+    // released by the resource destroy hook later
     while (!securityContexts.empty()) {
         auto* ctx = (SecurityContext*)securityContexts.mutFront();
 
@@ -12419,11 +12431,6 @@ WaylandImpl::~WaylandImpl() noexcept {
         } else {
             securityRelease(ctx);
         }
-    }
-
-    if (display) {
-        wl_display_destroy(display);
-        display = nullptr;
     }
 }
 
@@ -13791,6 +13798,7 @@ void WaylandImpl::run() {
     ev_run(loop, 0);
 
     wl_display_destroy_clients(display);
+    stopSecurityContexts();
     wl_display_destroy(display);
     display = nullptr;
 }
