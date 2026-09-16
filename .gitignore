@@ -10,3 +10,5 @@ __pycache__/
 .#*
 /test
 /imway_test
+# the per-test client binaries the build symlinks into the tree
+/client_*
