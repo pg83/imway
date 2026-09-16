@@ -24,7 +24,6 @@ import re
 import shlex
 import shutil
 import signal
-import sqlite3
 import stat
 import subprocess
 import sysconfig
@@ -36,6 +35,13 @@ import uuid
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Iterable
+
+# sqlite backs only the strace input index; a build box whose python lacks
+# the module still runs every untraced build
+try:
+    import sqlite3
+except ImportError:
+    sqlite3 = None
 
 
 S = "$(S)"
@@ -2606,6 +2612,9 @@ def main(argv: list[str] | None = None) -> int:
             for directory in ("cas", "uid", "tmp", "grb"):
                 shutil.rmtree(cache_root / directory, ignore_errors=True)
         context.build_root.mkdir(parents=True, exist_ok=True)
+        if args.strace and sqlite3 is None:
+            print("build: --strace needs the sqlite3 module", file=sys.stderr)
+            return 2
         Executor(
             context,
             args.jobs,
