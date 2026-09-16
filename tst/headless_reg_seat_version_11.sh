@@ -6,29 +6,29 @@ set -euo pipefail
 start_client
 wait_mapped
 
-# The compositor logs the map before the frame that lays the window out, so
-# the rect is a frame away, several on an instrumented build. An empty one
-# parks the pointer at the origin instead of over the client, and the wheel
-# then goes to nobody until the client's own alarm kills it.
-have_rect() {
+# Park the pointer over the client so the wheel is routed to it. Two things
+# settle late on a loaded rasterizer: the window position, which is per-frame
+# renderer truth and is missing entirely for the first frames, and the
+# pointer enter, which the compositor works out from a rendered frame after
+# the motion. Neither is worth a guessed sleep -- re-aim and scroll again
+# until the client has its contract, the way headless_reg_pointer_warp does.
+for _ in $(seq 1 20); do
     x=$(dump_field 'app_id=seat11' imgx)
     y=$(dump_field 'app_id=seat11' imgy)
-    [[ -n "$x" && -n "$y" ]]
-}
 
-await 100 have_rect || { echo "no client rect in the dump"; dump_state; exit 1; }
+    if [[ -n "$x" && -n "$y" ]]; then
+        # hover lands a frame after the first motion
+        ctl "motion $((x + 40)) $((y + 40))"
+        sleep 0.2
+        ctl "motion $((x + 41)) $((y + 40))"
+        sleep 0.2
+        # a wheel notch: the compositor must translate it to axis_value120 = 120
+        ctl "scroll -1"
+    fi
 
-# Park the pointer over the client so the scroll is routed to it. Hover is
-# computed from the last rendered frame, so force one between the motions
-# the way click_at does rather than hoping a sleep covers it.
-ctl "motion $((x + 40)) $((y + 40))"
-screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-ctl "motion $((x + 41)) $((y + 40))"
-screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-
-# a wheel notch: the compositor must translate it to axis_value120 = 120
-ctl "scroll -1"
-ctl "scroll -1"
+    kill -0 "$CLIENT_PID" 2>/dev/null || break
+    sleep 0.5
+done
 
 expect_client_ok "seat v11 / axis_value120 contract not met"
 echo "OK: wl_seat v11 delivers axis_value120"
