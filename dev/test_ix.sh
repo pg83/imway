@@ -12,6 +12,17 @@
 #   dev/test_ix.sh -Druns=1 -Dfilter='headless_reg_positioner_*'
 #
 # Needs a machine where IX can realize a realm (a running sud).
+#
+# Two things to know. The vulkan driver is linked into the binary by the
+# realm (ix hands the ICD over as an object file), so a compositor built by
+# dev/build_ix.sh, whose set has no driver, dies in vkCreateInstance — build
+# the test binary through this script, not that one. And ./build caches
+# scenario verdicts: re-running an unchanged scenario prints nothing and
+# exits zero. To actually re-run one, call the runner directly inside the
+# realm, with absolute paths (the realm has its own cwd):
+#
+#   python3 dev/run_test.py --scenario tst/headless_X.sh \
+#       --imway "$PWD/.build/imway_test" --out /tmp/x.json --run 0
 
 IX=${IX:-$HOME/monorepo/ix/ix}
 # the same driver set/pg asks for, so the store artifact is reused; override
