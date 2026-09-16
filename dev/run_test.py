@@ -349,7 +349,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         return dict(status=status, seconds=time.monotonic() - started, detail=detail, artifacts=arts)
 
     if rc == 127:
-        return finish(SKIP)
+        # the aggregator prints this: a skip has to say what the environment
+        # lacked, or a scenario that quietly stops running is invisible
+        return finish(SKIP, last_line(shell_out))
     if rc != 0:
         detail = f"scenario rc={rc}: {last_line(shell_out)}"
         milestone = last_line(tail(client_log, 5))

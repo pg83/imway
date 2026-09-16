@@ -96,29 +96,37 @@ static int makeDevice(const char* name, const int* keys, int nkeys, int rel, cha
         return -1;
     }
 
+    return fd;
+}
+
+// Link the node into the compositor's directory, once it is ours to open.
+// Whoever manages /dev decides that, and it is not instant: udev applies
+// its rules after the kernel has already created the node.
+static int linkDevice(const char* sysname) {
     char node[256], link[512];
 
     snprintf(node, sizeof(node), "/dev/input/%s", sysname);
     snprintf(link, sizeof(link), "%s/%s", gDir, sysname);
 
-    if (access(node, R_OK) != 0) {
-        fprintf(stderr, "uinput unavailable: %s is not readable (%s)\n", node, strerror(errno));
-        ioctl(fd, UI_DEV_DESTROY);
-        close(fd);
+    int readable = 0;
 
-        return -2;
+    for (int i = 0; i < 60 && !readable; i++) {
+        readable = access(node, R_OK) == 0;
+
+        if (!readable) {
+            usleep(50000);
+        }
     }
 
-    unlink(link);
-
-    if (symlink(node, link) < 0) {
-        ioctl(fd, UI_DEV_DESTROY);
-        close(fd);
+    if (!readable) {
+        printf("uinput unavailable: %s is not readable (%s)\n", node, strerror(errno));
 
         return -1;
     }
 
-    return fd;
+    unlink(link);
+
+    return symlink(node, link);
 }
 
 static void dropDevice(int fd, const char* sysname) {
@@ -160,32 +168,36 @@ int main(int argc, char** argv) {
 
     int kbd = makeDevice("imway test keyboard", kbdKeys, 4, 0, kbdName, sizeof(kbdName));
 
-    if (kbd == -2) {
-        printf("uinput unavailable: the node it created cannot be opened\n");
+    if (kbd < 0) {
+        printf("uinput unavailable: cannot create a virtual keyboard (%s)\n", strerror(errno));
 
         return 0;
-    }
-
-    if (kbd < 0) {
-        fprintf(stderr, "cannot create the virtual keyboard: %s\n", strerror(errno));
-
-        return 1;
     }
 
     int mouse = makeDevice("imway test mouse", mouseKeys, 2, 1, mouseName, sizeof(mouseName));
 
     if (mouse < 0) {
+        printf("uinput unavailable: cannot create a virtual mouse (%s)\n", strerror(errno));
         dropDevice(kbd, kbdName);
 
-        if (mouse == -2) {
-            printf("uinput unavailable: the node it created cannot be opened\n");
+        return 0;
+    }
 
-            return 0;
-        }
+    // the nodes exist now but are not linked yet: the scenario gets its
+    // chance to make them openable before the compositor is shown them
+    printf("uinput created %s %s\n", kbdName, mouseName);
 
-        fprintf(stderr, "cannot create the virtual mouse: %s\n", strerror(errno));
+    if (waitFor("go-link")) {
+        fprintf(stderr, "the scenario never asked for the link\n");
 
         return 1;
+    }
+
+    if (linkDevice(kbdName) || linkDevice(mouseName)) {
+        dropDevice(mouse, mouseName);
+        dropDevice(kbd, kbdName);
+
+        return 0;
     }
 
     printf("uinput ready %s %s\n", kbdName, mouseName);

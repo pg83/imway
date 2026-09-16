@@ -14,19 +14,37 @@ in_log "libinput ready" || {
     exit 1
 }
 
+skip_unless_uinput() {
+    if grep -q "uinput unavailable" "$CLIENT_LOG"; then
+        echo "SKIP: $(grep -m1 'uinput unavailable' "$CLIENT_LOG")"
+        exit 127
+    fi
+}
+
 start_client "$XDG_RUNTIME_DIR/input"
-await 200 grep -q "uinput" "$CLIENT_LOG" || {
+await 200 grep -q "^uinput " "$CLIENT_LOG" || {
     echo "the uinput helper said nothing"
     cat "$CLIENT_LOG"
     exit 1
 }
 
-if grep -q "uinput unavailable" "$CLIENT_LOG"; then
-    echo "SKIP: $(grep -m1 'uinput unavailable' "$CLIENT_LOG")"
-    exit 127
-fi
+skip_unless_uinput
+wait_client "uinput created"
 
-wait_client "uinput ready"
+# The nodes exist but are not linked yet. Who may open them is whoever
+# manages /dev: with a passwordless sudo this decides for itself, and
+# without one the helper reports the node it cannot read and this skips.
+read -r _ _ kbd_node mouse_node < <(grep -m1 "uinput created" "$CLIENT_LOG")
+sudo -n chmod 666 "/dev/input/$kbd_node" "/dev/input/$mouse_node" 2>/dev/null || true
+touch go-link
+
+await 200 grep -qE "^uinput (ready|unavailable)" "$CLIENT_LOG" || {
+    echo "the helper never linked its devices"
+    cat "$CLIENT_LOG"
+    exit 1
+}
+
+skip_unless_uinput
 await 200 in_log "input device event" || {
     echo "libinput never noticed the plugged devices"
     cat "$IMWAY_LOG"

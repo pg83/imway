@@ -952,7 +952,12 @@ bool RendererImpl::surfaceVisible(Surface* s) const {
         }
     }
 
-    return root == scene->cursorSurface || root == scene->dragIcon.get();
+    // The overlays desktop.cpp draws outside the scene walk: their textures
+    // are sampled by the frame just like anyone else's, so the frame has to
+    // hold them. An input-method popup that was not on this list died with
+    // its client while a submitted frame still pointed at its descriptor,
+    // and the rasterizer read the freed image on its own thread.
+    return root == scene->cursorSurface || root == scene->dragIcon.get() || root == scene->imePopup.get();
 }
 
 void RendererImpl::holdShmForFrame(ShmContent* content) {
