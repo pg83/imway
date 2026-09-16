@@ -4114,6 +4114,15 @@ bool RendererImpl::readbackLastFrame() {
 }
 
 bool RendererImpl::screenshot(StringView path) {
+    // The pixels of a commit that just arrived may still be on the copy
+    // thread. The frame loop waits for them (shouldCompose returns false
+    // while a copy is active), the forced frame below does not — without
+    // this the readback carries the previous content of every shm client,
+    // which is the whole flake class in the pixel scenarios.
+    while (shmCopyActive) {
+        shmCopyJob->drain();
+    }
+
     // Compose now, always: the readback below returns the last frame, and
     // whatever a client committed since then would be missing from it. A
     // direct-scanout frame has nothing to read back at all.

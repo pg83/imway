@@ -19,6 +19,11 @@ struct OffloadJob {
     virtual bool inFlight() const = 0;
     // block until the pass in flight retires (teardown)
     virtual void join() = 0;
+    // Block until the pass in flight retires and run its completion right
+    // here, instead of on the next loop iteration. For a caller that must
+    // see the result before it returns; the loop-side watcher finds the
+    // eventfd already drained and stays quiet.
+    virtual void drain() = 0;
 
     static OffloadJob* create(Composer& c, void (*work)(void*), void* self, Listener& done);
     // A shorter-lived owner may hold the job. Its pool stops the event watcher

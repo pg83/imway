@@ -31,6 +31,7 @@ namespace {
         void run() override;
         bool inFlight() const override;
         void join() override;
+        void drain() override;
         void retired();
     };
 
@@ -85,6 +86,15 @@ bool OffloadJobImpl::inFlight() const {
 void OffloadJobImpl::join() {
     if (busy) {
         c->offload->join();
+    }
+}
+
+void OffloadJobImpl::drain() {
+    while (busy) {
+        c->offload->join();
+        // retired() drains the eventfd, so the io watcher has nothing left
+        // to report and the completion still runs exactly once
+        retired();
     }
 }
 
