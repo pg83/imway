@@ -7,10 +7,14 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
+# both keycodes carry the Print keysym, and the screenshot they take would
+# put a second client on the seat halfway through the sweep
+skip="99 210"
+
 [[ "$(dump_state | awk '/^layout/ { print $2 }')" == "EN" ]] || { echo "unexpected initial layout"; exit 1; }
 
 for code in $(seq 1 248); do
-    [[ "$code" -eq 99 ]] && continue
+    [[ " $skip " == *" $code "* ]] && continue
     ctl "key $code press"
     ctl "key $code release"
 done
