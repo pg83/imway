@@ -81,6 +81,25 @@ static const struct wp_drm_lease_v1_listener lease_listener = {
     lease_lease_fd, lease_finished_cb,
 };
 
+/* the throwaway connection below binds its own device: whatever the
+ * compositor hands it has to be released too, or a sanitized run counts the
+ * proxies and the duplicated drm fd as leaks */
+static void spare_drm_fd(void* d, struct wp_drm_lease_device_v1* dev, int32_t fd) {
+    (void)d; (void)dev;
+    close(fd);
+}
+static void spare_connector(void* d, struct wp_drm_lease_device_v1* dev,
+                            struct wp_drm_lease_connector_v1* c) {
+    (void)d; (void)dev;
+    wp_drm_lease_connector_v1_destroy(c);
+}
+static void spare_done(void* d, struct wp_drm_lease_device_v1* dev) { (void)d; (void)dev; }
+static void spare_released(void* d, struct wp_drm_lease_device_v1* dev) { (void)d; (void)dev; }
+
+static const struct wp_drm_lease_device_v1_listener spare_listener = {
+    spare_drm_fd, spare_connector, spare_done, spare_released,
+};
+
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t ver) {
     (void)d; (void)ver;
@@ -148,9 +167,12 @@ int main(void) {
         lease_dev = saved;
 
         if (ed) {
-            struct wp_drm_lease_request_v1* empty = wp_drm_lease_device_v1_create_lease_request(ed);
+            wp_drm_lease_device_v1_add_listener(ed, &spare_listener, NULL);
+            wl_display_roundtrip(err_dpy);
 
-            wp_drm_lease_request_v1_submit(empty);
+            struct wp_drm_lease_request_v1* empty = wp_drm_lease_device_v1_create_lease_request(ed);
+            struct wp_drm_lease_v1* born = wp_drm_lease_request_v1_submit(empty);
+
             wl_display_roundtrip(err_dpy);
 
             int err = wl_display_get_error(err_dpy);
@@ -161,8 +183,11 @@ int main(void) {
             }
 
             puts("empty request refused");
+            wp_drm_lease_v1_destroy(born);
+            wp_drm_lease_device_v1_destroy(ed);
         }
 
+        wl_registry_destroy(er);
         wl_display_disconnect(err_dpy);
     }
 
@@ -205,6 +230,13 @@ int main(void) {
     }
 
     puts("duplicate refused");
+
+    /* the proxies are client-side allocations; a sanitized run wants them
+     * all back even though the connection is already dead */
+    wp_drm_lease_request_v1_destroy(dup);
+    wp_drm_lease_connector_v1_destroy(offered);
+    wp_drm_lease_device_v1_destroy(lease_dev);
+    wl_registry_destroy(registry);
 
     return 0;
 }
