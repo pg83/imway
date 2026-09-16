@@ -18,10 +18,18 @@ in_log "scanout swapchain" || { echo "no zero-copy swapchain"; cat "$IMWAY_LOG";
 start_client
 wait_client "kms smoke mapped"
 
-# the full render path works: the client's color survives into the readback
-screenshot "$XDG_RUNTIME_DIR/kms.ppm"
-read -r r g b _ < <(surface_mean "$XDG_RUNTIME_DIR/kms.ppm" 'title=kms-smoke')
-[[ "$b" -gt 100 && "$b" -gt $((r + 30)) ]] || {
+# the full render path works: the client's color survives into the readback.
+# The first composed frame after the map need not carry it yet — on the
+# split render/display path the readback lags a frame — so poll.
+blue_arrived() {
+    local r g b
+    screenshot "$XDG_RUNTIME_DIR/kms.ppm" || return 1
+    read -r r g b _ < <(surface_mean "$XDG_RUNTIME_DIR/kms.ppm" 'title=kms-smoke')
+    [[ "$b" -gt 100 && "$b" -gt $((r + 30)) ]]
+}
+
+await 50 blue_arrived || {
+    read -r r g b _ < <(surface_mean "$XDG_RUNTIME_DIR/kms.ppm" 'title=kms-smoke')
     echo "client color did not survive the kms render path ($r $g $b)"
     exit 1
 }
