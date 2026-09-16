@@ -465,7 +465,11 @@ void ControlImpl::handleLine(StringView cmd) {
         // exercises the death policy end to end: the log line, the prompt
         // exit, no hang
         *(comp->log) << "imway: vulkan device lost, exiting"_sv << endL;
-        exit(1);
+        // _exit, not exit: the gpu is gone, and unwinding through atexit
+        // (the driver's own, the profile writer's) while the copy thread and
+        // the driver's threads are still live is how this died with SIGSEGV
+        // instead of its exit code under an instrumented build
+        _exit(1);
     } else if (verb == "rule"_sv) {
         // `rule INDEX POLICY APP`: a per-application notification rule, which
         // the settings dialog otherwise owns

@@ -153,7 +153,9 @@ namespace {
             // deliberate policy: no in-process recovery, no restart — the
             // session dies with its reason on record
             sysE << "imway: vulkan device lost, exiting"_sv << endL;
-            exit(1);
+            // no unwinding on a dead device: atexit would run the driver's
+            // own teardown over it, with our threads still live
+            _exit(1);
         }
 
         if (err < 0) {
@@ -985,7 +987,8 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     if (status == VK_TIMEOUT) {
         // a frame fence that never signals is a hung gpu, not a slow one
         *(comp->log) << "imway: gpu hang (frame fence timeout), exiting"_sv << endL;
-        exit(1);
+        // same as a lost device: die where we stand, do not unwind
+        _exit(1);
     }
 
     if (status != VK_SUCCESS) {
