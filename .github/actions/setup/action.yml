@@ -23,6 +23,7 @@ runs:
           libxkbcommon-dev libseat-dev libdbus-1-dev libpng-dev libjxl-dev \
           liblcms2-dev libvulkan-dev mesa-vulkan-drivers vulkan-tools \
           libev-dev libpam0g-dev libpulse-dev libsndio-dev sndiod sndio-tools \
+          pulseaudio pulseaudio-utils \
           seatd libcrypt-dev libasound2-data \
           dbus foot wl-clipboard gdb acl fonts-dejavu-core
 
