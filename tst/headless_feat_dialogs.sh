@@ -23,14 +23,19 @@ no_window() {
     [[ -z "$(dump_field "^imgui name=$1" x)" ]]
 }
 
+# Each step waits for its own result. The launcher has to be taking text
+# before the query is typed, or ImGui stops trickling the characters ahead
+# of the Up queued behind them and the unfiltered grid gets navigated; and
+# the launcher is still drawn for the frame in which the action it fired
+# has already toggled a dialog, so the toggle is only judged once it is off
+# the screen.
 action() { # <launcher action name>
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
-    sleep 0.3
+    await_typing '##launcher' || { echo "the launcher did not open for '$1'"; exit 1; }
     ctl "type $1"
-    sleep 0.3
     ctl "key 103 press"; ctl "key 103 release" # Up: select the action row
     ctl "key 28 press"; ctl "key 28 release"
-    sleep 0.3
+    await_no_imgui '##launcher' || { echo "the launcher did not close after '$1'"; exit 1; }
 }
 
 # the log view: its own action, and the action again closes it
@@ -64,12 +69,17 @@ await 50 window '##calendar' || { echo "the clock did not open the calendar"; du
 
 # its month arrows and the today button, then Escape
 cx=$(dump_field '^imgui name=##calendar' x); cy=$(dump_field '^imgui name=##calendar' y); cw=$(dump_field '^imgui name=##calendar' w)
+# twenty pixels of a redrawn month label: take fresh frames until the
+# header changes rather than judging whichever one a fixed sleep lands on
+month_stepped() {
+    screenshot "$XDG_RUNTIME_DIR/month-back.ppm" &&
+        [[ "$(region_diff "$XDG_RUNTIME_DIR/month0.ppm" "$XDG_RUNTIME_DIR/month-back.ppm" \
+            "$cx" "$cy" $((cx + cw)) $((cy + 60)))" -gt 20 ]]
+}
+
 screenshot "$XDG_RUNTIME_DIR/month0.ppm"
 click_at $((cx + 14)) $((cy + 14))
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/month-back.ppm"
-[[ "$(region_diff "$XDG_RUNTIME_DIR/month0.ppm" "$XDG_RUNTIME_DIR/month-back.ppm" "$cx" "$cy" $((cx + cw)) $((cy + 60)))" -gt 20 ]] || {
-    echo "the calendar did not step back a month"; exit 1; }
+await 50 month_stepped || { echo "the calendar did not step back a month"; exit 1; }
 click_at $((cx + cw - 14)) $((cy + 14))
 sleep 0.3
 ctl "key 1 press"; ctl "key 1 release"

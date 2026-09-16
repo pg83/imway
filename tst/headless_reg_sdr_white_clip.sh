@@ -7,13 +7,8 @@ set -euo pipefail
 
 start_client
 wait_mapped
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
-
-read -r r g b n < <(surface_mean "$XDG_RUNTIME_DIR/shot.ppm" "app_id=sdr-white-clip")
-[[ "$r" -ge 252 && "$g" -ge 252 && "$b" -ge 252 ]] || {
-    echo "SDR white is dimmed by the tone map: mean $r $g $b over $n px"
-    exit 1
-}
+await_mean "$XDG_RUNTIME_DIR/shot.ppm" 'app_id=sdr-white-clip' \
+    '"$r" -ge 252 && "$g" -ge 252 && "$b" -ge 252' ||
+    { echo "SDR white is dimmed by the tone map"; exit 1; }
 
 echo "OK: SDR white reaches full code without HDR content"
