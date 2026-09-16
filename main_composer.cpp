@@ -37,6 +37,16 @@
 #if defined(IMWAY_FOR_TESTS) && __has_include(<execinfo.h>)
     #include <execinfo.h>
 #endif
+// a sanitizer's own fault report is worth more than ours; leave its handler
+// in place and install nothing under asan/msan/tsan
+#if defined(__has_feature)
+    #if __has_feature(address_sanitizer) || __has_feature(memory_sanitizer) || __has_feature(thread_sanitizer)
+        #define IMWAY_SANITIZED 1
+    #endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+    #define IMWAY_SANITIZED 1
+#endif
 #include <unistd.h>
 #include <sys/prctl.h>
 
@@ -118,7 +128,7 @@ namespace {
         bool login = false;
     };
 
-#ifdef IMWAY_FOR_TESTS
+#if defined(IMWAY_FOR_TESTS) && !defined(IMWAY_SANITIZED)
     // A crash in the test build names itself: the scenario runner folds the
     // compositor's stderr into imway.log, so the frames land in the verdict
     // next to the log instead of leaving a bare rc=-11 behind. Only the
@@ -160,7 +170,7 @@ namespace {
 int mainComposer(int argc, char** argv) {
     // a client or pipe going away mid-write is an error code, not a death
     signal(SIGPIPE, SIG_IGN);
-#ifdef IMWAY_FOR_TESTS
+#if defined(IMWAY_FOR_TESTS) && !defined(IMWAY_SANITIZED)
     installCrashHandler();
 #endif
 
