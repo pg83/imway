@@ -42,8 +42,8 @@ static void popup_xs_configure(void* d, struct xdg_surface* s, uint32_t serial) 
     (void)d;
     xdg_surface_ack_configure(s, serial);
     if (!popup_committed) {
-        wl_surface_attach(popup_surface, wl_solid(200, 150, 0xFFFFFF00), 0, 0);
-        wl_surface_damage(popup_surface, 0, 0, 200, 150);
+        wl_surface_attach(popup_surface, wl_solid(200, 700, 0xFFFFFF00), 0, 0);
+        wl_surface_damage(popup_surface, 0, 0, 200, 700);
         wl_surface_commit(popup_surface);
         popup_committed = 1;
         printf("popup mapped\n");
@@ -88,8 +88,10 @@ int main(void) {
 
     struct xdg_positioner* pos = xdg_wm_base_create_positioner(wl_wm);
 
-    /* anchored below the parent's bottom edge, sliding to stay on screen */
-    xdg_positioner_set_size(pos, 200, 150);
+    /* Anchored below the parent's bottom edge and taller than the room
+     * left there, so the slide always has work to do and its result moves
+     * with the bottom of the work area. */
+    xdg_positioner_set_size(pos, 200, 700);
     xdg_positioner_set_anchor_rect(pos, 0, cur_h - 10, cur_w, 10);
     xdg_positioner_set_anchor(pos, XDG_POSITIONER_ANCHOR_BOTTOM);
     xdg_positioner_set_gravity(pos, XDG_POSITIONER_GRAVITY_BOTTOM);
