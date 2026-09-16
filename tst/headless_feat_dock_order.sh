@@ -38,22 +38,26 @@ await 50 leader_is order-a order-b || {
     exit 1
 }
 
-# the focused app_id is the first element of the top bar
-screenshot "$XDG_RUNTIME_DIR/bar-a.ppm"
+# the focused app_id is the first element of the top bar; the dump reports
+# the value the bar drew, so the check waits for the frame instead of
+# diffing two readbacks a handful of pixels apart
+bar_is() { # <app_id>
+    [[ "$(dump_field '^bar ' app_id)" = "$1" ]]
+}
+
+await 50 bar_is order-a || {
+    echo "the bar does not show the focused app_id: $(dump_field '^bar ' app_id)"
+    exit 1
+}
+
 alt_tab
 await 50 leader_is order-b order-a || {
     echo "second switch did not promote: a=$(seq_of order-a) b=$(seq_of order-b)"
     exit 1
 }
 
-# the readback can still carry the frame from before the switch, so poll
-bar_changed() {
-    screenshot "$XDG_RUNTIME_DIR/bar-b.ppm" || return 1
-    [[ "$(region_diff "$XDG_RUNTIME_DIR/bar-a.ppm" "$XDG_RUNTIME_DIR/bar-b.ppm" 58 0 300 25)" -gt 5 ]]
-}
-
-await 30 bar_changed || {
-    echo "bar app_id did not change with the focus"
+await 50 bar_is order-b || {
+    echo "bar app_id did not change with the focus: $(dump_field '^bar ' app_id)"
     exit 1
 }
 

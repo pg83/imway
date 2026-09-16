@@ -80,6 +80,7 @@ namespace {
 
         if (c.settings->topBarAppId() && !info.focusedAppId.empty()) {
             ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
+            result.barAppId = info.focusedAppId;
         }
 
         if (c.settings->topBarGlobalMenu() && info.globalMenu && info.globalMenu->ready) {

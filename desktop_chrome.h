@@ -22,6 +22,9 @@ struct DesktopChromeResult {
     bool wifi = false;
     float launcherX = -1.f;
     float launcherY = -1.f;
+    // app_id the bar actually drew this frame, empty when it drew none —
+    // the state dump reports it, so a test asserts on the drawn value
+    stl::StringView barAppId;
     // the wifi glyph's rectangle in output pixels, for the state dump
     float wifiX0 = -1.f;
     float wifiY0 = -1.f;

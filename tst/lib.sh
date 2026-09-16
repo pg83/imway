@@ -211,6 +211,36 @@ print(*(round(sum(p[c] for p in pixels) / len(pixels)) for c in range(3)),
 PY
 }
 
+# Take fresh readbacks until the client surface's mean satisfies <cond>, a
+# [[ ]] expression over r, g, b (means) and n (sampled pixels); echo the
+# values it settled on. A bare sleep then screenshot asserts on whatever
+# happened to be on screen: the frame carrying the client's content can be a
+# configure round trip away, and a sanitized or instrumented build makes
+# that window wide. Quote <cond> so it expands here, not at the call site.
+await_mean() { # <ppm> <dump-pattern> <cond>
+    local i r g b n
+
+    for ((i = 0; i < 40; i++)); do
+        if screenshot "$1"; then
+            read -r r g b n < <(surface_mean "$1" "$2" 2>/dev/null) || true
+
+            if [[ -n "${n:-}" ]]; then
+                if eval "[[ $3 ]]"; then
+                    echo "$r $g $b $n"
+
+                    return 0
+                fi
+            fi
+        fi
+
+        sleep 0.2
+    done
+
+    echo "surface mean settled at ${r:-?} ${g:-?} ${b:-?}, n=${n:-0}" >&2
+
+    return 1
+}
+
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
 screenshot() {

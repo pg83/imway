@@ -4,16 +4,16 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 start_client
+
+# the raw phase holds for three seconds, long enough to catch its frame
 wait_client "raw"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/raw.ppm"
+await_mean "$XDG_RUNTIME_DIR/raw.ppm" 'app_id=client_feat_color_mgmt' \
+    '"$r $g $b" == "121 108 82"' ||
+    { echo "the raw surface never reached its expected mean"; exit 1; }
+
 wait_client "managed"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/managed.ppm"
-read -r rr rg rb rn < <(surface_mean "$XDG_RUNTIME_DIR/raw.ppm" \
-    'app_id=client_feat_color_mgmt')
-read -r mr mg mb mn < <(surface_mean "$XDG_RUNTIME_DIR/managed.ppm" \
-    'app_id=client_feat_color_mgmt')
-[[ "$rr $rg $rb" == "121 108 82" ]]
-[[ "$mr $mg $mb" == "123 107 76" ]]
+await_mean "$XDG_RUNTIME_DIR/managed.ppm" 'app_id=client_feat_color_mgmt' \
+    '"$r $g $b" == "123 107 76"' ||
+    { echo "the managed surface never reached its expected mean"; exit 1; }
+
 echo "OK: Display P3 primaries are transformed into the BT.2020 scene"

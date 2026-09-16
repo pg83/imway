@@ -453,6 +453,8 @@ struct Scene {
     // the bar's wifi glyph rectangle (x0 y0 x1 y1, -1 when absent), written
     // by the desktop each frame; surfaced through the state dump
     float wifiGlyph[4] = {-1.f, -1.f, -1.f, -1.f};
+    // app_id the top bar drew last frame ("" when it drew none)
+    char barAppId[64] = "";
     bool kbCaptured = false;
     bool ptrCaptured = false;
     bool shortcutsInhibited = false;

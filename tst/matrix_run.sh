@@ -74,8 +74,6 @@ PY
 start_client "$s" "$t" "$vp" "${dm/-/all}"
 wait_client "phase1"
 
-imgx=$(dump_field 'app_id=matrix' imgx); imgy=$(dump_field 'app_id=matrix' imgy)
-cw=$(dump_field 'app_id=matrix' client_w); ch=$(dump_field 'app_id=matrix' client_h)
 case $t in 1|3|5|7) vw=$((84 / s)); vh=$((120 / s)) ;; *) vw=$((120 / s)); vh=$((84 / s)) ;; esac
 case $vp in
     none) ew=$vw;         eh=$vh;         mode=quad ;;
@@ -83,25 +81,37 @@ case $vp in
     crop) ew=100;         eh=60;          mode=uniform ;;
 esac
 
-# the client prints on its commit; the frame that carries its content can be
-# a configure round trip away, so re-take it if the oracle comes up empty
+# The client prints on its commit, but the frame carrying that content can
+# be a configure round trip away and the window's box moves with it, so
+# every attempt re-reads the box and takes a fresh shot. A sanitized or
+# instrumented build needs the pauses: three back-to-back retries all land
+# inside the same stale frame.
 oracle_ok() { # <ppm> <prev|->
+    imgx=$(dump_field 'app_id=matrix' imgx); imgy=$(dump_field 'app_id=matrix' imgy)
+    cw=$(dump_field 'app_id=matrix' client_w); ch=$(dump_field 'app_id=matrix' client_h)
     screenshot "$1" || return 1
     oracle "$1" "$2" > "$XDG_RUNTIME_DIR/corners"
 }
 
-oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - ||
-    oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - ||
-    oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - || { echo "phase1 oracle failed"; exit 1; }
+oracle_wait() { # <ppm> <prev|->
+    local i
+
+    for ((i = 0; i < 8; i++)); do
+        oracle_ok "$1" "$2" && return 0
+        sleep 0.3
+    done
+
+    return 1
+}
+
+oracle_wait "$XDG_RUNTIME_DIR/m1.ppm" - || { echo "phase1 oracle failed"; exit 1; }
 
 corners=$(cat "$XDG_RUNTIME_DIR/corners")
 
 if [[ "$dm" != "-" ]]; then
     ctl "key 2 press"; ctl "key 2 release"   # KEY_1
     wait_client "phase2"
-    oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" ||
-        oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" ||
-        oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" || { echo "phase2 oracle failed"; exit 1; }
+    oracle_wait "$XDG_RUNTIME_DIR/m2.ppm" "$corners" || { echo "phase2 oracle failed"; exit 1; }
 fi
 
 expect_alive "compositor died on scale=$s transform=$t vp=$vp damage=$dm"

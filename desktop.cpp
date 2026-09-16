@@ -1535,6 +1535,15 @@ void DesktopImpl::buildUi(Scene& scene) {
     DesktopChromeResult chromeResult;
 
     drawDesktopChrome(*comp, chromeInfo, chromeResult);
+
+    {
+        StringView id = chromeResult.barAppId;
+        size_t n = id.length() < sizeof(scene.barAppId) - 1 ? id.length() : sizeof(scene.barAppId) - 1;
+
+        memcpy(scene.barAppId, id.begin(), n);
+        scene.barAppId[n] = 0;
+    }
+
     scene.wifiGlyph[0] = chromeResult.wifiX0;
     scene.wifiGlyph[1] = chromeResult.wifiY0;
     scene.wifiGlyph[2] = chromeResult.wifiX1;
