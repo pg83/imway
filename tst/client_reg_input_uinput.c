@@ -22,6 +22,7 @@
 #include <linux/uinput.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
+#include <dirent.h>
 
 static const char* gDir;
 
@@ -38,6 +39,37 @@ static int emit(int fd, unsigned type, unsigned code, int value) {
 
 static int syn(int fd) {
     return emit(fd, EV_SYN, SYN_REPORT, 0);
+}
+
+// the kernel publishes the evdev node as a child directory of the input
+// device; it appears a moment after UI_DEV_CREATE returns
+static int eventName(const char* inputName, char* out, size_t cap) {
+    char dir[128];
+
+    snprintf(dir, sizeof(dir), "/sys/class/input/%s", inputName);
+
+    for (int i = 0; i < 100; i++) {
+        DIR* d = opendir(dir);
+
+        if (d) {
+            struct dirent* e;
+
+            while ((e = readdir(d))) {
+                if (!strncmp(e->d_name, "event", 5) && e->d_name[5]) {
+                    snprintf(out, cap, "%s", e->d_name);
+                    closedir(d);
+
+                    return 0;
+                }
+            }
+
+            closedir(d);
+        }
+
+        usleep(20000);
+    }
+
+    return -1;
 }
 
 // create one device, then link the node it grew into the compositor's
@@ -89,7 +121,20 @@ static int makeDevice(const char* name, const int* keys, int nkeys, int rel, cha
         return -1;
     }
 
-    if (ioctl(fd, UI_GET_SYSNAME(cap), sysname) < 0) {
+    // UI_GET_SYSNAME names the input device, "inputN". The evdev node the
+    // path backend opens is a child of it in sysfs, and its name is the one
+    // libinput reports back as the device's sysname.
+    char sys[64] = {};
+
+    if (ioctl(fd, UI_GET_SYSNAME(sizeof(sys)), sys) < 0) {
+        ioctl(fd, UI_DEV_DESTROY);
+        close(fd);
+
+        return -1;
+    }
+
+    if (eventName(sys, sysname, cap)) {
+        fprintf(stderr, "no evdev node under /sys/class/input/%s\n", sys);
         ioctl(fd, UI_DEV_DESTROY);
         close(fd);
 
