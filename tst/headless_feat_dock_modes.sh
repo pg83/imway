@@ -92,19 +92,26 @@ await 100 test -s "$XDG_RUNTIME_DIR/pinned.out" || { echo "the pinned slot did n
 ctl "set desktop.pinned_apps "
 ctl "set desktop.group_windows true"
 
-# the four edges: the window stays inside the work area each time
-edge() { # <position ordinal> <field> <min>
+# the four edges: the bar occupies that side of the output, and the work
+# area it reserves moves with it. An already mapped window keeps its place,
+# so the dock's own rectangle is what moves.
+edge() { # <position ordinal> <x> <y> <w> <h>
     ctl "set desktop.dock_position $1"
-    sleep 0.3
+    sleep 0.4
     screenshot "$XDG_RUNTIME_DIR/edge$1.ppm"
-    local v
-    v=$(dump_field 'app_id=shot-source' "$2")
-    [[ "$v" -ge "$3" ]] || { echo "dock position $1: $2=$v"; dump_state; exit 1; }
+    local x y w h
+    x=$(dump_field '^imgui name=##dock' x); y=$(dump_field '^imgui name=##dock' y)
+    w=$(dump_field '^imgui name=##dock' w); h=$(dump_field '^imgui name=##dock' h)
+    [[ "$x $y $w $h" == "$2 $3 $4 $5" ]] || {
+        echo "dock position $1 is ${x}x${y}+${w}+${h}, expected $2x$3+$4+$5"
+        dump_state
+        exit 1
+    }
 }
-edge 2 y 58
-edge 3 x 0
-edge 1 x 0
-edge 0 x 58
+edge 2 0 0 1280 58
+edge 3 0 742 1280 58
+edge 1 1222 0 58 800
+edge 0 0 0 58 800
 
 # auto-hide: the dock leaves until the pointer touches its edge
 ctl "motion 640 400"
