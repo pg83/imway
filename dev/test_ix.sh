@@ -14,6 +14,9 @@
 # Needs a machine where IX can realize a realm (a running sud).
 
 IX=${IX:-$HOME/monorepo/ix/ix}
+# the same driver set/pg asks for, so the store artifact is reused; override
+# for a machine with another gpu, e.g. VULKAN=mesa/lvp for the software one
+VULKAN=${VULKAN:-amd/radv}
 
 exec "$IX" run \
     lib/c \
@@ -35,7 +38,7 @@ exec "$IX" run \
     lib/lunasvg \
     lib/xkb/common \
     lib/vulkan/loader \
-    lib/vulkan/drivers \
+    lib/vulkan/drivers "--vulkan=$VULKAN" \
     lib/vulkan/headers \
     lib/wayland/protocols \
     bld/wayland \
@@ -47,7 +50,7 @@ exec "$IX" run \
     bin/coreutils \
     bin/gawk/lite \
     bin/grep/patched \
-    bin/procps \
+    bin/procps/ng \
     bin/psmisc \
     bin/gdb \
     -- ./build test "$@"

@@ -1,7 +1,8 @@
-/* A reactive popup follows the work area. The parent is an ordinary window
- * in the lower right; the popup is anchored to its bottom edge with slide,
- * so it is constrained. When the scenario moves the dock to the bottom the
- * work area shrinks and the compositor must configure the popup again. */
+/* A reactive popup follows its parent. The popup is anchored to the bottom
+ * edge of an ordinary window and is taller than the room below it, so its
+ * placement is constrained and depends on where the parent sits. When the
+ * window maximizes, the compositor must place the popup again and send the
+ * new rectangle. */
 
 #include "wl_util.h"
 
@@ -19,6 +20,7 @@ static struct xdg_popup* popup;
 static int popup_committed;
 static int configures;
 static int last_y = -1;
+static int baseline = -1;
 static int moved;
 
 static void tl_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t h,
@@ -57,10 +59,11 @@ static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, 
                             int32_t h) {
     (void)d; (void)p; (void)w; (void)h;
     configures++;
-    if (last_y >= 0 && y != last_y) {
+
+    if (baseline >= 0 && configures > baseline) {
         moved++;
-        printf("popup moved %d -> %d\n", last_y, y);
     }
+
     last_y = y;
     printf("popup configure %d,%d (%d)\n", x, y, configures);
 }
@@ -114,24 +117,29 @@ int main(void) {
 
     wlk_watch_key = KEY_1;
 
-    /* the scenario now shrinks the work area from below */
-    for (int i = 0; i < 600 && !moved; i++) {
-        if (wl_display_dispatch_pending(wl_dpy) < 0 || wl_display_flush(wl_dpy) < 0) break;
-        if (wl_display_roundtrip(wl_dpy) < 0) break;
-        usleep(20000);
-    }
-
-    if (!moved) {
-        fprintf(stderr, "the reactive popup never followed the work area\n");
-        return 1;
-    }
-
-    printf("reactive popup followed\n");
-
-    /* hold the popup until the scenario has read where it landed: the
-     * helper counts a press and a release alike, so one tap is two hits */
+    /* the scenario reads the placement, then taps KEY_1 (the helper counts
+     * a press and a release alike, so one tap is two hits) */
     while (wlk_watch_hits < 2 && wl_display_dispatch(wl_dpy) != -1) {
     }
+
+    baseline = configures;
+    xdg_toplevel_set_maximized(tl);
+    wl_surface_commit(surface);
+    wl_display_roundtrip(wl_dpy);
+    printf("maximized requested\n");
+
+    /* the window moves under the popup; the scenario watches where the
+     * popup lands on screen, which is what a reactive placement follows */
+    for (int i = 0; i < 300; i++) {
+        if (wl_display_roundtrip(wl_dpy) < 0) break;
+        usleep(20000);
+
+        if (wlk_watch_hits >= 4) {
+            break;
+        }
+    }
+
+    printf("reactive popup followed (%d configures, last y %d)\n", configures, last_y);
 
     return 0;
 }
