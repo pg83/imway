@@ -530,6 +530,14 @@ void LockFilter::destroyResources() noexcept {
         return;
     }
 
+    // The frame that sampled these can still be in flight. The mode change
+    // path idles the gpu before it gets here, the teardown path does not:
+    // ~DesktopImpl runs one pool slot ahead of ~RendererImpl and its
+    // vkDeviceWaitIdle. A descriptor set or an image freed under a submitted
+    // command buffer is a use-after-free the driver may crash on, and
+    // llvmpipe, which reads descriptors on its own rasterizer threads, does.
+    vkDeviceWaitIdle(device);
+
     if (blurUi) {
         textures->free(blurUi, blurUiPool);
     }

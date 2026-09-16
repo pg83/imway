@@ -34,6 +34,9 @@
 
 #include <signal.h>
 #include <stdlib.h>
+#if defined(IMWAY_FOR_TESTS) && __has_include(<execinfo.h>)
+    #include <execinfo.h>
+#endif
 #include <unistd.h>
 #include <sys/prctl.h>
 
@@ -115,6 +118,33 @@ namespace {
         bool login = false;
     };
 
+#ifdef IMWAY_FOR_TESTS
+    // A crash in the test build names itself: the scenario runner folds the
+    // compositor's stderr into imway.log, so the frames land in the verdict
+    // next to the log instead of leaving a bare rc=-11 behind. Only the
+    // faults nothing else claims (wayland.cpp owns SIGBUS for shm reads).
+    void crashHandler(int sig) {
+        static const char head[] = "imway: fatal signal, stack follows\n";
+
+        (void)!write(2, head, sizeof(head) - 1);
+#if __has_include(<execinfo.h>)
+        void* frames[64];
+
+        backtrace_symbols_fd(frames, backtrace(frames, 64), 2);
+#endif
+        signal(sig, SIG_DFL);
+        raise(sig);
+    }
+
+    void installCrashHandler() {
+        static const int fatal[] = {SIGSEGV, SIGILL, SIGFPE, SIGABRT};
+
+        for (size_t i = 0; i < sizeof(fatal) / sizeof(fatal[0]); i++) {
+            signal(fatal[i], crashHandler);
+        }
+    }
+#endif
+
     void usage(Log& log, const char* argv0) {
         log << "usage: "_sv << argv0
             << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]"
@@ -130,6 +160,9 @@ namespace {
 int mainComposer(int argc, char** argv) {
     // a client or pipe going away mid-write is an error code, not a death
     signal(SIGPIPE, SIG_IGN);
+#ifdef IMWAY_FOR_TESTS
+    installCrashHandler();
+#endif
 
     // the test harness may itself be killed; the compositor then goes with
     // it instead of lingering with its children
