@@ -70,12 +70,22 @@ echo "legacy SDR in PQ=($rr,$rg,$rb); managed PQ=($hr,$hg,$hb)"
 # dim compositor/legacy SDR while leaving absolute HDR client pixels intact.
 read -r bg1r bg1g bg1b < <(first_pixel "$XDG_RUNTIME_DIR/hdr.ppm")
 ctl "sdr-white 100"
-sleep 0.2
-screenshot "$XDG_RUNTIME_DIR/low-white.ppm"
-read -r lr lg lb ln < <(surface_color "$XDG_RUNTIME_DIR/low-white.ppm" "$x" "$y" "$w" "$h")
-read -r bg2r bg2g bg2b < <(first_pixel "$XDG_RUNTIME_DIR/low-white.ppm")
-[[ $((lr - 180)) -ge -3 && $((lr - 180)) -le 3 ]]
-[[ $((lg - 120)) -ge -3 && $((lg - 120)) -le 3 ]]
-[[ $((lb - 60)) -ge -3 && $((lb - 60)) -le 3 ]]
-[[ "$bg1r $bg1g $bg1b" != "$bg2r $bg2g $bg2b" ]]
+
+# the new white takes a frame to reach the readback, like every other
+# change here: poll for the frame that carries it
+lowered() {
+    screenshot "$XDG_RUNTIME_DIR/low-white.ppm" || return 1
+    read -r lr lg lb ln < <(surface_color "$XDG_RUNTIME_DIR/low-white.ppm" "$x" "$y" "$w" "$h")
+    read -r bg2r bg2g bg2b < <(first_pixel "$XDG_RUNTIME_DIR/low-white.ppm")
+    [[ "$ln" -gt 40000 &&
+       $((lr - 180)) -ge -3 && $((lr - 180)) -le 3 &&
+       $((lg - 120)) -ge -3 && $((lg - 120)) -le 3 &&
+       $((lb - 60)) -ge -3 && $((lb - 60)) -le 3 &&
+       "$bg1r $bg1g $bg1b" != "$bg2r $bg2g $bg2b" ]]
+}
+
+await 40 lowered || {
+    echo "lowering SDR white did not leave the absolute pixels alone: client=($lr,$lg,$lb) background $bg1r $bg1g $bg1b -> $bg2r $bg2g $bg2b"
+    exit 1
+}
 echo "OK: linear HDR scene preserves absolute PQ content"
