@@ -308,6 +308,7 @@ client_protocol_paths = [
     "staging/tearing-control/tearing-control-v1",
     "staging/fifo/fifo-v1",
     "staging/commit-timing/commit-timing-v1",
+    "staging/drm-lease/drm-lease-v1",
     "staging/ext-image-capture-source/ext-image-capture-source-v1",
     "staging/ext-image-copy-capture/ext-image-copy-capture-v1",
     "staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1",

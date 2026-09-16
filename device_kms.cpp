@@ -1735,7 +1735,8 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
             continue;
         }
 
-        bool ok = c->connection == DRM_MODE_CONNECTED && c->count_modes > 0;
+        // a non-desktop connector belongs to a lessee, never to the desktop
+        bool ok = c->connection == DRM_MODE_CONNECTED && c->count_modes > 0 && !connectorNonDesktop(fd, c->connector_id);
 
         if (ok && !connector.empty()) {
             auto& name = sb();

@@ -41,6 +41,12 @@ namespace {
     constexpr u32 kPlaneId = 104;
     constexpr u32 kCursorPlaneId = 105;
 
+    // a second pipe the compositor never drives: its connector carries
+    // "non-desktop", so it is the one offered over wp-drm-lease
+    constexpr u32 kLeaseConnectorId = 301;
+    constexpr u32 kLeaseEncoderId = 302;
+    constexpr u32 kLeaseCrtcId = 303;
+
     // property ids, one flat namespace across objects
     enum : u32 {
         pConnCrtcId = 201,
@@ -50,6 +56,7 @@ namespace {
         pConnHdrMeta,
         pConnEdid,
         pConnLinkBpc,
+        pConnNonDesktop,
         pCrtcModeId,
         pCrtcActive,
         pCrtcGamma,
@@ -190,6 +197,7 @@ namespace {
         bool rejectColor = false;
 
         u64 flipsDone = 0;
+        u32 lastLessee = 0;
 
         int openDevice() override;
         void setConnected(bool connected) override;
@@ -227,6 +235,8 @@ namespace {
         int emuAddFb2(drm_mode_fb_cmd2* f);
         int emuRmFb(u32* id);
         int emuAtomic(drm_mode_atomic* a);
+        int emuCreateLease(drm_mode_create_lease* l);
+        int emuRevokeLease(drm_mode_revoke_lease* l);
         long fakeIoctl(unsigned long req, void* arg);
         int dumbMemFd(unsigned long long off);
         void flipLoop();
@@ -480,6 +490,9 @@ void FakeKms::buildProps() {
     // exercise the HDR degradation ladder
     const char* linkBpc = getenv("IMWAY_FAKE_KMS_LINK_BPC");
 
+    addProp(kConnectorId, pConnNonDesktop, "non-desktop", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 1, 0);
+    addProp(kLeaseConnectorId, pConnNonDesktop, "non-desktop", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 1, 1);
+    addProp(kLeaseConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
     addProp(kConnectorId, pConnLinkBpc, "link bpc", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 16, linkBpc ? (u64)atoi(linkBpc) : 10);
 
     addProp(kCrtcId, pCrtcModeId, "MODE_ID", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
@@ -563,13 +576,13 @@ int FakeKms::emuGetCap(drm_get_cap* c) {
 }
 
 int FakeKms::emuGetResources(drm_mode_card_res* r) {
-    static const u32 crtcs[] = {kCrtcId};
-    static const u32 conns[] = {kConnectorId};
-    static const u32 encs[] = {kEncoderId};
+    static const u32 crtcs[] = {kCrtcId, kLeaseCrtcId};
+    static const u32 conns[] = {kConnectorId, kLeaseConnectorId};
+    static const u32 encs[] = {kEncoderId, kLeaseEncoderId};
 
-    fillArray(r->crtc_id_ptr, r->count_crtcs, crtcs, 1);
-    fillArray(r->connector_id_ptr, r->count_connectors, conns, 1);
-    fillArray(r->encoder_id_ptr, r->count_encoders, encs, 1);
+    fillArray(r->crtc_id_ptr, r->count_crtcs, crtcs, 2);
+    fillArray(r->connector_id_ptr, r->count_connectors, conns, 2);
+    fillArray(r->encoder_id_ptr, r->count_encoders, encs, 2);
     r->count_fbs = 0;
     r->min_width = 640;
     r->max_width = 8192;
@@ -601,6 +614,47 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
 }
 
 int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
+    if (c->connector_id == kLeaseConnectorId) {
+        drm_mode_modeinfo mode;
+
+        fillMode(mode, 1920, 1080, 90, true);
+
+        if (c->modes_ptr && c->count_modes >= 1) {
+            memcpy((void*)(uintptr_t)c->modes_ptr, &mode, sizeof(mode));
+        }
+
+        c->count_modes = 1;
+
+        Vector<u32> propIds;
+        Vector<u64> propValues;
+
+        for (const PropDef& p : props) {
+            if (p.obj == kLeaseConnectorId) {
+                propIds.pushBack(p.id);
+                propValues.pushBack(p.value);
+            }
+        }
+
+        fillArray(c->props_ptr, c->count_props, propIds.data(), (u32)propIds.length());
+
+        if (c->prop_values_ptr && propValues.length()) {
+            memcpy((void*)(uintptr_t)c->prop_values_ptr, propValues.data(), sizeof(u64) * propValues.length());
+        }
+
+        static const u32 leaseEncs[] = {kLeaseEncoderId};
+
+        fillArray(c->encoders_ptr, c->count_encoders, leaseEncs, 1);
+        c->encoder_id = kLeaseEncoderId;
+        c->connector_type = DRM_MODE_CONNECTOR_DisplayPort;
+        c->connector_type_id = 1;
+        c->connection = 1;
+        c->mm_width = 70;
+        c->mm_height = 40;
+        c->subpixel = 0;
+
+        return 0;
+    }
+
     if (c->connector_id != kConnectorId) {
         return -ENOENT;
     }
@@ -645,6 +699,15 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
 }
 
 int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
+    if (e->encoder_id == kLeaseEncoderId) {
+        e->encoder_type = DRM_MODE_ENCODER_TMDS;
+        e->crtc_id = kLeaseCrtcId;
+        e->possible_crtcs = 2; // the second crtc of the resource list
+        e->possible_clones = 0;
+
+        return 0;
+    }
+
     if (e->encoder_id != kEncoderId) {
         return -ENOENT;
     }
@@ -655,6 +718,41 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
     e->possible_clones = 0;
 
     return 0;
+}
+
+// A lease is a fresh handle on the same device. Nothing here polices what
+// the lessee then does with it: the objects are only checked for existence,
+// and the returned fd is another reference to the companion node.
+int FakeKms::emuCreateLease(drm_mode_create_lease* l) {
+    if (!l->object_count || !l->object_ids) {
+        return -EINVAL;
+    }
+
+    const u32* ids = (const u32*)(uintptr_t)l->object_ids;
+
+    for (u32 i = 0; i < l->object_count; i++) {
+        u32 id = ids[i];
+        bool known = id == kLeaseConnectorId || id == kLeaseCrtcId || id == kConnectorId || id == kCrtcId || id == kPlaneId || id == kCursorPlaneId;
+
+        if (!known) {
+            return -ENOENT;
+        }
+    }
+
+    int fd = dup(renderFd);
+
+    if (fd < 0) {
+        return -errno;
+    }
+
+    l->fd = (u32)fd;
+    l->lessee_id = ++lastLessee;
+
+    return 0;
+}
+
+int FakeKms::emuRevokeLease(drm_mode_revoke_lease* l) {
+    return l->lessee_id && l->lessee_id <= lastLessee ? 0 : -ENOENT;
 }
 
 int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
@@ -1163,7 +1261,10 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
             rc = emuDestroyDumb((drm_mode_destroy_dumb*)arg);
             break;
         case DRM_IOCTL_MODE_CREATE_LEASE:
-            rc = -ENOTSUP;
+            rc = emuCreateLease((drm_mode_create_lease*)arg);
+            break;
+        case DRM_IOCTL_MODE_REVOKE_LEASE:
+            rc = emuRevokeLease((drm_mode_revoke_lease*)arg);
             break;
         default:
             if (_IOC_TYPE(req) == DRM_IOCTL_BASE && _IOC_NR(req) >= 0xBF && _IOC_NR(req) <= 0xCF && _IOC_NR(req) != 0xCE) {
