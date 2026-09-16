@@ -58,7 +58,9 @@ await 50 quieter || { echo "the volume did not come back down ($up -> $(volume))
 # an external change is the base of the next step, so the compositor tracks
 # the server rather than its own idea of the level
 pa set-sink-volume imway_null 20%
-await 50 test "$(volume)" -le 25 || true
+took_external() { [[ "$(volume)" -le 25 ]]; }
+
+await 50 took_external || true
 ctl "key 115 press"; ctl "key 115 release"
 stepped_from_external() {
     local v

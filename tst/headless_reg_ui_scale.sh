@@ -10,7 +10,9 @@ dock_w() { dump_field '^imgui name=##dock ' w; }
 bar_h() { dump_field '^imgui name=##MainMenuBar ' h; }
 frames() { dump_field '^frames ' done; }
 
-await 100 test -n "$(dock_w)" || { echo "no dock in the dump"; dump_state; exit 1; }
+have_dock() { [[ -n "$(dock_w)" && -n "$(bar_h)" ]]; }
+
+await 100 have_dock || { echo "no dock in the dump"; dump_state; exit 1; }
 
 w0=$(dock_w)
 h0=$(bar_h)

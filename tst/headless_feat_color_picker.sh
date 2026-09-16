@@ -27,7 +27,9 @@ sleep 0.3
 click_at 900 600
 
 await 50 swatch_up || { echo "the picker swatch did not appear"; dump_state; exit 1; }
-await 50 test "$(notes_active)" = 1 || { echo "the picked color was not posted: active=$(notes_active)"; dump_state; exit 1; }
+posted() { [[ "$(notes_active)" = 1 ]]; }
+
+await 50 posted || { echo "the picked color was not posted: active=$(notes_active)"; dump_state; exit 1; }
 
 ctl "key 1 press"; ctl "key 1 release" # Escape closes the swatch
 

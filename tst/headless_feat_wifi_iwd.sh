@@ -81,7 +81,9 @@ await 50 iw "passphrase secret" || { echo "the passphrase did not reach the agen
 # and the same prompt cancelled: the agent answers with an error
 picker_open || open_picker
 row_click 1
-await 50 test "$(grep -c 'connect called' "$IWD_LOG")" -ge 2 || { echo "the second connect never arrived"; cat "$IWD_LOG"; exit 1; }
+connects() { [[ "$(grep -c 'connect called' "$IWD_LOG")" -ge 2 ]]; }
+
+await 50 connects || { echo "the second connect never arrived"; cat "$IWD_LOG"; exit 1; }
 sleep 0.5
 x=$(dump_field '^imgui name=##wifi' x); y=$(dump_field '^imgui name=##wifi' y)
 click_at $((x + 8 + 20)) $((y + 79))
