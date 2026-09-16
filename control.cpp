@@ -27,6 +27,7 @@
 #include <fcntl.h>
 #include <stdio.h> // rename(2) only
 #include <stdlib.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <linux/input-event-codes.h>
@@ -159,6 +160,14 @@ namespace {
 
     void controlIoCb(struct ev_loop*, ev_io* w, int) {
         ((ControlImpl*)w->data)->handleInput();
+    }
+
+    template <size_t N>
+    void copyText(char (&out)[N], StringView value) {
+        size_t length = value.length() < N - 1 ? value.length() : N - 1;
+
+        memcpy(out, value.data(), length);
+        out[length] = 0;
     }
 }
 
@@ -456,6 +465,28 @@ void ControlImpl::handleLine(StringView cmd) {
         // exit, no hang
         *(comp->log) << "imway: vulkan device lost, exiting"_sv << endL;
         exit(1);
+    } else if (verb == "rule"_sv) {
+        // `rule INDEX POLICY APP`: a per-application notification rule, which
+        // the settings dialog otherwise owns
+        StringView index, policy, app, rest;
+
+        if (args.split(' ', index, rest) && rest.split(' ', policy, app)) {
+            size_t slot = (size_t)index.stou();
+
+            if (slot < Settings::notificationRuleCapacity) {
+                NotificationRule value;
+
+                copyText(value.app, app);
+                value.policy = (NotificationPolicy)policy.stou();
+                comp->settings->setNotificationRule(slot, value);
+
+                if (comp->settings->notificationRuleCount() <= slot) {
+                    comp->settings->setNotificationRuleCount(slot + 1);
+                }
+
+                *(comp->log) << "imway: control: rule "_sv << index << endL;
+            }
+        }
     } else if (verb == "notify"_sv) {
         // `notify APP REPLACES CRITICAL SUMMARY`: the internal producers'
         // entry point, so a scenario can drive the notifier without a bus

@@ -85,5 +85,26 @@ sleep 0.5
 [[ "$(dump_field '^notifications ' history)" == "$before" ]] || { echo "a replacing post added a slot"; exit 1; }
 await 50 active_is 1 || { echo "the replaced post left the screen"; exit 1; }
 
+# per-application rules override the schedule in both directions
+ctl "set notifications.dnd_start 0"
+ctl "set notifications.dnd_end 1439"
+ctl "rule 0 1 allowed-app"        # allow, even under do-not-disturb
+ctl "rule 1 2 muted-app"          # mute, even outside it
+await 20 in_log "control: rule 1" || { echo "the rules did not reach the settings"; exit 1; }
+
+before=$(dump_field '^notifications ' active)
+grew() {
+    [[ "$(dump_field '^notifications ' active)" -gt "$before" ]]
+}
+
+ctl "notify allowed-app 0 0 allowed-under-dnd"
+await 50 grew || { echo "an allowed application stayed off screen ($before -> $(dump_field '^notifications ' active))"; exit 1; }
+
+ctl "set notifications.dnd_scheduled false"
+before=$(dump_field '^notifications ' active)
+ctl "notify muted-app 0 0 muted-without-dnd"
+sleep 0.5
+[[ "$(dump_field '^notifications ' active)" == "$before" ]] || { echo "a muted application reached the screen"; exit 1; }
+
 expect_alive "compositor died driving the notification store"
-echo "OK: posts, a bounded history, replacement, do-not-disturb and its schedule"
+echo "OK: posts, a bounded history, replacement, do-not-disturb, its schedule and the rules"
