@@ -802,6 +802,16 @@ void Dialog::draw(Composer& c, bool& open) {
             ImGui::TextUnformatted("checking...");
         } else {
             enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+
+            // The field holds the keyboard for as long as the screen is
+            // locked. Anything that takes the active id away (a client
+            // window appearing behind the overlay, a stray click on the
+            // background) would otherwise leave the session unable to type
+            // its own password, since the initial focus is a one-shot.
+            if (!ImGui::IsItemActive()) {
+                focusField = true;
+                c.scene->needsFrame = true;
+            }
         }
 
         if (failed && !authenticating) {

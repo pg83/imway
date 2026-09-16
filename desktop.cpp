@@ -1687,7 +1687,10 @@ void DesktopImpl::buildUi(Scene& scene) {
         // SetWindowFocus would never run — SetNextWindowFocus lands the nav
         // focus and the dock node selects the tab off it; a minimized
         // window is restored first for the same reason
-        if (t->raiseRequested) {
+        // ... and it waits while the screen is locked: focus handed to a
+        // client behind the overlay takes the keyboard off the password
+        // field. The request survives to the frame after the unlock.
+        if (t->raiseRequested && !lockState) {
             t->raiseRequested = false;
             t->minimized = false;
             ImGui::SetNextWindowFocus();
@@ -1785,6 +1788,12 @@ void DesktopImpl::buildUi(Scene& scene) {
         }
 
         ImGuiWindowFlags flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+
+        if (lockState) {
+            // a window mapping under the lock screen must not take the nav
+            // focus imgui hands to every appearing window
+            flags |= ImGuiWindowFlags_NoFocusOnAppearing;
+        }
 
         if (t->maximized) {
             ImGui::SetNextWindowDockID(0, ImGuiCond_Always);
