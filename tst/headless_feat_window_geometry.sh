@@ -6,10 +6,12 @@ set -euo pipefail
 
 start_client
 wait_client "mapped"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
+# the client prints on its first commit; the content the geometry applies to
+# arrives a configure round trip later, so re-take the frame if it is early
+shot_ok() {
+    screenshot "$XDG_RUNTIME_DIR/shot.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
 w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
@@ -32,6 +34,9 @@ print(f"orange={orange} bbox={bw}x{bh} magenta={magenta}")
 assert magenta < 100, f"CSD margin leaked to the screen ({magenta}px of magenta)"
 assert 254 <= bw <= 266 and 154 <= bh <= 166, f"core bbox {bw}x{bh}, want ~260x160"
 PY
+}
+
+shot_ok || shot_ok || shot_ok || { echo "the geometry never came out as expected"; exit 1; }
 
 cw=$(dump_field 'app_id=geometry' client_w); ch=$(dump_field 'app_id=geometry' client_h)
 [[ "$cw" == 260 && "$ch" == 160 ]] || { echo "geometry size wrong: ${cw}x${ch}"; exit 1; }

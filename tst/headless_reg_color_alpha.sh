@@ -89,19 +89,45 @@ assert_stripes() { # actual array name, expected array name, label
 
 start_client
 wait_client "sdr-alpha"
-sleep 0.3
 x=$(dump_field 'app_id=color-alpha' imgx)
 y=$(dump_field 'app_id=color-alpha' imgy)
-screenshot "$XDG_RUNTIME_DIR/sdr-alpha.ppm"
-read -r -a sdr_actual < <(sample_stripes "$XDG_RUNTIME_DIR/sdr-alpha.ppm" "$x" "$y")
-read -r -a sdr_expected < <(expected sdr)
-assert_stripes sdr_actual sdr_expected "sRGB electrical alpha"
+
+# the stripes are sampled from the frame that carries them: a client prints
+# on its commit, so the first frame after that can still be the old one
+stripes_reached() { # <ppm> <expected-kind>
+    local -a actual expected_values
+    screenshot "$1" || return 1
+    read -r -a actual < <(sample_stripes "$1" "$x" "$y")
+    read -r -a expected_values < <(expected "$2")
+
+    for index in $(seq 0 11); do
+        local delta=$((actual[index] - expected_values[index]))
+        [[ "$delta" -ge -3 && "$delta" -le 3 ]] || return 1
+    done
+}
+
+sdr_ok=0
+for _ in $(seq 1 10); do
+    stripes_reached "$XDG_RUNTIME_DIR/sdr-alpha.ppm" sdr && { sdr_ok=1; break; }
+done
+
+if [[ "$sdr_ok" != 1 ]]; then
+    read -r -a sdr_actual < <(sample_stripes "$XDG_RUNTIME_DIR/sdr-alpha.ppm" "$x" "$y")
+    read -r -a sdr_expected < <(expected sdr)
+    assert_stripes sdr_actual sdr_expected "sRGB electrical alpha"
+fi
 
 wait_client "pq-alpha"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/pq-alpha.ppm"
-read -r -a pq_actual < <(sample_stripes "$XDG_RUNTIME_DIR/pq-alpha.ppm" "$x" "$y")
-read -r -a pq_expected < <(expected pq)
-assert_stripes pq_actual pq_expected "PQ electrical alpha"
+
+pq_ok=0
+for _ in $(seq 1 10); do
+    stripes_reached "$XDG_RUNTIME_DIR/pq-alpha.ppm" pq && { pq_ok=1; break; }
+done
+
+if [[ "$pq_ok" != 1 ]]; then
+    read -r -a pq_actual < <(sample_stripes "$XDG_RUNTIME_DIR/pq-alpha.ppm" "$x" "$y")
+    read -r -a pq_expected < <(expected pq)
+    assert_stripes pq_actual pq_expected "PQ electrical alpha"
+fi
 
 echo "OK: electrical premultiplication is removed before SDR/PQ EOTF"

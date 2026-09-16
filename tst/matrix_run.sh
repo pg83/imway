@@ -73,8 +73,6 @@ PY
 
 start_client "$s" "$t" "$vp" "${dm/-/all}"
 wait_client "phase1"
-sleep 0.4
-screenshot "$XDG_RUNTIME_DIR/m1.ppm"
 
 imgx=$(dump_field 'app_id=matrix' imgx); imgy=$(dump_field 'app_id=matrix' imgy)
 cw=$(dump_field 'app_id=matrix' client_w); ch=$(dump_field 'app_id=matrix' client_h)
@@ -85,14 +83,25 @@ case $vp in
     crop) ew=100;         eh=60;          mode=uniform ;;
 esac
 
-corners=$(oracle "$XDG_RUNTIME_DIR/m1.ppm" -) || { echo "phase1 oracle failed"; exit 1; }
+# the client prints on its commit; the frame that carries its content can be
+# a configure round trip away, so re-take it if the oracle comes up empty
+oracle_ok() { # <ppm> <prev|->
+    screenshot "$1" || return 1
+    oracle "$1" "$2" > "$XDG_RUNTIME_DIR/corners"
+}
+
+oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - ||
+    oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - ||
+    oracle_ok "$XDG_RUNTIME_DIR/m1.ppm" - || { echo "phase1 oracle failed"; exit 1; }
+
+corners=$(cat "$XDG_RUNTIME_DIR/corners")
 
 if [[ "$dm" != "-" ]]; then
     ctl "key 2 press"; ctl "key 2 release"   # KEY_1
     wait_client "phase2"
-    sleep 0.4
-    screenshot "$XDG_RUNTIME_DIR/m2.ppm"
-    oracle "$XDG_RUNTIME_DIR/m2.ppm" "$corners" >/dev/null || { echo "phase2 oracle failed"; exit 1; }
+    oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" ||
+        oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" ||
+        oracle_ok "$XDG_RUNTIME_DIR/m2.ppm" "$corners" || { echo "phase2 oracle failed"; exit 1; }
 fi
 
 expect_alive "compositor died on scale=$s transform=$t vp=$vp damage=$dm"
