@@ -102,7 +102,9 @@ static const char* check_signals(void) {
         return "signal mask is not empty\n";
     }
 
-    int signals[] = {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE, SIGCHLD, SIGBUS, SIGUSR1};
+    // the fault signals are left out: a sanitizer runtime in this very
+    // probe installs its own handlers for them
+    int signals[] = {SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGPIPE, SIGCHLD, SIGUSR1};
 
     for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); i++) {
         struct sigaction action;

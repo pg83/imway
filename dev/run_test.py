@@ -108,15 +108,6 @@ def signal_group(pid: int, signum: int) -> None:
         pass
 
 
-def first_child(pid: int) -> int:
-    try:
-        with open(f"/proc/{pid}/task/{pid}/children") as f:
-            children = f.read().split()
-        return int(children[0]) if children else 0
-    except (OSError, ValueError):
-        return 0
-
-
 def tail(path: str, n: int = 25) -> str:
     try:
         with open(path, errors="replace") as f:
@@ -317,7 +308,6 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         died = proc.poll() is not None
         expected_exit_missing = not died
 
-    composer_pid = first_child(proc.pid)
     terminated_by_runner = not died
     if terminated_by_runner:
         signal_group(proc.pid, signal.SIGTERM)
@@ -328,7 +318,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         time.sleep(0.05)
 
     if proc.poll() is None:
-        dump_stacks(composer_pid or proc.pid, os.path.join(rt, "gdb-stacks.txt"))
+        dump_stacks(proc.pid, os.path.join(rt, "gdb-stacks.txt"))
         end = time.monotonic() + 5.0
         while time.monotonic() < end and proc.poll() is None:
             time.sleep(0.05)

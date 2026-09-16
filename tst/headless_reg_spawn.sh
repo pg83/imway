@@ -56,10 +56,16 @@ probe_ok boot
 screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 release" # Super+L
 await 100 locked || { echo "lockscreen did not open"; exit 1; }
-ctl "type xxx"
-sleep 0.4
-ctl "key 28 press"; ctl "key 28 release"
-await 100 in_log "lockscreen closed" || { echo "lockscreen did not unlock"; exit 1; }
+# the password field takes focus a frame or two after the dialog opens;
+# text typed before that is dropped, so retry the whole entry
+for _ in 1 2 3 4 5; do
+    sleep 0.5
+    ctl "type xxx"
+    sleep 0.5 # let ImGui's trickle queue consume every x before Enter
+    ctl "key 28 press"; ctl "key 28 release"
+    await 30 in_log "lockscreen closed" && break
+done
+in_log "lockscreen closed" || { echo "lockscreen did not unlock"; cat "$IMWAY_LOG"; exit 1; }
 
 # launcher commands run through sh -c in the compositor's working
 # directory, which is this scratch dir

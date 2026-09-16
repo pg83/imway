@@ -1113,7 +1113,11 @@ namespace {
         Buffer instanceId;
     };
 
-    struct SecurityContext {
+    // A committed context outlives its protocol object: the listen socket
+    // keeps accepting until the sandbox closes its end. Such contexts sit on
+    // WaylandImpl::securityContexts so that shutdown can stop them; the
+    // object dies when both the resource and the listener are gone.
+    struct SecurityContext: IntrusiveNode {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         int listenFd = -1;
@@ -1679,6 +1683,7 @@ namespace {
         IntrusiveList captureSessions;
         IntrusiveList cursorSessions;
         IntrusiveList sandboxed;
+        IntrusiveList securityContexts;
         IntrusiveList tablets;
         IntrusiveList foreignExports;
         IntrusiveList foreignImports;
@@ -7089,10 +7094,8 @@ namespace {
         return 0;
     }
 
-    static int securityCloseReadable(int, u32, void* data) {
-        auto* ctx = (SecurityContext*)data;
-
-        // the sandbox went away: stop accepting, existing clients stay
+    // stop accepting; existing sandboxed clients stay
+    static void securityStop(SecurityContext* ctx) {
         if (ctx->listenSrc) {
             wl_event_source_remove(ctx->listenSrc);
             ctx->listenSrc = nullptr;
@@ -7103,33 +7106,49 @@ namespace {
             ctx->closeSrc = nullptr;
         }
 
+        if (ctx->listenFd >= 0) {
+            close(ctx->listenFd);
+            ctx->listenFd = -1;
+        }
+
+        if (ctx->closeFd >= 0) {
+            close(ctx->closeFd);
+            ctx->closeFd = -1;
+        }
+    }
+
+    static void securityRelease(SecurityContext* ctx) {
+        if (ctx->committed) {
+            ctx->unlink();
+        }
+
+        ctx->srv->alloc->release(ctx);
+    }
+
+    static int securityCloseReadable(int, u32, void* data) {
+        auto* ctx = (SecurityContext*)data;
+
+        // the sandbox went away
+        securityStop(ctx);
+
+        if (!ctx->res) {
+            securityRelease(ctx);
+        }
+
         return 0;
     }
 
     void securityContextResourceDestroyed(wl_resource* res) {
         auto* ctx = (SecurityContext*)wl_resource_get_user_data(res);
 
+        ctx->res = nullptr;
+
         // the listen socket keeps running past the manager object per the
-        // spec, so only tear it down if it never committed
-        if (!ctx->committed) {
-            if (ctx->listenSrc) {
-                wl_event_source_remove(ctx->listenSrc);
-            }
-
-            if (ctx->closeSrc) {
-                wl_event_source_remove(ctx->closeSrc);
-            }
-
-            if (ctx->listenFd >= 0) {
-                close(ctx->listenFd);
-            }
-
-            if (ctx->closeFd >= 0) {
-                close(ctx->closeFd);
-            }
+        // spec; an uncommitted or already stopped context has nothing left
+        if (!ctx->committed || !ctx->listenSrc) {
+            securityStop(ctx);
+            securityRelease(ctx);
         }
-
-        ctx->srv->alloc->release(ctx);
     }
 
     void securitySetEngine(wl_client*, wl_resource* res, const char* name) {
@@ -7187,6 +7206,7 @@ namespace {
         }
 
         ctx->committed = true;
+        ctx->srv->securityContexts.pushBack(ctx);
 
         wl_event_loop* loop = wl_display_get_event_loop(ctx->srv->display);
 
@@ -12383,6 +12403,22 @@ WaylandImpl::~WaylandImpl() noexcept {
         ev_prepare_stop(loop, &flushPrepare);
         ev_signal_stop(loop, &sigInt);
         ev_signal_stop(loop, &sigTerm);
+    }
+
+    // active event sources are not freed by wl_display_destroy: stop every
+    // sandbox listener first; a context whose object still exists is
+    // released by the resource destroy hook below
+    while (!securityContexts.empty()) {
+        auto* ctx = (SecurityContext*)securityContexts.mutFront();
+
+        securityStop(ctx);
+
+        if (ctx->res) {
+            ctx->unlink();
+            ctx->committed = false;
+        } else {
+            securityRelease(ctx);
+        }
     }
 
     if (display) {
