@@ -13,6 +13,7 @@ environment does not.
 
 ```sh
 ASAN_OPTIONS='detect_leaks=1:abort_on_error=1' \
+LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp" \
 UBSAN_OPTIONS='halt_on_error=1:print_stacktrace=1' \
 ./build -B .build-asan-ubsan -Dsanitizers=address,undefined test
 

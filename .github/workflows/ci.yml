@@ -273,6 +273,7 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-fsanitize=address"
           export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+          export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
           {
             python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-ta -j "$(nproc)" -k &&
