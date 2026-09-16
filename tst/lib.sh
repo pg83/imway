@@ -187,6 +187,39 @@ dump_field() { # <pattern> <field>
         $0 ~ pat { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
 }
 
+# echo the dump line of one compositor ImGui window; nonzero when it is not
+# on screen. The dump reports the windows drawn last frame, so this is the
+# compositor's own answer to "is the dialog up", with no pixel threshold and
+# no dependence on the rasterizer's colours.
+imgui_win() { # <name>
+    dump_state | awk -v n="$1" '$1 == "imgui" && $2 == "name=" n' | grep .
+}
+
+imgui_gone() { # <name>
+    ! imgui_win "$1" >/dev/null 2>&1
+}
+
+# true once <name> is the window holding the keyboard AND a text field in it
+# is taking input
+imgui_typing() { # <name>
+    local line
+    line=$(dump_state | grep '^imgui focus ') || return 1
+    [[ "$line" == *"name=$1 "* && "$line" == *"want_text=1"* ]]
+}
+
+# Poll until a compositor dialog is on screen, or off it. A fixed sleep
+# asserts on whatever frame happened to be up: a dialog can be a frame or
+# several away, and an instrumented build makes that window wide.
+await_imgui()    { await 100 imgui_win "$1" >/dev/null; } # <name>
+await_no_imgui() { await 100 imgui_gone "$1"; }           # <name>
+
+# Wait until a dialog's text field is the one taking input, before typing at
+# it. ImGui only trickles characters ahead of the keys queued behind them
+# while a text field wants input; type into a window that has not got there
+# yet and the arrow key can be applied in the same frame as the text, ahead
+# of whatever the text was meant to change.
+await_typing() { await 100 imgui_typing "$1"; }           # <name>
+
 # Print rounded mean R G B and pixel count from the inset client content box.
 # Averaging makes color assertions compatible with output dithering while
 # retaining their sub-code luminance/chromaticity checks.

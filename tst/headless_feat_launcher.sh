@@ -35,39 +35,42 @@ done
 echo "opened=$opened closed=$closed"
 [[ "$closed" -lt 1000 ]] || { echo "launcher did not close ($closed)"; exit 1; }
 
-pick_action() {
+# Open the launcher, type a query, run the first hit of the filtered grid.
+# Every step waits for the compositor to show its result instead of sleeping
+# a fixed amount: an instrumented build spends several frames on each of
+# them, and what the next screenshot catches is then whatever was up.
+pick_action() { # <query>
     local query="$1"
 
     ctl "key 125 press"
     ctl "key 60 press"
     ctl "key 60 release"
     ctl "key 125 release"
-    sleep 0.2
+    await_typing '##launcher' || { echo "launcher did not open for '$query'"; exit 1; }
+
     ctl "type $query"
-    sleep 0.3
     ctl "key 103 press"; ctl "key 103 release" # Up: enter the grid from the input line
     ctl "key 28 press"; ctl "key 28 release"   # Enter
-    sleep 0.3
+    # The action runs while the launcher is still being drawn, so for one
+    # frame the dialog it toggled is already gone and the launcher is not.
+    await_no_imgui '##launcher' || { echo "launcher did not close after '$query'"; exit 1; }
 }
 
+# Which dialog is up is the compositor's own answer, not a pixel count: the
+# settings window covers procedural wallpaper, so a threshold over it says
+# more about the rasterizer than about the action.
 pick_action settings
-screenshot "$XDG_RUNTIME_DIR/settings.ppm"
-settings_diff=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/settings.ppm" 0 30 1280 780)
-[[ "$settings_diff" -gt 2000 ]] || { echo "launcher did not open settings ($settings_diff)"; exit 1; }
+await_imgui settings || { echo "launcher did not open settings"; exit 1; }
 
 # The action is a toggle, like inspector: selecting it again closes the dialog.
 pick_action settings
-screenshot "$XDG_RUNTIME_DIR/settings-closed.ppm"
-settings_closed=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/settings-closed.ppm" 0 30 1280 780)
-[[ "$settings_closed" -lt 1000 ]] || { echo "settings did not close ($settings_closed)"; exit 1; }
+await_no_imgui settings || { echo "settings did not close"; exit 1; }
 
-pick_action "lock screen"
-screenshot "$XDG_RUNTIME_DIR/locked.ppm"
-locked=$(region_diff "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/locked.ppm" 0 30 1280 780)
 # The procedural desktop is deliberately close to the lockscreen's dark
 # tint.  Assert the visible dialog and the actual security boundary instead
 # of coupling this test to shadows/flat-background pixel counts.
-[[ "$locked" -gt 1000 ]] || { echo "launcher did not show lock dialog ($locked)"; exit 1; }
+pick_action "lock screen"
+await_imgui '##lock-overlay' || { echo "launcher did not show the lock dialog"; exit 1; }
 [[ "$(dump_field '^captured ' kb)" = 1 && "$(dump_field '^captured ' ptr)" = 1 ]] || {
     echo "launcher lock screen did not capture input"
     exit 1
