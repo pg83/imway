@@ -1711,6 +1711,7 @@ namespace {
         void run() override;
         void inputActivity() override;
         void setLayout(u32 group) override;
+        void drainClients() override;
 
         Icon* findIcon(u64 sym, u32 desired, StringView id) override;
         void syncKeyboardCapture();
@@ -13801,6 +13802,15 @@ void WaylandImpl::run() {
     stopSecurityContexts();
     wl_display_destroy(display);
     display = nullptr;
+}
+
+void WaylandImpl::drainClients() {
+    if (!display || !wlLoop) {
+        return;
+    }
+
+    wl_event_loop_dispatch(wlLoop, 0);
+    wl_display_flush_clients(display);
 }
 
 void WaylandImpl::setLayout(u32 group) {

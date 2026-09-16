@@ -11,6 +11,7 @@
 #include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
+#include "wayland.h"
 #include "imgui_wm.h"
 #include "intr_list.h"
 #include "input_sink.h"
@@ -209,6 +210,12 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
 }
 
 void ControlImpl::handleLine(StringView cmd) {
+    // every command acts on the state the clients have already produced,
+    // never on what the loop happened to have read by now
+    if (comp->wayland) {
+        comp->wayland->drainClients();
+    }
+
     StringView verb, args;
 
     if (!cmd.split(' ', verb, args)) {

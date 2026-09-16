@@ -216,12 +216,6 @@ PY
 screenshot() {
     rm -f "$1"
 
-    # One completed round trip first: a client prints as soon as it writes
-    # its commit, and the loop iteration that answers this dump is the one
-    # that reads that socket too. Without it the capture below can compose a
-    # frame that predates the content the scenario is about to assert on.
-    dump_state >/dev/null
-
     ctl "screenshot $1"
 
     local prev=-1 size

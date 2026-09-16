@@ -46,5 +46,11 @@ struct Wayland {
     // focused client, exactly as a layout hotkey would
     virtual void setLayout(u32 group) = 0;
 
+    // Process whatever the clients have already sent. The control harness
+    // calls this before every command: a scenario acts the moment a client
+    // says it committed, and the loop is free to answer the command first,
+    // which would make the command see the state from before that commit.
+    virtual void drainClients() = 0;
+
     static Wayland* create(Composer& c, const WaylandConfig&);
 };
