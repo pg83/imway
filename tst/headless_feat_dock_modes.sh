@@ -113,27 +113,34 @@ edge 3 0 742 1280 58
 edge 1 1222 0 58 800
 edge 0 0 0 58 800
 
-# auto-hide: the dock leaves until the pointer touches its edge
+# auto-hide: the bar is not submitted at all until the pointer touches its
+# edge, so the state dump is where it appears and disappears
+dock_shown() {
+    [[ -n "$(dump_field '^imgui name=##dock' x)" ]]
+}
+bar_shown() {
+    [[ -n "$(dump_field '^imgui name=##MainMenuBar' x)" ]]
+}
+
 ctl "motion 640 400"
 ctl "set desktop.dock_auto_hide true"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/hidden.ppm"
+dock_hidden() { ! dock_shown; }
+await 50 dock_hidden || { echo "the dock did not hide with the pointer away"; dump_state; exit 1; }
 ctl "motion 2 400"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/revealed.ppm"
-[[ "$(region_diff "$XDG_RUNTIME_DIR/hidden.ppm" "$XDG_RUNTIME_DIR/revealed.ppm" 0 100 58 700)" -gt 100 ]] || { echo "the dock did not reveal at the edge"; exit 1; }
+await 50 dock_shown || { echo "the dock did not reveal at the edge"; dump_state; exit 1; }
 ctl "set desktop.dock_auto_hide false"
 ctl "motion 640 400"
+await 50 dock_shown || { echo "the dock did not come back"; exit 1; }
 
 # no dock, no top bar, then the clock variants
 ctl "set desktop.dock_visible false"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/nodock.ppm"
+await 50 dock_hidden || { echo "the dock is still drawn when hidden"; dump_state; exit 1; }
 ctl "set desktop.top_bar false"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/nobar.ppm"
+bar_hidden() { ! bar_shown; }
+await 50 bar_hidden || { echo "the top bar is still drawn when hidden"; dump_state; exit 1; }
 ctl "set desktop.top_bar true"
 ctl "set desktop.dock_visible true"
+await 50 bar_shown || { echo "the top bar did not come back"; exit 1; }
 ctl "set desktop.clock_seconds true"
 ctl "set desktop.clock_24_hour false"
 ctl "set desktop.clock_date false"

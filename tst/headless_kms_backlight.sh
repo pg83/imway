@@ -23,17 +23,21 @@ raw() { cat "$XDG_RUNTIME_DIR/backlight/imway0/brightness"; }
 
 [[ "$(raw)" == 128 ]] || { echo "the staged brightness changed at startup: $(raw)"; exit 1; }
 
+osd_up() {
+    [[ -n "$(dump_field '^imgui name=##osd' x)" ]]
+}
+
+! osd_up || { echo "an on-screen display was already up"; dump_state; exit 1; }
+
 # the key steps by the configured 5% of 255, and an OSD comes up
-screenshot "$XDG_RUNTIME_DIR/plain.ppm"
 ctl "key 225 press"; ctl "key 225 release" # KEY_BRIGHTNESSUP
 brighter() { [[ "$(raw)" -gt 128 ]]; }
 await 50 brighter || { echo "the brightness key did not reach sysfs: $(raw)"; exit 1; }
 up=$(raw)
 [[ "$up" == 141 ]] || { echo "the step is $up, expected 141 (5% of 255 above 128)"; exit 1; }
 
+await 50 osd_up || { echo "no on-screen display after the brightness key"; dump_state; exit 1; }
 screenshot "$XDG_RUNTIME_DIR/osd.ppm"
-[[ "$(region_diff "$XDG_RUNTIME_DIR/plain.ppm" "$XDG_RUNTIME_DIR/osd.ppm" 0 30 1280 780)" -gt 100 ]] || {
-    echo "no on-screen display after the brightness key"; exit 1; }
 
 ctl "key 224 press"; ctl "key 224 release" # KEY_BRIGHTNESSDOWN
 dimmer() { [[ "$(raw)" -lt "$up" ]]; }

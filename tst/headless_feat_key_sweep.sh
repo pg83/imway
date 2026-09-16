@@ -27,12 +27,12 @@ layout_en() {
 await 50 layout_en || { echo "Caps Lock did not toggle the layout back"; exit 1; }
 
 # the brightness keys move SDR white by the configured step, OSD on screen
-screenshot "$XDG_RUNTIME_DIR/plain.ppm"
+osd_up() {
+    [[ -n "$(dump_field '^imgui name=##osd' x)" ]]
+}
+
 ctl "key 225 press"; ctl "key 225 release" # KEY_BRIGHTNESSUP
-sleep 0.2
-screenshot "$XDG_RUNTIME_DIR/osd.ppm"
-osd=$(region_diff "$XDG_RUNTIME_DIR/plain.ppm" "$XDG_RUNTIME_DIR/osd.ppm" 0 30 1280 780)
-[[ "$osd" -gt 100 ]] || { echo "no OSD after the brightness key ($osd)"; exit 1; }
+await 50 osd_up || { echo "no OSD after the brightness key"; dump_state; exit 1; }
 ctl "key 224 press"; ctl "key 224 release" # KEY_BRIGHTNESSDOWN
 sleep 0.2
 
