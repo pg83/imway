@@ -247,14 +247,41 @@ int main(int argc, char** argv) {
 
     printf("uinput ready %s %s\n", kbdName, mouseName);
 
+    // Relative motion is accelerated on its way through libinput, so the
+    // pixels a delta becomes are not ours to predict. Every move here is
+    // large enough to clamp against an edge, which makes where the cursor
+    // ends up exact without assuming anything about the curve.
+    if (waitFor("go-far")) {
+        fprintf(stderr, "the scenario never asked for the far corner\n");
+
+        return 1;
+    }
+
+    for (int i = 0; i < 20; i++) {
+        if (emit(mouse, EV_REL, REL_X, 200) || emit(mouse, EV_REL, REL_Y, 200) || syn(mouse)) {
+            fprintf(stderr, "relative motion write failed: %s\n", strerror(errno));
+
+            return 1;
+        }
+    }
+
+    // the empty bottom-right corner is a safe place to press a button
+    if (emit(mouse, EV_KEY, BTN_LEFT, 1) || syn(mouse) ||
+        emit(mouse, EV_KEY, BTN_LEFT, 0) || syn(mouse) ||
+        emit(mouse, EV_REL, REL_WHEEL, -1) || syn(mouse)) {
+        fprintf(stderr, "button write failed: %s\n", strerror(errno));
+
+        return 1;
+    }
+
+    printf("pointer far\n");
+
     if (waitFor("go-corner")) {
         fprintf(stderr, "the scenario never asked for the corner\n");
 
         return 1;
     }
 
-    // far enough that the cursor clamps into the top-left corner whatever
-    // the compositor started it at: every move below is from a known point
     for (int i = 0; i < 20; i++) {
         if (emit(mouse, EV_REL, REL_X, -200) || emit(mouse, EV_REL, REL_Y, -200) || syn(mouse)) {
             fprintf(stderr, "relative motion write failed: %s\n", strerror(errno));
@@ -281,47 +308,6 @@ int main(int argc, char** argv) {
     }
 
     printf("keys sent\n");
-
-    if (waitFor("go-centre")) {
-        fprintf(stderr, "the scenario never asked for the centre\n");
-
-        return 1;
-    }
-
-    // onto the launcher the keys just opened, by a known delta from the corner
-    if (emit(mouse, EV_REL, REL_X, 640) || emit(mouse, EV_REL, REL_Y, 300) || syn(mouse)) {
-        fprintf(stderr, "relative motion write failed: %s\n", strerror(errno));
-
-        return 1;
-    }
-
-    printf("pointer centred\n");
-
-    if (waitFor("go-click")) {
-        fprintf(stderr, "the scenario never asked for the click\n");
-
-        return 1;
-    }
-
-    // out to the empty bottom-right corner before pressing anything: a click
-    // inside the launcher would run whatever it is sitting on
-    for (int i = 0; i < 10; i++) {
-        if (emit(mouse, EV_REL, REL_X, 200) || emit(mouse, EV_REL, REL_Y, 200) || syn(mouse)) {
-            fprintf(stderr, "relative motion write failed: %s\n", strerror(errno));
-
-            return 1;
-        }
-    }
-
-    if (emit(mouse, EV_KEY, BTN_LEFT, 1) || syn(mouse) ||
-        emit(mouse, EV_KEY, BTN_LEFT, 0) || syn(mouse) ||
-        emit(mouse, EV_REL, REL_WHEEL, -1) || syn(mouse)) {
-        fprintf(stderr, "button write failed: %s\n", strerror(errno));
-
-        return 1;
-    }
-
-    printf("pointer clicked\n");
 
     if (waitFor("go-unplug")) {
         fprintf(stderr, "the scenario never asked for the unplug\n");

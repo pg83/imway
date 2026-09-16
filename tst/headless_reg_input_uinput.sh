@@ -4,7 +4,7 @@
 # The libinput source end to end: a virtual keyboard and mouse are plugged
 # into the compositor's own evdev directory while it runs, libinput picks
 # them up through inotify, and their events come out of the seat as the
-# launcher opening and the pointer moving by a known delta.
+# launcher opening and the cursor crossing the screen.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -54,29 +54,29 @@ await 200 in_log "input device event" || {
 captured() { dump_field '^captured ' ptr; }
 ptr_is() { [[ "$(captured)" == "$1" ]]; }
 
+# The dock owns the left edge and the desktop owns the bottom right, so
+# which of them the pointer is over says where it went without anyone
+# having to predict what libinput's acceleration made of the deltas.
+touch go-far
+wait_client "pointer far"
+await 100 ptr_is 0 || {
+    echo "the pointer did not reach the empty corner"
+    dump_state
+    exit 1
+}
+
 touch go-corner
 wait_client "pointer cornered"
+await 100 ptr_is 1 || {
+    echo "the pointer did not come back to the dock"
+    dump_state
+    exit 1
+}
 
 touch go-keys
 wait_client "keys sent"
 await_imgui '##launcher' || {
     echo "a key from the virtual keyboard did not reach the compositor"
-    dump_state
-    exit 1
-}
-
-touch go-centre
-wait_client "pointer centred"
-await 100 ptr_is 1 || {
-    echo "the pointer did not travel onto the launcher"
-    dump_state
-    exit 1
-}
-
-touch go-click
-wait_client "pointer clicked"
-await 100 ptr_is 0 || {
-    echo "the pointer did not leave the launcher for the empty corner"
     dump_state
     exit 1
 }
