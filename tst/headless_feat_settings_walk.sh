@@ -32,15 +32,16 @@ open_settings
 await 50 settings_open || { echo "settings did not open"; dump_state; exit 1; }
 
 wx=$(dump_field '^imgui name=settings ' x); wy=$(dump_field '^imgui name=settings ' y); ww=$(dump_field '^imgui name=settings ' w)
-# nav entries: 150px pane, rows 20px apart under the title bar (window at
-# 80,80 puts the first at y=118)
+# nav entries: a 150px pane of Selectables, one text line plus item
+# spacing apart, under the title bar and the window padding
 nav_x=$((wx + 40))
-first_y=$((wy + 38))
+first_y=$((wy + 36))
+row=17
 
 screenshot "$XDG_RUNTIME_DIR/page0.ppm"
 
 for i in $(seq 1 10); do
-    click_at "$nav_x" $((first_y + i * 20))
+    click_at "$nav_x" $((first_y + i * row))
     sleep 0.2
     screenshot "$XDG_RUNTIME_DIR/page$i.ppm"
     changed=$(region_diff "$XDG_RUNTIME_DIR/page$((i - 1)).ppm" "$XDG_RUNTIME_DIR/page$i.ppm" $((wx + 160)) $((wy + 30)) $((wx + ww)) $((wy + 300)))
