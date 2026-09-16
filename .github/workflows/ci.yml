@@ -6,6 +6,13 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      filter:
+        description: glob restricting which test scenarios run (all when empty)
+        default: ""
+
+env:
+  TEST_FILTER: ${{ inputs.filter }}
 
 permissions:
   contents: read
@@ -87,7 +94,7 @@ jobs:
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j 2 -k -Druns=1 test
+            python3 ./build -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -148,7 +155,7 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k &&
-            python3 ./build -B .b-cov -j 2 -k -Druns=1 test &&
+            python3 ./build -B .b-cov -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -277,7 +284,7 @@ jobs:
           {
             python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-ta -j "$(nproc)" -k &&
-            python3 ./build -B .b-ta -j 2 -k -Druns=1 test
+            python3 ./build -B .b-ta -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
@@ -373,7 +380,7 @@ jobs:
           {
             python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-tu -j "$(nproc)" -k &&
-            python3 ./build -B .b-tu -j 2 -k -Druns=1 test
+            python3 ./build -B .b-tu -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
       - name: Summarize failure

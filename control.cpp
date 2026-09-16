@@ -9,6 +9,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "renderer.h"
+#include "settings.h"
 #include "intr_list.h"
 #include "input_sink.h"
 #include "kms_intercept.h"
@@ -156,6 +157,9 @@ namespace {
     void controlIoCb(struct ev_loop*, ev_io* w, int) {
         ((ControlImpl*)w->data)->handleInput();
     }
+
+    // `set KEY VALUE`: every scalar and text setting by its schema key
+#include "settings.control.gen.inc"
 }
 
 ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
@@ -433,6 +437,21 @@ void ControlImpl::handleLine(StringView cmd) {
         // exit, no hang
         *(comp->log) << "imway: vulkan device lost, exiting"_sv << endL;
         exit(1);
+    } else if (verb == "set"_sv) {
+        StringView key, value;
+
+        if (!args.split(' ', key, value)) {
+            key = args;
+            value = {};
+        }
+
+        if (applySettingText(*comp->settings, key, value)) {
+            *(comp->log) << "imway: control: set "_sv << key << endL;
+        } else {
+            *(comp->log) << "imway: control: unknown setting "_sv << key << endL;
+        }
+
+        comp->scene->needsFrame = true;
     } else if (verb == "quit"_sv) {
         ev_break(loop, EVBREAK_ALL);
     } else {

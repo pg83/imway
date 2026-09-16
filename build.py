@@ -224,6 +224,7 @@ imgui = library(
 settings_gen_header = "$(B)/generated/settings.gen.h"
 settings_gen_impl_include = "$(B)/generated/settings.impl.gen.inc"
 settings_gen_dialog = "$(B)/generated/settings.dialog.gen.inc"
+settings_gen_control = "$(B)/generated/settings.control.gen.inc"
 settings_codegen = command(
     name="settings_codegen",
     inputs=[
@@ -231,7 +232,7 @@ settings_codegen = command(
         "$(S)/dev/settings_def.py",
         "$(S)/settings.h",
     ],
-    outputs=[settings_gen_header, settings_gen_impl_include, settings_gen_dialog],
+    outputs=[settings_gen_header, settings_gen_impl_include, settings_gen_dialog, settings_gen_control],
     descr="GN",
     cmd=[
         "python3", "$(S)/dev/gen_settings.py",
@@ -239,6 +240,7 @@ settings_codegen = command(
         "--header", settings_gen_header,
         "--impl", settings_gen_impl_include,
         "--dialog", settings_gen_dialog,
+        "--control", settings_gen_control,
     ],
 )
 
