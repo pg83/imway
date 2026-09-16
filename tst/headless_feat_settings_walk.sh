@@ -36,7 +36,7 @@ wx=$(dump_field '^imgui name=settings ' x); wy=$(dump_field '^imgui name=setting
 # spacing apart, under the title bar and the window padding
 nav_x=$((wx + 40))
 first_y=$((wy + 36))
-row=17
+row=20
 
 screenshot "$XDG_RUNTIME_DIR/page0.ppm"
 

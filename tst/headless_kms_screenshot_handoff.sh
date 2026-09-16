@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
+# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHILD_LOG=./viewer.log
 # imway-args: --device auto
 # The screenshot chord on a KMS session hands the scanout buffer itself to
 # the viewer instead of reading pixels back: the compositor swaps in a
@@ -30,6 +30,12 @@ await 100 candidate || { echo "the client never reached the plane"; dump_state; 
 
 ctl "key 99 press"; ctl "key 99 release" # Print
 
+await 100 in_log "screenshot handoff of the scanout buffer" || {
+    echo "the capture was read back instead of handed off"
+    cat "$IMWAY_LOG"
+    exit 1
+}
+
 saved() {
     [[ -s "$shots/handoff.png" ]]
 }
@@ -44,8 +50,8 @@ for _ in $(seq 1 200); do
 done
 
 saved || {
-    echo "the handed-off capture produced no file"
-    cat "$IMWAY_LOG"
+    echo "the handed-off capture produced no file; the viewer said:"
+    cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null || echo "(no viewer log)"
     exit 1
 }
 

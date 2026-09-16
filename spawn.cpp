@@ -37,6 +37,9 @@ namespace {
         Composer* comp = nullptr;
         // stdio of every child; opened once, close-on-exec
         int nullFd = -1;
+        // where a child's stdout and stderr go: /dev/null, or the file
+        // IMWAY_CHILD_LOG names in the test build
+        int childOut = -1;
         ev_child children{};
     };
 
@@ -132,7 +135,7 @@ namespace {
 
     // Nothing here may allocate, lock or log: the child owns a copy of one
     // thread and none of the locks the others held at fork.
-    [[noreturn]] static void execChild(pid_t parent, int nullFd, int passFd, const char* path, char** argv, char** envp) {
+    [[noreturn]] static void execChild(pid_t parent, int nullFd, int outFd, int passFd, const char* path, char** argv, char** envp) {
         sigset_t mask;
 
         sigemptyset(&mask);
@@ -148,7 +151,7 @@ namespace {
             _exit(126);
         }
 
-        if (dup2(nullFd, STDIN_FILENO) < 0 || dup2(nullFd, STDOUT_FILENO) < 0 || dup2(nullFd, STDERR_FILENO) < 0) {
+        if (dup2(nullFd, STDIN_FILENO) < 0 || dup2(outFd, STDOUT_FILENO) < 0 || dup2(outFd, STDERR_FILENO) < 0) {
             _exit(126);
         }
 
@@ -177,6 +180,18 @@ SpawnerImpl::SpawnerImpl(Composer& c)
         *comp->log << "imway: spawn: /dev/null unavailable: "_sv << StringView(strerror(errno)) << endL;
     }
 
+    childOut = nullFd;
+
+#ifdef IMWAY_FOR_TESTS
+    if (const char* path = getenv("IMWAY_CHILD_LOG"); path && *path) {
+        int log = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+
+        if (log >= 0) {
+            childOut = log;
+        }
+    }
+#endif
+
     ev_child_init(&children, childCb, 0, 0);
     children.data = this;
     ev_child_start(comp->loop, &children);
@@ -187,6 +202,10 @@ SpawnerImpl::SpawnerImpl(Composer& c)
 SpawnerImpl::~SpawnerImpl() noexcept {
     ev_ref(comp->loop);
     ev_child_stop(comp->loop, &children);
+
+    if (childOut >= 0 && childOut != nullFd) {
+        close(childOut);
+    }
 
     if (nullFd >= 0) {
         close(nullFd);
@@ -270,7 +289,7 @@ void SpawnerImpl::spawn(const SpawnSpec& spec) {
     }
 
     if (pid == 0) {
-        execChild(parent, nullFd, spec.fd, path.cStr(), argv.mutData(), envp.mutData());
+        execChild(parent, nullFd, childOut, spec.fd, path.cStr(), argv.mutData(), envp.mutData());
     }
 
     *comp->log << "imway: spawned "_sv << (long)pid << ": "_sv << sv(path) << endL;

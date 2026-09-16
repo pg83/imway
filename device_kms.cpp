@@ -2819,7 +2819,7 @@ void KmsOutput::setBrightness(float v) {
 
     p << sv(blPath) << "/brightness"_sv;
 
-    ScopedFD f(open(p.cStr(), O_WRONLY | O_CLOEXEC));
+    ScopedFD f(open(p.cStr(), O_WRONLY | O_TRUNC | O_CLOEXEC));
 
     if (f.get() < 0) {
         return;

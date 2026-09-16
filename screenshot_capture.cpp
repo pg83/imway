@@ -296,6 +296,8 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
         handoff = false;
     }
 
+    *(comp->log) << (handoff ? "imway: screenshot handoff of the scanout buffer"_sv : "imway: screenshot readback"_sv) << endL;
+
     if (!handoff) {
         ensureReadback();
     }

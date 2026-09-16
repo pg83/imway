@@ -16,6 +16,7 @@ history_is() {
     [[ "$(dump_field '^notifications ' history)" == "$1" ]]
 }
 
+screenshot "$XDG_RUNTIME_DIR/quiet-base.ppm"
 ctl "set notifications.history 3"
 ctl "set notifications.timeout 30"
 await 20 in_log "control: set notifications.timeout" || { echo "settings are not reachable"; exit 1; }
@@ -26,8 +27,12 @@ for i in 1 2 3; do
 done
 await 50 counts 3 3 || { echo "posts did not reach the store: $(dump_state | grep '^notifications')"; exit 1; }
 
-# a toast overlay is on screen now
-screenshot "$XDG_RUNTIME_DIR/toasts.ppm"
+# the toasts are drawn at the top right
+toasts_drawn() {
+    screenshot "$XDG_RUNTIME_DIR/toasts.ppm" || return 1
+    [[ "$(region_diff "$XDG_RUNTIME_DIR/quiet-base.ppm" "$XDG_RUNTIME_DIR/toasts.ppm" 900 20 1280 400)" -gt 200 ]]
+}
+await 50 toasts_drawn || { echo "the toasts were never drawn"; exit 1; }
 
 # the fourth post trims the oldest off-screen one; every one is on screen,
 # so nothing can be dropped yet and the history grows past its cap
@@ -41,9 +46,11 @@ ctl "set notifications.dnd true"
 await 50 active_is 0 || { echo "do-not-disturb did not clear the screen"; exit 1; }
 ctl "notify test 0 0 post-5"
 await 50 counts 0 3 || { echo "a bounded history did not trim: $(dump_state | grep '^notifications')"; exit 1; }
-screenshot "$XDG_RUNTIME_DIR/quiet.ppm"
-[[ "$(region_diff "$XDG_RUNTIME_DIR/toasts.ppm" "$XDG_RUNTIME_DIR/quiet.ppm" 900 20 1280 400)" -gt 200 ]] || {
-    echo "the toasts are still drawn under do-not-disturb"; exit 1; }
+toasts_gone() {
+    screenshot "$XDG_RUNTIME_DIR/quiet.ppm" || return 1
+    [[ "$(region_diff "$XDG_RUNTIME_DIR/quiet-base.ppm" "$XDG_RUNTIME_DIR/quiet.ppm" 900 20 1280 400)" -lt 200 ]]
+}
+await 50 toasts_gone || { echo "the toasts are still drawn under do-not-disturb"; exit 1; }
 
 # a critical post is allowed through while the setting permits it
 ctl "notify test 0 1 critical-post"

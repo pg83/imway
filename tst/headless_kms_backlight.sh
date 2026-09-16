@@ -16,6 +16,9 @@ in_log "imway: backlight ./backlight/imway0, max 255" || {
     exit 1
 }
 
+ctl "set display.osd_seconds 5"
+await 20 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
+
 raw() { cat "$XDG_RUNTIME_DIR/backlight/imway0/brightness"; }
 
 [[ "$(raw)" == 128 ]] || { echo "the staged brightness changed at startup: $(raw)"; exit 1; }
@@ -26,6 +29,7 @@ ctl "key 225 press"; ctl "key 225 release" # KEY_BRIGHTNESSUP
 brighter() { [[ "$(raw)" -gt 128 ]]; }
 await 50 brighter || { echo "the brightness key did not reach sysfs: $(raw)"; exit 1; }
 up=$(raw)
+[[ "$up" == 141 ]] || { echo "the step is $up, expected 141 (5% of 255 above 128)"; exit 1; }
 
 screenshot "$XDG_RUNTIME_DIR/osd.ppm"
 [[ "$(region_diff "$XDG_RUNTIME_DIR/plain.ppm" "$XDG_RUNTIME_DIR/osd.ppm" 0 30 1280 780)" -gt 100 ]] || {
