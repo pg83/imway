@@ -24,10 +24,13 @@ await 20 in_log "control: set desktop.dock_position" || { echo "settings are not
 
 wait_client "reactive popup followed"
 
+# the client holds the popup until KEY_1, so it is still mapped here
 after=$(dump_field '^popup' y)
+[[ -n "$after" ]] || { echo "the popup left the dump before it could be read"; dump_state; exit 1; }
 [[ "$after" -lt "$before" ]] || { echo "the popup did not move up ($before -> $after)"; dump_state; exit 1; }
 (( after >= 0 )) || { echo "the popup left the screen"; exit 1; }
 
+ctl "key 2 press"; ctl "key 2 release" # KEY_1: let the client finish
 expect_client_ok "the reactive popup client failed"
 expect_alive "compositor died re-placing a reactive popup"
 echo "OK: the reactive popup follows the work area"

@@ -5,6 +5,8 @@
 
 #include "wl_util.h"
 
+#include <linux/input-event-codes.h>
+
 static struct wl_surface* surface;
 static struct xdg_surface* xs;
 static struct xdg_toplevel* tl;
@@ -110,6 +112,8 @@ int main(void) {
     while (!popup_committed && wl_display_dispatch(wl_dpy) != -1) {
     }
 
+    wlk_watch_key = KEY_1;
+
     /* the scenario now shrinks the work area from below */
     for (int i = 0; i < 600 && !moved; i++) {
         if (wl_display_dispatch_pending(wl_dpy) < 0 || wl_display_flush(wl_dpy) < 0) break;
@@ -123,6 +127,11 @@ int main(void) {
     }
 
     printf("reactive popup followed\n");
+
+    /* hold the popup until the scenario has read where it landed: the
+     * helper counts a press and a release alike, so one tap is two hits */
+    while (wlk_watch_hits < 2 && wl_display_dispatch(wl_dpy) != -1) {
+    }
 
     return 0;
 }
