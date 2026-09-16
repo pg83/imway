@@ -1540,7 +1540,11 @@ void DesktopImpl::buildUi(Scene& scene) {
         StringView id = chromeResult.barAppId;
         size_t n = id.length() < sizeof(scene.barAppId) - 1 ? id.length() : sizeof(scene.barAppId) - 1;
 
-        memcpy(scene.barAppId, id.begin(), n);
+        // an empty view carries a null begin(); memcpy would take it
+        if (n) {
+            memcpy(scene.barAppId, id.begin(), n);
+        }
+
         scene.barAppId[n] = 0;
     }
 
