@@ -195,6 +195,7 @@ namespace {
         int failAddFbCount = 0;
         int rejectCursorErr = 0;
         bool rejectColor = false;
+        bool internalPanel = false;
 
         u64 flipsDone = 0;
         u32 lastLessee = 0;
@@ -688,7 +689,9 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
 
     fillArray(c->encoders_ptr, c->count_encoders, encs, 1);
     c->encoder_id = kEncoderId;
-    c->connector_type = DRM_MODE_CONNECTOR_HDMIA;
+    // an internal panel takes its brightness from the backlight class, an
+    // external one over ddc/ci; scenarios pick which
+    c->connector_type = internalPanel ? DRM_MODE_CONNECTOR_eDP : DRM_MODE_CONNECTOR_HDMIA;
     c->connector_type_id = 1;
     c->connection = connected ? 1 : 2; // connected : disconnected
     c->mm_width = 340;
@@ -1417,6 +1420,7 @@ int FakeKms::openDevice() {
 
     eventFd = pipeFds[1];
     renderFd = render;
+    internalPanel = getenv("IMWAY_FAKE_KMS_INTERNAL") != nullptr;
     rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
     rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
     noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;

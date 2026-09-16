@@ -39,6 +39,7 @@
 #include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <libudev.h>
@@ -56,6 +57,18 @@
 using namespace stl;
 
 namespace {
+    // the kernel's backlight class; the test build takes a staged directory
+    // instead, since a scenario cannot write the real one
+    StringView backlightRoot() {
+#ifdef IMWAY_FOR_TESTS
+        if (const char* root = getenv("IMWAY_SYSFS_BACKLIGHT"); root && *root) {
+            return StringView(root);
+        }
+#endif
+
+        return "/sys/class/backlight"_sv;
+    }
+
     void connectorName(const drmModeConnector* c, StringBuilder& out) {
         const char* t = drmModeGetConnectorTypeName(c->connector_type);
 
@@ -2530,12 +2543,14 @@ void KmsOutput::initBacklight() {
     // firmware > platform > raw, per kernel docs
     int best = 0;
 
+    StringView root = backlightRoot();
+
     try {
-        listDir("/sys/class/backlight"_sv, [this, &best](const TPathInfo& e) {
+        listDir(root, [this, root, &best](const TPathInfo& e) {
             Buffer p;
             StringBuilder builder((Buffer&&)p);
 
-            builder << "/sys/class/backlight/"_sv << e.item << "/type"_sv;
+            builder << root << "/"_sv << e.item << "/type"_sv;
             builder.xchg(p);
 
             Buffer t;
@@ -2554,7 +2569,7 @@ void KmsOutput::initBacklight() {
                 blPath.reset();
                 StringBuilder path((Buffer&&)blPath);
 
-                path << "/sys/class/backlight/"_sv << e.item;
+                path << root << "/"_sv << e.item;
                 path.xchg(blPath);
             }
         });
