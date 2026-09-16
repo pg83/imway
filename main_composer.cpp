@@ -109,6 +109,8 @@ namespace {
         double dpmsSec = 0;
         OutputConfiguration outputColor;
         char** cmdArgv = nullptr;
+        // start locked: the lockscreen is up before the first frame
+        bool login = false;
     };
 
     void usage(Log& log, const char* argv0) {
@@ -117,7 +119,7 @@ namespace {
                " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]"
                " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]"
                " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]"
-               " [--rgb-range auto|full|limited] [--list] [-- CMD ARG...]"_sv
+               " [--rgb-range auto|full|limited] [--login] [--list] [-- CMD ARG...]"_sv
             << endL;
     }
 
@@ -198,6 +200,8 @@ int mainComposer(int argc, char** argv) {
                 usage(*log, argv[0]);
                 return 2;
             }
+        } else if (arg == "--login"_sv) {
+            cfg.login = true;
         } else if (arg == "--screenshot"_sv) {
             cfg.screenshotPath = next();
         } else if (arg == "--control"_sv) {
@@ -414,6 +418,13 @@ int mainComposer(int argc, char** argv) {
         // the whole stack is wired: the first frame goes through the same
         // mode announcement a hotplug mode change takes
         output->announceMode();
+
+        if (cfg.login) {
+            // a login session opens locked; the count in the log is the
+            // proof that no frame went out before the overlay was up
+            *log << "imway: login: lockscreen opened after "_sv << scene->framesDone << " frames"_sv << endL;
+            c.desktop->lock();
+        }
 
         if (cfg.cmdArgv) {
             Vector<StringView> args;
