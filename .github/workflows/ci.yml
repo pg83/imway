@@ -281,6 +281,11 @@ jobs:
           export LDFLAGS="-fsanitize=address"
           export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
           export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
+          # lavapipe compiles shaders through LLVM on its own worker threads,
+          # whose stacks asan's inflated frames overrun: the run died with a
+          # SEGV inside libLLVM on a random scenario. No extra threads, no
+          # small stacks to overrun.
+          export LP_NUM_THREADS=0
           {
             python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-ta -j "$(nproc)" -k &&

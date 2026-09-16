@@ -5,10 +5,12 @@ set -euo pipefail
 
 start_client
 wait_client "dithering ready"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/dither.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/dither.ppm" <<'PY'
+# the gradient has to be on screen before its codes mean anything, so
+# the whole check is the predicate: retake the frame until it holds
+settled() {
+    screenshot "$XDG_RUNTIME_DIR/dither.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/dither.ppm" <<'PY'
 import collections, sys
 
 f = open(sys.argv[1], 'rb')
@@ -29,5 +31,8 @@ assert len(codes) >= 2, 'output gradient collapsed to one quantized code'
 assert largest < 54000, 'dither does not distribute quantization error'
 assert 108.5 <= mean <= 109.5, 'dither biases average luminance'
 PY
+}
+
+await 40 settled || { echo "the dithered gradient never settled:"; settled; exit 1; }
 
 echo "OK: output dithering distributes codes without luminance bias"

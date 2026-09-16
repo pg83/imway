@@ -18,6 +18,45 @@ static const char* kNetA = "/dev0/net_a";
 static const char* kNetB = "/dev0/net_b";
 static int connected;
 static time_t ordered_at;
+static char agent_path[256];
+static char agent_dest[256];
+
+/* iwd asks the compositor's agent for the passphrase of a secured network,
+ * the way the real daemon does on a Connect it cannot satisfy. The reply
+ * carries the string the user typed; a cancel comes back as an error. */
+static void request_passphrase(const char* net) {
+    if (!agent_path[0]) {
+        puts("no agent to ask");
+
+        return;
+    }
+
+    DBusMessage* ask = dbus_message_new_method_call(agent_dest, agent_path,
+        "net.connman.iwd.Agent", "RequestPassphrase");
+
+    dbus_message_append_args(ask, DBUS_TYPE_OBJECT_PATH, &net, DBUS_TYPE_INVALID);
+
+    DBusError err;
+
+    dbus_error_init(&err);
+
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block(conn, ask, 30000, &err);
+
+    dbus_message_unref(ask);
+
+    if (!reply) {
+        printf("passphrase refused: %s\n", dbus_error_is_set(&err) ? err.name : "no reply");
+        dbus_error_free(&err);
+
+        return;
+    }
+
+    const char* pw = "";
+
+    dbus_message_get_args(reply, NULL, DBUS_TYPE_STRING, &pw, DBUS_TYPE_INVALID);
+    printf("passphrase %s\n", pw);
+    dbus_message_unref(reply);
+}
 
 static void var_string(DBusMessageIter* dict, const char* key, const char* value) {
     DBusMessageIter entry, var;
@@ -135,15 +174,43 @@ static DBusHandlerResult message(DBusConnection* c, DBusMessage* msg, void* data
     } else if (dbus_message_is_method_call(msg, "net.connman.iwd.Station", "GetOrderedNetworks")) {
         send_ordered(msg);
     } else if (dbus_message_is_method_call(msg, "net.connman.iwd.AgentManager", "RegisterAgent")) {
+        const char* path = "";
+
+        if (dbus_message_get_args(msg, NULL, DBUS_TYPE_OBJECT_PATH, &path, DBUS_TYPE_INVALID)) {
+            snprintf(agent_path, sizeof(agent_path), "%s", path);
+            snprintf(agent_dest, sizeof(agent_dest), "%s", dbus_message_get_sender(msg));
+        }
+
         DBusMessage* reply = dbus_message_new_method_return(msg);
         dbus_connection_send(conn, reply, NULL);
         dbus_message_unref(reply);
         puts("agent registered");
-    } else if (dbus_message_is_method_call(msg, "net.connman.iwd.Network", "Connect")) {
+    } else if (dbus_message_is_method_call(msg, "net.connman.iwd.Station", "Scan")) {
         DBusMessage* reply = dbus_message_new_method_return(msg);
         dbus_connection_send(conn, reply, NULL);
         dbus_message_unref(reply);
-        puts("connect called");
+        puts("scan requested");
+    } else if (dbus_message_is_method_call(msg, "net.connman.iwd.Station", "Disconnect")) {
+        DBusMessage* reply = dbus_message_new_method_return(msg);
+        dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
+        connected = 0;
+        signal_state_change();
+        puts("disconnect requested");
+    } else if (dbus_message_is_method_call(msg, "net.connman.iwd.Network", "Connect")) {
+        const char* net = dbus_message_get_path(msg);
+
+        printf("connect called %s\n", net);
+        dbus_connection_flush(conn);
+
+        /* the second network is the one iwd has no key for */
+        if (net && !strcmp(net, kNetB)) {
+            request_passphrase(net);
+        }
+
+        DBusMessage* reply = dbus_message_new_method_return(msg);
+        dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
     } else if (dbus_message_get_type(msg) == DBUS_MESSAGE_TYPE_METHOD_CALL) {
         DBusMessage* err = dbus_message_new_error(msg, DBUS_ERROR_UNKNOWN_METHOD, "not faked");
         dbus_connection_send(conn, err, NULL);

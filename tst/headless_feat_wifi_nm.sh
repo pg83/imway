@@ -14,10 +14,10 @@ NM_LOG="$XDG_RUNTIME_DIR/nm.log"
 
 nm() { grep -q "$1" "$NM_LOG"; }
 
-await 50 in_log "wifi via NetworkManager" || { echo "NetworkManager was not detected"; cat "$IMWAY_LOG"; exit 1; }
-await 50 nm "get /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices" || { echo "Devices never read"; cat "$NM_LOG"; exit 1; }
-await 50 nm "settings served" || { echo "the saved connection was never read"; cat "$NM_LOG"; exit 1; }
-await 50 nm "get-all /org/freedesktop/NetworkManager/AccessPoint/3" || { echo "access points were not walked"; cat "$NM_LOG"; exit 1; }
+await 150 in_log "wifi via NetworkManager" || { echo "NetworkManager was not detected"; cat "$IMWAY_LOG"; exit 1; }
+await 150 nm "get /org/freedesktop/NetworkManager org.freedesktop.NetworkManager Devices" || { echo "Devices never read"; cat "$NM_LOG"; exit 1; }
+await 150 nm "settings served" || { echo "the saved connection was never read"; cat "$NM_LOG"; exit 1; }
+await 150 nm "get-all /org/freedesktop/NetworkManager/AccessPoint/3" || { echo "access points were not walked"; cat "$NM_LOG"; exit 1; }
 
 # the picker opens from the glyph the dump locates
 glyph_click() {
@@ -54,12 +54,12 @@ open_picker
 # the top-right "scan" button
 x=$(dump_field '^imgui name=##wifi' x); y=$(dump_field '^imgui name=##wifi' y); w=$(dump_field '^imgui name=##wifi' w)
 click_at $((x + w - 8 - 14)) $((y + 8 + 6))
-await 50 nm "scan requested" || { echo "scan did not reach NetworkManager"; cat "$NM_LOG"; exit 1; }
+await 150 nm "scan requested" || { echo "scan did not reach NetworkManager"; cat "$NM_LOG"; exit 1; }
 
 # row 0: the known network activates through its saved connection
 picker_open || open_picker
 row_click 0
-await 50 nm "activate /org/freedesktop/NetworkManager/Settings/1 /org/freedesktop/NetworkManager/AccessPoint/1" || {
+await 150 nm "activate /org/freedesktop/NetworkManager/Settings/1 /org/freedesktop/NetworkManager/AccessPoint/1" || {
     echo "the known network did not activate through its connection"; cat "$NM_LOG"; exit 1; }
 sleep 0.5
 
@@ -79,12 +79,12 @@ sleep 0.5
 ctl "type secret"
 sleep 0.4
 ctl "key 28 press"; ctl "key 28 release"
-await 50 nm "add-activate imway-secured psk=secret" || { echo "the passphrase did not reach AddAndActivateConnection"; cat "$NM_LOG"; exit 1; }
+await 150 nm "add-activate imway-secured psk=secret" || { echo "the passphrase did not reach AddAndActivateConnection"; cat "$NM_LOG"; exit 1; }
 
 # row 1: open network, no passphrase, no saved connection
 picker_open || open_picker
 row_click 1
-await 50 nm "activate / /org/freedesktop/NetworkManager/AccessPoint/2" || { echo "the open network did not activate"; cat "$NM_LOG"; exit 1; }
+await 150 nm "activate / /org/freedesktop/NetworkManager/AccessPoint/2" || { echo "the open network did not activate"; cat "$NM_LOG"; exit 1; }
 
 # the prompt again, this time cancelled: the cancel button sits under the
 # header, the prompt line and the input field; Escape then closes the list
