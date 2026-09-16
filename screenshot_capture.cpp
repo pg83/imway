@@ -10,7 +10,7 @@
 #include "device_vk.h"
 #include "fence_poll.h"
 #include "offload_job.h"
-#include "main_supervisor.h"
+#include "spawn.h"
 
 #include <std/ios/sys.h>
 #include <std/str/view.h>
@@ -591,7 +591,7 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     }
 
     StringView env[] = {sv(display), sv(scale), sv(color), sv(action), sv(format), sv(directory), sv(name), sv(lossless), sv(quality), sv(metadata)};
-    SupervisorSpawn spec;
+    SpawnSpec spec;
 
     spec.args = args;
     spec.argCount = 3;
@@ -599,8 +599,8 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     spec.envCount = image ? 10 : 9;
 
     spec.fd = fd;
-    comp->supervisor->spawn(spec);
-    // the socket queue holds its own reference now
+    comp->spawner->spawn(spec);
+    // the child holds its own copy now
     close(fd);
 }
 

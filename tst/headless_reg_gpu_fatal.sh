@@ -9,7 +9,7 @@ ctl "gpu-fatal"
 exec 3>&-
 
 compositor_gone() {
-    # the harness has not reaped the supervisor yet, so kill -0 would still
+    # the harness has not reaped the compositor yet, so kill -0 would still
     # succeed on the zombie — read the real process state instead
     local st
     st=$(awk '{print $3}' "/proc/$IMWAY_PID/stat" 2>/dev/null) || return 0

@@ -36,7 +36,7 @@ struct Desktop;
 struct Scene;
 struct Session;
 struct StatusNotifier;
-struct Supervisor;
+struct Spawner;
 struct Wayland;
 struct InputSink;
 struct InputSource;
@@ -75,7 +75,7 @@ struct Composer {
     Scene* scene = nullptr;
 
     Session* session = nullptr;
-    Supervisor* supervisor = nullptr;
+    Spawner* spawner = nullptr;
     Device* device = nullptr;
     Output* output = nullptr;
     Keyboard* kb = nullptr;

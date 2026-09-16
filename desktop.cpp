@@ -35,7 +35,7 @@
 #include "settings_ui.h"
 #include "icon_provider.h"
 #include "desktop_chrome.h"
-#include "main_supervisor.h"
+#include "spawn.h"
 
 #include <std/sys/fs.h>
 #include <std/ios/sys.h>
@@ -1453,7 +1453,7 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     displayBuilder.xchg(display);
 
     StringView env[] = {sv(display)};
-    SupervisorSpawn spawn;
+    SpawnSpec spawn;
 
     if (terminal && comp.settings->terminal().empty()) {
         return;
@@ -1464,7 +1464,7 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     spawn.env = env;
     spawn.envCount = 1;
 
-    comp.supervisor->spawn(spawn);
+    comp.spawner->spawn(spawn);
 }
 
 static StringView wifiGlyph(WifiState s) {

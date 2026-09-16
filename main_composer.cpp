@@ -19,7 +19,7 @@
 #include "keyboard.h"
 #include "log.h"
 #include "log_extern.h"
-#include "main_supervisor.h"
+#include "spawn.h"
 #include "mixer.h"
 #include "notifications.h"
 #include "notifier.h"
@@ -32,8 +32,10 @@
 #include "wayland.h"
 #include "wifi.h"
 
+#include <signal.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/prctl.h>
 
 #include <ev.h>
 
@@ -84,13 +86,13 @@ namespace {
             }
 
             StringView args[] = {"sh"_sv, "-c"_sv, line};
-            SupervisorSpawn spawn;
+            SpawnSpec spawn;
 
             spawn.args = args;
             spawn.argCount = 3;
             spawn.env = env;
             spawn.envCount = 1;
-            c.supervisor->spawn(spawn);
+            c.spawner->spawn(spawn);
         }
     }
 
@@ -126,10 +128,19 @@ namespace {
 }
 
 int mainComposer(int argc, char** argv) {
-    // stdin/stdout initially name the same full-duplex supervisor socket.
-    // Protocol traffic stays on stdin; ordinary output belongs in the IX log.
-    if (dup2(STDERR_FILENO, STDOUT_FILENO) < 0) {
-        return 1;
+    // a client or pipe going away mid-write is an error code, not a death
+    signal(SIGPIPE, SIG_IGN);
+
+    // the test harness may itself be killed; the compositor then goes with
+    // it instead of lingering with its children
+    if (getenv("IMWAY_DIE_WITH_PARENT")) {
+        unsetenv("IMWAY_DIE_WITH_PARENT");
+
+        pid_t parent = getppid();
+
+        if (prctl(PR_SET_PDEATHSIG, SIGKILL) != 0 || getppid() != parent) {
+            return 1;
+        }
     }
 
     ObjPool::Ref pool = ObjPool::fromMemory();
@@ -266,7 +277,7 @@ int mainComposer(int argc, char** argv) {
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
     c.loop = loop;
     c.offload = ThreadPool::simple(c.pool, 1);
-    c.supervisor = Supervisor::create(c);
+    c.spawner = Spawner::create(c);
 
     try {
         auto* scene = pool->make<Scene>();
@@ -440,14 +451,14 @@ int mainComposer(int argc, char** argv) {
             builder.xchg(display);
 
             StringView env[] = {sv(display)};
-            SupervisorSpawn spawn;
+            SpawnSpec spawn;
 
             spawn.args = args.data();
             spawn.argCount = args.length();
             spawn.env = env;
             spawn.envCount = 1;
 
-            c.supervisor->spawn(spawn);
+            c.spawner->spawn(spawn);
         }
 
         wayland->run();

@@ -1,6 +1,5 @@
 #include "main_composer.h"
 #include "main_screenshot.h"
-#include "main_supervisor.h"
 
 #include <std/str/view.h>
 
@@ -27,9 +26,5 @@ int main(int argc, char** argv) {
         return withProfileFlush(mainScreenshot(StringView(argv[2])));
     }
 
-    if (argc >= 2 && StringView(argv[1]) == StringView("composer")) {
-        return withProfileFlush(mainComposer(argc - 1, argv + 1));
-    }
-
-    return withProfileFlush(mainSupervisor(argc, argv));
+    return withProfileFlush(mainComposer(argc, argv));
 }

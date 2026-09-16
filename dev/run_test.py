@@ -228,9 +228,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         # point at addresses that fail fast, imway-env can override
         AUDIODEVICE="snd@127.0.0.1,9/0",
         PULSE_SERVER="unix:/nonexistent-imway-test",
-        # The build runner may itself be killed. The compositor supervisor
-        # then tears down its isolated process group instead of escaping it.
-        IMWAY_SUPERVISOR_DIE_WITH_PARENT="1",
+        # The build runner may itself be killed. The compositor then dies
+        # with it, and its children with the compositor.
+        IMWAY_DIE_WITH_PARENT="1",
     )
     env.update(meta["env"])
 
@@ -337,8 +337,8 @@ def run(imway: str, scenario: str, client: str, meta: dict,
             signal_group(proc.pid, signal.SIGKILL)
 
     comp_rc = proc.wait()
-    # The supervisor waits for the compositor, but an app may deliberately
-    # ignore SIGTERM. Nothing from a completed scenario may retain the group.
+    # A child gets SIGTERM when the compositor exits but may deliberately
+    # ignore it. Nothing from a completed scenario may retain the group.
     signal_group(proc.pid, signal.SIGKILL)
     logf.close()
 

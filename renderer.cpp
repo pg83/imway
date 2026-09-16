@@ -40,7 +40,6 @@
 #include "window_shadow.h"
 #include "desktop_chrome.h"
 #include "frame_listener.h"
-#include "main_supervisor.h"
 #include "screenshot_capture.h"
 
 #include <std/sys/fd.h>
@@ -1277,7 +1276,7 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
         return nullptr;
     }
 
-    int fd = dup(dmabuf.fds[0]);
+    int fd = fcntl(dmabuf.fds[0], F_DUPFD_CLOEXEC, 0);
 
     if (fd < 0) {
         return nullptr;
@@ -2983,7 +2982,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
     bool bound = false;
 
     if (!disjoint) {
-        int fd = dup(b->fds[0]);
+        int fd = fcntl(b->fds[0], F_DUPFD_CLOEXEC, 0);
         VkMemoryRequirements req{};
 
         vkGetImageMemoryRequirements(device, tex->image, &req);
@@ -3035,7 +3034,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
 
             vkGetImageMemoryRequirements2(device, &ri, &req2);
 
-            int fd = dup(b->fds[i]);
+            int fd = fcntl(b->fds[i], F_DUPFD_CLOEXEC, 0);
             u32 memType = pickType(req2.memoryRequirements.memoryTypeBits, fd);
 
             VkImportMemoryFdInfoKHR importInfo{VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR};

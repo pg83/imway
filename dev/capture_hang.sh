@@ -2,7 +2,7 @@
 set -uo pipefail
 
 usage() {
-    echo "usage: $0 [imway-supervisor-pid] [output.log]" >&2
+    echo "usage: $0 [imway-pid] [output.log]" >&2
     exit 2
 }
 
@@ -57,7 +57,7 @@ if [[ -z "$pid" ]]; then
     done
 
     if [[ ${#candidates[@]} -ne 1 ]]; then
-        echo "expected exactly one imway supervisor, got ${#candidates[@]}; pass its pid" >&2
+        echo "expected exactly one imway process, got ${#candidates[@]}; pass its pid" >&2
         process_table | grep -E '(^ *PID|imway|zutty|htop)' >&2 || true
         exit 2
     fi
@@ -95,7 +95,7 @@ done
 {
     echo "capture_utc=$stamp"
     echo "capture_uid=$(id -u)"
-    echo "supervisor_pid=$pid"
+    echo "imway_pid=$pid"
     echo "process_group=$pgid"
     echo "gdb=$gdb_bin"
     echo
