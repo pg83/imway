@@ -323,20 +323,33 @@ void ControlImpl::handleLine(StringView cmd) {
                 comp->entry->key(KEY_LEFTSHIFT, false);
             }
         }
-    } else if (verb == "hscroll"_sv) {
+    } else if (verb == "hscroll"_sv || verb == "scroll"_sv) {
+        // scroll|hscroll <notches|stop> [wheel|finger|continuous]
+        bool horizontal = verb == "hscroll"_sv;
+        StringView amount, kind;
+
+        if (!args.split(' ', amount, kind)) {
+            amount = args;
+            kind = {};
+        }
+
         ScrollEvent ev;
 
-        ev.dx = parseFloat(args);
-        ev.discreteX = (i32)ev.dx;
-        ev.source = ScrollSource::wheel;
-        comp->entry->scroll(ev);
-    } else if (verb == "scroll"_sv) {
-        ScrollEvent ev;
+        ev.source = kind == "finger"_sv ? ScrollSource::finger : kind == "continuous"_sv ? ScrollSource::continuous : ScrollSource::wheel;
 
-        ev.dy = parseFloat(args);
-        ev.discreteY = (i32)ev.dy;
-        ev.value120Y = (i32)ev.dy * 120;
-        ev.source = ScrollSource::wheel;
+        if (amount == "stop"_sv) {
+            ev.stopX = horizontal;
+            ev.stopY = !horizontal;
+        } else if (horizontal) {
+            ev.dx = parseFloat(amount);
+            ev.discreteX = (i32)ev.dx;
+            ev.value120X = (i32)ev.dx * 120;
+        } else {
+            ev.dy = parseFloat(amount);
+            ev.discreteY = (i32)ev.dy;
+            ev.value120Y = (i32)ev.dy * 120;
+        }
+
         comp->entry->scroll(ev);
     } else if (verb == "tablet"_sv) {
         // tablet <proximity_in|proximity_out|down|up|motion> <x> <y> [pressure]
