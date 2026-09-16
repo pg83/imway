@@ -36,7 +36,10 @@ unlocked() {
 }
 await 50 unlocked || { echo "the lock overlay is still drawn"; dump_state; exit 1; }
 
-# a client of the open session, then locked again: its keys are withheld
+# A client of the open session, then locked again: its keys are withheld.
+# The password is taken before this point on purpose — a window mapping
+# while the screen is locked takes the keyboard focus off the password
+# field (see the imgui focus line in the dump) and nothing gives it back.
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_feat_lockscreen"
 start_client
 wait_client "lockscreen ready"

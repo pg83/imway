@@ -45,10 +45,14 @@ static const struct xdg_surface_listener xs_listener = {xs_configure};
 static void popup_xs_configure(void* d, struct xdg_surface* s, uint32_t serial) {
     (void)d;
     xdg_surface_ack_configure(s, serial);
+
+    /* every configure is answered with a commit: the compositor applies the
+     * new placement then, and keeps the old one until it arrives */
+    wl_surface_attach(popup_surface, wl_solid(200, 700, 0xFFFFFF00), 0, 0);
+    wl_surface_damage(popup_surface, 0, 0, 200, 700);
+    wl_surface_commit(popup_surface);
+
     if (!popup_committed) {
-        wl_surface_attach(popup_surface, wl_solid(200, 700, 0xFFFFFF00), 0, 0);
-        wl_surface_damage(popup_surface, 0, 0, 200, 700);
-        wl_surface_commit(popup_surface);
         popup_committed = 1;
         printf("popup mapped\n");
     }
@@ -128,18 +132,22 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     printf("maximized requested\n");
 
-    /* the window moves under the popup; the scenario watches where the
-     * popup lands on screen, which is what a reactive placement follows */
-    for (int i = 0; i < 300; i++) {
+    /* the window moves under the popup, so the compositor places it again */
+    for (int i = 0; i < 300 && !moved; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
+    }
 
-        if (wlk_watch_hits >= 4) {
-            break;
-        }
+    if (!moved) {
+        fprintf(stderr, "no new placement arrived (y=%d)\n", last_y);
+        return 1;
     }
 
     printf("reactive popup followed (%d configures, last y %d)\n", configures, last_y);
+
+    /* hold it while the scenario reads the new placement */
+    while (wlk_watch_hits < 4 && wl_display_dispatch(wl_dpy) != -1) {
+    }
 
     return 0;
 }

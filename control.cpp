@@ -8,6 +8,7 @@
 #include "pooled.h"
 #include "composer.h"
 #include "listener.h"
+#include "keyboard.h"
 #include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
@@ -568,6 +569,10 @@ void ControlImpl::dumpState(StringView outPath) {
     // the compositor's own ImGui windows drawn last frame, so a scenario
     // can aim clicks at a dialog from its rectangle
     if (ImGuiContext* g = ImGui::GetCurrentContext()) {
+        // which of them holds the keyboard, and whether a text field is
+        // taking input: a dialog that lost this cannot be typed into
+        out << "imgui focus name="_sv << StringView(g->NavWindow ? g->NavWindow->Name : "-") << " want_text="_sv << (int)ImGui::GetIO().WantTextInput << " active_id="_sv << (int)(g->ActiveId != 0) << "\n"_sv;
+
         for (ImGuiWindow* w : g->Windows) {
             if (w->WasActive && !w->Hidden && !(w->Flags & ImGuiWindowFlags_ChildWindow)) {
                 out << "imgui name="_sv << StringView(w->Name) << " x="_sv << (int)w->Pos.x << " y="_sv << (int)w->Pos.y << " w="_sv << (int)w->Size.x << " h="_sv << (int)w->Size.y << "\n"_sv;
@@ -590,7 +595,10 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "notifications active="_sv << activeToasts << " history="_sv << keptToasts << "\n"_sv;
     out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
     out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
-    out << "layout "_sv << StringView(scene->layout) << "\n"_sv;
+    // the cached indicator and the live xkb group: they are refreshed on
+    // different events, so a scenario can tell a stale indicator from a
+    // group that really did not move
+    out << "layout "_sv << StringView(scene->layout) << " group="_sv << (comp->kb ? (int)comp->kb->activeLayout() : -1) << " count="_sv << (comp->kb ? (int)comp->kb->layoutCount() : -1) << "\n"_sv;
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;

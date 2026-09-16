@@ -11,35 +11,34 @@ wait_client "popup mapped"
 wait_mapped
 
 popup_placed() {
-    [[ -n "$(dump_field '^popup' imgy)" ]]
+    [[ -n "$(dump_field '^popup' y)" ]]
 }
 
 await 50 popup_placed || { echo "no popup in the dump"; dump_state; exit 1; }
 
-before=$(dump_field '^popup' imgy)
+before=$(dump_field '^popup' y)
 ctl "key 2 press"; ctl "key 2 release" # KEY_1: the client maximizes now
 wait_client "maximized requested"
+wait_client "reactive popup followed"
 
 moved() {
     local now
-    now=$(dump_field '^popup' imgy)
+    now=$(dump_field '^popup' y)
     [[ -n "$now" && "$now" != "$before" ]]
 }
 
-await 100 moved || { echo "the popup kept its place on screen ($before)"; dump_state; exit 1; }
+await 100 moved || { echo "the popup kept its placement ($before)"; dump_state; exit 1; }
 
-after=$(dump_field '^popup' imgy)
+after=$(dump_field '^popup' y)
+imgy=$(dump_field '^popup' imgy)
 h=$(dump_field '^popup' h)
+echo "popup placed again: $before -> $after (screen y $imgy, height $h)"
 
-# it stays visible. The bottom edge is not asserted: the placement is
-# computed in the parent's surface space against the whole output, so a
-# parent that does not sit at the origin shifts the result by its own
-# offset and a tall popup can hang below the screen.
-(( after >= 0 && after < 800 )) || { echo "the popup left the screen (imgy=$after h=$h)"; dump_state; exit 1; }
-echo "popup moved on screen: $before -> $after"
+# and the new placement is inside the output, which is what the constraint
+# is for: the bounds are the parent's own offset to the far edge
+(( imgy >= 0 && imgy + h <= 800 )) || { echo "the popup left the screen (imgy=$imgy h=$h)"; dump_state; exit 1; }
 
 ctl "key 2 press"; ctl "key 2 release" # let the client finish
-wait_client "reactive popup followed"
 expect_client_ok "the reactive popup client failed"
 expect_alive "compositor died re-placing a reactive popup"
 echo "OK: the reactive popup follows its parent"
