@@ -2236,6 +2236,8 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
         kind = scene.cursorShape;
     }
 
+    scene.cursorDrawn = kind;
+
     if (!scene.drawCursor) {
         return;
     }

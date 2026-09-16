@@ -478,6 +478,9 @@ struct Scene {
     float imePopupX = 0, imePopupY = 0;
 
     CursorKind cursorShape = CursorKind::unset;
+    // the kind the desktop settled on last frame (imgui's choice, or the
+    // client's shape over its own surface); reported by the state dump
+    CursorKind cursorDrawn = CursorKind::unset;
     Surface* cursorSurface = nullptr;
     int cursorHotX = 0, cursorHotY = 0;
 };
