@@ -61,6 +61,20 @@
 using namespace stl;
 
 namespace {
+    // the kernel's power-supply class; the test build takes a staged
+    // directory instead, since a scenario cannot write the real one
+    StringView powerSupplyRoot() {
+#ifdef IMWAY_FOR_TESTS
+        if (const char* root = getenv("IMWAY_SYSFS_POWER_SUPPLY"); root && *root) {
+            return StringView(root);
+        }
+#endif
+
+        return "/sys/class/power_supply"_sv;
+    }
+}
+
+namespace {
     struct DesktopImpl;
 
     struct CallDesktopVolume: Listener {
@@ -1287,7 +1301,7 @@ void DesktopImpl::sampleStats() {
         Buffer devBat;
 
         try {
-            listDir("/sys/class/power_supply"_sv, [this, &content, &devBat](const TPathInfo& e) {
+            listDir(powerSupplyRoot(), [this, &content, &devBat](const TPathInfo& e) {
                 if (!batPath.empty()) {
                     return;
                 }
@@ -1297,7 +1311,7 @@ void DesktopImpl::sampleStats() {
                 {
                     StringBuilder builder((Buffer&&)p);
 
-                    builder << "/sys/class/power_supply/"_sv << e.item << "/type"_sv;
+                    builder << powerSupplyRoot() << "/"_sv << e.item << "/type"_sv;
                     builder.xchg(p);
                 }
 
@@ -1311,7 +1325,7 @@ void DesktopImpl::sampleStats() {
                     p.reset();
                     StringBuilder builder((Buffer&&)p);
 
-                    builder << "/sys/class/power_supply/"_sv << e.item << "/scope"_sv;
+                    builder << powerSupplyRoot() << "/"_sv << e.item << "/scope"_sv;
                     builder.xchg(p);
                     device = readSmallFile(p, content).startsWith("Device"_sv);
                 } catch (...) {
@@ -1322,13 +1336,13 @@ void DesktopImpl::sampleStats() {
                     if (devBat.empty()) {
                         StringBuilder builder((Buffer&&)devBat);
 
-                        builder << "/sys/class/power_supply/"_sv << e.item;
+                        builder << powerSupplyRoot() << "/"_sv << e.item;
                         builder.xchg(devBat);
                     }
                 } else {
                     StringBuilder path((Buffer&&)batPath);
 
-                    path << "/sys/class/power_supply/"_sv << e.item;
+                    path << powerSupplyRoot() << "/"_sv << e.item;
                     path.xchg(batPath);
                 }
             });
@@ -1357,6 +1371,9 @@ void DesktopImpl::sampleStats() {
             batPath.reset();
         }
     }
+
+    comp->scene->batteryPct = batPct;
+    comp->scene->batteryDischarging = batDischarging;
 }
 
 // resizeAnchor bits: which edge stays under the hand during a drag

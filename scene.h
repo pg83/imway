@@ -453,6 +453,12 @@ struct Scene {
     // the bar's wifi glyph rectangle (x0 y0 x1 y1, -1 when absent), written
     // by the desktop each frame; surfaced through the state dump
     float wifiGlyph[4] = {-1.f, -1.f, -1.f, -1.f};
+
+    // the power supply the desktop settled on, as read: -1 when there is
+    // none. Reported so a scenario can assert the sysfs walk without
+    // reading the bar's glyphs back out of the framebuffer
+    long batteryPct = -1;
+    bool batteryDischarging = false;
     // app_id the top bar drew last frame ("" when it drew none)
     char barAppId[64] = "";
     bool kbCaptured = false;

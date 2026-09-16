@@ -598,6 +598,7 @@ void ControlImpl::dumpState(StringView outPath) {
 
     out << "notifications active="_sv << activeToasts << " history="_sv << keptToasts << "\n"_sv;
     out << "bar app_id="_sv << StringView(scene->barAppId[0] ? scene->barAppId : "-") << "\n"_sv;
+    out << "battery pct="_sv << (i64)scene->batteryPct << " discharging="_sv << (int)scene->batteryDischarging << "\n"_sv;
     out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
     out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
     // the cached indicator and the live xkb group: they are refreshed on
