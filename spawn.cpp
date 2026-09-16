@@ -4,6 +4,7 @@
 #include "util.h"
 #include "composer.h"
 
+#include <std/ios/manip.h>
 #include <std/lib/buffer.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
@@ -100,10 +101,11 @@ namespace {
     }
 
     static bool sameKey(const char* entry, StringView keyValue) {
-        const char* eq = (const char*)memchr(keyValue.data(), '=', keyValue.length());
-        size_t keyLen = eq ? (size_t)(eq - keyValue.data()) : keyValue.length();
+        const char* key = (const char*)keyValue.data();
+        const char* eq = (const char*)memchr(key, '=', keyValue.length());
+        size_t keyLen = eq ? (size_t)(eq - key) : keyValue.length();
 
-        return strncmp(entry, keyValue.data(), keyLen) == 0 && entry[keyLen] == '=';
+        return strncmp(entry, key, keyLen) == 0 && entry[keyLen] == '=';
     }
 
     // every descriptor is close-on-exec by construction (see the audit in
