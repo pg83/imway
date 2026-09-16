@@ -27,14 +27,11 @@ wait_client "closed two reason 3"
 
 # the history panel via the launcher action
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
-sleep 0.2
+await_typing '##launcher' || { echo "the launcher did not open"; exit 1; }
 ctl "type notifications"
-sleep 0.3
 ctl "key 103 press"; ctl "key 103 release"
 ctl "key 28 press"; ctl "key 28 release"
-sleep 0.3
-
-screenshot "$XDG_RUNTIME_DIR/pre_panel.ppm" || true
+await_no_imgui '##launcher' || { echo "the launcher did not close"; exit 1; }
 
 panel_open() {
     screenshot "$XDG_RUNTIME_DIR/panel.ppm" || return 1

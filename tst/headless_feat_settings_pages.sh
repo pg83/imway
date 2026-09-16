@@ -42,28 +42,32 @@ done
 [[ "$(dump_state | awk '/^layout/ { print $2 }')" == "EN" ]] || {
     echo "unexpected initial layout"; exit 1; }
 
+# A click is applied over the frames after it, not in the one a fixed sleep
+# happens to reach: ImGui trickles the queued input, and an instrumented
+# build spreads it further still. Every check below polls for its result.
+layout_is() { # <EN|RU>
+    [[ "$(dump_state | awk '/^layout/ { print $2 }')" == "$1" ]]
+}
+
 # keyboard page: click the nav entry, then the Russian radio; the switch must
 # go through the real keyboard, not just the widget state
 click_at "$NAV_X" "$KEYBOARD_Y"
-sleep 0.2
 screenshot "$XDG_RUNTIME_DIR/keyboard.ppm"
 click_at "$RU_X" "$RU_Y"
-sleep 0.2
-
-layout=$(dump_state | awk '/^layout/ { print $2 }')
-[[ "$layout" == "RU" ]] || { echo "layout radio did not switch ($layout)"; exit 1; }
+await 50 layout_is RU || { echo "layout radio did not switch"; exit 1; }
 
 # and back, so the check is not a one-way fluke
 click_at "$EN_X" "$EN_Y"
-sleep 0.2
-layout=$(dump_state | awk '/^layout/ { print $2 }')
-[[ "$layout" == "EN" ]] || { echo "layout did not switch back ($layout)"; exit 1; }
+await 50 layout_is EN || { echo "layout did not switch back"; exit 1; }
 
 # shortcuts page: the bindings table replaces the keyboard rows in the right pane
+shortcuts_shown() {
+    screenshot "$XDG_RUNTIME_DIR/shortcuts.ppm" &&
+        [[ "$(region_diff "$XDG_RUNTIME_DIR/keyboard.ppm" "$XDG_RUNTIME_DIR/shortcuts.ppm" \
+            220 100 700 300)" -gt 1500 ]]
+}
+
 click_at "$NAV_X" "$SHORTCUTS_Y"
-sleep 0.2
-screenshot "$XDG_RUNTIME_DIR/shortcuts.ppm"
-shortcuts_diff=$(region_diff "$XDG_RUNTIME_DIR/keyboard.ppm" "$XDG_RUNTIME_DIR/shortcuts.ppm" 220 100 700 300)
-[[ "$shortcuts_diff" -gt 1500 ]] || { echo "shortcuts page did not render ($shortcuts_diff)"; exit 1; }
+await 50 shortcuts_shown || { echo "shortcuts page did not render"; exit 1; }
 
 echo "OK: settings pages, layout switch from the keyboard page, shortcuts view"
