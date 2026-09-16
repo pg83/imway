@@ -167,7 +167,9 @@ int main(void) {
         wl_display_roundtrip(wl_dpy);
         printf("case %s mapped\n", c->name);
 
-        int want = (int)i + 1;
+        /* the helper counts press and release alike, and the scenario taps
+         * the key once per case */
+        int want = ((int)i + 1) * 2;
 
         while (wlk_watch_hits < want && wl_display_dispatch(wl_dpy) != -1) {
         }

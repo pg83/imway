@@ -10,7 +10,7 @@ wait_client "scroll axes ready"
 wait_mapped
 
 point_at_color 32 192 32 || { echo "the client window was not found"; exit 1; }
-wait_client "entered"
+wait_client "pointer entered"
 
 ctl "scroll 2"
 sleep 0.2

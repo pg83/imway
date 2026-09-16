@@ -82,8 +82,12 @@ static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t ver) {
     (void)d;
     if (!strcmp(iface, wl_seat_interface.name) && !seat11) {
-        seat_version = ver;
-        seat11 = wl_registry_bind(r, name, &wl_seat_interface, ver > 11 ? 11 : ver);
+        /* never above what this client library knows: a proxy at a version
+         * whose events it cannot decode kills the connection */
+        uint32_t want = ver < (uint32_t)wl_seat_interface.version ? ver : (uint32_t)wl_seat_interface.version;
+
+        seat_version = want;
+        seat11 = wl_registry_bind(r, name, &wl_seat_interface, want);
     }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
@@ -102,9 +106,11 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     if (!seat11 || seat_version < 9) {
-        fprintf(stderr, "wl_seat at version %u, need 9 or more\n", seat_version);
+        fprintf(stderr, "wl_seat usable at version %u, need 9 or more\n", seat_version);
         return 1;
     }
+
+    printf("seat bound at %u\n", seat_version);
 
     ptr11 = wl_seat_get_pointer(seat11);
     wl_pointer_add_listener(ptr11, &ptr_listener, NULL);
@@ -126,7 +132,7 @@ int main(void) {
         return 1;
     }
 
-    printf("entered\n");
+    printf("pointer entered\n");
 
     /* wheel notches on both axes, then a finger scroll, then the stops */
     for (int i = 0; i < 400 && !(stop_v && stop_h); i++) {
