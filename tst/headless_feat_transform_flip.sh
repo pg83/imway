@@ -5,10 +5,15 @@ set -euo pipefail
 
 start_client
 wait_mapped
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
+# one completed dump round trip proves the compositor has drained the
+# client's socket, so the next composed frame carries the surface; the
+# retries absorb a slow first frame
+dump_state >/dev/null
+
+shot_ok() {
+    screenshot "$XDG_RUNTIME_DIR/shot.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
 w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
@@ -27,4 +32,7 @@ print(f"bbox={bw}x{bh}, red_cx={rx:.0f} blue_cx={bx:.0f}")
 assert 190 <= bw <= 210 and 110 <= bh <= 130, "180 must not swap dimensions"
 assert rx > bx, "colors were not flipped left<->right by the 180 transform"
 PY
+}
+
+shot_ok || shot_ok || shot_ok || { echo "the surface never reached the screen as expected"; exit 1; }
 echo "OK: buffer_transform 180 flipped the colors, kept dimensions"

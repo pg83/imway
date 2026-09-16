@@ -6,10 +6,15 @@ set -euo pipefail
 
 start_client
 wait_client "mapped"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
-python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
+# the client prints as soon as it commits; one completed dump round trip
+# proves the compositor has drained its socket, so the next composed frame
+# carries the surface. A couple of retries absorb a slow first frame.
+dump_state >/dev/null
+
+shot_ok() {
+    screenshot "$XDG_RUNTIME_DIR/shot.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/shot.ppm" <<'PY'
 import sys
 f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
 w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
@@ -30,4 +35,7 @@ assert 54 <= bw <= 66 and 114 <= bh <= 126, f"expected ~60x120 view, got {bw}x{b
 assert abs(rcx - bcx) < 10, "halves did not stay aligned in x"
 assert abs(rcy - bcy) > 30, "the color split did not rotate onto the y axis"
 PY
+}
+
+shot_ok || shot_ok || shot_ok || { echo "the surface never reached the screen as expected"; exit 1; }
 echo "OK: scale 2 + transform 90 compose (60x120 view, split rotated to Y)"
