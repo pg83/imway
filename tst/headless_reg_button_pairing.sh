@@ -11,6 +11,7 @@ wait_client "pairing ready"
 sleep 0.5
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=pairing'
 x=$(dump_field 'app_id=pairing' x); y=$(dump_field 'app_id=pairing' y)
 w=$(dump_field 'app_id=pairing' w)
 imgx=$(dump_field 'app_id=pairing' imgx); imgy=$(dump_field 'app_id=pairing' imgy)

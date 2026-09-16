@@ -9,6 +9,7 @@ wait_client "close client mapped"
 sleep 0.5
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=closable'
 x=$(dump_field 'app_id=closable' x); y=$(dump_field 'app_id=closable' y)
 w=$(dump_field 'app_id=closable' w)
 imgy=$(dump_field 'app_id=closable' imgy)

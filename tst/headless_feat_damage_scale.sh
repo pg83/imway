@@ -9,6 +9,7 @@ start_client
 wait_client "state1"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/s1.ppm"
+wait_rect 'app_id=dscale'
 imgx=$(dump_field 'app_id=dscale' imgx); imgy=$(dump_field 'app_id=dscale' imgy)
 
 ctl "key 2 press"; ctl "key 2 release"   # KEY_1

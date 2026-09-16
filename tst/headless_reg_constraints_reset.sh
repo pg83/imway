@@ -10,6 +10,7 @@ sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
 # A maps second, so it sits above B; move onto A to activate lock #1
+wait_rect 'app_id=lockA'
 ax=$(dump_field 'app_id=lockA' imgx); ay=$(dump_field 'app_id=lockA' imgy)
 ctl "motion $((ax + 100)) $((ay + 75))"
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
@@ -24,6 +25,7 @@ sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
 # onto B for lock #2 (the pointer is free again after A died)
+wait_rect 'app_id=lockB'
 bx=$(dump_field 'app_id=lockB' imgx); by=$(dump_field 'app_id=lockB' imgy)
 ctl "motion $((bx + 100)) $((by + 75))"
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"

@@ -10,6 +10,7 @@ sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
 x0=$(dump_field 'app_id=serial' x); y0=$(dump_field 'app_id=serial' y)
+wait_rect 'app_id=serial'
 imgx=$(dump_field 'app_id=serial' imgx); imgy=$(dump_field 'app_id=serial' imgy)
 mx=$((imgx + 150)); my=$((imgy + 100))
 

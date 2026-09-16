@@ -6,6 +6,7 @@ start_client
 wait_client "mapped"
 sleep 0.2
 screenshot "$XDG_RUNTIME_DIR/_cursor.ppm"
+wait_rect 'app_id=cursor-role'
 imgx=$(dump_field 'app_id=cursor-role' imgx)
 imgy=$(dump_field 'app_id=cursor-role' imgy)
 ctl "motion $((imgx + 100)) $((imgy + 80))"

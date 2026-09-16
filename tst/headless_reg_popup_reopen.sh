@@ -18,6 +18,7 @@ start_client
 wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+wait_rect 'app_id=reopen'
 imgx=$(dump_field 'app_id=reopen' imgx); imgy=$(dump_field 'app_id=reopen' imgy)
 
 round() { # <n>

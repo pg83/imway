@@ -17,7 +17,9 @@ wait_client "source ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=dndsrc'
 sx=$(dump_field 'app_id=dndsrc' imgx); sy=$(dump_field 'app_id=dndsrc' imgy)
+wait_rect 'app_id=dndtgt'
 tx=$(dump_field 'app_id=dndtgt' imgx); ty=$(dump_field 'app_id=dndtgt' imgy)
 echo "source at $sx,$sy target at $tx,$ty"
 

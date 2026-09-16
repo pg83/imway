@@ -9,6 +9,7 @@ wait_client "tool ready"
 wait_mapped 'app_id=tablet-test'
 sleep 0.3
 
+wait_rect 'app_id=tablet-test'
 x=$(dump_field 'app_id=tablet-test' imgx)
 y=$(dump_field 'app_id=tablet-test' imgy)
 cx=$((x + 50))

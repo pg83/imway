@@ -5,7 +5,7 @@ set -euo pipefail
 
 start_client
 wait_client "night-light ready"
-sleep 0.3
+wait_rect 'app_id=night-light'
 x=$(dump_field 'app_id=night-light' imgx)
 y=$(dump_field 'app_id=night-light' imgy)
 w=$(dump_field 'app_id=night-light' client_w)

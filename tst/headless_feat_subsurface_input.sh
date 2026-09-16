@@ -10,6 +10,7 @@ wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=subinput'
 imgx=$(dump_field 'app_id=subinput' imgx); imgy=$(dump_field 'app_id=subinput' imgy)
 echo "content at $imgx,$imgy"
 

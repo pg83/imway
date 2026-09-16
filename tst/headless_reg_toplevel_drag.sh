@@ -10,6 +10,7 @@ wait_mapped 'app_id=drag-origin'
 wait_mapped 'app_id=drag-torn'
 sleep 0.3
 
+wait_rect 'app_id=drag-origin'
 ox=$(dump_field 'app_id=drag-origin' imgx)
 oy=$(dump_field 'app_id=drag-origin' imgy)
 # press low in the origin, clear of the torn window that cascades over its

@@ -10,6 +10,7 @@ start_client destroy-source
 wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+wait_rect 'app_id=dndphase'
 imgx=$(dump_field 'app_id=dndphase' imgx); imgy=$(dump_field 'app_id=dndphase' imgy)
 ctl "motion $((imgx + 150)) $((imgy + 100))"
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"

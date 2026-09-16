@@ -27,6 +27,7 @@ start_client
 wait_client "state1"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/s1.ppm"
+wait_rect 'app_id=damage'
 imgx=$(dump_field 'app_id=damage' imgx); imgy=$(dump_field 'app_id=damage' imgy)
 read -r r1 g1 b1 < <(counts "$XDG_RUNTIME_DIR/s1.ppm" "$imgx" "$imgy")
 echo "state1: red=$r1 green=$g1 blue=$b1"

@@ -12,6 +12,7 @@ wait_mapped
 sleep 0.5
 screenshot "$XDG_RUNTIME_DIR/shot.ppm"
 
+wait_rect 'app_id=surface-snap'
 x=$(dump_field 'app_id=surface-snap' imgx)
 y=$(dump_field 'app_id=surface-snap' imgy)
 w=$(dump_field 'app_id=surface-snap' client_w)

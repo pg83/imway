@@ -11,6 +11,7 @@ start_client
 wait_client "dither-temporal ready"
 sleep 0.3
 
+wait_rect 'app_id=dither-temporal'
 x=$(dump_field 'app_id=dither-temporal' imgx)
 y=$(dump_field 'app_id=dither-temporal' imgy)
 w=$(dump_field 'app_id=dither-temporal' client_w)

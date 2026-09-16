@@ -9,6 +9,7 @@ wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=seat2'
 imgx=$(dump_field 'app_id=seat2' imgx); imgy=$(dump_field 'app_id=seat2' imgy)
 click_at $((imgx + 150)) $((imgy + 100))
 ctl "key 30 press"; ctl "key 30 release"    # client watches KEY_A by default? no: set below

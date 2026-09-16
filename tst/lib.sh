@@ -187,6 +187,28 @@ dump_field() { # <pattern> <field>
         $0 ~ pat { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
 }
 
+# true once the compositor has laid the client's window out
+have_rect() { # <dump-pattern>
+    local w
+    [[ -n "$(dump_field "$1" imgx)" ]] || return 1
+    w=$(dump_field "$1" client_w)
+    [[ -n "$w" && "$w" -gt 0 ]]
+}
+
+# Wait for the frame that lays a client's window out before reading its rect
+# from the dump. The compositor logs the map, and the scenario's wait_mapped
+# returns, before that frame: read the rect right after and it can still be
+# missing -- and an empty field silently becomes 0 in the arithmetic that
+# follows, parking the pointer at the origin instead of over the client. An
+# instrumented build makes that window wide enough to hit regularly.
+wait_rect() { # <dump-pattern>
+    await 100 have_rect "$1" || {
+        echo "the compositor never laid out a window matching: $1"
+        dump_state
+        exit 1
+    }
+}
+
 # echo the dump line of one compositor ImGui window; nonzero when it is not
 # on screen. The dump reports the windows drawn last frame, so this is the
 # compositor's own answer to "is the dialog up", with no pixel threshold and

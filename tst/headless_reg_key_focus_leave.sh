@@ -9,7 +9,9 @@ wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=kfA'
 ax=$(dump_field 'app_id=kfA' imgx); ay=$(dump_field 'app_id=kfA' imgy)
+wait_rect 'app_id=kfB'
 bx=$(dump_field 'app_id=kfB' imgx); by=$(dump_field 'app_id=kfB' imgy)
 
 # focus A (top-left corner stays clear of B) and hold KEY_A

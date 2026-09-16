@@ -10,6 +10,7 @@ wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=confine'
 imgx=$(dump_field 'app_id=confine' imgx); imgy=$(dump_field 'app_id=confine' imgy)
 
 # into the confine region (right half) to activate it

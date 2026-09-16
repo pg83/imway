@@ -18,6 +18,7 @@ start_client
 wait_client "state1"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+wait_rect 'app_id=deep'
 imgx=$(dump_field 'app_id=deep' imgx); imgy=$(dump_field 'app_id=deep' imgy)
 
 point_parent 60 60          # green/blue overlap: blue wins while on top

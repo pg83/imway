@@ -5,7 +5,7 @@ set -euo pipefail
 
 start_client
 wait_mapped
-sleep 0.3
+wait_rect 'app_id=cshape2'
 x=$(dump_field 'app_id=cshape2' imgx)
 y=$(dump_field 'app_id=cshape2' imgy)
 ctl "motion $((x + 40)) $((y + 40))"

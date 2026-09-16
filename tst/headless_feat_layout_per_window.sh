@@ -20,7 +20,9 @@ screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
 # B cascades over A, so click via exact dump coords: A's top-left corner is
 # clear of B, and B is on top so any point of it works
+wait_rect 'app_id=layA'
 ax=$(dump_field 'app_id=layA' imgx); ay=$(dump_field 'app_id=layA' imgy)
+wait_rect 'app_id=layB'
 bx=$(dump_field 'app_id=layB' imgx); by=$(dump_field 'app_id=layB' imgy)
 
 # focus A (red), switch it to RU

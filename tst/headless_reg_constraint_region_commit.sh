@@ -7,6 +7,7 @@ start_client
 wait_client "region ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+wait_rect 'app_id=constraint-region-commit'
 imgx=$(dump_field 'app_id=constraint-region-commit' imgx)
 imgy=$(dump_field 'app_id=constraint-region-commit' imgy)
 

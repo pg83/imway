@@ -89,6 +89,7 @@ assert_stripes() { # actual array name, expected array name, label
 
 start_client
 wait_client "sdr-alpha"
+wait_rect 'app_id=color-alpha'
 x=$(dump_field 'app_id=color-alpha' imgx)
 y=$(dump_field 'app_id=color-alpha' imgy)
 

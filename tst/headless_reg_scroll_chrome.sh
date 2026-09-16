@@ -9,6 +9,7 @@ wait_client "ready"
 sleep 0.3
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 
+wait_rect 'app_id=scroll'
 imgx=$(dump_field 'app_id=scroll' imgx); imgy=$(dump_field 'app_id=scroll' imgy)
 
 # phase A: over the content
