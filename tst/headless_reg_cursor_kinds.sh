@@ -9,12 +9,18 @@ IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_shm"
 start_client
 wait_mapped
 
-# the window's own rect, not the client content: the grip sits in its frame
-wx=$(dump_field '^imgui name=client_shm###toplevel' x)
-wy=$(dump_field '^imgui name=client_shm###toplevel' y)
-ww=$(dump_field '^imgui name=client_shm###toplevel' w)
-wh=$(dump_field '^imgui name=client_shm###toplevel' h)
-[[ -n "$wx" && -n "$ww" ]] || { echo "no toplevel window in the dump"; dump_state; exit 1; }
+# The window's own rect, not the client content: the grip sits in its frame.
+# The compositor logs the map before the frame that lays the window out, so
+# the rect arrives a frame later — on an instrumented build, several.
+have_window() {
+    wx=$(dump_field '^imgui name=client_shm###toplevel' x)
+    wy=$(dump_field '^imgui name=client_shm###toplevel' y)
+    ww=$(dump_field '^imgui name=client_shm###toplevel' w)
+    wh=$(dump_field '^imgui name=client_shm###toplevel' h)
+    [[ -n "$wx" && -n "$ww" && "$ww" -gt 0 && "$wh" -gt 0 ]]
+}
+
+await 100 have_window || { echo "no toplevel window in the dump"; dump_state; exit 1; }
 
 shape() {
     dump_field '^cursor shape' drawn
