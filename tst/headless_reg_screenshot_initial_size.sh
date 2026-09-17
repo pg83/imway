@@ -9,6 +9,7 @@ ctl "key 99 press"
 ctl "key 99 release"
 
 await 100 in_log "toplevel imway screenshot (imway-screenshot) mapped"
+wait_rect "title=imway screenshot"
 
 w=$(dump_field "title=imway screenshot" client_w)
 h=$(dump_field "title=imway screenshot" client_h)
@@ -22,40 +23,60 @@ h=$(dump_field "title=imway screenshot" client_h)
 # Grow the native window from its bottom-right edge, then invoke the same reset
 # path as the button through its 0 shortcut. Besides restoring 50% zoom/scroll,
 # Reset must request the exact initial native size again.
-x=$(dump_field "title=imway screenshot" x)
-y=$(dump_field "title=imway screenshot" y)
-ow=$(dump_field "title=imway screenshot" w)
-oh=$(dump_field "title=imway screenshot" h)
-gx=$((x + ow - 1))
-gy=$((y + oh - 1))
-
-# the corner-grip pick runs on last-frame hover: force a rendered frame
-# between the motion and the press, like click_at does, or a loaded
-# rasterizer grabs the bottom edge instead of the corner
-ctl "motion $gx $gy"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
-ctl "motion $gx $gy"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
-ctl "button left press"
-sleep 0.2
-
-for d in 20 40 60 80 100; do
-    ctl "motion $((gx + d)) $((gy + d / 2))"
-    screenshot "$XDG_RUNTIME_DIR/_grip.ppm" # one consumed drag step per frame
-done
-
-ctl "button left release"
-
-# transactional resize: the size lands when the viewer answers the drag's
-# configure with a buffer — poll, a loaded rasterizer answers late
-grown=0
-for _ in $(seq 1 30); do
-    sleep 0.2
+# Grow the native window from its bottom-right edge, then invoke the same reset
+# path as the button through its 0 shortcut. Besides restoring 50% zoom/scroll,
+# Reset must request the exact initial native size again.
+#
+# The corner-grip pick runs on last-frame hover, and a loaded rasterizer
+# grabs the bottom edge instead of the corner, which grows the height alone.
+# Forcing frames between the motion and the press makes that rare, not
+# impossible, so the whole grab is retried from wherever the corner is now.
+grown() {
     rw=$(dump_field "title=imway screenshot" client_w)
     rh=$(dump_field "title=imway screenshot" client_h)
-    (( rw > 900 && rh > 430 )) && { grown=1; break; }
+
+    [[ -n "$rw" && -n "$rh" ]] && (( rw > 900 && rh > 430 ))
+}
+
+drag_corner() {
+    local x y ow oh gx gy d
+
+    x=$(dump_field "title=imway screenshot" x)
+    y=$(dump_field "title=imway screenshot" y)
+    ow=$(dump_field "title=imway screenshot" w)
+    oh=$(dump_field "title=imway screenshot" h)
+    [[ -n "$x" && -n "$ow" ]] || return 1
+    gx=$((x + ow - 1))
+    gy=$((y + oh - 1))
+
+    ctl "motion $gx $gy"
+    screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+    ctl "motion $gx $gy"
+    screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+    ctl "button left press"
+    sleep 0.2
+
+    for d in 20 40 60 80 100; do
+        ctl "motion $((gx + d)) $((gy + d / 2))"
+        screenshot "$XDG_RUNTIME_DIR/_grip.ppm" # one consumed drag step per frame
+    done
+
+    ctl "button left release"
+
+    # transactional resize: the size lands when the viewer answers the drag's
+    # configure with a buffer, and a loaded rasterizer answers late
+    await 30 grown
+}
+
+rw=0
+rh=0
+resized=0
+
+for _ in $(seq 1 6); do
+    drag_corner && { resized=1; break; }
 done
-(( grown )) || {
+
+(( resized )) || {
     echo "screenshot window did not grow: ${rw}x${rh}"
     dump_state
     exit 1
