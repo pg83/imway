@@ -177,7 +177,14 @@ jobs:
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
           mkdir -p "$RUNNER_TEMP/profiles"
-          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%16m.profraw"
+          # %m is online merging: every process writes into a shared pool
+          # under a lock. This suite kills compositors and clients where they
+          # stand, and one killed mid-merge leaves an accumulator that every
+          # later process merges into again. That is where the report's
+          # impossible hit counts came from. One file per process instead,
+          # named per scenario by dev/run_test.py, so a killed process takes
+          # only its own profile down with it.
+          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k &&

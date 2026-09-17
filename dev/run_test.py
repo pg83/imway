@@ -206,6 +206,16 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     input_dir = os.path.join(rt, "input")
     os.makedirs(input_dir, exist_ok=True)
 
+    # A coverage run points LLVM_PROFILE_FILE at a directory. Name this
+    # scenario's profiles after it: pids are reused over a ten minute run,
+    # and two processes sharing a name means one of them is lost.
+    profile = env.get("LLVM_PROFILE_FILE")
+
+    if profile:
+        env["LLVM_PROFILE_FILE"] = os.path.join(
+            os.path.dirname(profile),
+            os.path.basename(scenario)[:-3] + "-%p.profraw")
+
     env.update(
         XDG_RUNTIME_DIR=rt,
         WAYLAND_DISPLAY="imway-test",

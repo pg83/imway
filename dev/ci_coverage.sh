@@ -30,29 +30,29 @@ mkdir -p "$out/html"
 
 profiles=("$profile_dir"/*.profraw)
 [[ -e "${profiles[0]}" ]] || { echo "no profiles in $profile_dir" >&2; exit 1; }
-echo "merging ${#profiles[@]} profiles"
+echo "found ${#profiles[@]} profiles"
 
 # Clients killed mid-write leave truncated profiles behind. Merging the lot
 # with -failure-mode=warn takes those in too, and what comes out is not a
 # smaller count but a wrong one: a line that runs once a session reads
 # hundreds of trillions of hits, and a line that ran can come back zero.
 # Check each profile on its own instead and drop the ones that do not load.
-good=()
-bad=0
+good_list="$out/readable-profiles.txt"
 
-for profile in "${profiles[@]}"; do
-    if "$profdata" merge -sparse "$profile" -o "$out/probe.profdata" 2>/dev/null; then
-        good+=("$profile")
-    else
-        bad=$((bad + 1))
-    fi
-done
+printf '%s\n' "${profiles[@]}" |
+    xargs -P "$(nproc)" -I{} sh -c '
+        tmp=$(mktemp)
+        if "$0" merge -sparse "$1" -o "$tmp" 2>/dev/null; then
+            printf "%s\n" "$1"
+        fi
+        rm -f "$tmp"
+    ' "$profdata" {} > "$good_list"
 
-rm -f "$out/probe.profdata"
-echo "merging ${#good[@]} profiles, dropping $bad unreadable"
+mapfile -t good < "$good_list"
+echo "merging ${#good[@]} of ${#profiles[@]} profiles"
 [[ ${#good[@]} -gt 0 ]] || { echo "no readable profiles in $profile_dir" >&2; exit 1; }
 
-"$profdata" merge -sparse "${good[@]}" -o "$out/coverage.profdata"
+"$profdata" merge -sparse -f "$good_list" -o "$out/coverage.profdata"
 "$cov" export "$binary" -instr-profile="$out/coverage.profdata" -format=lcov \
     -ignore-filename-regex="$ignore" > "$out/coverage.info"
 "$cov" report "$binary" -instr-profile="$out/coverage.profdata" \
