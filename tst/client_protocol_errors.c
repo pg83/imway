@@ -30,6 +30,8 @@
 #include <ext-image-capture-source-v1-client-protocol.h>
 #include <ext-image-copy-capture-v1-client-protocol.h>
 #include <wlr-screencopy-unstable-v1-client-protocol.h>
+#include <color-management-v1-client-protocol.h>
+#include <xdg-toplevel-drag-v1-client-protocol.h>
 
 static struct wl_compositor* compositor;
 static struct wl_subcompositor* subcompositor;
@@ -54,6 +56,8 @@ static struct ext_output_image_capture_source_manager_v1* cap_source;
 static struct ext_image_copy_capture_manager_v1* cap_mgr;
 static struct zwlr_screencopy_manager_v1* screencopy;
 static struct wl_output* output;
+static struct wp_color_manager_v1* colour;
+static struct xdg_toplevel_drag_manager_v1* drag_mgr;
 
 static void registry_global(void* data, struct wl_registry* registry, uint32_t name,
                             const char* interface, uint32_t version) {
@@ -112,6 +116,11 @@ static void registry_global(void* data, struct wl_registry* registry, uint32_t n
             &zwlr_screencopy_manager_v1_interface, 1);
     else if (!strcmp(interface, wl_output_interface.name) && !output)
         output = wl_registry_bind(registry, name, &wl_output_interface, 1);
+    else if (!strcmp(interface, wp_color_manager_v1_interface.name))
+        colour = wl_registry_bind(registry, name, &wp_color_manager_v1_interface, 1);
+    else if (!strcmp(interface, xdg_toplevel_drag_manager_v1_interface.name))
+        drag_mgr = wl_registry_bind(registry, name,
+            &xdg_toplevel_drag_manager_v1_interface, 1);
 }
 
 static void registry_global_remove(void* data, struct wl_registry* registry, uint32_t name) {
@@ -135,8 +144,10 @@ static int expect_error(struct wl_display* display, const char* interface_name, 
     uint32_t object_id = 0;
     uint32_t code = wl_display_get_protocol_error(display, &interface, &object_id);
 
-    if (wl_display_get_error(display) != EPROTO || !interface ||
-        strcmp(interface->name, interface_name) || code != expected) {
+    // interface_name may be NULL: a request marked destructor takes the
+    // proxy with it, and libwayland then has no object to name
+    if (wl_display_get_error(display) != EPROTO || code != expected ||
+        (interface_name && (!interface || strcmp(interface->name, interface_name)))) {
         fprintf(stderr, "unexpected protocol error: iface=%s id=%u code=%u errno=%d\n",
                 interface ? interface->name : "(none)", object_id, code,
                 wl_display_get_error(display));
@@ -296,6 +307,45 @@ static struct ext_image_copy_capture_frame_v1* captured_frame(struct wl_display*
     return frame;
 }
 
+static uint32_t wlr_w, wlr_h, wlr_stride, wlr_format;
+static int wlr_got_buffer;
+
+static void wlr_buffer(void* d, struct zwlr_screencopy_frame_v1* f,
+                       uint32_t format, uint32_t w, uint32_t h, uint32_t stride) {
+    (void)d; (void)f;
+    wlr_format = format;
+    wlr_w = w;
+    wlr_h = h;
+    wlr_stride = stride;
+    wlr_got_buffer = 1;
+}
+static void wlr_flags(void* d, struct zwlr_screencopy_frame_v1* f, uint32_t fl) {
+    (void)d; (void)f; (void)fl;
+}
+static void wlr_ready(void* d, struct zwlr_screencopy_frame_v1* f,
+                      uint32_t hi, uint32_t lo, uint32_t ns) {
+    (void)d; (void)f; (void)hi; (void)lo; (void)ns;
+}
+static void wlr_failed(void* d, struct zwlr_screencopy_frame_v1* f) { (void)d; (void)f; }
+static void wlr_damage(void* d, struct zwlr_screencopy_frame_v1* f,
+                       uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
+    (void)d; (void)f; (void)x; (void)y; (void)w; (void)h;
+}
+static void wlr_dmabuf(void* d, struct zwlr_screencopy_frame_v1* f,
+                       uint32_t fmt, uint32_t w, uint32_t h) {
+    (void)d; (void)f; (void)fmt; (void)w; (void)h;
+}
+static void wlr_buffer_done(void* d, struct zwlr_screencopy_frame_v1* f) { (void)d; (void)f; }
+static const struct zwlr_screencopy_frame_v1_listener wlr_listener = {
+    .buffer = wlr_buffer,
+    .flags = wlr_flags,
+    .ready = wlr_ready,
+    .failed = wlr_failed,
+    .damage = wlr_damage,
+    .linux_dmabuf = wlr_dmabuf,
+    .buffer_done = wlr_buffer_done,
+};
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         return 2;
@@ -315,11 +365,100 @@ int main(int argc, char** argv) {
         !seat || !data_manager || !shm || !viewporter || !tearing || !fifo_mgr || !timing ||
         !content_type || !alpha_mod || !representation || !dmabuf || !exporter ||
         !icons || !spb || !wm_base3 || !security || !cap_source || !cap_mgr ||
-        !screencopy || !output) {
+        !screencopy || !output || !colour || !drag_mgr) {
         return 2;
     }
 
     struct wl_surface* surface = wl_compositor_create_surface(compositor);
+
+    if (!strcmp(argv[1], "screencopy-twice")) {
+        struct zwlr_screencopy_frame_v1* frame =
+            zwlr_screencopy_manager_v1_capture_output(screencopy, 0, output);
+
+        zwlr_screencopy_frame_v1_add_listener(frame, &wlr_listener, NULL);
+
+        while (!wlr_got_buffer && wl_display_dispatch(display) != -1) {
+        }
+
+        int size = (int)wlr_stride * (int)wlr_h;
+        struct wl_shm_pool* pool = make_pool(size);
+
+        if (!pool) return 2;
+
+        struct wl_buffer* buf = wl_shm_pool_create_buffer(pool, 0, (int)wlr_w, (int)wlr_h,
+                                                          (int)wlr_stride, wlr_format);
+
+        zwlr_screencopy_frame_v1_copy(frame, buf);
+        zwlr_screencopy_frame_v1_copy(frame, buf);
+
+        return expect_error(display, zwlr_screencopy_frame_v1_interface.name,
+                            ZWLR_SCREENCOPY_FRAME_V1_ERROR_ALREADY_USED);
+    }
+
+    if (!strcmp(argv[1], "drag-source-reused")) {
+        struct wl_data_source* source = wl_data_device_manager_create_data_source(data_manager);
+
+        xdg_toplevel_drag_manager_v1_get_xdg_toplevel_drag(drag_mgr, source);
+        // the same source cannot carry a second drag object
+        xdg_toplevel_drag_manager_v1_get_xdg_toplevel_drag(drag_mgr, source);
+
+        return expect_error(display, xdg_toplevel_drag_manager_v1_interface.name,
+                            XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE);
+    }
+
+    if (!strcmp(argv[1], "colour-primaries-twice")) {
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+
+        wp_image_description_creator_params_v1_set_primaries(
+            params, 680000, 320000, 265000, 690000, 150000, 60000, 312700, 329000);
+        wp_image_description_creator_params_v1_set_primaries(
+            params, 640000, 330000, 300000, 600000, 150000, 60000, 312700, 329000);
+
+        return expect_error(display, wp_image_description_creator_params_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET);
+    }
+
+    if (!strcmp(argv[1], "colour-bad-luminance")) {
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        wp_image_description_creator_params_v1_set_primaries_named(
+            params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+        // a floor above the ceiling
+        wp_image_description_creator_params_v1_set_luminances(params, 1000000, 1, 1);
+        wp_image_description_creator_params_v1_create(params);
+
+        // create is a destructor, so the object the error names is already
+        // gone on this side
+        return expect_error(display, NULL,
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
+    }
+
+    if (!strcmp(argv[1], "colour-surface-dead")) {
+        struct wp_color_management_surface_v1* cms =
+            wp_color_manager_v1_get_surface(colour, surface);
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+        wp_image_description_creator_params_v1_set_primaries_named(
+            params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+
+        struct wp_image_description_v1* desc =
+            wp_image_description_creator_params_v1_create(params);
+
+        wl_display_roundtrip(display);
+        wl_surface_destroy(surface);
+        wp_color_management_surface_v1_set_image_description(
+            cms, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+
+        return expect_error(display, wp_color_management_surface_v1_interface.name,
+                            WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT);
+    }
 
     if (!strcmp(argv[1], "capture-bad-option")) {
         struct ext_image_capture_source_v1* src =
