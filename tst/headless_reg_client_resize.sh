@@ -11,25 +11,31 @@ start_client client-resize
 wait_client "resize client mapped"
 wait_rect 'app_id=resize'
 
-x=$(dump_field 'app_id=resize' imgx)
-y=$(dump_field 'app_id=resize' imgy)
 cw=$(dump_field 'app_id=resize' client_w)
 ch=$(dump_field 'app_id=resize' client_h)
 
 asked() { grep -q "resize asked" "$CLIENT_LOG"; }
 
-# the press has to land on the client, and pointer focus is worked out from
-# a rendered frame, so keep trying until the client has asked
-for _ in $(seq 1 20); do
-    ctl "motion $((x + 40)) $((y + 40))"
-    screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-    ctl "motion $((x + 41)) $((y + 40))"
-    screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-    ctl "button left press"
-    sleep 0.3
-    asked && break
-    ctl "button left release"
-    sleep 0.3
+# The press has to land on the client, and pointer focus is worked out from
+# a rendered frame, so keep aiming until the client has asked. The rect is
+# re-read each time: the window is still settling into its decorations
+# while this runs.
+for _ in $(seq 1 25); do
+    x=$(dump_field 'app_id=resize' imgx)
+    y=$(dump_field 'app_id=resize' imgy)
+
+    if [[ -n "$x" && -n "$y" ]]; then
+        ctl "motion $((x + 40)) $((y + 40))"
+        screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+        ctl "motion $((x + 41)) $((y + 40))"
+        screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+        ctl "button left press"
+        sleep 0.4
+        asked && break
+        ctl "button left release"
+    fi
+
+    sleep 0.4
 done
 
 wait_client "resize asked"
