@@ -10,12 +10,6 @@ set -euo pipefail
 
 count() { grep -c "$1" "$IMWAY_LOG" || true; }
 
-# after a refusal the field takes the focus back, and anything typed before
-# that lands nowhere
-refocused_after() { # <count before>
-    [[ "$(count 'lockscreen refocused')" -gt "$1" ]]
-}
-
 ctl "set appearance.lock_blur false"
 await 20 in_log "control: set appearance.lock_blur" || { echo "settings are not reachable"; exit 1; }
 
@@ -23,8 +17,6 @@ ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 rele
 await_imgui '##lock-overlay' || { echo "the session did not lock"; dump_state; exit 1; }
 
 # nothing typed: Enter still submits, and an empty password is refused
-focus0=$(count 'lockscreen refocused')
-
 ctl "key 28 press"; ctl "key 28 release"
 await 200 in_log "lockscreen rejected" || {
     echo "an empty password was not refused"
@@ -32,7 +24,7 @@ await 200 in_log "lockscreen rejected" || {
     exit 1
 }
 
-await 200 refocused_after "$focus0" || { echo "the field did not come back"; exit 1; }
+await_typing '##lock-overlay' || { echo "the field did not come back"; dump_state; exit 1; }
 
 [[ "$(dump_field '^captured ' kb)" = 1 ]] || { echo "the lock screen let the keyboard go"; exit 1; }
 
@@ -44,7 +36,6 @@ ctl "set advanced.pam_service $long"
 await 20 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
 
 rejections=$(count 'lockscreen rejected')
-focus1=$(count 'lockscreen refocused')
 
 ctl "type nope"
 sleep 0.4
@@ -58,7 +49,7 @@ await 300 refused_again || {
     exit 1
 }
 
-await 200 refocused_after "$focus1" || { echo "the field did not come back"; exit 1; }
+await_typing '##lock-overlay' || { echo "the field did not come back"; dump_state; exit 1; }
 
 for _ in 1 2 3; do
     ctl "key 45 press"; ctl "key 45 release" # KEY_X

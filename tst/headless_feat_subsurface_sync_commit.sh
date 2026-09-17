@@ -18,17 +18,29 @@ print(g, y)
 PY
 }
 
+# the counts are read from the frame that carries the state, not from
+# whichever one a fixed sleep happens to reach
+reached() { # <ppm> <condition over $g and $y>
+    screenshot "$1" || return 1
+    read -r g y < <(counts "$1")
+    eval "[[ $2 ]]"
+}
+
 start_client
 wait_client "state1"
-sleep 0.3
-screenshot "$XDG_RUNTIME_DIR/s1.ppm"
-read -r g1 y1 < <(counts "$XDG_RUNTIME_DIR/s1.ppm")
-echo "state1: green=$g1 yellow=$y1"
-(( g1 > 7000 && y1 < 100 )) || { echo "sync child not visible initially"; exit 1; }
+
+await 100 reached "$XDG_RUNTIME_DIR/s1.ppm" '$g -gt 7000 && $y -lt 100' || {
+    echo "sync child not visible initially: green=${g:-?} yellow=${y:-?}"
+    exit 1
+}
 
 ctl "key 2 press"; ctl "key 2 release"   # KEY_1: child-only commit
 wait_client "state2"
-sleep 0.4
+
+# Nothing should reach the screen here, so there is no change to wait for.
+# Two composed frames after the client says it committed are the most the
+# compositor is going to be given, and then the screen has to be unchanged.
+screenshot "$XDG_RUNTIME_DIR/s2.ppm"
 screenshot "$XDG_RUNTIME_DIR/s2.ppm"
 read -r g2 y2 < <(counts "$XDG_RUNTIME_DIR/s2.ppm")
 echo "state2: green=$g2 yellow=$y2"
@@ -37,10 +49,10 @@ echo "state2: green=$g2 yellow=$y2"
 
 ctl "key 3 press"; ctl "key 3 release"   # KEY_2: parent commit
 wait_client "state3"
-sleep 0.4
-screenshot "$XDG_RUNTIME_DIR/s3.ppm"
-read -r g3 y3 < <(counts "$XDG_RUNTIME_DIR/s3.ppm")
-echo "state3: green=$g3 yellow=$y3"
-(( y3 > 7000 && g3 < 100 )) || { echo "parent commit did not apply the cached child state"; exit 1; }
+
+await 100 reached "$XDG_RUNTIME_DIR/s3.ppm" '$y -gt 7000 && $g -lt 100' || {
+    echo "parent commit did not apply the cached child state: green=${g:-?} yellow=${y:-?}"
+    exit 1
+}
 
 echo "OK: sync child state cached until the parent commit"
