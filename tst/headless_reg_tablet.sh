@@ -34,10 +34,22 @@ ctl "tablet motion $((cx + 20)) $((cy + 10)) 0.75"
 wait_client "motion 70 70"
 wait_client "pressure 49151"
 
+# every other axis the tool can carry, in one frame
+ctl "tablet motion $((cx + 20)) $((cy + 10)) distance=0.25 tilt=10,-5 rotation=45 slider=0.5 wheel=15,2 button=330,press"
+wait_client "distance 16383"
+wait_client "tilt 10 -5"
+wait_client "rotation 45"
+wait_client "slider 32767"
+wait_client "wheel 15 2"
+wait_client "button 330 1"
+
+ctl "tablet motion $((cx + 20)) $((cy + 10)) button=330,release"
+wait_client "button 330 0"
+
 ctl "tablet up $((cx + 20)) $((cy + 10))"
 wait_client "tablet: up"
 
 ctl "tablet proximity_out $((cx + 20)) $((cy + 10))"
 wait_client "prox_out"
 
-echo "OK: tablet-v2 delivered proximity/down/motion/pressure/up with local coords"
+echo "OK: tablet-v2 delivered proximity, the tool axes and its button with local coords"

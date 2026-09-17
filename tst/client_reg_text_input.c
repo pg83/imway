@@ -39,9 +39,17 @@ static void ti_leave(void* d, struct zwp_text_input_v3* t, struct wl_surface* s)
     (void)d; (void)t; (void)s;
     ti_entered = 0;
 }
+static char ti_preedit_text[128];
+static int32_t ti_preedit_begin, ti_preedit_end;
+static int ti_preedit_seen;
+
 static void ti_preedit(void* d, struct zwp_text_input_v3* t, const char* text,
                        int32_t a, int32_t b) {
-    (void)d; (void)t; (void)text; (void)a; (void)b;
+    (void)d; (void)t;
+    snprintf(ti_preedit_text, sizeof(ti_preedit_text), "%s", text ? text : "");
+    ti_preedit_begin = a;
+    ti_preedit_end = b;
+    ti_preedit_seen++;
 }
 static void ti_commit_string(void* d, struct zwp_text_input_v3* t, const char* text) {
     (void)d; (void)t;
@@ -50,8 +58,14 @@ static void ti_commit_string(void* d, struct zwp_text_input_v3* t, const char* t
         ti_commit_seen = 1;
     }
 }
+static uint32_t ti_delete_before, ti_delete_after;
+static int ti_delete_seen;
+
 static void ti_delete(void* d, struct zwp_text_input_v3* t, uint32_t a, uint32_t b) {
-    (void)d; (void)t; (void)a; (void)b;
+    (void)d; (void)t;
+    ti_delete_before = a;
+    ti_delete_after = b;
+    ti_delete_seen++;
 }
 static void ti_done(void* d, struct zwp_text_input_v3* t, uint32_t serial) {
     (void)d; (void)t; (void)serial;
@@ -76,16 +90,27 @@ static void im_deactivate(void* d, struct zwp_input_method_v2* m) {
     (void)d; (void)m;
     im_active = 0;
 }
+static char im_surrounding_text[128];
+static uint32_t im_cursor, im_anchor, im_hint, im_purpose;
+static int im_surrounding_seen, im_content_seen;
+
 static void im_surrounding(void* d, struct zwp_input_method_v2* m,
                            const char* t, uint32_t c, uint32_t a) {
-    (void)d; (void)m; (void)t; (void)c; (void)a;
+    (void)d; (void)m;
+    snprintf(im_surrounding_text, sizeof(im_surrounding_text), "%s", t ? t : "");
+    im_cursor = c;
+    im_anchor = a;
+    im_surrounding_seen++;
 }
 static void im_change_cause(void* d, struct zwp_input_method_v2* m, uint32_t c) {
     (void)d; (void)m; (void)c;
 }
 static void im_content_type(void* d, struct zwp_input_method_v2* m,
                             uint32_t h, uint32_t p) {
-    (void)d; (void)m; (void)h; (void)p;
+    (void)d; (void)m;
+    im_hint = h;
+    im_purpose = p;
+    im_content_seen++;
 }
 static void im_done(void* d, struct zwp_input_method_v2* m) {
     (void)d; (void)m;
@@ -144,6 +169,52 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     while (!im_active && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    // An update while the input method is already active. The compositor
+    // forwards the new surrounding text and content type without activating
+    // anything a second time.
+    zwp_text_input_v3_set_surrounding_text(ti, "hello world", 5, 5);
+    zwp_text_input_v3_set_content_type(ti, ZWP_TEXT_INPUT_V3_CONTENT_HINT_SPELLCHECK,
+                                       ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_EMAIL);
+    zwp_text_input_v3_commit(ti);
+
+    while (!im_surrounding_seen && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (strcmp(im_surrounding_text, "hello world") || im_cursor != 5 || im_anchor != 5) {
+        fprintf(stderr, "surrounding text came through as \"%s\" %u/%u\n",
+                im_surrounding_text, im_cursor, im_anchor);
+        return 1;
+    }
+
+    while (!im_content_seen && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (im_purpose != ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_EMAIL) {
+        fprintf(stderr, "content purpose came through as %u\n", im_purpose);
+        return 1;
+    }
+
+    // The IME shows a preedit and asks for two characters behind the cursor
+    // to be taken out, both of which reach the application as they are.
+    zwp_input_method_v2_set_preedit_string(im, "compo", 1, 4);
+    zwp_input_method_v2_delete_surrounding_text(im, 2, 0);
+    zwp_input_method_v2_commit(im, 0);
+
+    while (!ti_preedit_seen && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (strcmp(ti_preedit_text, "compo") || ti_preedit_begin != 1 || ti_preedit_end != 4) {
+        fprintf(stderr, "preedit came through as \"%s\" %d..%d\n",
+                ti_preedit_text, ti_preedit_begin, ti_preedit_end);
+        return 1;
+    }
+
+    if (!ti_delete_seen || ti_delete_before != 2 || ti_delete_after != 0) {
+        fprintf(stderr, "delete_surrounding_text came through as %u/%u (seen %d)\n",
+                ti_delete_before, ti_delete_after, ti_delete_seen);
+        return 1;
     }
 
     // the IME commits a string

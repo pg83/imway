@@ -69,13 +69,42 @@ static void tool_motion(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t x, wl_
     motion_y = wl_fixed_to_int(y);
 }
 static void tool_pressure(void* d, struct zwp_tablet_tool_v2* t, uint32_t p) { (void)d;(void)t; saw_pressure = 1; pressure_v = p; }
-static void tool_distance(void* d, struct zwp_tablet_tool_v2* t, uint32_t v) { (void)d;(void)t;(void)v; }
-static void tool_tilt(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t x, wl_fixed_t y) { (void)d;(void)t;(void)x;(void)y; }
-static void tool_rotation(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t r) { (void)d;(void)t;(void)r; }
-static void tool_slider(void* d, struct zwp_tablet_tool_v2* t, int32_t v) { (void)d;(void)t;(void)v; }
-static void tool_wheel(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t deg, int32_t clicks) { (void)d;(void)t;(void)deg;(void)clicks; }
+static int saw_distance, saw_tilt, saw_rotation, saw_slider, saw_wheel, saw_button;
+static uint32_t distance_v, button_v, button_state;
+static int tilt_x, tilt_y, rotation_v, slider_v, wheel_deg, wheel_clicks;
+
+static void tool_distance(void* d, struct zwp_tablet_tool_v2* t, uint32_t v) {
+    (void)d;(void)t;
+    saw_distance = 1;
+    distance_v = v;
+}
+static void tool_tilt(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t x, wl_fixed_t y) {
+    (void)d;(void)t;
+    saw_tilt = 1;
+    tilt_x = wl_fixed_to_int(x);
+    tilt_y = wl_fixed_to_int(y);
+}
+static void tool_rotation(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t r) {
+    (void)d;(void)t;
+    saw_rotation = 1;
+    rotation_v = wl_fixed_to_int(r);
+}
+static void tool_slider(void* d, struct zwp_tablet_tool_v2* t, int32_t v) {
+    (void)d;(void)t;
+    saw_slider = 1;
+    slider_v = v;
+}
+static void tool_wheel(void* d, struct zwp_tablet_tool_v2* t, wl_fixed_t deg, int32_t clicks) {
+    (void)d;(void)t;
+    saw_wheel = 1;
+    wheel_deg = wl_fixed_to_int(deg);
+    wheel_clicks = clicks;
+}
 static void tool_button(void* d, struct zwp_tablet_tool_v2* t, uint32_t serial, uint32_t button, uint32_t state) {
-    (void)d;(void)t;(void)serial;(void)button;(void)state;
+    (void)d;(void)t;(void)serial;
+    saw_button = 1;
+    button_v = button;
+    button_state = state;
 }
 static void tool_frame(void* d, struct zwp_tablet_tool_v2* t, uint32_t time) {
     (void)d; (void)t; (void)time;
@@ -84,8 +113,15 @@ static void tool_frame(void* d, struct zwp_tablet_tool_v2* t, uint32_t time) {
     if (saw_up) printf("tablet: up\n");
     if (saw_motion) printf("tablet: motion %d %d\n", motion_x, motion_y);
     if (saw_pressure) printf("tablet: pressure %u\n", pressure_v);
+    if (saw_distance) printf("tablet: distance %u\n", distance_v);
+    if (saw_tilt) printf("tablet: tilt %d %d\n", tilt_x, tilt_y);
+    if (saw_rotation) printf("tablet: rotation %d\n", rotation_v);
+    if (saw_slider) printf("tablet: slider %d\n", slider_v);
+    if (saw_wheel) printf("tablet: wheel %d %d\n", wheel_deg, wheel_clicks);
+    if (saw_button) printf("tablet: button %u %u\n", button_v, button_state);
     if (saw_prox_out) printf("tablet: prox_out\n");
     saw_prox_in = saw_prox_out = saw_down = saw_up = saw_motion = saw_pressure = 0;
+    saw_distance = saw_tilt = saw_rotation = saw_slider = saw_wheel = saw_button = 0;
 }
 static const struct zwp_tablet_tool_v2_listener tool_listener = {
     tool_type, tool_serial, tool_id_wacom, tool_cap, tool_done, tool_removed,

@@ -369,8 +369,11 @@ void ControlImpl::handleLine(StringView cmd) {
 
         comp->entry->scroll(ev);
     } else if (verb == "tablet"_sv) {
-        // tablet <proximity_in|proximity_out|down|up|motion> <x> <y> [pressure]
-        StringView phase, rest, xs, ys, ps;
+        // tablet <proximity_in|proximity_out|down|up|motion> <x> <y> [axis ...]
+        // An axis is name=value, or a bare number for the pressure, which is
+        // how this command started out. tilt, wheel and button take a pair:
+        // tilt=<x>,<y>  wheel=<degrees>,<clicks>  button=<code>,<press|release>
+        StringView phase, rest, xs, ys;
 
         args.split(' ', phase, rest);
 
@@ -379,15 +382,63 @@ void ControlImpl::handleLine(StringView cmd) {
         ev.phase = phase == "proximity_in"_sv ? TabletPhase::proximityIn : phase == "proximity_out"_sv ? TabletPhase::proximityOut : phase == "down"_sv ? TabletPhase::tipDown : phase == "up"_sv ? TabletPhase::tipUp : TabletPhase::motion;
 
         if (rest.split(' ', xs, ys)) {
-            StringView yy;
+            StringView yy, tail;
 
-            ys.split(' ', yy, ps);
+            if (!ys.split(' ', yy, tail)) {
+                yy = ys;
+                tail = {};
+            }
+
             ev.x = parseFloat(xs);
-            ev.y = parseFloat(yy.empty() ? ys : yy);
+            ev.y = parseFloat(yy);
 
-            if (!ps.empty()) {
-                ev.pressureSet = true;
-                ev.pressure = parseFloat(ps);
+            while (!tail.empty()) {
+                StringView token, more;
+
+                if (!tail.split(' ', token, more)) {
+                    token = tail;
+                    more = {};
+                }
+
+                tail = more;
+
+                StringView key, value;
+
+                if (!token.split('=', key, value)) {
+                    ev.pressureSet = true;
+                    ev.pressure = parseFloat(token);
+
+                    continue;
+                }
+
+                StringView first, second;
+                bool pair = value.split(',', first, second);
+
+                if (key == "pressure"_sv) {
+                    ev.pressureSet = true;
+                    ev.pressure = parseFloat(value);
+                } else if (key == "distance"_sv) {
+                    ev.distanceSet = true;
+                    ev.distance = parseFloat(value);
+                } else if (key == "rotation"_sv) {
+                    ev.rotationSet = true;
+                    ev.rotation = parseFloat(value);
+                } else if (key == "slider"_sv) {
+                    ev.sliderSet = true;
+                    ev.slider = parseFloat(value);
+                } else if (key == "tilt"_sv && pair) {
+                    ev.tiltSet = true;
+                    ev.tiltX = parseFloat(first);
+                    ev.tiltY = parseFloat(second);
+                } else if (key == "wheel"_sv && pair) {
+                    ev.wheelSet = true;
+                    ev.wheelDegrees = parseFloat(first);
+                    ev.wheelClicks = (i32)second.stou();
+                } else if (key == "button"_sv && pair) {
+                    ev.buttonSet = true;
+                    ev.button = (u32)first.stou();
+                    ev.buttonPressed = second == "press"_sv;
+                }
             }
         }
 
