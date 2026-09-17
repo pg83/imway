@@ -94,6 +94,11 @@ jobs:
           printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
             sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
           sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
           vulkaninfo --summary || true
 
       - name: Run full test suite
@@ -159,6 +164,11 @@ jobs:
           printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
             sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
           sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
 
       - name: Run full test suite with coverage
         run: |
@@ -296,6 +306,11 @@ jobs:
           printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
             sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
           sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
 
       - name: Run full test suite with ASan
         run: |
@@ -406,6 +421,11 @@ jobs:
           printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
             sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
           sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
 
       - name: Run full test suite with UBSan
         run: |
