@@ -54,6 +54,7 @@
 
 #include <std/dbg/verify.h>
 #include <std/ios/sys.h>
+#include <std/ios/fs_utils.h>
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
 #include <std/mem/small_obj_allocator.h>
@@ -73,6 +74,25 @@ namespace {
     }
 
     void runAutostart(Composer& c) {
+#ifdef IMWAY_FOR_TESTS
+        // The setting is normally restored before this runs, and a scenario
+        // has no way to reach it that early, so the test build reads it out
+        // of a file: the commands are one per line, which an environment
+        // variable cannot carry.
+        Buffer seededList;
+
+        if (const char* path = getenv("IMWAY_AUTOSTART_FILE"); path && *path) {
+            Buffer p{StringView(path)};
+
+            try {
+                readFileContent(p, seededList);
+                c.settings->setAutostart(sv(seededList));
+            } catch (...) {
+                *(c.log) << "imway: autostart list unreadable: "_sv << Exception::current() << endL;
+            }
+        }
+#endif
+
         StringView commands = c.settings->autostart();
         Buffer display;
         StringBuilder builder((Buffer&&)display);

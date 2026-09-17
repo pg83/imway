@@ -72,6 +72,30 @@ await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/wheeled.ppm" || 
     echo "the wheel did not zoom the canvas"; exit 1; }
 
 tap 11 # 0 resets
+
+# Keys the editor has no use for must leave it alone. They still travel the
+# whole input path into it, which is where the keymap and the button
+# mapping live, so the sweep is over the punctuation that path names one by
+# one, plus the two mouse buttons that are not the primary.
+await 50 settled "$XDG_RUNTIME_DIR/s2.ppm" "$XDG_RUNTIME_DIR/idle.ppm" || {
+    echo "the editor never settled before the sweep"; exit 1; }
+
+for code in 40 51 52 53 39 26 43 27 41 15 57; do
+    ctl "key $code press"; ctl "key $code release"
+done
+
+ctl "button right press"; ctl "button right release"
+ctl "button middle press"; ctl "button middle release"
+
+unchanged() {
+    screenshot "$XDG_RUNTIME_DIR/swept.ppm" &&
+        [[ "$(region_diff "$XDG_RUNTIME_DIR/idle.ppm" "$XDG_RUNTIME_DIR/swept.ppm" \
+            0 30 1280 780)" -lt 500 ]]
+}
+
+viewer_up || { echo "a stray key closed the editor"; exit 1; }
+await 50 unchanged || { echo "a key the editor ignores changed the view"; exit 1; }
+
 tap 28 # Enter saves
 await 200 test -s "$shots/crop.png" || { echo "Enter did not save the crop"; cat "$IMWAY_LOG"; exit 1; }
 [[ "$(head -c 4 "$shots/crop.png" | od -An -tx1 | tr -d ' \n')" == 89504e47 ]] || { echo "crop.png is not a PNG"; exit 1; }
