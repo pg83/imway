@@ -99,6 +99,12 @@ jobs:
           # then refuses, which is the whole conversation
           printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
             sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
           vulkaninfo --summary || true
 
       - name: Run full test suite
@@ -169,6 +175,12 @@ jobs:
           # then refuses, which is the whole conversation
           printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
             sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
 
       - name: Run full test suite with coverage
         run: |
@@ -318,6 +330,12 @@ jobs:
           # then refuses, which is the whole conversation
           printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
             sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
 
       - name: Run full test suite with ASan
         run: |
@@ -433,6 +451,12 @@ jobs:
           # then refuses, which is the whole conversation
           printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
             sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
 
       - name: Run full test suite with UBSan
         run: |
