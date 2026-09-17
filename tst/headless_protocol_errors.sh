@@ -15,8 +15,15 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             commit-timer-dead-surface \
             content-type-twice alpha-mod-twice alpha-mod-dead-surface \
             dmabuf-params-incomplete representation-dead-alpha \
-            representation-dead-coefficients representation-dead-chroma; do
-    "$IMWAY_CLIENT" "$mode"
+            representation-dead-coefficients representation-dead-chroma \
+            negative-max-size dmabuf-params-plane-gap export-plain-surface \
+            icon-not-shm icon-not-square reposition-bad-positioner \
+            security-bad-listen-fd security-incomplete security-engine-after-commit \
+            security-appid-after-commit security-instance-after-commit \
+            security-commit-twice \
+            capture-bad-option capture-bad-damage capture-attach-after \
+            capture-damage-after capture-twice; do
+    "$IMWAY_CLIENT" "$mode" || { echo "the compositor let $mode through"; exit 1; }
     expect_alive "compositor died on $mode"
 done
 

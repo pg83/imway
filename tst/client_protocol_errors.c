@@ -9,6 +9,8 @@
 #include <string.h>
 
 #include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include <wayland-client.h>
@@ -21,10 +23,18 @@
 #include <alpha-modifier-v1-client-protocol.h>
 #include <color-representation-v1-client-protocol.h>
 #include <linux-dmabuf-v1-client-protocol.h>
+#include <xdg-foreign-unstable-v2-client-protocol.h>
+#include <xdg-toplevel-icon-v1-client-protocol.h>
+#include <single-pixel-buffer-v1-client-protocol.h>
+#include <security-context-v1-client-protocol.h>
+#include <ext-image-capture-source-v1-client-protocol.h>
+#include <ext-image-copy-capture-v1-client-protocol.h>
+#include <wlr-screencopy-unstable-v1-client-protocol.h>
 
 static struct wl_compositor* compositor;
 static struct wl_subcompositor* subcompositor;
 static struct xdg_wm_base* wm_base;
+static struct xdg_wm_base* wm_base3; // reposition arrived in version 3
 static struct wl_seat* seat;
 static struct wl_data_device_manager* data_manager;
 static struct wl_shm* shm;
@@ -36,6 +46,14 @@ static struct wp_content_type_manager_v1* content_type;
 static struct wp_alpha_modifier_v1* alpha_mod;
 static struct wp_color_representation_manager_v1* representation;
 static struct zwp_linux_dmabuf_v1* dmabuf;
+static struct zxdg_exporter_v2* exporter;
+static struct xdg_toplevel_icon_manager_v1* icons;
+static struct wp_single_pixel_buffer_manager_v1* spb;
+static struct wp_security_context_manager_v1* security;
+static struct ext_output_image_capture_source_manager_v1* cap_source;
+static struct ext_image_copy_capture_manager_v1* cap_mgr;
+static struct zwlr_screencopy_manager_v1* screencopy;
+static struct wl_output* output;
 
 static void registry_global(void* data, struct wl_registry* registry, uint32_t name,
                             const char* interface, uint32_t version) {
@@ -46,8 +64,10 @@ static void registry_global(void* data, struct wl_registry* registry, uint32_t n
         compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 6);
     else if (!strcmp(interface, wl_subcompositor_interface.name))
         subcompositor = wl_registry_bind(registry, name, &wl_subcompositor_interface, 1);
-    else if (!strcmp(interface, xdg_wm_base_interface.name))
+    else if (!strcmp(interface, xdg_wm_base_interface.name)) {
         wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
+        wm_base3 = wl_registry_bind(registry, name, &xdg_wm_base_interface, 3);
+    }
     else if (!strcmp(interface, wl_seat_interface.name))
         seat = wl_registry_bind(registry, name, &wl_seat_interface, 5);
     else if (!strcmp(interface, wl_data_device_manager_interface.name))
@@ -71,6 +91,27 @@ static void registry_global(void* data, struct wl_registry* registry, uint32_t n
             &wp_color_representation_manager_v1_interface, 1);
     else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name))
         dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
+    else if (!strcmp(interface, zxdg_exporter_v2_interface.name))
+        exporter = wl_registry_bind(registry, name, &zxdg_exporter_v2_interface, 1);
+    else if (!strcmp(interface, xdg_toplevel_icon_manager_v1_interface.name))
+        icons = wl_registry_bind(registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
+    else if (!strcmp(interface, wp_single_pixel_buffer_manager_v1_interface.name))
+        spb = wl_registry_bind(registry, name,
+            &wp_single_pixel_buffer_manager_v1_interface, 1);
+    else if (!strcmp(interface, wp_security_context_manager_v1_interface.name))
+        security = wl_registry_bind(registry, name,
+            &wp_security_context_manager_v1_interface, 1);
+    else if (!strcmp(interface, ext_output_image_capture_source_manager_v1_interface.name))
+        cap_source = wl_registry_bind(registry, name,
+            &ext_output_image_capture_source_manager_v1_interface, 1);
+    else if (!strcmp(interface, ext_image_copy_capture_manager_v1_interface.name))
+        cap_mgr = wl_registry_bind(registry, name,
+            &ext_image_copy_capture_manager_v1_interface, 1);
+    else if (!strcmp(interface, zwlr_screencopy_manager_v1_interface.name))
+        screencopy = wl_registry_bind(registry, name,
+            &zwlr_screencopy_manager_v1_interface, 1);
+    else if (!strcmp(interface, wl_output_interface.name) && !output)
+        output = wl_registry_bind(registry, name, &wl_output_interface, 1);
 }
 
 static void registry_global_remove(void* data, struct wl_registry* registry, uint32_t name) {
@@ -121,6 +162,140 @@ static struct wl_shm_pool* make_pool(int size) {
     return pool;
 }
 
+// a socket that is really listening, which is what the manager insists on
+static int listening_socket(void) {
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+
+    if (fd < 0) {
+        return -1;
+    }
+
+    struct sockaddr_un addr;
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sun_family = AF_UNIX;
+    // an abstract name, so nothing is left behind in the scratch directory
+    snprintf(addr.sun_path + 1, sizeof(addr.sun_path) - 1, "imway-errors-%d", getpid());
+
+    socklen_t len = (socklen_t)(sizeof(addr.sun_family) + 1 + strlen(addr.sun_path + 1));
+
+    if (bind(fd, (struct sockaddr*)&addr, len) < 0 || listen(fd, 1) < 0) {
+        close(fd);
+
+        return -1;
+    }
+
+    return fd;
+}
+
+// a context with all of its metadata in place and committed
+static struct wp_security_context_v1* committed_context(void) {
+    int listen_fd = listening_socket();
+    int pair[2];
+
+    if (listen_fd < 0 || socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) < 0) {
+        return NULL;
+    }
+
+    struct wp_security_context_v1* ctx =
+        wp_security_context_manager_v1_create_listener(security, listen_fd, pair[0]);
+
+    close(listen_fd);
+    close(pair[0]);
+    close(pair[1]);
+    wp_security_context_v1_set_sandbox_engine(ctx, "imway.test");
+    wp_security_context_v1_set_app_id(ctx, "imway.test.app");
+    wp_security_context_v1_set_instance_id(ctx, "1");
+    wp_security_context_v1_commit(ctx);
+
+    return ctx;
+}
+
+static uint32_t cap_w, cap_h;
+static int cap_done;
+
+static void cap_buffer_size(void* d, struct ext_image_copy_capture_session_v1* s,
+                            uint32_t w, uint32_t h) {
+    (void)d; (void)s;
+    cap_w = w;
+    cap_h = h;
+}
+static void cap_shm_format(void* d, struct ext_image_copy_capture_session_v1* s, uint32_t f) {
+    (void)d; (void)s; (void)f;
+}
+static void cap_dmabuf_device(void* d, struct ext_image_copy_capture_session_v1* s,
+                              struct wl_array* a) {
+    (void)d; (void)s; (void)a;
+}
+static void cap_dmabuf_format(void* d, struct ext_image_copy_capture_session_v1* s,
+                              uint32_t f, struct wl_array* a) {
+    (void)d; (void)s; (void)f; (void)a;
+}
+static void cap_session_done(void* d, struct ext_image_copy_capture_session_v1* s) {
+    (void)d; (void)s;
+    cap_done = 1;
+}
+static void cap_stopped(void* d, struct ext_image_copy_capture_session_v1* s) {
+    (void)d; (void)s;
+}
+static const struct ext_image_copy_capture_session_v1_listener cap_session_listener = {
+    .buffer_size = cap_buffer_size,
+    .shm_format = cap_shm_format,
+    .dmabuf_device = cap_dmabuf_device,
+    .dmabuf_format = cap_dmabuf_format,
+    .done = cap_session_done,
+    .stopped = cap_stopped,
+};
+
+static struct ext_image_copy_capture_session_v1* capture_session(struct wl_display* display) {
+    struct ext_image_capture_source_v1* src =
+        ext_output_image_capture_source_manager_v1_create_source(cap_source, output);
+    struct ext_image_copy_capture_session_v1* session =
+        ext_image_copy_capture_manager_v1_create_session(cap_mgr, src, 0);
+
+    ext_image_copy_capture_session_v1_add_listener(session, &cap_session_listener, NULL);
+
+    while (!cap_done && wl_display_dispatch(display) != -1) {
+    }
+
+    return cap_done ? session : NULL;
+}
+
+// a buffer matching whatever the session announced, so the capture succeeds
+// and the frame moves into the state the errors below are about
+static struct wl_buffer* sized_buffer(uint32_t w, uint32_t h) {
+    int stride = (int)w * 4, size = stride * (int)h;
+    struct wl_shm_pool* pool = make_pool(size);
+
+    if (!pool) {
+        return NULL;
+    }
+
+    return wl_shm_pool_create_buffer(pool, 0, (int)w, (int)h, stride, WL_SHM_FORMAT_XRGB8888);
+}
+
+static struct ext_image_copy_capture_frame_v1* captured_frame(struct wl_display* display) {
+    struct ext_image_copy_capture_session_v1* session = capture_session(display);
+
+    if (!session) {
+        return NULL;
+    }
+
+    struct wl_buffer* buf = sized_buffer(cap_w, cap_h);
+
+    if (!buf) {
+        return NULL;
+    }
+
+    struct ext_image_copy_capture_frame_v1* frame =
+        ext_image_copy_capture_session_v1_create_frame(session);
+
+    ext_image_copy_capture_frame_v1_attach_buffer(frame, buf);
+    ext_image_copy_capture_frame_v1_capture(frame);
+
+    return frame;
+}
+
 int main(int argc, char** argv) {
     if (argc != 2) {
         return 2;
@@ -138,11 +313,226 @@ int main(int argc, char** argv) {
 
     if (wl_display_roundtrip(display) < 0 || !compositor || !subcompositor || !wm_base ||
         !seat || !data_manager || !shm || !viewporter || !tearing || !fifo_mgr || !timing ||
-        !content_type || !alpha_mod || !representation || !dmabuf) {
+        !content_type || !alpha_mod || !representation || !dmabuf || !exporter ||
+        !icons || !spb || !wm_base3 || !security || !cap_source || !cap_mgr ||
+        !screencopy || !output) {
         return 2;
     }
 
     struct wl_surface* surface = wl_compositor_create_surface(compositor);
+
+    if (!strcmp(argv[1], "capture-bad-option")) {
+        struct ext_image_capture_source_v1* src =
+            ext_output_image_capture_source_manager_v1_create_source(cap_source, output);
+
+        // only paint_cursors is defined
+        ext_image_copy_capture_manager_v1_create_session(cap_mgr, src, 0xfu);
+
+        return expect_error(display, ext_image_copy_capture_manager_v1_interface.name,
+                            EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_ERROR_INVALID_OPTION);
+    }
+
+    if (!strcmp(argv[1], "capture-bad-damage")) {
+        struct ext_image_copy_capture_session_v1* session = capture_session(display);
+
+        if (!session) return 2;
+
+        struct ext_image_copy_capture_frame_v1* frame =
+            ext_image_copy_capture_session_v1_create_frame(session);
+
+        ext_image_copy_capture_frame_v1_damage_buffer(frame, 0, 0, 0, 0);
+
+        return expect_error(display, ext_image_copy_capture_frame_v1_interface.name,
+                            EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_INVALID_BUFFER_DAMAGE);
+    }
+
+    if (!strcmp(argv[1], "capture-attach-after")) {
+        struct ext_image_copy_capture_frame_v1* frame = captured_frame(display);
+
+        if (!frame) return 2;
+
+        ext_image_copy_capture_frame_v1_attach_buffer(frame, sized_buffer(cap_w, cap_h));
+
+        return expect_error(display, ext_image_copy_capture_frame_v1_interface.name,
+                            EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED);
+    }
+
+    if (!strcmp(argv[1], "capture-damage-after")) {
+        struct ext_image_copy_capture_frame_v1* frame = captured_frame(display);
+
+        if (!frame) return 2;
+
+        ext_image_copy_capture_frame_v1_damage_buffer(frame, 0, 0, 8, 8);
+
+        return expect_error(display, ext_image_copy_capture_frame_v1_interface.name,
+                            EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED);
+    }
+
+    if (!strcmp(argv[1], "capture-twice")) {
+        struct ext_image_copy_capture_frame_v1* frame = captured_frame(display);
+
+        if (!frame) return 2;
+
+        ext_image_copy_capture_frame_v1_capture(frame);
+
+        return expect_error(display, ext_image_copy_capture_frame_v1_interface.name,
+                            EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_ALREADY_CAPTURED);
+    }
+
+    if (!strcmp(argv[1], "security-bad-listen-fd")) {
+        int pair[2];
+
+        if (socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) < 0) return 2;
+
+        // a connected socket, not a listening one
+        wp_security_context_manager_v1_create_listener(security, pair[0], pair[1]);
+        close(pair[0]);
+        close(pair[1]);
+
+        return expect_error(display, wp_security_context_manager_v1_interface.name,
+                            WP_SECURITY_CONTEXT_MANAGER_V1_ERROR_INVALID_LISTEN_FD);
+    }
+
+    if (!strcmp(argv[1], "security-incomplete")) {
+        int listen_fd = listening_socket();
+        int pair[2];
+
+        if (listen_fd < 0 || socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) < 0) return 2;
+
+        struct wp_security_context_v1* ctx =
+            wp_security_context_manager_v1_create_listener(security, listen_fd, pair[0]);
+
+        close(listen_fd);
+        close(pair[0]);
+        close(pair[1]);
+        // committed without an engine, an app id or an instance id
+        wp_security_context_v1_commit(ctx);
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA);
+    }
+
+    if (!strcmp(argv[1], "security-engine-after-commit")) {
+        struct wp_security_context_v1* ctx = committed_context();
+
+        if (!ctx) return 2;
+
+        wp_security_context_v1_set_sandbox_engine(ctx, "imway.late");
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED);
+    }
+
+    if (!strcmp(argv[1], "security-appid-after-commit")) {
+        struct wp_security_context_v1* ctx = committed_context();
+
+        if (!ctx) return 2;
+
+        wp_security_context_v1_set_app_id(ctx, "imway.late.app");
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED);
+    }
+
+    if (!strcmp(argv[1], "security-instance-after-commit")) {
+        struct wp_security_context_v1* ctx = committed_context();
+
+        if (!ctx) return 2;
+
+        wp_security_context_v1_set_instance_id(ctx, "2");
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED);
+    }
+
+    if (!strcmp(argv[1], "security-commit-twice")) {
+        struct wp_security_context_v1* ctx = committed_context();
+
+        if (!ctx) return 2;
+
+        wp_security_context_v1_commit(ctx);
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_USED);
+    }
+
+    if (!strcmp(argv[1], "negative-max-size")) {
+        struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wm_base, surface);
+        struct xdg_toplevel* tl = xdg_surface_get_toplevel(xs);
+
+        xdg_toplevel_set_max_size(tl, -1, 10);
+
+        return expect_error(display, xdg_toplevel_interface.name,
+                            XDG_TOPLEVEL_ERROR_INVALID_SIZE);
+    }
+
+    if (!strcmp(argv[1], "dmabuf-params-plane-gap")) {
+        struct zwp_linux_buffer_params_v1* params = zwp_linux_dmabuf_v1_create_params(dmabuf);
+        int fd = memfd_create("errors-plane", 0);
+
+        if (fd < 0 || ftruncate(fd, 16 * 16 * 4) < 0) return 2;
+
+        // planes 0 and 2, so plane 1 is a hole
+        zwp_linux_buffer_params_v1_add(params, fd, 0, 0, 16 * 4, 0, 0);
+        zwp_linux_buffer_params_v1_add(params, fd, 2, 0, 16 * 4, 0, 0);
+        close(fd);
+        zwp_linux_buffer_params_v1_create(params, 16, 16, 0x34325258u, 0);
+
+        return expect_error(display, zwp_linux_buffer_params_v1_interface.name,
+                            ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INCOMPLETE);
+    }
+
+    if (!strcmp(argv[1], "export-plain-surface")) {
+        // a surface that never took an xdg_toplevel role
+        zxdg_exporter_v2_export_toplevel(exporter, surface);
+
+        return expect_error(display, zxdg_exporter_v2_interface.name,
+                            ZXDG_EXPORTER_V2_ERROR_INVALID_SURFACE);
+    }
+
+    if (!strcmp(argv[1], "icon-not-shm")) {
+        struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icons);
+        struct wl_buffer* buf = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(
+            spb, 0xffffffffu, 0, 0, 0xffffffffu);
+
+        xdg_toplevel_icon_v1_add_buffer(icon, buf, 1);
+
+        return expect_error(display, xdg_toplevel_icon_v1_interface.name,
+                            XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER);
+    }
+
+    if (!strcmp(argv[1], "icon-not-square")) {
+        struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icons);
+        struct wl_shm_pool* pool = make_pool(64 * 32 * 4);
+        struct wl_buffer* buf = wl_shm_pool_create_buffer(pool, 0, 64, 32, 64 * 4,
+                                                          WL_SHM_FORMAT_ARGB8888);
+
+        xdg_toplevel_icon_v1_add_buffer(icon, buf, 1);
+
+        return expect_error(display, xdg_toplevel_icon_v1_interface.name,
+                            XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER);
+    }
+
+    if (!strcmp(argv[1], "reposition-bad-positioner")) {
+        struct xdg_surface* parent_xs = xdg_wm_base_get_xdg_surface(wm_base3, surface);
+        struct xdg_toplevel* parent_tl = xdg_surface_get_toplevel(parent_xs);
+        struct wl_surface* child = wl_compositor_create_surface(compositor);
+        struct xdg_surface* child_xs = xdg_wm_base_get_xdg_surface(wm_base3, child);
+        struct xdg_positioner* good = xdg_wm_base_create_positioner(wm_base3);
+        struct xdg_positioner* bad = xdg_wm_base_create_positioner(wm_base3);
+
+        (void)parent_tl;
+        xdg_positioner_set_size(good, 40, 40);
+        xdg_positioner_set_anchor_rect(good, 0, 0, 10, 10);
+
+        struct xdg_popup* popup = xdg_surface_get_popup(child_xs, parent_xs, good);
+
+        // the second positioner was never given a size
+        xdg_popup_reposition(popup, bad, 1);
+
+        return expect_error(display, xdg_wm_base_interface.name,
+                            XDG_WM_BASE_ERROR_INVALID_POSITIONER);
+    }
 
     if (!strcmp(argv[1], "content-type-twice")) {
         wp_content_type_manager_v1_get_surface_content_type(content_type, surface);
