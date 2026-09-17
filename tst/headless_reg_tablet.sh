@@ -52,4 +52,16 @@ wait_client "tablet: up"
 ctl "tablet proximity_out $((cx + 20)) $((cy + 10))"
 wait_client "prox_out"
 
+# and the other way out of proximity: the surface the tool is on goes away
+ctl "tablet proximity_in $cx $cy"
+wait_client "prox_in"
+ctl "tablet down $cx $cy 0.5"
+wait_client "tablet: down"
+
+touch go-destroy
+ctl "tablet motion $cx $cy"
+wait_client "surface gone"
+wait_client "tablet: up"
+wait_client "prox_out"
+
 echo "OK: tablet-v2 delivered proximity, the tool axes and its button with local coords"

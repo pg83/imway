@@ -106,6 +106,8 @@ static void tool_button(void* d, struct zwp_tablet_tool_v2* t, uint32_t serial, 
     button_v = button;
     button_state = state;
 }
+static int surface_gone;
+
 static void tool_frame(void* d, struct zwp_tablet_tool_v2* t, uint32_t time) {
     (void)d; (void)t; (void)time;
     if (saw_prox_in) printf("tablet: prox_in\n");
@@ -122,6 +124,15 @@ static void tool_frame(void* d, struct zwp_tablet_tool_v2* t, uint32_t time) {
     if (saw_prox_out) printf("tablet: prox_out\n");
     saw_prox_in = saw_prox_out = saw_down = saw_up = saw_motion = saw_pressure = 0;
     saw_distance = saw_tilt = saw_rotation = saw_slider = saw_wheel = saw_button = 0;
+
+    // the scenario asks for the surface to go while the tool is on it: the
+    // compositor has to lift the tip and take the tool out of proximity
+    if (!surface_gone && access("go-destroy", F_OK) == 0) {
+        surface_gone = 1;
+        wl_surface_destroy(my_surface);
+        my_surface = NULL;
+        printf("tablet: surface gone\n");
+    }
 }
 static const struct zwp_tablet_tool_v2_listener tool_listener = {
     tool_type, tool_serial, tool_id_wacom, tool_cap, tool_done, tool_removed,
