@@ -8,6 +8,14 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
+count() { grep -c "$1" "$IMWAY_LOG" || true; }
+
+# after a refusal the field takes the focus back, and anything typed before
+# that lands nowhere
+refocused_after() { # <count before>
+    [[ "$(count 'lockscreen refocused')" -gt "$1" ]]
+}
+
 ctl "set appearance.lock_blur false"
 await 20 in_log "control: set appearance.lock_blur" || { echo "settings are not reachable"; exit 1; }
 
@@ -15,12 +23,16 @@ ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 rele
 await_imgui '##lock-overlay' || { echo "the session did not lock"; dump_state; exit 1; }
 
 # nothing typed: Enter still submits, and an empty password is refused
+focus0=$(count 'lockscreen refocused')
+
 ctl "key 28 press"; ctl "key 28 release"
-await 100 in_log "lockscreen rejected" || {
+await 200 in_log "lockscreen rejected" || {
     echo "an empty password was not refused"
     cat "$IMWAY_LOG"
     exit 1
 }
+
+await 200 refocused_after "$focus0" || { echo "the field did not come back"; exit 1; }
 
 [[ "$(dump_field '^captured ' kb)" = 1 ]] || { echo "the lock screen let the keyboard go"; exit 1; }
 
@@ -31,19 +43,22 @@ long=$(printf 'imway-%0.sx' $(seq 1 80))
 ctl "set advanced.pam_service $long"
 await 20 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
 
-rejections=$(grep -c "lockscreen rejected" "$IMWAY_LOG")
+rejections=$(count 'lockscreen rejected')
+focus1=$(count 'lockscreen refocused')
 
 ctl "type nope"
 sleep 0.4
 ctl "key 28 press"; ctl "key 28 release"
 
-refused_again() { [[ "$(grep -c 'lockscreen rejected' "$IMWAY_LOG")" -gt "$rejections" ]]; }
+refused_again() { [[ "$(count 'lockscreen rejected')" -gt "$rejections" ]]; }
 
-await 200 refused_again || {
+await 300 refused_again || {
     echo "the overlong service name was not refused"
     cat "$IMWAY_LOG"
     exit 1
 }
+
+await 200 refocused_after "$focus1" || { echo "the field did not come back"; exit 1; }
 
 for _ in 1 2 3; do
     ctl "key 45 press"; ctl "key 45 release" # KEY_X
@@ -52,7 +67,7 @@ done
 
 sleep 0.5 # let ImGui's trickle queue consume every x before Enter
 ctl "key 28 press"; ctl "key 28 release"
-await 100 in_log "lockscreen closed" || { echo "xxx did not unlock"; cat "$IMWAY_LOG"; exit 1; }
+await 200 in_log "lockscreen closed" || { echo "xxx did not unlock"; cat "$IMWAY_LOG"; exit 1; }
 await_no_imgui '##lock-overlay' || { echo "the overlay stayed up"; dump_state; exit 1; }
 
 expect_alive "compositor died locking without its blur"
