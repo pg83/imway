@@ -49,7 +49,7 @@ static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const cha
 static void reg2_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener reg2_listener = {reg2_global, reg2_remove};
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (wl_boot()) return 1;
 
@@ -71,7 +71,21 @@ int main(void) {
     zxdg_toplevel_decoration_v1_set_mode(deco, ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
     wl_surface_commit(surface);
 
+    // With this argument the client asks for the resize itself, the way an
+    // application does from a grip of its own drawing: the first press it
+    // sees becomes an xdg_toplevel.resize on that serial, and the drag after
+    // it is the compositor's to follow.
+    int ask = argc > 1 && !strcmp(argv[1], "client-resize");
+    int asked = 0;
+
     while (wl_display_dispatch(wl_dpy) != -1) {
+        if (ask && !asked && wlp_button_count &&
+            wlp_button_state == WL_POINTER_BUTTON_STATE_PRESSED) {
+            asked = 1;
+            xdg_toplevel_resize(tl, wl_seat_g, wlp_button_serial,
+                                XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT);
+            printf("resize asked\n");
+        }
     }
     return 0;
 }
