@@ -17,6 +17,12 @@ await 20 in_log "control: set advanced.pam_service" || { echo "settings are not 
 ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 release" # Super+L
 await_imgui '##lock-overlay' || { echo "the session did not lock"; dump_state; exit 1; }
 
+count() { grep -c "$1" "$IMWAY_LOG" || true; }
+
+# after a refusal the field takes the focus back, and anything typed before
+# that lands nowhere
+focus0=$(count 'lockscreen refocused')
+
 ctl "type nope"
 sleep 0.4 # let ImGui's trickle queue consume the text before Enter
 ctl "key 28 press"; ctl "key 28 release"
@@ -37,6 +43,10 @@ await 300 in_log "lockscreen rejected" || {
 ! in_log "lockscreen accepted" || { echo "PAM accepted a password it should not have"; exit 1; }
 [[ "$(dump_field '^captured ' kb)" = 1 ]] || { echo "the lock screen let the keyboard go"; exit 1; }
 
+refocused() { [[ "$(count 'lockscreen refocused')" -gt "$focus0" ]]; }
+
+await 200 refocused || { echo "the field did not come back"; exit 1; }
+
 for _ in 1 2 3; do
     ctl "key 45 press"; ctl "key 45 release" # KEY_X
     sleep 0.2
@@ -44,7 +54,7 @@ done
 
 sleep 0.5
 ctl "key 28 press"; ctl "key 28 release"
-await 100 in_log "lockscreen closed" || { echo "xxx did not unlock"; cat "$IMWAY_LOG"; exit 1; }
+await 200 in_log "lockscreen closed" || { echo "xxx did not unlock"; cat "$IMWAY_LOG"; exit 1; }
 
 expect_alive "compositor died authenticating through PAM"
 echo "OK: a password the test build does not know goes to PAM and is refused"
