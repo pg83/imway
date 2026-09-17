@@ -15,7 +15,10 @@ gx=$((x + w - 1)); gy=$((y + h / 2))
 
 # grab the right border and start dragging
 ctl "motion $gx $gy"
-sleep 0.3
+# the border grip is picked from the last rendered frame
+screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+ctl "motion $gx $((gy + 1))"
+screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 ctl "button left press"
 sleep 0.3
 ctl "motion $((gx + 20)) $gy"
