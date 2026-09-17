@@ -108,9 +108,10 @@ stripes_reached() { # <ppm> <expected-kind>
 }
 
 sdr_ok=0
-for _ in $(seq 1 10); do
-    stripes_reached "$XDG_RUNTIME_DIR/sdr-alpha.ppm" sdr && { sdr_ok=1; break; }
-done
+
+# ten readbacks in a row take no time at all, and an instrumented build is
+# still a frame or two behind the commit the client announced
+await 100 stripes_reached "$XDG_RUNTIME_DIR/sdr-alpha.ppm" sdr && sdr_ok=1
 
 if [[ "$sdr_ok" != 1 ]]; then
     read -r -a sdr_actual < <(sample_stripes "$XDG_RUNTIME_DIR/sdr-alpha.ppm" "$x" "$y")
@@ -121,9 +122,8 @@ fi
 wait_client "pq-alpha"
 
 pq_ok=0
-for _ in $(seq 1 10); do
-    stripes_reached "$XDG_RUNTIME_DIR/pq-alpha.ppm" pq && { pq_ok=1; break; }
-done
+
+await 100 stripes_reached "$XDG_RUNTIME_DIR/pq-alpha.ppm" pq && pq_ok=1
 
 if [[ "$pq_ok" != 1 ]]; then
     read -r -a pq_actual < <(sample_stripes "$XDG_RUNTIME_DIR/pq-alpha.ppm" "$x" "$y")
