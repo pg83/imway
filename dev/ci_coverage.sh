@@ -5,8 +5,9 @@
 #
 # Every instrumented process (the compositor and each test client) drops a
 # profile into the profile dir. Binary-id file naming proved unstable across
-# link/exec flavors, so merge everything: llvm-cov maps records through the
-# function hashes present in imway_test and simply ignores the rest.
+# link/exec flavors, so they all land together and llvm-cov maps records
+# through the function hashes present in imway_test. What cannot come along
+# is a profile that was never finished being written: see the merge below.
 #
 # usage: ci_coverage.sh <build-dir> <profile-dir>
 set -euo pipefail
@@ -31,9 +32,27 @@ profiles=("$profile_dir"/*.profraw)
 [[ -e "${profiles[0]}" ]] || { echo "no profiles in $profile_dir" >&2; exit 1; }
 echo "merging ${#profiles[@]} profiles"
 
-# clients killed mid-write leave truncated profiles behind; skip those
-# and merge the rest
-"$profdata" merge -sparse -failure-mode=warn "${profiles[@]}" -o "$out/coverage.profdata"
+# Clients killed mid-write leave truncated profiles behind. Merging the lot
+# with -failure-mode=warn takes those in too, and what comes out is not a
+# smaller count but a wrong one: a line that runs once a session reads
+# hundreds of trillions of hits, and a line that ran can come back zero.
+# Check each profile on its own instead and drop the ones that do not load.
+good=()
+bad=0
+
+for profile in "${profiles[@]}"; do
+    if "$profdata" merge -sparse "$profile" -o "$out/probe.profdata" 2>/dev/null; then
+        good+=("$profile")
+    else
+        bad=$((bad + 1))
+    fi
+done
+
+rm -f "$out/probe.profdata"
+echo "merging ${#good[@]} profiles, dropping $bad unreadable"
+[[ ${#good[@]} -gt 0 ]] || { echo "no readable profiles in $profile_dir" >&2; exit 1; }
+
+"$profdata" merge -sparse "${good[@]}" -o "$out/coverage.profdata"
 "$cov" export "$binary" -instr-profile="$out/coverage.profdata" -format=lcov \
     -ignore-filename-regex="$ignore" > "$out/coverage.info"
 "$cov" report "$binary" -instr-profile="$out/coverage.profdata" \
