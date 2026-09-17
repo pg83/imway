@@ -14,16 +14,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# wl-copy has to reach the compositor and be handed the selection before
+# anyone can read it back, and how long that takes is the build's business,
+# not a number this scenario can pick
+pasted() { # <expected> [wl-paste args...]
+    local want="$1" got
+    shift
+
+    got="$(timeout 5 wl-paste "$@" 2>/dev/null)" || return 1
+
+    [[ "$got" == "$want" ]]
+}
+
 echo -n "clipboard payload" | wl-copy --foreground &
 pids+=("$!")
-sleep 0.7
-GOT="$(timeout 5 wl-paste)"
-[[ "$GOT" == "clipboard payload" ]] || { echo "clipboard: got '$GOT'"; exit 1; }
+await 100 pasted "clipboard payload" || {
+    echo "the clipboard never carried the payload"
+    exit 1
+}
 
 echo -n "primary payload" | wl-copy --foreground --primary &
 pids+=("$!")
-sleep 0.7
-GOT="$(timeout 5 wl-paste --primary)"
-[[ "$GOT" == "primary payload" ]] || { echo "primary: got '$GOT'"; exit 1; }
+await 100 pasted "primary payload" --primary || {
+    echo "the primary selection never carried the payload"
+    exit 1
+}
 
 echo "OK: clipboard and primary selection round-trip"
