@@ -53,13 +53,17 @@ jobs:
           retention-days: 7
           compression-level: 9
 
-  # the suite in four stable slices side by side (build.py -Dshard): one
-  # runner took twenty minutes over all of it
+  # Every suite runs in four stable slices side by side (build.py
+  # -Dshard=K/N, a hash of the scenario name): one runner took twenty
+  # minutes over all of it. The plain slices gate the coverage and
+  # sanitizer ones, and each plain and coverage slice also runs its share
+  # of the explicit-sync scenarios in a VM with timeline syncobjs.
+
   tests-0:
-    name: Tests (0/4)
+    name: Tests 0/4
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -67,55 +71,17 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          # nested user namespaces for the sndio scenario's private /var/run
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf (built into the azure
-          # kernel; modprobe is the fallback for modular kernels)
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          # a drm node backs dmabuf fd validation and the KMS emulator's
-          # companion identity: a render node when the kernel offers one,
-          # else the hypervisor's card
-          sudo modprobe vgem 2>/dev/null || true
-          ls -l /dev/dri
-          sudo chmod 666 /dev/dri/*
-          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-          vulkaninfo --summary || true
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Run full test suite
+      - name: Run the test slice
         run: |
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -123,24 +89,24 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests (0/4)" \
+            --title "Tests 0/4" \
             --reproduce "./build -Druns=1 -Dshard=0/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-log-0
+          name: tests-0-log
           path: ${{ runner.temp }}/tests.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
   tests-1:
-    name: Tests (1/4)
+    name: Tests 1/4
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -148,55 +114,17 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          # nested user namespaces for the sndio scenario's private /var/run
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf (built into the azure
-          # kernel; modprobe is the fallback for modular kernels)
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          # a drm node backs dmabuf fd validation and the KMS emulator's
-          # companion identity: a render node when the kernel offers one,
-          # else the hypervisor's card
-          sudo modprobe vgem 2>/dev/null || true
-          ls -l /dev/dri
-          sudo chmod 666 /dev/dri/*
-          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-          vulkaninfo --summary || true
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Run full test suite
+      - name: Run the test slice
         run: |
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -204,24 +132,24 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests (1/4)" \
+            --title "Tests 1/4" \
             --reproduce "./build -Druns=1 -Dshard=1/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-log-1
+          name: tests-1-log
           path: ${{ runner.temp }}/tests.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
   tests-2:
-    name: Tests (2/4)
+    name: Tests 2/4
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -229,55 +157,17 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          # nested user namespaces for the sndio scenario's private /var/run
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf (built into the azure
-          # kernel; modprobe is the fallback for modular kernels)
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          # a drm node backs dmabuf fd validation and the KMS emulator's
-          # companion identity: a render node when the kernel offers one,
-          # else the hypervisor's card
-          sudo modprobe vgem 2>/dev/null || true
-          ls -l /dev/dri
-          sudo chmod 666 /dev/dri/*
-          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-          vulkaninfo --summary || true
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Run full test suite
+      - name: Run the test slice
         run: |
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -285,24 +175,24 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests (2/4)" \
+            --title "Tests 2/4" \
             --reproduce "./build -Druns=1 -Dshard=2/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-log-2
+          name: tests-2-log
           path: ${{ runner.temp }}/tests.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
   tests-3:
-    name: Tests (3/4)
+    name: Tests 3/4
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -310,55 +200,17 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          # nested user namespaces for the sndio scenario's private /var/run
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf (built into the azure
-          # kernel; modprobe is the fallback for modular kernels)
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          # a drm node backs dmabuf fd validation and the KMS emulator's
-          # companion identity: a render node when the kernel offers one,
-          # else the hypervisor's card
-          sudo modprobe vgem 2>/dev/null || true
-          ls -l /dev/dri
-          sudo chmod 666 /dev/dri/*
-          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-          vulkaninfo --summary || true
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Run full test suite
+      - name: Run the test slice
         run: |
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -366,22 +218,22 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests (3/4)" \
+            --title "Tests 3/4" \
             --reproduce "./build -Druns=1 -Dshard=3/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-log-3
+          name: tests-3-log
           path: ${{ runner.temp }}/tests.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
-  tests-vm:
-    name: Tests VM
-    needs: build
+  coverage-0:
+    name: Coverage 0/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -391,94 +243,66 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          # nested user namespaces for the sndio scenario's private /var/run
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          # dmabuf test buffers come from udmabuf (built into the azure
-          # kernel; modprobe is the fallback for modular kernels)
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          # a drm node backs dmabuf fd validation and the KMS emulator's
-          # companion identity: a render node when the kernel offers one,
-          # else the hypervisor's card
-          sudo modprobe vgem 2>/dev/null || true
-          ls -l /dev/dri
-          sudo chmod 666 /dev/dri/*
-          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-          vulkaninfo --summary || true
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Prepare a VM for the explicit-sync scenarios
-        run: |
-          # the runner's own DRM node has no timeline syncobjs; a virtme-ng
-          # VM on the runner's kernel with a virtio-gpu does, and
-          # dev/vng_wrap.sh runs single scenarios in one (-Dtest_wrap)
-          sudo apt-get install -y -qq qemu-system-x86 "linux-modules-extra-$(uname -r)" >/dev/null
-          pipx install virtme-ng >/dev/null
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          sudo chmod 666 /dev/kvm
-          sudo chmod a+r "/boot/vmlinuz-$(uname -r)"
-
-      - name: Run the explicit-sync scenarios in a VM
+      - name: Run the test slice with coverage
         run: |
           set -o pipefail
+          export CFLAGS="-fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -fcoverage-prefix-map=$PWD=."
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
+          mkdir -p "$RUNNER_TEMP/profiles"
+          # %m is online merging: every process writes into a shared pool under a
+          # lock. This suite kills compositors and clients where they stand, and one
+          # killed mid-merge leaves an accumulator that every later process merges
+          # into again. One file per process instead, named per scenario by
+          # dev/run_test.py, so a killed process takes only its own profile with it.
+          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -j "$(nproc)" -k imway_test &&
-            python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
-          } 2>&1 | tee "$RUNNER_TEMP/tests.log"
+            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
+          } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
+
+      - name: Upload the slice's tracefile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-0
+          path: |
+            .coverage/coverage.info
+            .coverage/summary.txt
+          # the report lives in a dot-directory, which is "hidden" by default
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
 
       - name: Summarize failure
         if: failure()
         run: |
           python3 dev/ci_report.py \
-            --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests VM" \
-            --reproduce "./build -Druns=1 -Dfilter='headless_*syncobj*' -Dtest_wrap=dev/vng_wrap.sh test"
+            --log "$RUNNER_TEMP/coverage.log" \
+            --title "Coverage 0/4" \
+            --reproduce "./build -B .b-cov -Druns=1 -Dshard=0/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-vm-log
-          path: ${{ runner.temp }}/tests.log
+          name: coverage-0-log
+          path: ${{ runner.temp }}/coverage.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
-  coverage:
-    name: Coverage
+  coverage-1:
+    name: Coverage 1/4
     needs: [tests-0, tests-1, tests-2, tests-3]
-    permissions:
-      contents: read
-      id-token: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -486,90 +310,244 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          sudo modprobe vgem 2>/dev/null || true
-          sudo chmod 666 /dev/dri/*
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Prepare a VM for the explicit-sync scenarios
-        run: |
-          # the runner's own DRM node has no timeline syncobjs; a virtme-ng
-          # VM on the runner's kernel with a virtio-gpu does, and
-          # dev/vng_wrap.sh runs single scenarios in one (-Dtest_wrap)
-          sudo apt-get install -y -qq qemu-system-x86 "linux-modules-extra-$(uname -r)" >/dev/null
-          pipx install virtme-ng >/dev/null
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          sudo chmod 666 /dev/kvm
-          sudo chmod a+r "/boot/vmlinuz-$(uname -r)"
-
-      - name: Run full test suite with coverage
+      - name: Run the test slice with coverage
         run: |
           set -o pipefail
           export CFLAGS="-fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -fcoverage-prefix-map=$PWD=."
           export CXXFLAGS="$CFLAGS"
           export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
           mkdir -p "$RUNNER_TEMP/profiles"
-          # %m is online merging: every process writes into a shared pool
-          # under a lock. This suite kills compositors and clients where they
-          # stand, and one killed mid-merge leaves an accumulator that every
-          # later process merges into again. That is where the report's
-          # impossible hit counts came from. One file per process instead,
-          # named per scenario by dev/run_test.py, so a killed process takes
-          # only its own profile down with it.
+          # %m is online merging: every process writes into a shared pool under a
+          # lock. This suite kills compositors and clients where they stand, and one
+          # killed mid-merge leaves an accumulator that every later process merges
+          # into again. One file per process instead, named per scenario by
+          # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
-      - name: Publish coverage summary
+      - name: Upload the slice's tracefile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-1
+          path: |
+            .coverage/coverage.info
+            .coverage/summary.txt
+          # the report lives in a dot-directory, which is "hidden" by default
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+      - name: Summarize failure
+        if: failure()
         run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/coverage.log" \
+            --title "Coverage 1/4" \
+            --reproduce "./build -B .b-cov -Druns=1 -Dshard=1/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-1-log
+          path: ${{ runner.temp }}/coverage.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  coverage-2:
+    name: Coverage 2/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with coverage
+        run: |
+          set -o pipefail
+          export CFLAGS="-fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -fcoverage-prefix-map=$PWD=."
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
+          mkdir -p "$RUNNER_TEMP/profiles"
+          # %m is online merging: every process writes into a shared pool under a
+          # lock. This suite kills compositors and clients where they stand, and one
+          # killed mid-merge leaves an accumulator that every later process merges
+          # into again. One file per process instead, named per scenario by
+          # dev/run_test.py, so a killed process takes only its own profile with it.
+          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            echo "## LLVM coverage"
+            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
+          } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
+
+      - name: Upload the slice's tracefile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-2
+          path: |
+            .coverage/coverage.info
+            .coverage/summary.txt
+          # the report lives in a dot-directory, which is "hidden" by default
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/coverage.log" \
+            --title "Coverage 2/4" \
+            --reproduce "./build -B .b-cov -Druns=1 -Dshard=2/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-2-log
+          path: ${{ runner.temp }}/coverage.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  coverage-3:
+    name: Coverage 3/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with coverage
+        run: |
+          set -o pipefail
+          export CFLAGS="-fprofile-instr-generate -fcoverage-mapping -fcoverage-compilation-dir=. -fcoverage-prefix-map=$PWD=."
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fprofile-instr-generate -Wl,--build-id=sha1"
+          mkdir -p "$RUNNER_TEMP/profiles"
+          # %m is online merging: every process writes into a shared pool under a
+          # lock. This suite kills compositors and clients where they stand, and one
+          # killed mid-merge leaves an accumulator that every later process merges
+          # into again. One file per process instead, named per scenario by
+          # dev/run_test.py, so a killed process takes only its own profile with it.
+          export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
+          {
+            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
+          } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
+
+      - name: Upload the slice's tracefile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-shard-3
+          path: |
+            .coverage/coverage.info
+            .coverage/summary.txt
+          # the report lives in a dot-directory, which is "hidden" by default
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 9
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/coverage.log" \
+            --title "Coverage 3/4" \
+            --reproduce "./build -B .b-cov -Druns=1 -Dshard=3/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-3-log
+          path: ${{ runner.temp }}/coverage.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  coverage:
+    name: Coverage
+    needs: [coverage-0, coverage-1, coverage-2, coverage-3]
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the slices' tracefiles
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: coverage-shard-*
+          path: ${{ runner.temp }}/coverage-shards
+
+      - name: Merge the slices' tracefiles
+        run: |
+          set -o pipefail
+          report="$RUNNER_TEMP/coverage-report"
+          mkdir -p "$report"
+          python3 dev/merge_lcov.py \
+            --output "$report/coverage.info" \
+            --summary "$report/summary.txt" \
+            "$RUNNER_TEMP"/coverage-shards/coverage-shard-*/coverage.info
+          {
+            echo "## Merged coverage"
             echo
             echo '```text'
-            cat .coverage/summary.txt
+            cat "$report/summary.txt"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Render browsable report
+        run: |
+          sudo apt-get install -y -qq lcov >/dev/null
+          report="$RUNNER_TEMP/coverage-report"
+          genhtml --branch-coverage \
+            --ignore-errors inconsistent,category,count,range,source \
+            --output-directory "$report/html" \
+            "$report/coverage.info"
 
       - name: Upload browsable coverage report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-report
-          path: .coverage
-          # the report lives in a dot-directory, which is "hidden" by default
-          include-hidden-files: true
+          path: ${{ runner.temp }}/coverage-report
           if-no-files-found: error
           retention-days: 14
           compression-level: 9
@@ -578,35 +556,17 @@ jobs:
         uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
         with:
           use_oidc: true
-          files: .coverage/coverage.info
+          files: ${{ runner.temp }}/coverage-report/coverage.info
           disable_search: true
           fail_ci_if_error: true
           name: linux-clang
           verbose: true
 
-      - name: Summarize failure
-        if: failure()
-        run: |
-          python3 dev/ci_report.py \
-            --log "$RUNNER_TEMP/coverage.log" \
-            --title "Coverage" \
-            --reproduce "./build -B .b-cov -Druns=1 test"
-
-      - name: Upload failure log
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: coverage-log
-          path: ${{ runner.temp }}/coverage.log
-          if-no-files-found: ignore
-          retention-days: 7
-          compression-level: 9
-
-  build-asan:
-    name: Build ASan
-    needs: build
+  tests-asan-0:
+    name: Tests ASan 0/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -614,79 +574,10 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Build imway with ASan
-        run: |
-          set -o pipefail
-          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
-          export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-fsanitize=address"
-          python3 ./build -B .build-asan -j "$(nproc)" imway \
-            2>&1 | tee "$RUNNER_TEMP/build-asan.log"
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Summarize failure
-        if: failure()
-        run: |
-          python3 dev/ci_report.py \
-            --log "$RUNNER_TEMP/build-asan.log" \
-            --title "Build ASan" \
-            --reproduce "CFLAGS/-fsanitize=address ./build -B .build-asan imway"
-
-      - name: Upload failure log
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: build-asan-log
-          path: ${{ runner.temp }}/build-asan.log
-          if-no-files-found: ignore
-          retention-days: 7
-          compression-level: 9
-
-  tests-asan:
-    name: Tests ASan
-    needs: [tests-0, tests-1, tests-2, tests-3, build-asan]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    steps:
-      - name: Check out source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Set up build environment
-        uses: ./.github/actions/setup
-
-      - name: Prepare the runner for the test environment
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          sudo modprobe vgem 2>/dev/null || true
-          sudo chmod 666 /dev/dri/*
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
-
-      - name: Run full test suite with ASan
+      - name: Run the test slice with ASan
         run: |
           set -o pipefail
           export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
@@ -694,15 +585,14 @@ jobs:
           export LDFLAGS="-fsanitize=address"
           export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
           export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
-          # lavapipe compiles shaders through LLVM on its own worker threads,
-          # whose stacks asan's inflated frames overrun: the run died with a
-          # SEGV inside libLLVM on a random scenario. No extra threads, no
-          # small stacks to overrun.
+          # lavapipe compiles shaders through LLVM on its own worker threads, whose
+          # stacks asan's inflated frames overrun: the run died with a SEGV inside
+          # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
           export LP_NUM_THREADS=0
           {
             python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-ta -j "$(nproc)" -k &&
-            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
@@ -710,24 +600,24 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-asan.log" \
-            --title "Tests ASan" \
-            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 test"
+            --title "Tests ASan 0/4" \
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 -Dshard=0/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-asan-log
+          name: tests-asan-0-log
           path: ${{ runner.temp }}/tests-asan.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
-  build-ubsan:
-    name: Build UBSan
-    needs: build
+  tests-asan-1:
+    name: Tests ASan 1/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -735,38 +625,50 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Build imway with UBSan
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with ASan
         run: |
           set -o pipefail
-          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
           export CXXFLAGS="$CFLAGS"
-          export LDFLAGS="-fsanitize=undefined"
-          python3 ./build -B .build-ubsan -j "$(nproc)" imway \
-            2>&1 | tee "$RUNNER_TEMP/build-ubsan.log"
+          export LDFLAGS="-fsanitize=address"
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+          export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
+          # lavapipe compiles shaders through LLVM on its own worker threads, whose
+          # stacks asan's inflated frames overrun: the run died with a SEGV inside
+          # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
+          export LP_NUM_THREADS=0
+          {
+            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
         if: failure()
         run: |
           python3 dev/ci_report.py \
-            --log "$RUNNER_TEMP/build-ubsan.log" \
-            --title "Build UBSan" \
-            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .build-ubsan imway"
+            --log "$RUNNER_TEMP/tests-asan.log" \
+            --title "Tests ASan 1/4" \
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 -Dshard=1/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: build-ubsan-log
-          path: ${{ runner.temp }}/build-ubsan.log
+          name: tests-asan-1-log
+          path: ${{ runner.temp }}/tests-asan.log
           if-no-files-found: ignore
           retention-days: 7
           compression-level: 9
 
-  tests-ubsan:
-    name: Tests UBSan
-    needs: [tests-0, tests-1, tests-2, tests-3, build-ubsan]
+  tests-asan-2:
+    name: Tests ASan 2/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -774,40 +676,112 @@ jobs:
       - name: Set up build environment
         uses: ./.github/actions/setup
 
-      - name: Prepare the runner for the test environment
-        run: |
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
-          [ -e /dev/udmabuf ] || {
-            echo "no udmabuf device; kernel config:"
-            grep -i udmabuf "/boot/config-$(uname -r)" || true
-            exit 1
-          }
-          sudo chmod 666 /dev/udmabuf
-          sudo modprobe vgem 2>/dev/null || true
-          sudo chmod 666 /dev/dri/*
-          sudo chmod 666 /dev/tty[0-9]*
-          # the input scenario plugs virtual devices in through uinput; the
-          # nodes it creates have to be openable by the runner as well, and
-          # a missing uinput only makes that scenario skip
-          sudo modprobe uinput 2>/dev/null || true
-          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
-          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
-            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
-          sudo udevadm control --reload-rules 2>/dev/null || true
-          # the lock screen's PAM path needs a service that exists before it
-          # can get as far as asking for the password: this one asks and
-          # then refuses, which is the whole conversation
-          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
-            sudo tee /etc/pam.d/imway-test >/dev/null
-          # and one that says yes, so the other half of the exchange runs:
-          # the account check after a successful authentication, and a
-          # message from the stack that is neither of the two prompts
-          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
-          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
-            sudo tee /etc/pam.d/imway-test-ok >/dev/null
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
 
-      - name: Run full test suite with UBSan
+      - name: Run the test slice with ASan
+        run: |
+          set -o pipefail
+          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=address"
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+          export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
+          # lavapipe compiles shaders through LLVM on its own worker threads, whose
+          # stacks asan's inflated frames overrun: the run died with a SEGV inside
+          # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
+          export LP_NUM_THREADS=0
+          {
+            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-asan.log" \
+            --title "Tests ASan 2/4" \
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 -Dshard=2/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-asan-2-log
+          path: ${{ runner.temp }}/tests-asan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-asan-3:
+    name: Tests ASan 3/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with ASan
+        run: |
+          set -o pipefail
+          export CFLAGS="-fsanitize=address -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=address"
+          export ASAN_OPTIONS=detect_leaks=1:abort_on_error=1
+          export LSAN_OPTIONS="suppressions=$PWD/dev/lsan.supp"
+          # lavapipe compiles shaders through LLVM on its own worker threads, whose
+          # stacks asan's inflated frames overrun: the run died with a SEGV inside
+          # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
+          export LP_NUM_THREADS=0
+          {
+            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k &&
+            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-asan.log" \
+            --title "Tests ASan 3/4" \
+            --reproduce "CFLAGS/-fsanitize=address ./build -B .b-ta -Druns=1 -Dshard=3/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-asan-3-log
+          path: ${{ runner.temp }}/tests-asan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-ubsan-0:
+    name: Tests UBSan 0/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with UBSan
         run: |
           set -o pipefail
           export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
@@ -817,7 +791,7 @@ jobs:
           {
             python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-tu -j "$(nproc)" -k &&
-            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
       - name: Summarize failure
@@ -825,14 +799,152 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests-ubsan.log" \
-            --title "Tests UBSan" \
-            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 test"
+            --title "Tests UBSan 0/4" \
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 -Dshard=0/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-ubsan-log
+          name: tests-ubsan-0-log
+          path: ${{ runner.temp }}/tests-ubsan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-ubsan-1:
+    name: Tests UBSan 1/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with UBSan
+        run: |
+          set -o pipefail
+          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=undefined"
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          {
+            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-ubsan.log" \
+            --title "Tests UBSan 1/4" \
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 -Dshard=1/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-ubsan-1-log
+          path: ${{ runner.temp }}/tests-ubsan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-ubsan-2:
+    name: Tests UBSan 2/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with UBSan
+        run: |
+          set -o pipefail
+          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=undefined"
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          {
+            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-ubsan.log" \
+            --title "Tests UBSan 2/4" \
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 -Dshard=2/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-ubsan-2-log
+          path: ${{ runner.temp }}/tests-ubsan.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-ubsan-3:
+    name: Tests UBSan 3/4
+    needs: [tests-0, tests-1, tests-2, tests-3]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the scenarios
+        uses: ./.github/actions/prepare-tests
+
+      - name: Run the test slice with UBSan
+        run: |
+          set -o pipefail
+          export CFLAGS="-fsanitize=undefined -fno-sanitize-recover=all -fno-omit-frame-pointer -g"
+          export CXXFLAGS="$CFLAGS"
+          export LDFLAGS="-fsanitize=undefined"
+          export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
+          {
+            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k &&
+            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests-ubsan.log" \
+            --title "Tests UBSan 3/4" \
+            --reproduce "CFLAGS/-fsanitize=undefined ./build -B .b-tu -Druns=1 -Dshard=3/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-ubsan-3-log
           path: ${{ runner.temp }}/tests-ubsan.log
           if-no-files-found: ignore
           retention-days: 7

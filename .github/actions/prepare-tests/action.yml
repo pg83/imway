@@ -1,0 +1,63 @@
+name: Prepare the runner for the scenarios
+description: >
+  Device nodes, PAM services and uinput rules the scenarios expect, and a
+  virtme-ng VM with timeline syncobjs for the explicit-sync scenarios
+  (dev/vng_wrap.sh, build.py -Dtest_wrap).
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare the runner for the test environment
+      shell: bash
+      run: |
+        # nested user namespaces for the sndio scenario's private /var/run
+        sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+        # dmabuf test buffers come from udmabuf (built into the azure
+        # kernel; modprobe is the fallback for modular kernels)
+        [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+        [ -e /dev/udmabuf ] || {
+          echo "no udmabuf device; kernel config:"
+          grep -i udmabuf "/boot/config-$(uname -r)" || true
+          exit 1
+        }
+        sudo chmod 666 /dev/udmabuf
+        # a drm node backs dmabuf fd validation and the KMS emulator's
+        # companion identity: a render node when the kernel offers one,
+        # else the hypervisor's card
+        sudo modprobe vgem 2>/dev/null || true
+        ls -l /dev/dri
+        sudo chmod 666 /dev/dri/*
+        # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
+        sudo chmod 666 /dev/tty[0-9]*
+        # the input scenario plugs virtual devices in through uinput; the
+        # nodes it creates have to be openable by the runner as well, and
+        # a missing uinput only makes that scenario skip
+        sudo modprobe uinput 2>/dev/null || true
+        [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
+        printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
+          sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
+        sudo udevadm control --reload-rules 2>/dev/null || true
+        # the lock screen's PAM path needs a service that exists before it
+        # can get as far as asking for the password: this one asks and
+        # then refuses, which is the whole conversation
+        printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+          sudo tee /etc/pam.d/imway-test >/dev/null
+        # and one that says yes, so the other half of the exchange runs:
+        # the account check after a successful authentication, and a
+        # message from the stack that is neither of the two prompts
+        echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+        printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+          sudo tee /etc/pam.d/imway-test-ok >/dev/null
+        vulkaninfo --summary || true
+
+    - name: Prepare a VM for the explicit-sync scenarios
+      shell: bash
+      run: |
+        # the runner's own DRM node has no timeline syncobjs; a virtme-ng
+        # VM on the runner's kernel with a virtio-gpu does, and
+        # dev/vng_wrap.sh runs single scenarios in one (-Dtest_wrap)
+        sudo apt-get install -y -qq qemu-system-x86 "linux-modules-extra-$(uname -r)" >/dev/null
+        pipx install virtme-ng >/dev/null
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        sudo chmod 666 /dev/kvm
+        sudo chmod a+r "/boot/vmlinuz-$(uname -r)"
