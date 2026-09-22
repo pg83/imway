@@ -78,8 +78,6 @@ jobs:
         run: |
           set -o pipefail
           {
-            python3 ./build -j "$(nproc)" -k imway_test &&
-            python3 ./build -j "$(nproc)" -k &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
@@ -121,8 +119,6 @@ jobs:
         run: |
           set -o pipefail
           {
-            python3 ./build -j "$(nproc)" -k imway_test &&
-            python3 ./build -j "$(nproc)" -k &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
@@ -164,8 +160,6 @@ jobs:
         run: |
           set -o pipefail
           {
-            python3 ./build -j "$(nproc)" -k imway_test &&
-            python3 ./build -j "$(nproc)" -k &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
@@ -207,8 +201,6 @@ jobs:
         run: |
           set -o pipefail
           {
-            python3 ./build -j "$(nproc)" -k imway_test &&
-            python3 ./build -j "$(nproc)" -k &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
@@ -260,8 +252,6 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -327,8 +317,6 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -394,8 +382,6 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -461,8 +447,6 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -590,8 +574,6 @@ jobs:
           # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
           export LP_NUM_THREADS=0
           {
-            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-ta -j "$(nproc)" -k &&
             python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
@@ -641,8 +623,6 @@ jobs:
           # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
           export LP_NUM_THREADS=0
           {
-            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-ta -j "$(nproc)" -k &&
             python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
@@ -692,8 +672,6 @@ jobs:
           # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
           export LP_NUM_THREADS=0
           {
-            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-ta -j "$(nproc)" -k &&
             python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
@@ -743,8 +721,6 @@ jobs:
           # libLLVM on a random scenario. No extra threads, no small stacks to overrun.
           export LP_NUM_THREADS=0
           {
-            python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-ta -j "$(nproc)" -k &&
             python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
@@ -789,8 +765,6 @@ jobs:
           export LDFLAGS="-fsanitize=undefined"
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           {
-            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-tu -j "$(nproc)" -k &&
             python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
@@ -835,8 +809,6 @@ jobs:
           export LDFLAGS="-fsanitize=undefined"
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           {
-            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-tu -j "$(nproc)" -k &&
             python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
@@ -881,8 +853,6 @@ jobs:
           export LDFLAGS="-fsanitize=undefined"
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           {
-            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-tu -j "$(nproc)" -k &&
             python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
@@ -927,8 +897,6 @@ jobs:
           export LDFLAGS="-fsanitize=undefined"
           export UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1
           {
-            python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
-            python3 ./build -B .b-tu -j "$(nproc)" -k &&
             python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
