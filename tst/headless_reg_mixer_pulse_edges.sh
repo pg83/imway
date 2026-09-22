@@ -39,38 +39,40 @@ key 113
 sleep 0.3
 expect_alive "compositor died pressing volume keys without a sink"
 
+# the level the compositor steps from; every step below waits until it
+# has learned the server's state, since the keys act on what it knows
+mixer_at() { [[ "$(dump_field '^mixer volume' volume)" == "$1" ]]; }
+
 # the first sink appears and becomes the default
 pa load-module module-null-sink sink_name=imway_a >/dev/null
 pa set-sink-volume imway_a 50%
+await 100 mixer_at 50 || { echo "the compositor never picked up the sink that appeared"; dump_state; exit 1; }
+key 115
 louder() { [[ "$(volume imway_a)" -gt 50 ]]; }
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    key 115
-    await 10 louder && break
-done
-louder || { echo "the keys never reached the sink that appeared ($(volume imway_a))"; exit 1; }
+await 50 louder || { echo "the key did not reach the sink that appeared ($(volume imway_a))"; exit 1; }
 
 # clamped at the top and at the bottom
 pa set-sink-volume imway_a 98%
-sleep 0.5 # the compositor learns the level from the server
+await 100 mixer_at 98 || { echo "the compositor did not learn the level 98"; dump_state; exit 1; }
 key 115
 top() { [[ "$(volume imway_a)" == 100 ]]; }
 await 50 top || { echo "stepping past full did not clamp at 100 ($(volume imway_a))"; exit 1; }
 pa set-sink-volume imway_a 2%
-sleep 0.5
+await 100 mixer_at 2 || { echo "the compositor did not learn the level 2"; dump_state; exit 1; }
 key 114
 bottom() { [[ "$(volume imway_a)" == 0 ]]; }
 await 50 bottom || { echo "stepping past silence did not clamp at 0 ($(volume imway_a))"; exit 1; }
+await 100 mixer_at 0 || { echo "the compositor did not settle at 0"; dump_state; exit 1; }
 
-# a second sink made the default takes the keys
+# a second sink made the default takes the keys, once the compositor has
+# heard of the switch (the old sink sits at 0, the new one at 50)
 pa load-module module-null-sink sink_name=imway_b >/dev/null
 pa set-sink-volume imway_b 50%
 pa set-default-sink imway_b
+await 100 mixer_at 50 || { echo "the compositor did not follow the new default sink"; dump_state; exit 1; }
+key 115
 b_louder() { [[ "$(volume imway_b)" -gt 50 ]]; }
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-    key 115
-    await 10 b_louder && break
-done
-b_louder || { echo "the keys did not follow the new default sink ($(volume imway_b))"; exit 1; }
+await 50 b_louder || { echo "the key did not reach the new default sink ($(volume imway_b))"; exit 1; }
 [[ "$(volume imway_a)" == 0 ]] || { echo "the old default sink still moved ($(volume imway_a))"; exit 1; }
 
 # pulseaudio dies
