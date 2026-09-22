@@ -58,6 +58,7 @@ for want in "depth=1 " "toggle=0 " "disposition=2 " "icon_w=0 " "shortcut= " "la
 done
 [[ "$(item 3)" == *"label="* && "$(item 3)" != *"plain"* ]] || fail "a non-variant property was read: $(item 3)"
 [[ -n "$(item 4)" ]] || fail "an id-only item was dropped"
+[[ "$(item 100)" == *"disposition=0 "* ]] || fail "a normal disposition was not read: $(item 100)"
 [[ -n "$(item 115)" && -z "$(item 116)" ]] || fail "the depth limit did not cut the chain at 16 levels"
 [[ "$(dump_state | grep -c '^menuitem ')" == 20 ]] || fail "the rich layout has a wrong item count"
 go rich
@@ -78,6 +79,7 @@ go updates
 
 wait_client "stage invalid"
 await 100 in_log "rejected invalid DBusMenu endpoint org.example.ImwayMenuPeer not a path" || fail "an invalid endpoint was not rejected"
+await 100 in_log "rejected invalid DBusMenu endpoint not..a..name /Menu" || fail "an invalid bus name was not rejected"
 [[ -z "$(menu_field ready)" ]] || fail "an invalid endpoint left a menu attached"
 go invalid
 
@@ -96,6 +98,7 @@ go orphaned
 
 wait_client "registrar answered malformed calls"
 wait_client "registrar tracked its peers"
+wait_client "registrar ignored the impostor"
 wait_client "menu peer done"
 expect_alive "compositor died under the hostile menu peer"
 

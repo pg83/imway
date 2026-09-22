@@ -165,6 +165,12 @@ static void chain(DBusMessageIter* children, int32_t id, int left) {
     DBusMessageIter var, node, props, kids;
 
     node_open(children, id, &var, &node, &props);
+
+    if (id == 100) {
+        prop_string(&props, "disposition", "normal");
+        prop_string(&props, "x-imway-unknown", "ignored");
+    }
+
     node_children(&node, &props, &kids);
 
     if (left > 0) {
@@ -172,6 +178,59 @@ static void chain(DBusMessageIter* children, int32_t id, int left) {
     }
 
     node_close(children, &var, &node, &kids);
+}
+
+static uint32_t crc32(const unsigned char* p, size_t n) {
+    uint32_t c = 0xffffffffu;
+
+    for (size_t i = 0; i < n; i++) {
+        c ^= p[i];
+
+        for (int k = 0; k < 8; k++) {
+            c = (c >> 1) ^ (0xedb88320u & (0u - (c & 1)));
+        }
+    }
+
+    return ~c;
+}
+
+static void put32(unsigned char* p, uint32_t v) {
+    p[0] = v >> 24;
+    p[1] = v >> 16;
+    p[2] = v >> 8;
+    p[3] = v;
+}
+
+/* a well-formed PNG header announcing w x h, then an empty IDAT and IEND:
+ * enough for the header to be read, too big for a menu icon */
+static int png_header(unsigned char* out, uint32_t w, uint32_t h) {
+    static const unsigned char sig[8] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    int at = 0;
+
+    memcpy(out, sig, 8);
+    at = 8;
+    put32(out + at, 13);
+    memcpy(out + at + 4, "IHDR", 4);
+    put32(out + at + 8, w);
+    put32(out + at + 12, h);
+    out[at + 16] = 8;
+    out[at + 17] = 6;
+    out[at + 18] = 0;
+    out[at + 19] = 0;
+    out[at + 20] = 0;
+    put32(out + at + 21, crc32(out + at + 4, 17));
+    at += 25;
+
+    static const char* tail[] = {"IDAT", "IEND"};
+
+    for (int i = 0; i < 2; i++) {
+        put32(out + at, 0);
+        memcpy(out + at + 4, tail[i], 4);
+        put32(out + at + 8, crc32(out + at + 4, 4));
+        at += 12;
+    }
+
+    return at;
 }
 
 static void rich_children(DBusMessageIter* children) {
@@ -202,6 +261,11 @@ static void rich_children(DBusMessageIter* children) {
         prop_strings(&props2, "icon-data", "a", "b");
         prop_bytes(&props2, "icon-data", NULL, 0);
         prop_bytes(&props2, "icon-data", junk, (int)sizeof(junk));
+
+        unsigned char wide[64], tall[64];
+
+        prop_bytes(&props2, "icon-data", wide, png_header(wide, 2000, 1));
+        prop_bytes(&props2, "icon-data", tall, png_header(tall, 1, 2000));
         prop_u32(&props2, "label", 7);
         node_children(&node2, &props2, &kids2);
         node_close(&kids, &var2, &node2, &kids2);
@@ -591,6 +655,37 @@ static DBusConnection* second_connection(void) {
     return c;
 }
 
+/* a peer impersonating the bus: a unicast NameOwnerChanged claiming the
+ * victim left. Only org.freedesktop.DBus speaks for bus names. */
+static void forge_departure(const char* service, const char* victim) {
+    DBusMessage* call = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "GetNameOwner");
+    const char* owner = "";
+    const char* none = "";
+
+    dbus_message_append_args(call, DBUS_TYPE_STRING, &service, DBUS_TYPE_INVALID);
+
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block(bus, call, 2000, NULL);
+
+    dbus_message_unref(call);
+
+    if (!reply || !dbus_message_get_args(reply, NULL, DBUS_TYPE_STRING, &owner, DBUS_TYPE_INVALID)) {
+        fprintf(stderr, "nobody owns %s\n", service);
+        exit(1);
+    }
+
+    DBusMessage* sig = dbus_message_new_signal(DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "NameOwnerChanged");
+
+    dbus_message_set_destination(sig, owner);
+    dbus_message_append_args(sig, DBUS_TYPE_STRING, &victim, DBUS_TYPE_STRING, &victim, DBUS_TYPE_STRING, &none, DBUS_TYPE_INVALID);
+    dbus_message_unref(reply);
+    emit(sig);
+
+    /* and one whose arguments are not even names */
+    sig = dbus_message_new_signal(DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "NameOwnerChanged");
+    dbus_message_set_destination(sig, owner);
+    emit(sig);
+}
+
 static void registrar_checks(void) {
     DBusMessage* reply;
 
@@ -657,6 +752,15 @@ static void registrar_checks(void) {
     }
 
     puts("registrar tracked its peers");
+
+    forge_departure(kRegistrar, dbus_bus_get_unique_name(bus));
+
+    if (listed(bus, 4242) != 1) {
+        fprintf(stderr, "a forged NameOwnerChanged dropped the registration\n");
+        exit(1);
+    }
+
+    puts("registrar ignored the impostor");
 }
 
 int main(void) {
@@ -744,6 +848,7 @@ int main(void) {
 
     /* an address that is no address */
     set_address(kName, "not a path");
+    set_address("not..a..name", "/Menu");
     stage("invalid");
 
     /* the endpoint by its unique name; a layout left unanswered while the

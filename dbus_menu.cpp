@@ -437,7 +437,9 @@ namespace {
     DBusHandlerResult busFilter(DBusConnection*, DBusMessage* msg, void* data) {
         auto* menus = (MenusImpl*)data;
 
-        if (dbus_message_is_signal(msg, DBUS_INTERFACE_DBUS, "NameOwnerChanged")) {
+        // any peer can unicast a signal named like the bus's own; only the
+        // bus speaks for who owns a name
+        if (dbus_message_is_signal(msg, DBUS_INTERFACE_DBUS, "NameOwnerChanged") && dbus_message_has_sender(msg, DBUS_SERVICE_DBUS)) {
             menus->nameOwnerChanged(msg);
         } else if (dbus_message_get_type(msg) == DBUS_MESSAGE_TYPE_SIGNAL) {
             menus->signal(msg);
