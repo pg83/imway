@@ -518,12 +518,24 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
+        with:
+          use_oidc: true
+          files: ${{ runner.temp }}/coverage-report/coverage.info
+          disable_search: true
+          fail_ci_if_error: true
+          name: linux-clang
+          verbose: true
+
       - name: Render browsable report
+        # the page is for people; Codecov already has the numbers
+        continue-on-error: true
         run: |
           sudo apt-get install -y -qq lcov >/dev/null
           report="$RUNNER_TEMP/coverage-report"
           genhtml --branch-coverage \
-            --ignore-errors inconsistent,category,count,range,source \
+            --ignore-errors inconsistent,category,count,source \
             --output-directory "$report/html" \
             "$report/coverage.info"
 
@@ -535,16 +547,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           compression-level: 9
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
-        with:
-          use_oidc: true
-          files: ${{ runner.temp }}/coverage-report/coverage.info
-          disable_search: true
-          fail_ci_if_error: true
-          name: linux-clang
-          verbose: true
 
   tests-asan-0:
     name: Tests ASan 0/4
