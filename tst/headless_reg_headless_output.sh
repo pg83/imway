@@ -17,6 +17,13 @@ changed() { # <a> <b>
     region_diff "$XDG_RUNTIME_DIR/$1.ppm" "$XDG_RUNTIME_DIR/$2.ppm" 0 0 1280 800
 }
 
+# a steady blue-grey window gives every comparison below the same bright
+# content, whatever the host's panel shows
+IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_tablet"
+start_client
+wait_client "tool ready"
+wait_rect 'app_id=tablet-test'
+
 shot base
 ctl "sdr-white 250"
 ctl "night 7000"
@@ -26,10 +33,11 @@ shot same
 [[ "$(changed base same)" -eq 0 ]] || { echo "a no-op color control changed pixels ($(changed base same))"; exit 1; }
 [[ "$(dump_field '^hdr' metadata)" == 0 ]] || { echo "an SDR output reports HDR metadata"; dump_state; exit 1; }
 
-# the measure itself: a real night-light temperature does move pixels
+# the measure itself: a real night-light temperature moves the window's
+# blue well past region_diff's threshold, all 400x300 of it
 ctl "night 3000"
 shot warm
-[[ "$(changed base warm)" -gt 1000 ]] || { echo "night light 3000K changed nothing"; exit 1; }
+[[ "$(changed base warm)" -gt 100000 ]] || { echo "night light 3000K changed only $(changed base warm) pixels"; exit 1; }
 ctl "night 0"
 
 cll() { dump_field '^hdr' max_cll; }
