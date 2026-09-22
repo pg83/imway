@@ -10,6 +10,7 @@
 #include "input_sink.h"
 #include "log_extern.h"
 
+#include <std/sys/fs.h>
 #include <std/ios/sys.h>
 #include <std/dbg/verify.h>
 #include <std/mem/obj_pool.h>
@@ -249,10 +250,18 @@ LibinputSource::LibinputSource(Composer& c)
 
     int devices = 0;
 
-    for (int i = 0; i < 64; i++) {
-        if (pathAdd(i)) {
-            devices++;
-        }
+    // only the nodes that are there: libinput logs every path it cannot
+    // open as a client bug, and most of the 64 slots are empty
+    try {
+        listDir(StringView(dir), [this, &devices](const TPathInfo& e) {
+            StringView name = e.item;
+
+            if (name.startsWith("event"_sv) && pathAdd((int)StringView(name.begin() + 5, name.end()).stou())) {
+                devices++;
+            }
+        });
+    } catch (...) {
+        // no directory, no devices; the watch below reports none either
     }
 
     inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);

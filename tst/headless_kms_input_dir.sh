@@ -13,6 +13,9 @@ set -euo pipefail
 in_log "libinput ready, 0 devices" || { echo "the KMS session brought up no libinput source"; cat "$IMWAY_LOG"; exit 1; }
 
 dir="$XDG_RUNTIME_DIR/input"
+
+# the directory is empty at boot: nothing in it was handed to libinput
+! grep -q "Invalid path $dir/" "$IMWAY_LOG" || { echo "boot probed evdev nodes that are not there"; grep -c "Invalid path" "$IMWAY_LOG"; exit 1; }
 probes() { grep -c "Invalid path $dir/$1\$" "$IMWAY_LOG" || true; }
 
 # await re-runs its command, so the count is read inside a function
