@@ -119,7 +119,9 @@ int main(void) {
     }
 
     printf("victim frame callbacks in 1.2s: %d\n", frames_seen);
-    if (frames_seen < 30) {
+    // a stalled loop delivers none at all; a software renderer in a small
+    // VM manages a dozen, so the bar is "keeps going", not a frame rate
+    if (frames_seen < 5) {
         fprintf(stderr, "compositor frame loop stalled by unsignaled acquire points (%d callbacks in 1.2s)\n", frames_seen);
         return 1;
     }
