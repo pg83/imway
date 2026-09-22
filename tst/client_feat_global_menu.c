@@ -487,7 +487,7 @@ static struct wl_buffer* green_buffer(void) {
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    alarm(40);
+    alarm(55);
 
     DBusError error;
 

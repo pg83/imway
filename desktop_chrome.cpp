@@ -78,6 +78,8 @@ namespace {
             return;
         }
 
+        result.barWindowId = ImGui::GetCurrentWindow()->ID;
+
         if (c.settings->topBarAppId() && !info.focusedAppId.empty()) {
             ImGui::TextUnformatted((const char*)info.focusedAppId.begin(), (const char*)info.focusedAppId.end());
             result.barAppId = info.focusedAppId;

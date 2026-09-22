@@ -72,6 +72,20 @@ await 50 menu_shown || { echo "File did not open again"; exit 1; }
 click_at "$file_x" 10
 await 50 menu_hidden || { echo "a second click on File did not close its popup"; exit 1; }
 
+# The bar is the focused application's: clicking it, and closing a menu on
+# it, leaves that application focused and its menu on the bar.
+app_focused() {
+    [[ "$(dump_field '^focus ' id)" == "$(dump_field 'app_id=dbusmenu-conform' id)" && "$(dump_field '^bar ' app_id)" == dbusmenu-conform ]]
+}
+holds_focus() { # <what>
+    local i
+    for i in $(seq 5); do
+        app_focused || { echo "$1 took the focus from the application"; dump_state; exit 1; }
+        sleep 0.1
+    done
+}
+holds_focus "closing a menu on the bar"
+
 # Help is a leaf right on the bar: a click activates it with no popup. The
 # dump reports where the bar drew each heading; aim at Help's centre from
 # there. The client finishes only once it has seen both activations.

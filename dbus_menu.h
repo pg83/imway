@@ -37,6 +37,8 @@ struct DBusMenuItem {
     bool submenu = false;
     // renderer-local edge detector for AboutToShow; not remote model state
     bool open = false;
+    // the bar heading's own press closed its menu; its release is spent
+    bool closedByPress = false;
 #ifdef IMWAY_FOR_TESTS
     // where the global menu bar drew this heading last frame (x0, y0, x1,
     // y1; -1 while it is not on the bar), for the state dump

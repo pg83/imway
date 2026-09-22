@@ -31,6 +31,9 @@ struct DesktopChromeResult {
     float wifiX1 = -1.f;
     float wifiY1 = -1.f;
     char launchApp[128] = "";
+    // the top bar's ImGui window, 0 when it was not drawn: ImGui focus
+    // sitting on it is not a change of the client focus
+    unsigned barWindowId = 0;
 };
 
 // The Unity-like desktop chrome is one public widget.  Internally its two

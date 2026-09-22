@@ -172,14 +172,25 @@ void drawDBusMenuBar(Composer& c, DBusMenu& menu) {
             recordBarRect(*item);
 #endif
 
+            // ImGui closes a popup on the press of a click outside it, and a
+            // heading acts on the release: the release of a press on the
+            // open heading must not reopen the menu that press closed
+            if (item->open && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup)) {
+                item->closedByPress = true;
+            }
+
             if (clicked) {
                 if (item->open) {
                     item->open = false;
-                } else {
+                } else if (!item->closedByPress) {
                     item->open = true;
                     menu.prepare(item->id);
                     ImGui::OpenPopup("##dbus-root");
                 }
+            }
+
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                item->closedByPress = false;
             }
 
             if (item->open && ImGui::BeginPopup("##dbus-root")) {

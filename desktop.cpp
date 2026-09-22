@@ -2008,7 +2008,13 @@ void DesktopImpl::buildUi(Scene& scene) {
     // state took it straight back. An ImGui popup is compositor UI: its nav
     // focus must not erase the Wayland client focus (and, for a global
     // menu, its own data source).
-    if (imguiFocus != imguiFocused.get() && (imguiFocus || GImGui->OpenPopupStack.empty())) {
+    // The top bar belongs to the focused client too (its global menu lives
+    // there): ImGui focus landing on the bar, by a click there or a menu
+    // closing back to it, keeps the client focused.
+    ImGuiWindow* nav = GImGui->NavWindow;
+    bool barFocused = nav && chromeResult.barWindowId && nav->RootWindow->ID == chromeResult.barWindowId;
+
+    if (imguiFocus != imguiFocused.get() && (imguiFocus || (GImGui->OpenPopupStack.empty() && !barFocused))) {
         if (imguiFocus) {
             imguiFocused.bind(imguiFocus->weak);
             scene.focusedToplevel.bind(imguiFocus->weak);
