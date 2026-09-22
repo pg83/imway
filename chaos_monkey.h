@@ -60,6 +60,10 @@ struct ChaosMonkey {
     // a GPU readback's fence as its poll delivers it: the screenshot's, or
     // the frame capture's that screencopy clients wait on
     virtual VkResult readbackFence(VkResult result) = 0;
+    // the texture descriptor chain: a pool being created for it, and a set
+    // being allocated from one of its pools
+    virtual VkResult descriptorPool(VkResult result) = 0;
+    virtual VkResult descriptorSet(VkResult result) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one

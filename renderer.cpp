@@ -1913,7 +1913,7 @@ void RendererImpl::setup() {
 
     setupOutputTransform();
 
-    texPool = VkTexturePool::create(*pool, device, sampler);
+    texPool = VkTexturePool::create(*pool, device, sampler, *comp->chaos);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -2345,7 +2345,7 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
             vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
         }
 
-        if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
+        if (allocated(true, vkCreateImageView(device, &vci, nullptr, &tex->view)) != VK_SUCCESS) {
             destroyTexture(tex);
             alloc->release(s.frame);
             s.frame = nullptr;

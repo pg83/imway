@@ -6,6 +6,8 @@ namespace stl {
     class ObjPool;
 }
 
+struct ChaosMonkey;
+
 // A growable allocator of imgui-compatible texture descriptor sets. imgui's
 // own AddTexture draws from a single fixed pool a client can exhaust (one
 // descriptor set per mapped surface) and then crash the driver; this owns a
@@ -24,5 +26,5 @@ struct VkTexturePool {
     virtual VkDescriptorSet alloc(VkImageView view, VkImageLayout layout, VkDescriptorPool& outPool, VkImageView chromaView = VK_NULL_HANDLE) = 0;
     virtual void free(VkDescriptorSet set, VkDescriptorPool pool) = 0;
 
-    static VkTexturePool* create(stl::ObjPool& pool, VkDevice device, VkSampler sampler);
+    static VkTexturePool* create(stl::ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
 };

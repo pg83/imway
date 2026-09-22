@@ -2,6 +2,7 @@
 
 #include "util.h"
 #include "pooled.h"
+#include "chaos_monkey.h"
 
 #include <std/lib/vector.h>
 #include <std/mem/obj_pool.h>
@@ -15,7 +16,7 @@ namespace {
     constexpr u32 kMaxShift = 16; // clamp so the chunk size never overflows u32
 
     struct VkTexturePoolImpl: public VkTexturePool {
-        VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler);
+        VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
 
         VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
@@ -26,15 +27,17 @@ namespace {
         ObjPool& pool;
         VkDevice device;
         VkSampler sampler;
+        ChaosMonkey* chaos;
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
         Vector<VkDescriptorPool> chunks;
     };
 }
 
-VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s)
+VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosMonkey& c)
     : pool(p)
     , device(d)
     , sampler(s)
+    , chaos(&c)
 {
     // identical to imgui's texture descriptor set layout, so imgui binds our
     // sets as-is. Binding 1 carries the interleaved UV plane for NV12/P010.
@@ -73,7 +76,7 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
 
     VkDescriptorPool p = VK_NULL_HANDLE;
 
-    if (vkCreateDescriptorPool(device, &dpci, nullptr, &p) != VK_SUCCESS) {
+    if (chaos->descriptorPool(vkCreateDescriptorPool(device, &dpci, nullptr, &p)) != VK_SUCCESS) {
         return VK_NULL_HANDLE;
     }
 
@@ -120,7 +123,7 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
 
         ai.descriptorPool = p;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        VkResult r = vkAllocateDescriptorSets(device, &ai, &set);
+        VkResult r = chaos->descriptorSet(vkAllocateDescriptorSets(device, &ai, &set));
 
         if (r == VK_SUCCESS) {
             write(set, view, chromaView, imageLayout);
@@ -145,6 +148,6 @@ void VkTexturePoolImpl::free(VkDescriptorSet set, VkDescriptorPool pool) {
     }
 }
 
-VkTexturePool* VkTexturePool::create(ObjPool& pool, VkDevice device, VkSampler sampler) {
-    return pool.make<VkTexturePoolImpl>(pool, device, sampler);
+VkTexturePool* VkTexturePool::create(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos) {
+    return pool.make<VkTexturePoolImpl>(pool, device, sampler, chaos);
 }

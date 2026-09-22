@@ -52,6 +52,10 @@ using namespace stl;
 //   frame-hang=K      the same, reporting the wait timing out instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
+//   descriptor-pool=K K texture descriptor pool creations pass, the one
+//                     after runs out of device memory
+//   descriptor-set=K  K texture descriptor set allocations pass, every
+//                     later one runs out of device memory
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -97,6 +101,8 @@ namespace {
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
         int readbackFenceSkip = -1;
+        int descriptorPoolSkip = -1;
+        int descriptorSetSkip = -1;
         // buses
         BusRule busRules[8];
         int busSendBuffer = 0;
@@ -123,6 +129,8 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        VkResult descriptorPool(VkResult result) override;
+        VkResult descriptorSet(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -195,6 +203,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
     } else if (fault == "readback-fence"_sv) {
         readbackFenceSkip = (int)arg.stou();
+    } else if (fault == "descriptor-pool"_sv) {
+        descriptorPoolSkip = (int)arg.stou();
+    } else if (fault == "descriptor-set"_sv) {
+        descriptorSetSkip = (int)arg.stou();
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -420,6 +432,32 @@ VkResult TestChaosMonkey::readbackFence(VkResult result) {
     return VK_ERROR_DEVICE_LOST;
 }
 
+VkResult TestChaosMonkey::descriptorPool(VkResult result) {
+    if (descriptorPoolSkip < 0) {
+        return result;
+    }
+
+    if (descriptorPoolSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
+VkResult TestChaosMonkey::descriptorSet(VkResult result) {
+    if (descriptorSetSkip < 0) {
+        return result;
+    }
+
+    if (descriptorSetSkip > 0) {
+        descriptorSetSkip--;
+
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 // buses
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
     if (!busFires(BusFault::message, built)) {
@@ -476,6 +514,8 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        VkResult descriptorPool(VkResult result) override;
+        VkResult descriptorSet(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -538,6 +578,14 @@ VkResult IdleChaosMonkey::frameFence(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::readbackFence(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::descriptorPool(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::descriptorSet(VkResult result) {
     return result;
 }
 
