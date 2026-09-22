@@ -1039,9 +1039,10 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         sci.pNext = &exp;
         vkDestroySemaphore(device, syncOut, nullptr);
 
-        if (vkCreateSemaphore(device, &sci, nullptr, &syncOut) != VK_SUCCESS) {
+        if (comp->chaos->syncWait(vkCreateSemaphore(device, &sci, nullptr, &syncOut)) != VK_SUCCESS) {
             syncOut = VK_NULL_HANDLE;
             hasSyncFd = false;
+            *(comp->log) << "imway: cannot recreate the SYNC_FD semaphore, implicit-sync bridge disabled"_sv << endL;
         }
     }
 
@@ -4115,7 +4116,14 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
         int outFd = -1;
 
-        if (getSemFd(device, &gfi, &outFd) == VK_SUCCESS && outFd >= 0) {
+        bool exported = getSemFd(device, &gfi, &outFd) == VK_SUCCESS && outFd >= 0;
+
+        if (exported) {
+            outFd = comp->chaos->syncFile(outFd);
+            exported = outFd >= 0;
+        }
+
+        if (exported) {
             for (int fd : frameSyncFds) {
                 dma_buf_import_sync_file imp{};
 

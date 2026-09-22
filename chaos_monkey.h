@@ -64,12 +64,14 @@ struct ChaosMonkey {
     // being allocated from one of its pools
     virtual VkResult descriptorPool(VkResult result) = 0;
     virtual VkResult descriptorSet(VkResult result) = 0;
-    // a sync file the renderer exported to wait on before sampling a
-    // client's dma-buf (implicit or explicit sync); a replacement failure
-    // closes the fd it was handed and returns -1
+    // a sync file the renderer exported: to wait on before sampling a
+    // client's dma-buf (implicit or explicit sync), or its own frame's
+    // fence to hand back to those dma-bufs; a replacement failure closes
+    // the fd it was handed and returns -1
     virtual int syncFile(int fd) = 0;
-    // the result of turning such a sync file into a semaphore the frame
-    // waits on: creating the semaphore, importing the fd into it
+    // the result of making or filling a sync-file semaphore: one the frame
+    // waits on (creating it, importing the fd into it), or the frame's own
+    // signal semaphore being recreated
     virtual VkResult syncWait(VkResult result) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
