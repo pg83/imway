@@ -206,12 +206,13 @@ namespace {
         }
     }
 
+    // what the vendored ImGui ever asks for: nothing here calls
+    // SetMouseCursor, and its only Hand producers (TextLink, the debug item
+    // picker) are never used
     plt::PointerIcon pointerIcon(ImGuiMouseCursor cursor) {
         switch (cursor) {
             case ImGuiMouseCursor_TextInput:
                 return plt::PointerIcon::Text;
-            case ImGuiMouseCursor_ResizeAll:
-                return plt::PointerIcon::ResizeAll;
             case ImGuiMouseCursor_ResizeNS:
                 return plt::PointerIcon::ResizeNorthSouth;
             case ImGuiMouseCursor_ResizeEW:
@@ -220,14 +221,6 @@ namespace {
                 return plt::PointerIcon::ResizeNorthEastSouthWest;
             case ImGuiMouseCursor_ResizeNWSE:
                 return plt::PointerIcon::ResizeNorthWestSouthEast;
-            case ImGuiMouseCursor_Hand:
-                return plt::PointerIcon::Pointer;
-            case ImGuiMouseCursor_Wait:
-                return plt::PointerIcon::Wait;
-            case ImGuiMouseCursor_Progress:
-                return plt::PointerIcon::Progress;
-            case ImGuiMouseCursor_NotAllowed:
-                return plt::PointerIcon::NotAllowed;
             default:
                 return plt::PointerIcon::Default;
         }

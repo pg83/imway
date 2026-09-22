@@ -18,12 +18,19 @@ geometry() { # -> x y w h client_w client_h
 }
 
 # press at (x,y) after two frames of hover, walk the pointer by (dx,dy) in
-# steps, then release
-drag() { # <x> <y> <dx> <dy>
+# steps, then release. With <cursor>, the hover must have drawn that cursor
+# kind first (the dump's CursorKind ordinal): the handle is what ImGui
+# thinks is under the pointer.
+drag() { # <x> <y> <dx> <dy> [cursor]
     ctl "motion $1 $2"
     screenshot "$XDG_RUNTIME_DIR/_f.ppm"
     ctl "motion $1 $2"
     screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+    if [[ -n "${5:-}" ]]; then
+        want_cursor=$5
+        cursor_is() { [[ "$(dump_field '^cursor ' drawn)" == "$want_cursor" ]]; }
+        await 50 cursor_is || { echo "hovering $1,$2 drew cursor $(dump_field '^cursor ' drawn), not $want_cursor"; exit 1; }
+    fi
     ctl "button left press"
     screenshot "$XDG_RUNTIME_DIR/_f.ppm"
     for s in 1 2 3 4 5; do
@@ -61,7 +68,7 @@ await 100 moved || { echo "the title bar drag did not move the window: $(geometr
 read -r x y w h cw ch <<<"$(geometry)"
 
 # top border, 40px up
-drag $((x + w / 2)) "$y" 0 -40
+drag $((x + w / 2)) "$y" 0 -40 27 # nsResize
 await 100 settled_since "$cw" "$ch" || { echo "the top border drag did not resize: $(geometry)"; exit 1; }
 read -r nx ny nw nh ncw nch <<<"$(geometry)"
 echo "top: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
@@ -71,7 +78,7 @@ echo "top: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
 x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
 
 # bottom-left grip, 40px left and 30px down
-drag $((x + 3)) $((y + h - 3)) -40 30
+drag $((x + 3)) $((y + h - 3)) -40 30 28 # neswResize
 await 100 settled_since "$cw" "$ch" || { echo "the bottom-left grip did not resize: $(geometry)"; exit 1; }
 read -r nx ny nw nh ncw nch <<<"$(geometry)"
 echo "bottom-left: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"

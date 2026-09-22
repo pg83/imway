@@ -368,6 +368,8 @@ namespace {
         }
     }
 
+    // never handed CursorKind::hidden: cursorUi draws nothing for it, and
+    // the renderer's hardware plane hides itself before rasterizing
     void drawCursorKind(ImDrawList* dl, ImVec2 p, float s, CursorKind kind) {
         // NB: AddConcavePolyFilled wants this winding, reversed it fills the convex hull
         static const ImVec2 arrow[] = {{12.2f, 11.8f}, {6.8f, 11.8f}, {9.5f, 17.8f}, {6.9f, 18.9f}, {4.2f, 12.9f}, {0.f, 16.5f}, {0.f, 0.f}};
@@ -381,8 +383,6 @@ namespace {
         const float R = 0.70710678f;
 
         switch (kind) {
-            case CursorKind::hidden:
-                return;
             case CursorKind::text:
                 cursorBeam(dl, p, s, false);
                 return;
@@ -525,15 +525,13 @@ namespace {
     }
 
     // ImGui's own cursor requests (widget hover, resize edges) fold into
-    // the same currency the wayland side speaks
+    // the same currency the wayland side speaks. These are all the vendored
+    // ImGui ever asks for: nothing here calls SetMouseCursor, and its only
+    // Hand producers (TextLink, the debug item picker) are never used
     CursorKind imguiCursorKind(ImGuiMouseCursor c) {
         switch (c) {
-            case ImGuiMouseCursor_None:
-                return CursorKind::hidden;
             case ImGuiMouseCursor_TextInput:
                 return CursorKind::text;
-            case ImGuiMouseCursor_ResizeAll:
-                return CursorKind::move;
             case ImGuiMouseCursor_ResizeNS:
                 return CursorKind::nsResize;
             case ImGuiMouseCursor_ResizeEW:
@@ -542,14 +540,6 @@ namespace {
                 return CursorKind::neswResize;
             case ImGuiMouseCursor_ResizeNWSE:
                 return CursorKind::nwseResize;
-            case ImGuiMouseCursor_Hand:
-                return CursorKind::pointer;
-            case ImGuiMouseCursor_Wait:
-                return CursorKind::wait;
-            case ImGuiMouseCursor_Progress:
-                return CursorKind::progress;
-            case ImGuiMouseCursor_NotAllowed:
-                return CursorKind::notAllowed;
             default:
                 return CursorKind::def;
         }
