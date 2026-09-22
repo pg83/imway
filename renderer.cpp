@@ -1256,7 +1256,7 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
     bci.size = (VkDeviceSize)st.st_size;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-    if (vkCreateBuffer(device, &bci, nullptr, &upload->buffer) != VK_SUCCESS) {
+    if (comp->chaos->clientImport(vkCreateBuffer(device, &bci, nullptr, &upload->buffer)) != VK_SUCCESS) {
         return nullptr;
     }
 
@@ -1266,7 +1266,7 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
 
     VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
-    if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, dmabuf.fds[0], &fdProps) != VK_SUCCESS) {
+    if (comp->chaos->clientImport(getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, dmabuf.fds[0], &fdProps)) != VK_SUCCESS) {
         return nullptr;
     }
 
@@ -1313,7 +1313,7 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
         return nullptr;
     }
 
-    if (vkBindBufferMemory(device, upload->buffer, upload->memory, 0) != VK_SUCCESS) {
+    if (comp->chaos->clientImport(vkBindBufferMemory(device, upload->buffer, upload->memory, 0)) != VK_SUCCESS) {
         return nullptr;
     }
 
@@ -1355,7 +1355,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
 
     VkExternalMemoryHandleTypeFlagBits handle = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
     VkMemoryHostPointerPropertiesEXT hostProps{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
-    VkResult result = vkDevice->getMemoryHostPointerProps(device, handle, content.poolData, &hostProps);
+    VkResult result = comp->chaos->clientImport(vkDevice->getMemoryHostPointerProps(device, handle, content.poolData, &hostProps));
 
     if (result != VK_SUCCESS || !hostProps.memoryTypeBits) {
         *comp->log << "imway: wl_shm external-host pointer is not importable ("_sv << (long)result << ")"_sv << endL;
@@ -1377,7 +1377,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
     bci.size = (VkDeviceSize)content.offset + span;
     bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
 
-    result = vkCreateBuffer(device, &bci, nullptr, &upload->buffer);
+    result = comp->chaos->clientImport(vkCreateBuffer(device, &bci, nullptr, &upload->buffer));
 
     if (result != VK_SUCCESS) {
         *comp->log << "imway: wl_shm external-host vkCreateBuffer failed ("_sv << (long)result << ")"_sv << endL;
@@ -1423,7 +1423,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
     allocate.allocationSize = allocationSize;
     allocate.memoryTypeIndex = memoryType;
 
-    result = vkAllocateMemory(device, &allocate, nullptr, &upload->memory);
+    result = comp->chaos->clientImport(vkAllocateMemory(device, &allocate, nullptr, &upload->memory));
 
     if (result != VK_SUCCESS) {
         *comp->log << "imway: wl_shm external-host allocation failed ("_sv << (long)result << ")"_sv << endL;
@@ -1431,7 +1431,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
         return nullptr;
     }
 
-    result = vkBindBufferMemory(device, upload->buffer, upload->memory, 0);
+    result = comp->chaos->clientImport(vkBindBufferMemory(device, upload->buffer, upload->memory, 0));
 
     if (result != VK_SUCCESS) {
         *comp->log << "imway: wl_shm external-host bind failed ("_sv << (long)result << ")"_sv << endL;
