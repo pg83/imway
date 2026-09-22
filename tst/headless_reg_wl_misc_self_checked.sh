@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Requests whose answer the client checks itself: popups dismissed with an
+# unmapped parent (with the v3 positioner parent hints) and the wm_base
+# destroyed after its objects, a minimized v6 toplevel told it is suspended,
+# a foreign-toplevel list bound after a map and stopped, the data-control
+# loopback offer received, a toplevel-drag object destroyed before a drag,
+# and an input method's keyboard grab released and taken again.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_wl_misc"
+next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next step
+
+for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab; do
+    "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
+    expect_alive "the compositor died in $mode"
+done
+echo "OK: every self-checked request was answered as the protocol says"
