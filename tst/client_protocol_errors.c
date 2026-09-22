@@ -200,7 +200,8 @@ static int listening_socket(void) {
 }
 
 // a context with all of its metadata in place and committed
-static struct wp_security_context_v1* committed_context(void) {
+// a context on a real listening socket with none of its metadata set yet
+static struct wp_security_context_v1* fresh_context(void) {
     int listen_fd = listening_socket();
     int pair[2];
 
@@ -214,6 +215,17 @@ static struct wp_security_context_v1* committed_context(void) {
     close(listen_fd);
     close(pair[0]);
     close(pair[1]);
+
+    return ctx;
+}
+
+static struct wp_security_context_v1* committed_context(void) {
+    struct wp_security_context_v1* ctx = fresh_context();
+
+    if (!ctx) {
+        return NULL;
+    }
+
     wp_security_context_v1_set_sandbox_engine(ctx, "imway.test");
     wp_security_context_v1_set_app_id(ctx, "imway.test.app");
     wp_security_context_v1_set_instance_id(ctx, "1");
@@ -606,6 +618,57 @@ int main(int argc, char** argv) {
 
         return expect_error(display, wp_security_context_v1_interface.name,
                             WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA);
+    }
+
+    if (!strcmp(argv[1], "security-listen-not-socket")) {
+        int fd = memfd_create("not-a-socket", 0);
+        int pair[2];
+
+        if (fd < 0 || socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, pair) < 0) return 2;
+
+        // not a socket at all: SO_ACCEPTCONN cannot even be asked
+        wp_security_context_manager_v1_create_listener(security, fd, pair[1]);
+        close(fd);
+        close(pair[0]);
+        close(pair[1]);
+
+        return expect_error(display, wp_security_context_manager_v1_interface.name,
+                            WP_SECURITY_CONTEXT_MANAGER_V1_ERROR_INVALID_LISTEN_FD);
+    }
+
+    // each piece of metadata is required on its own, and each can be set
+    // only once
+    if (!strcmp(argv[1], "security-no-app-id") || !strcmp(argv[1], "security-no-instance")) {
+        struct wp_security_context_v1* ctx = fresh_context();
+
+        if (!ctx) return 2;
+
+        wp_security_context_v1_set_sandbox_engine(ctx, "imway.test");
+        if (!strcmp(argv[1], "security-no-instance"))
+            wp_security_context_v1_set_app_id(ctx, "imway.test.app");
+        wp_security_context_v1_commit(ctx);
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_INVALID_METADATA);
+    }
+
+    if (!strcmp(argv[1], "security-engine-twice") || !strcmp(argv[1], "security-app-id-twice") ||
+        !strcmp(argv[1], "security-instance-twice")) {
+        struct wp_security_context_v1* ctx = fresh_context();
+
+        if (!ctx) return 2;
+
+        for (int i = 0; i < 2; i++) {
+            if (!strcmp(argv[1], "security-engine-twice"))
+                wp_security_context_v1_set_sandbox_engine(ctx, "imway.test");
+            else if (!strcmp(argv[1], "security-app-id-twice"))
+                wp_security_context_v1_set_app_id(ctx, "imway.test.app");
+            else
+                wp_security_context_v1_set_instance_id(ctx, "1");
+        }
+
+        return expect_error(display, wp_security_context_v1_interface.name,
+                            WP_SECURITY_CONTEXT_V1_ERROR_ALREADY_SET);
     }
 
     if (!strcmp(argv[1], "security-engine-after-commit")) {

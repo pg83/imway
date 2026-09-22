@@ -20,7 +20,9 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             icon-not-shm icon-not-square reposition-bad-positioner \
             security-bad-listen-fd security-incomplete security-engine-after-commit \
             security-appid-after-commit security-instance-after-commit \
-            security-commit-twice \
+            security-commit-twice security-listen-not-socket security-no-app-id \
+            security-no-instance security-engine-twice security-app-id-twice \
+            security-instance-twice \
             capture-bad-option capture-bad-damage capture-damage-left \
             capture-damage-above capture-damage-flat capture-attach-after \
             capture-damage-after capture-twice \
