@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # imway-env: IMWAY_SETTINGS=audio.backend=2 PULSE_SERVER=unix:./pulse/native
-# imway-pre: mkdir -p pulse; (pulseaudio -n --daemonize=no --exit-idle-time=-1 --disable-shm=yes --log-target=file:$PWD/pulse/log --load="module-native-protocol-unix socket=$PWD/pulse/native auth-anonymous=1" >/dev/null 2>&1 & echo $! > pulse/pid); for i in $(seq 1 80); do [ -S pulse/native ] && break; sleep 0.1; done; exit 0
+# imway-pre: mkdir -p pulse; (pulseaudio -n --daemonize=no --exit-idle-time=-1 --disable-shm=yes --log-target=file:$PWD/pulse/log --load="module-native-protocol-unix socket=$PWD/pulse/native auth-anonymous=1" >/dev/null 2>&1 & echo $! > pulse.pid); for i in $(seq 1 80); do [ -S pulse/native ] && break; sleep 0.1; done; exit 0
 # The pulse mixer at its edges, on a private pulseaudio that starts with no
 # sink at all: the volume keys have nothing to act on until a null sink
 # is loaded, which the compositor picks up from the server's events; the
@@ -74,7 +74,7 @@ b_louder || { echo "the keys did not follow the new default sink ($(volume imway
 [[ "$(volume imway_a)" == 0 ]] || { echo "the old default sink still moved ($(volume imway_a))"; exit 1; }
 
 # pulseaudio dies
-kill "$(cat "$XDG_RUNTIME_DIR/pulse/pid")"
+kill "$(cat "$XDG_RUNTIME_DIR/pulse.pid")"
 await 100 in_log "pulse connection failed" || { echo "the lost server went unreported"; cat "$IMWAY_LOG"; exit 1; }
 key 115
 key 113
