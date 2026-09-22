@@ -11,6 +11,8 @@
     #endif
 
     #include <stdlib.h>
+    #include <std/lib/vector.h>
+    #include <wayland-server-core.h>
 #endif
 
 using namespace stl;
@@ -26,6 +28,9 @@ using namespace stl;
 //   pam-answer=N      the next N answer copies fail to allocate
 //   memory-types=N    the next N memory-type queries find none
 //   vulkan=K          K checked Vulkan calls pass, the one after fails
+//   resource=IFACE    wayland: the next resource of wl_interface IFACE
+//                     (wl_shm_pool, xdg_popup, ...) fails to allocate; one
+//                     word per interface, each spent on its own
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -35,6 +40,7 @@ namespace {
         int answerFaults = 0;
         int memoryFaults = 0;
         int vulkanSkip = -1;
+        Vector<StringView> resourceFaults;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -47,6 +53,7 @@ namespace {
         char* pamAnswer(char* answer) override;
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
+        wl_resource* resource(wl_resource* created) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -93,6 +100,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         memoryFaults = (int)arg.stou();
     } else if (fault == "vulkan"_sv) {
         vulkanSkip = (int)arg.stou();
+    } else if (fault == "resource"_sv) {
+        resourceFaults.pushBack(arg);
     }
 }
 
@@ -159,6 +168,25 @@ VkResult TestChaosMonkey::vulkan(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+wl_resource* TestChaosMonkey::resource(wl_resource* created) {
+    if (!created) {
+        return created;
+    }
+
+    StringView name(wl_resource_get_class(created));
+
+    for (size_t i = 0; i < resourceFaults.length(); i++) {
+        if (resourceFaults[i] == name) {
+            resourceFaults.mut(i) = {};
+            wl_resource_destroy(created);
+
+            return nullptr;
+        }
+    }
+
+    return created;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -174,6 +202,7 @@ namespace {
         char* pamAnswer(char* answer) override;
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
+        wl_resource* resource(wl_resource* created) override;
     };
 }
 
@@ -198,6 +227,10 @@ void IdleChaosMonkey::memoryTypes(VkPhysicalDeviceMemoryProperties&) {
 
 VkResult IdleChaosMonkey::vulkan(VkResult result) {
     return result;
+}
+
+wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
+    return created;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

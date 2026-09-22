@@ -7,6 +7,7 @@ namespace stl {
 }
 
 struct passwd;
+struct wl_resource;
 struct pam_message;
 struct pam_response;
 
@@ -30,6 +31,11 @@ struct ChaosMonkey {
     virtual void memoryTypes(VkPhysicalDeviceMemoryProperties& props) = 0;
     // the result of a Vulkan call its caller checks
     virtual VkResult vulkan(VkResult result) = 0;
+
+    // wayland: a resource fresh from wl_resource_create, before the request
+    // or bind that asked for it fills it in; a null return stands for the
+    // allocation failing (the replacement destroys what it was handed)
+    virtual wl_resource* resource(wl_resource* created) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
