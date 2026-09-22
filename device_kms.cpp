@@ -546,6 +546,10 @@ namespace {
         ObjPool* link = nullptr;
         ScanBuf scan[2];
         int scanCount = 0;
+        // the boot ladder's choice, zero-copy swapchain or dumb buffers:
+        // a mode switch rebuilds the same kind, even after a failed attempt
+        // left scanCount at zero
+        bool zeroCopy = false;
         int scanNext = 0;
         int currentScan = -1;
         int queuedScan = -1;
@@ -1596,6 +1600,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     }
 
     if (scanCount >= 2) {
+        zeroCopy = true;
         scanModCount = planeModifiers(fd, planeId, scanFourcc, scanMods, 64);
     }
 
@@ -2082,7 +2087,7 @@ void KmsOutput::freeDumb(DumbBuffer& b) {
 // failure everything at the old size is gone — the caller restores the
 // old mode and rebuilds again.
 bool KmsOutput::rebuildScanout() {
-    if (scanCount > 0) {
+    if (zeroCopy) {
         delete link;
         link = nullptr;
         scanCount = 0;
