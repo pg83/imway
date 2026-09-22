@@ -11894,6 +11894,12 @@ void SeatState::imUpdateActivation() {
             zwp_input_method_v2_send_content_type(im->res, ti->hint, ti->purpose);
         }
 
+        // the method's cause starts as input_method and falls back to it on
+        // every done: only another cause needs saying
+        if (ti->changeCause != ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD) {
+            zwp_input_method_v2_send_text_change_cause(im->res, ti->changeCause);
+        }
+
         zwp_input_method_v2_send_done(im->res);
     } else if (ti && im->active) {
         bool any = false;
@@ -11906,6 +11912,11 @@ void SeatState::imUpdateActivation() {
 
         if (ti->contentSet) {
             zwp_input_method_v2_send_content_type(im->res, ti->hint, ti->purpose);
+            any = true;
+        }
+
+        if (ti->changeCause != ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD) {
+            zwp_input_method_v2_send_text_change_cause(im->res, ti->changeCause);
             any = true;
         }
 
