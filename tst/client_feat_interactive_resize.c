@@ -75,19 +75,24 @@ int main(int argc, char** argv) {
     // application does from a grip of its own drawing: the first press it
     // sees becomes an xdg_toplevel.resize on that serial, and the drag after
     // it is the compositor's to follow.
-    // "client-resize-top-left" names the opposite corner, so the drag grows
-    // the window toward the hand from its left and top edges
+    // "client-resize-top-left" names the opposite corner on the first press,
+    // so the drag grows the window toward the hand from its left and top
+    // edges, and the top edge alone and that corner again in turn after it
     int ask = argc > 1 && !strncmp(argv[1], "client-resize", 13);
-    uint32_t edge = argc > 1 && !strcmp(argv[1], "client-resize-top-left") ? XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT : XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT;
+    int topLeft = argc > 1 && !strcmp(argv[1], "client-resize-top-left");
     int asked = 0;
+    int seen = 0;
 
     while (wl_display_dispatch(wl_dpy) != -1) {
-        if (ask && !asked && wlp_button_count &&
-            wlp_button_state == WL_POINTER_BUTTON_STATE_PRESSED) {
-            asked = 1;
+        if (ask && wlp_button_count != seen && wlp_button_state == WL_POINTER_BUTTON_STATE_PRESSED && (topLeft || !asked)) {
+            uint32_t edge = !topLeft ? XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT : asked % 2 ? XDG_TOPLEVEL_RESIZE_EDGE_TOP : XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT;
+
+            asked++;
             xdg_toplevel_resize(tl, wl_seat_g, wlp_button_serial, edge);
-            printf("resize asked\n");
+            printf("resize asked %d\n", asked);
         }
+
+        seen = wlp_button_count;
     }
     return 0;
 }

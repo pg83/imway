@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# The frame's other resize handles: the top border grows the window upward
-# with its bottom edge pinned, the bottom-left grip grows it left and down
-# with the right edge and the top pinned, and a client that asks for a
-# top-left resize grows it toward the hand from its left and top edges. The
-# client size must track the window size in every case.
+# The frame's other resize handles and the client's own resizes: the top
+# border grows the window upward and the bottom border downward, the
+# bottom-left grip left and down, each with the opposite edges pinned; a
+# client that asks for a top-left resize grows it toward the hand, one that
+# asks for the top edge alone ignores the hand's sideways part, and a corner
+# dragged far past the opposite edges stops at a one-pixel client. The client
+# size must track the window size in every case.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -87,32 +89,62 @@ echo "bottom-left: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
 (( ny == y )) || { echo "the top moved on a bottom grip drag ($y -> $ny)"; exit 1; }
 x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
 
-# the client's own press: it names the top-left corner, and the drag after
-# it is the compositor's to follow
-for _ in $(seq 1 25); do
-    ix=$(dump_field 'app_id=resize' imgx); iy=$(dump_field 'app_id=resize' imgy)
-    ctl "motion $((ix + 40)) $((iy + 40))"
-    screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-    ctl "motion $((ix + 41)) $((iy + 40))"
-    screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-    ctl "button left press"
-    sleep 0.4
-    grep -q "resize asked" "$CLIENT_LOG" && break
+# bottom border, 30px down: the top stays
+drag $((x + w / 2)) $((y + h - 1)) 0 30 27 # nsResize
+await 100 settled_since "$cw" "$ch" || { echo "the bottom border drag did not resize: $(geometry)"; exit 1; }
+read -r nx ny nw nh ncw nch <<<"$(geometry)"
+echo "bottom: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
+(( nh >= h + 20 && ny == y && nw == w )) || { echo "the bottom drag did not grow the height alone"; exit 1; }
+x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
+
+# The client's own presses: it names the top-left corner, then the top edge
+# alone, then the corner again, and the drag after each is the
+# compositor's to follow. Press inside the client until it has asked <n>
+# times, walk the pointer by (dx,dy), let go.
+client_drag() { # <n> <dx> <dy>
+    local i
+    for i in $(seq 1 25); do
+        ix=$(dump_field 'app_id=resize' imgx); iy=$(dump_field 'app_id=resize' imgy)
+        ctl "motion $((ix + 40)) $((iy + 40))"
+        screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+        ctl "motion $((ix + 41)) $((iy + 40))"
+        screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+        ctl "button left press"
+        sleep 0.4
+        grep -q "resize asked $1" "$CLIENT_LOG" && break
+        ctl "button left release"
+        sleep 0.4
+    done
+    wait_client "resize asked $1"
+    for i in 1 2 3 4; do
+        ctl "motion $((ix + 41 + $2 * i / 4)) $((iy + 40 + $3 * i / 4))"
+        screenshot "$XDG_RUNTIME_DIR/_f.ppm"
+    done
     ctl "button left release"
-    sleep 0.4
-done
-wait_client "resize asked"
-for d in 10 20 30 40; do
-    ctl "motion $((ix + 41 - d)) $((iy + 40 - d))"
-    screenshot "$XDG_RUNTIME_DIR/_f.ppm"
-done
-ctl "button left release"
+}
+
+client_drag 1 -40 -40
 await 100 settled_since "$cw" "$ch" || { echo "the client-driven top-left resize did not land: $(geometry)"; exit 1; }
 read -r nx ny nw nh ncw nch <<<"$(geometry)"
 echo "client top-left: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
 (( nw > w && nh > h )) || { echo "the top-left resize did not grow the window"; exit 1; }
 (( nx + nw >= x + w - 2 && nx + nw <= x + w + 2 )) || { echo "the right edge moved on a top-left resize"; exit 1; }
 (( ny + nh >= y + h - 2 && ny + nh <= y + h + 2 )) || { echo "the bottom edge moved on a top-left resize"; exit 1; }
+x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
+
+# the top edge alone: a sideways hand does not change the width
+client_drag 2 30 -30
+await 100 settled_since "$cw" "$ch" || { echo "the client-driven top resize did not land: $(geometry)"; exit 1; }
+read -r nx ny nw nh ncw nch <<<"$(geometry)"
+echo "client top: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
+(( nh > h && ncw == cw )) || { echo "the top resize did not grow the height alone"; exit 1; }
+x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
+
+# the corner again, dragged far past the opposite edges: the window shrinks
+# to the smallest client the frame allows, one pixel each way
+client_drag 3 $((w + 100)) $((h + 100))
+tiny() { [[ "$(dump_field 'app_id=resize' client_w)" == 1 && "$(dump_field 'app_id=resize' client_h)" == 1 ]]; }
+await 100 tiny || { echo "dragging past the far edges did not stop at a one-pixel client: $(geometry)"; exit 1; }
 
 expect_alive "compositor died resizing from the frame's edges"
-echo "OK: top border, bottom-left grip and a client top-left resize anchor the opposite edges"
+echo "OK: frame borders and grips and the client's own resizes anchor the opposite edges"
