@@ -8,15 +8,6 @@
 // and insertAfter() unlinks its node before splicing it in, so bind() need not
 // detach by hand.
 
-WeakRefBase::WeakRefBase(void* p) noexcept
-    : ptr(p) {
-}
-
-WeakRefBase::WeakRefBase(WeakRefBase& o) noexcept
-    : ptr(o.ptr) {
-    stl::IntrusiveList::insertAfter(&o, this);
-}
-
 WeakRefBase::~WeakRefBase() noexcept {
     unlink();
 }

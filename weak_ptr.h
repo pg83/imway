@@ -6,7 +6,7 @@
 // threaded into a single ring (each is an IntrusiveNode); when the target dies
 // it calls invalidate() on its anchor, the ring is walked, and every pointer
 // in it is nulled. A lone reference dying just leaves the ring. There is no
-// copy constructor: a new reference is spun off an existing node, taking that
+// copy constructor: a new reference binds to an existing node, taking that
 // node's pointer and linking into its ring.
 //
 // Usage: the target holds an anchor reference pointing at itself (seat it with
@@ -22,8 +22,6 @@ struct WeakRefBase: stl::IntrusiveNode {
     void* ptr = nullptr;
 
     WeakRefBase() noexcept = default;
-    explicit WeakRefBase(void* p) noexcept;
-    WeakRefBase(WeakRefBase& o) noexcept;
 
     WeakRefBase(const WeakRefBase&) = delete;
     WeakRefBase& operator=(const WeakRefBase&) = delete;
@@ -49,16 +47,6 @@ struct WeakRefBase: stl::IntrusiveNode {
 template <typename T>
 struct Weak: WeakRefBase {
     Weak() noexcept = default;
-
-    // seat an anchor on its target (or make an observer aimed straight at t)
-    explicit Weak(T* t) noexcept
-        : WeakRefBase((void*)t) {
-    }
-
-    // spin a new reference off an existing node
-    Weak(Weak& o) noexcept
-        : WeakRefBase(o) {
-    }
 
     void bind(Weak& o) noexcept {
         WeakRefBase::bind(o);

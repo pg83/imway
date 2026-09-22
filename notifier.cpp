@@ -44,8 +44,6 @@ namespace {
         void activeImpl(VisitorFace&& vis) override;
         void historyImpl(VisitorFace&& vis) override;
         void clearHistory() override;
-        bool dnd() override;
-        void setDnd(bool v) override;
 
         ToastImpl* byId(u32 id);
         void armTimer(ToastImpl& t, i32 expireMs);
@@ -237,14 +235,6 @@ void NotifierImpl::clearHistory() {
     }
 
     c->scene->needsFrame = true;
-}
-
-bool NotifierImpl::dnd() {
-    return dndActive();
-}
-
-void NotifierImpl::setDnd(bool v) {
-    c->settings->setDnd(v);
 }
 
 bool NotifierImpl::dndActive() const {

@@ -41,12 +41,6 @@ double parseFloat(StringView s) {
     return neg ? -r : r;
 }
 
-void pad2(StringBuilder& out, unsigned v) {
-    char b[2] = {(char)('0' + v / 10 % 10), (char)('0' + v % 10)};
-
-    out << StringView((const u8*)b, 2);
-}
-
 void hex16(StringBuilder& out, u64 v) {
     char b[16];
 

@@ -57,10 +57,6 @@ struct Notifier {
     virtual void historyImpl(stl::VisitorFace&& vis) = 0; // all kept, newest first
     virtual void clearHistory() = 0;
 
-    // do-not-disturb: posts still land in history, but never pop on screen
-    virtual bool dnd() = 0;
-    virtual void setDnd(bool v) = 0;
-
     template <typename F>
     void active(F f) {
         activeImpl(visitEach<Toast>(f));
