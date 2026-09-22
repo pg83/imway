@@ -21,10 +21,12 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             security-bad-listen-fd security-incomplete security-engine-after-commit \
             security-appid-after-commit security-instance-after-commit \
             security-commit-twice \
-            capture-bad-option capture-bad-damage capture-attach-after \
+            capture-bad-option capture-bad-damage capture-damage-left \
+            capture-damage-above capture-damage-flat capture-attach-after \
             capture-damage-after capture-twice \
             colour-primaries-twice colour-bad-luminance colour-surface-dead \
-            screencopy-twice drag-source-reused; do
+            screencopy-twice screencopy-not-shm screencopy-narrow screencopy-short \
+            screencopy-thin-stride drag-source-reused; do
     "$IMWAY_CLIENT" "$mode" || { echo "the compositor let $mode through"; exit 1; }
     expect_alive "compositor died on $mode"
 done

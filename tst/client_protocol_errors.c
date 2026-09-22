@@ -395,6 +395,46 @@ int main(int argc, char** argv) {
                             ZWLR_SCREENCOPY_FRAME_V1_ERROR_ALREADY_USED);
     }
 
+    // a copy buffer must match the announced frame on every count; each
+    // mode misses on exactly one
+    if (!strncmp(argv[1], "screencopy-", 11)) {
+        struct zwlr_screencopy_frame_v1* frame =
+            zwlr_screencopy_manager_v1_capture_output(screencopy, 0, output);
+
+        zwlr_screencopy_frame_v1_add_listener(frame, &wlr_listener, NULL);
+
+        while (!wlr_got_buffer && wl_display_dispatch(display) != -1) {
+        }
+
+        int w = (int)wlr_w, h = (int)wlr_h, stride = (int)wlr_stride;
+        struct wl_buffer* buf = NULL;
+
+        if (!strcmp(argv[1], "screencopy-not-shm")) {
+            buf = wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(spb, 0, 0, 0, ~0u);
+        } else if (!strcmp(argv[1], "screencopy-narrow")) {
+            w--;
+        } else if (!strcmp(argv[1], "screencopy-short")) {
+            h--;
+        } else if (!strcmp(argv[1], "screencopy-thin-stride")) {
+            stride = w * 4 - 4;
+        } else {
+            return 2;
+        }
+
+        if (!buf) {
+            struct wl_shm_pool* pool = make_pool(stride * h);
+
+            if (!pool) return 2;
+
+            buf = wl_shm_pool_create_buffer(pool, 0, w, h, stride, wlr_format);
+        }
+
+        zwlr_screencopy_frame_v1_copy(frame, buf);
+
+        return expect_error(display, zwlr_screencopy_frame_v1_interface.name,
+                            ZWLR_SCREENCOPY_FRAME_V1_ERROR_INVALID_BUFFER);
+    }
+
     if (!strcmp(argv[1], "drag-source-reused")) {
         struct wl_data_source* source = wl_data_device_manager_create_data_source(data_manager);
 
@@ -471,7 +511,23 @@ int main(int argc, char** argv) {
                             EXT_IMAGE_COPY_CAPTURE_MANAGER_V1_ERROR_INVALID_OPTION);
     }
 
-    if (!strcmp(argv[1], "capture-bad-damage")) {
+    // every edge of the damage rectangle is checked on its own: a zero
+    // width, a negative origin on either axis, a zero height
+    static const struct {
+        const char* mode;
+        int32_t x, y, w, h;
+    } bad_damage[] = {
+        {"capture-bad-damage", 0, 0, 0, 0},
+        {"capture-damage-left", -1, 0, 1, 1},
+        {"capture-damage-above", 0, -1, 1, 1},
+        {"capture-damage-flat", 0, 0, 1, 0},
+    };
+
+    for (size_t i = 0; i < sizeof(bad_damage) / sizeof(bad_damage[0]); i++) {
+        if (strcmp(argv[1], bad_damage[i].mode)) {
+            continue;
+        }
+
         struct ext_image_copy_capture_session_v1* session = capture_session(display);
 
         if (!session) return 2;
@@ -479,7 +535,8 @@ int main(int argc, char** argv) {
         struct ext_image_copy_capture_frame_v1* frame =
             ext_image_copy_capture_session_v1_create_frame(session);
 
-        ext_image_copy_capture_frame_v1_damage_buffer(frame, 0, 0, 0, 0);
+        ext_image_copy_capture_frame_v1_damage_buffer(frame, bad_damage[i].x, bad_damage[i].y,
+                                                      bad_damage[i].w, bad_damage[i].h);
 
         return expect_error(display, ext_image_copy_capture_frame_v1_interface.name,
                             EXT_IMAGE_COPY_CAPTURE_FRAME_V1_ERROR_INVALID_BUFFER_DAMAGE);
