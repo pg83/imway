@@ -186,6 +186,15 @@ namespace {
 
     static void dumpMenu(StringBuilder& out, StringView owner, const DBusMenu& menu) {
         out << "menu "_sv << owner << " ready="_sv << (int)menu.ready << " revision="_sv << menu.revision << " activation="_sv << (menu.hasActivationRequest ? menu.activationRequested : 0) << "\n"_sv;
+
+        // the headings as the global menu bar last drew them, so a scenario
+        // clicks one by its rectangle instead of guessing from the font
+        for (DBusMenuItem* item : menu.items) {
+            if (item->barRect[2] >= 0.f) {
+                out << "menubar heading id="_sv << item->id << " x0="_sv << (int)item->barRect[0] << " y0="_sv << (int)item->barRect[1] << " x1="_sv << (int)item->barRect[2] << " y1="_sv << (int)item->barRect[3] << " label="_sv << sv(item->label) << "\n"_sv;
+            }
+        }
+
         dumpMenuItems(out, menu.items, 0);
     }
 }

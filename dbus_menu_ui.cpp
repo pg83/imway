@@ -69,6 +69,16 @@ namespace {
         return out.cStr();
     }
 
+    void recordBarRect(DBusMenuItem& item) {
+        ImVec2 min = ImGui::GetItemRectMin();
+        ImVec2 max = ImGui::GetItemRectMax();
+
+        item.barRect[0] = min.x;
+        item.barRect[1] = min.y;
+        item.barRect[2] = max.x;
+        item.barRect[3] = max.y;
+    }
+
     void drawItems(Composer& c, DBusMenu& menu, Vector<DBusMenuItem*>& items) {
         for (DBusMenuItem* item : items) {
             if (!item->visible) {
@@ -155,6 +165,8 @@ void drawDBusMenuBar(Composer& c, DBusMenu& menu) {
         if (submenu) {
             bool clicked = ImGui::MenuItem(label, nullptr, item->open, item->enabled);
 
+            recordBarRect(*item);
+
             if (clicked) {
                 if (item->open) {
                     item->open = false;
@@ -176,8 +188,12 @@ void drawDBusMenuBar(Composer& c, DBusMenu& menu) {
             } else if (item->open && !ImGui::IsPopupOpen("##dbus-root")) {
                 item->open = false;
             }
-        } else if (ImGui::MenuItem(label, nullptr, false, item->enabled)) {
-            menu.activate(item->id);
+        } else {
+            if (ImGui::MenuItem(label, nullptr, false, item->enabled)) {
+                menu.activate(item->id);
+            }
+
+            recordBarRect(*item);
         }
 
         ImGui::PopStyleColor();

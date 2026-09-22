@@ -72,49 +72,26 @@ await 50 menu_shown || { echo "File did not open again"; exit 1; }
 click_at "$file_x" 10
 await 50 menu_hidden || { echo "a second click on File did not close its popup"; exit 1; }
 
-# Help is a leaf right on the bar, the heading after File: a click
-# activates it with no popup. Its place comes from the bar's own pixels:
-# the run of label text after the one File's click point sits in (a fixed
-# offset from File depends on the font). The client finishes only once it
-# has seen both activations.
-help_x=$(python3 - "$XDG_RUNTIME_DIR/before-menu.ppm" "$file_x" <<'PY'
-import sys
-f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
-w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
-fx = int(sys.argv[2])
-def ink(x):
-    return any(min(d[(y*w+x)*3:(y*w+x)*3+3]) > 150 for y in range(3, 19))
-# label runs: text columns, gaps under 6px bridged
-runs, start, gap, end = [], None, 0, 0
-for x in range(58, min(w, fx + 300)):
-    if ink(x):
-        if start is None:
-            start = x
-        gap, end = 0, x
-    elif start is not None:
-        gap += 1
-        if gap >= 6:
-            runs.append((start, end))
-            start, gap = None, 0
-if start is not None:
-    runs.append((start, end))
-# File is the first run that ends past the click point (which may sit in
-# the heading's padding, left of its text); Help is the one after it
-i = next(i for i, (a, b) in enumerate(runs) if b >= fx)
-a, b = runs[i + 1]
-print((a + b) // 2)
-PY
-) || { echo "no heading after File in the bar"; exit 1; }
-echo "File at $file_x, Help at $help_x"
+# Help is a leaf right on the bar: a click activates it with no popup. The
+# dump reports where the bar drew each heading; aim at Help's centre from
+# there. The client finishes only once it has seen both activations.
+heading() { # <label> <field>
+    dump_state | awk -v l="label=$1" -v f="$2" '$1 == "menubar" && $NF == l { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
+}
+has_heading() { [[ -n "$(heading Help x0)" ]]; }
+await 100 has_heading || { echo "the bar reports no Help heading"; dump_state; exit 1; }
+help_x=$(( ($(heading Help x0) + $(heading Help x1)) / 2 ))
+help_y=$(( ($(heading Help y0) + $(heading Help y1)) / 2 ))
+echo "Help heading at $help_x,$help_y"
 help=0
 for _ in 1 2 3; do
-    click_at "$help_x" 10
+    click_at "$help_x" "$help_y"
     if await 50 grep -q "event 2$" "$CLIENT_LOG"; then
         help=1
         break
     fi
 done
-(( help )) || { echo "the bar's Help leaf did not activate"; cat "$CLIENT_LOG"; exit 1; }
+(( help )) || { echo "the bar's Help leaf did not activate"; cat "$CLIENT_LOG"; dump_state; exit 1; }
 
 wait_client "property and activation signals sent"
 wait_client "conform complete"
