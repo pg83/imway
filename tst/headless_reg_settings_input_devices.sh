@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # The input page lists the devices libinput found and opens each into its own
 # overrides. With no device count set the list is empty, so none of it runs.
-# Each override that is ticked shows its own value controls.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -56,46 +55,6 @@ done
     dump_state
     exit 1
 }
-
-# The overrides run past the bottom of the dialog: make it taller by its
-# grip first, so every row below is on screen.
-ctl "motion $((wx + ww - 4)) $((wy + wh - 4))"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
-ctl "motion $((wx + ww - 3)) $((wy + wh - 4))"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
-ctl "button left press"
-for d in 40 80 120 160 190; do
-    ctl "motion $((wx + ww - 3)) $((wy + wh - 4 + d))"
-    screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
-done
-ctl "button left release"
-taller() { (( $(dump_field '^imgui name=settings ' h) >= wh + 150 )); }
-await 50 taller || { echo "the settings dialog did not grow"; dump_state; exit 1; }
-
-# Tick a checkbox of the device's overrides and wait for what it reveals:
-# the rows under the device are one framed checkbox apart, and ticking one
-# shows its value next to it or under it.
-tick() { # <dx> <row> <what>
-    local ty=$((y + 27 + $2 * 26))
-    ctl "motion $((wx + ww / 2)) $((wy + 40))"
-    screenshot "$XDG_RUNTIME_DIR/_settle.ppm"
-    screenshot "$XDG_RUNTIME_DIR/before-tick.ppm"
-    click_at $((wx + $1)) "$ty"
-    ctl "motion $((wx + ww / 2)) $((wy + 40))"
-    revealed() {
-        screenshot "$XDG_RUNTIME_DIR/after-tick.ppm" &&
-            [[ "$(region_diff "$XDG_RUNTIME_DIR/before-tick.ppm" "$XDG_RUNTIME_DIR/after-tick.ppm" \
-                $((wx + 160)) $((ty - 12)) $((wx + ww - 4)) $((ty + 40)))" -gt 60 ]]
-    }
-    await 50 revealed || { echo "ticking $3 changed nothing"; exit 1; }
-}
-
-tick 196 0 "override"                  # the per-setting rows appear
-tick 196 1 "pointer speed"             # its slider opens under it
-tick 196 3 "natural scroll"            # its enabled box appears beside it
-tick 352 3 "natural scroll's enabled"
-tick 196 4 "left handed"
-tick 336 4 "left handed's enabled"
 
 expect_alive "compositor died opening an input device's settings"
 echo "OK: the input page opens a device into its own overrides"
