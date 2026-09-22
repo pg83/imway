@@ -375,6 +375,9 @@ void LockFilter::createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    // a device without one cannot hold the filter; the index must not reach
+    // the driver, which indexes its type table with it unchecked
+    STD_VERIFY(mai.memoryTypeIndex != UINT32_MAX);
     VK_CHECK(comp->chaos->vulkan(vkAllocateMemory(device, &mai, nullptr, &memory)));
     VK_CHECK(comp->chaos->vulkan(vkBindImageMemory(device, image, memory, 0)));
 }
