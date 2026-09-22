@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# imway-env: IMWAY_CHAOS=client-texture=0 IMWAY_SHM_BACKEND=cpu
+# The buffer the CPU copy uploads the pool from cannot be created.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+fault_log=""
+. "$(dirname "$0")/texture_alloc_fault_case.sh"

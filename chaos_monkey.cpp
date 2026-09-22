@@ -39,6 +39,8 @@ using namespace stl;
 //                     with EBUSY, as when another lessee holds the objects
 //   client-import=K   renderer: K client-buffer import calls pass, every
 //                     later one fails: the device refuses the client's buffers
+//   client-texture=K  K client-sized allocation calls pass, the one after
+//                     fails
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -54,6 +56,7 @@ namespace {
         int leaseFaults = 0;
         // renderer
         int clientImportSkip = -1;
+        int clientTextureSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -72,6 +75,7 @@ namespace {
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
+        VkResult clientTexture(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -127,6 +131,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         leaseFaults = (int)arg.stou();
     } else if (fault == "client-import"_sv) {
         clientImportSkip = (int)arg.stou();
+    } else if (fault == "client-texture"_sv) {
+        clientTextureSkip = (int)arg.stou();
     }
 }
 
@@ -252,6 +258,18 @@ VkResult TestChaosMonkey::clientImport(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+VkResult TestChaosMonkey::clientTexture(VkResult result) {
+    if (clientTextureSkip < 0) {
+        return result;
+    }
+
+    if (clientTextureSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -273,6 +291,7 @@ namespace {
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
+        VkResult clientTexture(VkResult result) override;
     };
 }
 
@@ -314,6 +333,10 @@ int IdleChaosMonkey::leaseFd(int fd) {
 
 // renderer
 VkResult IdleChaosMonkey::clientImport(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::clientTexture(VkResult result) {
     return result;
 }
 

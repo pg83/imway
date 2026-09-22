@@ -47,6 +47,9 @@ struct ChaosMonkey {
     // the result of one Vulkan call that imports a client's buffer: a
     // dma-buf image, or a wl_shm pool as a udmabuf or a host pointer
     virtual VkResult clientImport(VkResult result) = 0;
+    // the result of one Vulkan call allocating a GPU resource sized by a
+    // client's buffer: its texture, staging or upload buffer
+    virtual VkResult clientTexture(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

@@ -484,8 +484,11 @@ namespace {
         void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
-        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1);
-        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map);
+        // client: sized by a client's buffer, its failure a render fault
+        // for that client rather than the session's
+        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1, bool client = false);
+        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, bool client = false);
+        VkResult allocated(bool client, VkResult result);
         void setup();
         void loadFont();
         void scheduleFontReload();
@@ -1068,7 +1071,11 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return UINT32_MAX;
 }
 
-void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips) {
+VkResult RendererImpl::allocated(bool client, VkResult result) {
+    return client ? comp->chaos->clientTexture(result) : result;
+}
+
+void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips, bool client) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
@@ -1080,7 +1087,7 @@ void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags 
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = usage;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VK_CHECK(vkCreateImage(device, &ici, nullptr, &img));
+    VK_CHECK(allocated(client, vkCreateImage(device, &ici, nullptr, &img)));
 
     VkMemoryRequirements req{};
 
@@ -1090,16 +1097,16 @@ void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags 
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &mem));
-    VK_CHECK(vkBindImageMemory(device, img, mem, 0));
+    VK_CHECK(allocated(client, vkAllocateMemory(device, &mai, nullptr, &mem)));
+    VK_CHECK(allocated(client, vkBindImageMemory(device, img, mem, 0)));
 }
 
-void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map) {
+void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, bool client) {
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 
     bci.size = size;
     bci.usage = usage;
-    VK_CHECK(vkCreateBuffer(device, &bci, nullptr, &buf));
+    VK_CHECK(allocated(client, vkCreateBuffer(device, &bci, nullptr, &buf)));
 
     VkMemoryRequirements req{};
 
@@ -1109,9 +1116,9 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &mem));
-    VK_CHECK(vkBindBufferMemory(device, buf, mem, 0));
-    VK_CHECK(vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map));
+    VK_CHECK(allocated(client, vkAllocateMemory(device, &mai, nullptr, &mem)));
+    VK_CHECK(allocated(client, vkBindBufferMemory(device, buf, mem, 0)));
+    VK_CHECK(allocated(client, vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map)));
 }
 
 ShmCache& RendererImpl::shmCache(ShmContent& content) {
@@ -1489,7 +1496,7 @@ ShmUpload* RendererImpl::makeCpuUpload(ShmContent& content, ShmCache& cache) {
     upload->device = device;
 
     try {
-        createHostBuffer((VkDeviceSize)content.width * content.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload->buffer, upload->memory, &upload->map);
+        createHostBuffer((VkDeviceSize)content.width * content.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload->buffer, upload->memory, &upload->map, true);
     } catch (...) {
         return nullptr;
     }
@@ -2312,13 +2319,16 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
         s.frame = alloc->make<FrameResourceRef>(frame);
 
         try {
-            createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory);
+            createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory, 1, true);
 
             if (staging) {
-                createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+                createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap, true);
             }
         } catch (...) {
             *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
+            // whatever the failed step left behind (an image without
+            // memory, memory without its staging buffer) goes with it
+            destroyTexture(tex);
             alloc->release(s.frame);
             s.frame = nullptr;
             faultSurfaceOwner(s);
