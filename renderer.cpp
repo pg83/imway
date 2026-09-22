@@ -4209,6 +4209,12 @@ bool RendererImpl::screenshot(StringView path) {
         shmCopyJob->drain();
     }
 
+    // frameNow composes nothing while the previous frame is still on the
+    // GPU: on a slow device the readback then returned that older frame,
+    // missing whatever changed since (a night-light temperature set just
+    // before the command, on llvmpipe)
+    finishGpuFrame(true);
+
     // Compose now, always: the readback below returns the last frame, and
     // whatever a client committed since then would be missing from it. A
     // direct-scanout frame has nothing to read back at all.
