@@ -27,6 +27,7 @@ static bool configured;
 static bool mapped_printed;
 static bool lazy_ready;
 static bool got_event;
+static bool got_help;
 static bool failed;
 static uint32_t layout_revision = 1;
 
@@ -329,7 +330,8 @@ static DBusHandlerResult menu_message(DBusConnection* connection, DBusMessage* m
         dbus_connection_send(bus, reply, NULL);
         dbus_message_unref(reply);
         printf("event %d\n", id);
-        got_event = id == 10;
+        got_event = got_event || id == 10;
+        got_help = got_help || id == 2;
         emit_properties_updated();
     } else {
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
@@ -559,7 +561,7 @@ int main(void) {
     while (!failed) {
         pump_once();
 
-        if (got_event) {
+        if (got_event && got_help) {
             // Leave enough time for the compositor to consume both signals.
             for (int i = 0; i < 30; i++) {
                 pump_once();

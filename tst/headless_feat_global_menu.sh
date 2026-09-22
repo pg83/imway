@@ -61,6 +61,30 @@ click_at "$file_x" 10
 click_at "$((file_x + 50))" 38
 wait_client "event 10"
 
+# File once more, and a second click on the open heading closes its popup
+menu_shown() {
+    screenshot "$XDG_RUNTIME_DIR/menu-now.ppm" &&
+        (( $(region_diff "$XDG_RUNTIME_DIR/before-menu.ppm" "$XDG_RUNTIME_DIR/menu-now.ppm" 58 30 700 180) > 200 ))
+}
+menu_hidden() { ! menu_shown; }
+click_at "$file_x" 10
+await 50 menu_shown || { echo "File did not open again"; exit 1; }
+click_at "$file_x" 10
+await 50 menu_hidden || { echo "a second click on File did not close its popup"; exit 1; }
+
+# Help is a leaf right on the bar, the heading after File: a click
+# activates it with no popup. Walk right from File until one does; the
+# client finishes only once it has seen both activations.
+help=0
+for x in $(seq $((file_x + 40)) 6 $((file_x + 76))); do
+    click_at "$x" 10
+    if await 5 grep -q "event 2$" "$CLIENT_LOG"; then
+        help=1
+        break
+    fi
+done
+(( help )) || { echo "the bar's Help leaf did not activate"; cat "$CLIENT_LOG"; exit 1; }
+
 wait_client "property and activation signals sent"
 wait_client "conform complete"
 expect_client_ok "global DBusMenu conform client failed"
