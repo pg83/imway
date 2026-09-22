@@ -489,6 +489,26 @@ int main(int argc, char** argv) {
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
     }
 
+    if (!strcmp(argv[1], "colour-info-failed")) {
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
+        // a primary with zero y: the description fails instead of becoming
+        // ready, and a failed one is never ready to be asked about
+        wp_image_description_creator_params_v1_set_primaries(
+            params, 640000, 0, 300000, 600000, 150000, 60000, 312700, 329000);
+
+        struct wp_image_description_v1* desc = wp_image_description_creator_params_v1_create(params);
+
+        wl_display_roundtrip(display);
+        wp_image_description_v1_get_information(desc);
+
+        return expect_error(display, wp_image_description_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_V1_ERROR_NOT_READY);
+    }
+
     if (!strcmp(argv[1], "colour-surface-dead")) {
         struct wp_color_management_surface_v1* cms =
             wp_color_manager_v1_get_surface(colour, surface);

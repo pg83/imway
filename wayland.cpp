@@ -12455,32 +12455,20 @@ void cmImageDescDestroy(wl_client*, wl_resource* res) {
     wl_resource_destroy(res);
 }
 
+// Only the display's own description (cmDisplayDesc) allows introspection,
+// and its encoding comes from OutputColorState::sdr or ::hdr10: sRGB or
+// BT.2100 PQ, sRGB or BT.2020 primaries, no content light levels. These
+// name that encoding and nothing else.
 u32 cmTfNamed(const ColorDescription& d, u32 version) {
     if (d.transfer == ColorTransfer::pq) {
         return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
-    }
-
-    if (d.transfer == ColorTransfer::hlg) {
-        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
-    }
-
-    if (d.transfer == ColorTransfer::extendedLinear) {
-        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
-    }
-
-    if (d.transfer == ColorTransfer::bt1886) {
-        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
-    }
-
-    if (d.transfer == ColorTransfer::gamma22) {
-        return WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22;
     }
 
     return version >= 2 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_COMPOUND_POWER_2_4 : WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
 }
 
 u32 cmPrimariesNamed(const ColorDescription& d) {
-    return d.primaries == ColorPrimaries::bt2020 ? WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 : d.primaries == ColorPrimaries::displayP3 ? WP_COLOR_MANAGER_V1_PRIMARIES_DISPLAY_P3 : WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
+    return d.primaries == ColorPrimaries::bt2020 ? WP_COLOR_MANAGER_V1_PRIMARIES_BT2020 : WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
 }
 
 u32 cmMinLuminance(double nits) {
@@ -12494,7 +12482,8 @@ u32 cmLuminance(double nits) {
 void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
     auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
-    if (!d || !d->ready) {
+    // a failed description is never ready
+    if (!d->ready) {
         wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_V1_ERROR_NOT_READY, "this image description is not ready");
 
         return;
@@ -12518,23 +12507,12 @@ void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
     const Chromaticities& primary = color.primary;
     const Chromaticities& target = color.target;
 
-    if (color.primaries != ColorPrimaries::custom) {
-        wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
-    }
+    wp_image_description_info_v1_send_primaries_named(info, cmPrimariesNamed(color));
     wp_image_description_info_v1_send_primaries(info, primary.rx, primary.ry, primary.gx, primary.gy, primary.bx, primary.by, primary.wx, primary.wy);
     wp_image_description_info_v1_send_tf_named(info, cmTfNamed(color, wl_resource_get_version(res)));
     wp_image_description_info_v1_send_luminances(info, cmMinLuminance(color.minNits), cmLuminance(color.maxNits), cmLuminance(color.referenceNits));
     wp_image_description_info_v1_send_target_primaries(info, target.rx, target.ry, target.gx, target.gy, target.bx, target.by, target.wx, target.wy);
     wp_image_description_info_v1_send_target_luminance(info, cmMinLuminance(color.targetMinNits), cmLuminance(color.targetMaxNits));
-
-    if (color.maxCllSet) {
-        wp_image_description_info_v1_send_target_max_cll(info, color.maxCll);
-    }
-
-    if (color.maxFallSet) {
-        wp_image_description_info_v1_send_target_max_fall(info, color.maxFall);
-    }
-
     wp_image_description_info_v1_send_done(info);
     wl_resource_destroy(info);
 }
@@ -12547,9 +12525,8 @@ const struct wp_image_description_v1_interface cmImageDescImpl = {
 void cmImageDescResourceDestroyed(wl_resource* res) {
     auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
-    if (d && d->srv) {
-        d->srv->alloc->release(d);
-    }
+    // both makers set the record and its server before anything else
+    d->srv->alloc->release(d);
 }
 
 // build an image description resource carrying `d`, sent ready
