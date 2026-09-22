@@ -215,15 +215,19 @@ namespace {
 
             dbus_message_iter_recurse(&arr, &e);
 
-            const char* key = "";
+            // the peer picks the signature: a key of another type reads as
+            // no name, a value that is no variant is skipped
+            StringView key = iterStr(&e);
 
-            dbus_message_iter_get_basic(&e, &key);
             dbus_message_iter_next(&e);
 
-            DBusMessageIter var;
+            if (dbus_message_iter_get_arg_type(&e) == DBUS_TYPE_VARIANT) {
+                DBusMessageIter var;
 
-            dbus_message_iter_recurse(&e, &var);
-            f(StringView(key), &var);
+                dbus_message_iter_recurse(&e, &var);
+                f(key, &var);
+            }
+
             dbus_message_iter_next(&arr);
         }
     }
@@ -406,7 +410,7 @@ void NmWifi::devicesReply(DBusMessage* reply) {
 
     DBusMessageIter it, var, arr;
 
-    if (reply && dbus_message_iter_init(reply, &it)) {
+    if (reply && dbus_message_iter_init(reply, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_VARIANT) {
         dbus_message_iter_recurse(&it, &var);
 
         if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
@@ -499,7 +503,7 @@ void NmWifi::connectionsReply(DBusMessage* reply) {
 
     DBusMessageIter it, var, arr;
 
-    if (reply && dbus_message_iter_init(reply, &it)) {
+    if (reply && dbus_message_iter_init(reply, &it) && dbus_message_iter_get_arg_type(&it) == DBUS_TYPE_VARIANT) {
         dbus_message_iter_recurse(&it, &var);
 
         if (dbus_message_iter_get_arg_type(&var) == DBUS_TYPE_ARRAY) {
@@ -549,12 +553,12 @@ void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
 
             dbus_message_iter_recurse(&outer, &grp);
 
-            const char* gname = "";
+            // keys and values of whatever type the peer sent, as in eachProp
+            StringView gname = iterStr(&grp);
 
-            dbus_message_iter_get_basic(&grp, &gname);
             dbus_message_iter_next(&grp);
 
-            if (StringView(gname) == "802-11-wireless"_sv) {
+            if (gname == "802-11-wireless"_sv && dbus_message_iter_get_arg_type(&grp) == DBUS_TYPE_ARRAY) {
                 DBusMessageIter props;
 
                 dbus_message_iter_recurse(&grp, &props);
@@ -564,12 +568,11 @@ void NmWifi::connectionReply(Ctx* cx, DBusMessage* reply) {
 
                     dbus_message_iter_recurse(&props, &kv);
 
-                    const char* key = "";
+                    StringView key = iterStr(&kv);
 
-                    dbus_message_iter_get_basic(&kv, &key);
                     dbus_message_iter_next(&kv);
 
-                    if (StringView(key) == "ssid"_sv) {
+                    if (key == "ssid"_sv && dbus_message_iter_get_arg_type(&kv) == DBUS_TYPE_VARIANT) {
                         DBusMessageIter var;
 
                         dbus_message_iter_recurse(&kv, &var);
