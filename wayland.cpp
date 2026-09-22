@@ -6382,7 +6382,7 @@ namespace {
         DataSource* src = (DataSource*)wl_resource_get_user_data(res);
         StringView mv(mime);
 
-        if (!src || src->usedForSelection || src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
+        if (src->usedForSelection || src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
             return;
         }
 
@@ -6399,10 +6399,10 @@ namespace {
     };
 
     void dcSourceResourceDestroyed(wl_resource* res) {
-        if (DataSource* src = (DataSource*)wl_resource_get_user_data(res)) {
-            src->srv->seat.sourceGone(src);
-            src->srv->alloc->release(src);
-        }
+        auto* src = (DataSource*)wl_resource_get_user_data(res);
+
+        src->srv->seat.sourceGone(src);
+        src->srv->alloc->release(src);
     }
 
     void dcManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
