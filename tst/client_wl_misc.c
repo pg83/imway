@@ -957,7 +957,43 @@ static int mode_icon_twice(void) {
 // The validators check their arguments in order; each mode gets past the
 // earlier ones so the last check is what fails.
 static int mode_bad(const char* what) {
+    if (!strcmp(what, "rescale")) {
+        struct wl_toplevel_ctx t;
+
+        // an odd buffer already shown cannot take scale 2
+        wl_make_toplevel(&t, "misc-bad-rescale", 121, 90, 0xFF0000FF);
+        wl_surface_set_buffer_scale(t.surface, 2);
+        wl_surface_commit(t.surface);
+        return wl_expect_error("wl_surface", WL_SURFACE_ERROR_INVALID_SIZE);
+    }
+    if (!strcmp(what, "source-y-outside")) {
+        need(viewporter, "wp_viewporter");
+
+        struct wl_toplevel_ctx t;
+
+        wl_make_toplevel(&t, "misc-bad-source", 64, 64, 0xFF0000FF);
+
+        struct wp_viewport* vp = wp_viewporter_get_viewport(viewporter, t.surface);
+
+        // inside horizontally, past the bottom edge
+        wp_viewport_set_source(vp, wl_fixed_from_int(0), wl_fixed_from_int(40), wl_fixed_from_int(10), wl_fixed_from_int(30));
+        wl_surface_commit(t.surface);
+        return wl_expect_error("wp_viewport", WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+    }
+
     struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+
+    if (!strcmp(what, "unacked")) {
+        struct xdg_surface* uxs = xdg_wm_base_get_xdg_surface(wl_wm, s);
+
+        xdg_toplevel_add_listener(xdg_surface_get_toplevel(uxs), &wl_tl_listener, NULL);
+        wl_surface_commit(s);
+        // the initial configure arrives here and is left unacknowledged
+        roundtrip("initial configure");
+        wl_surface_attach(s, wl_solid(32, 32, 0xFF0000FF), 0, 0);
+        wl_surface_commit(s);
+        return wl_expect_error("xdg_surface", XDG_SURFACE_ERROR_UNCONFIGURED_BUFFER);
+    }
 
     if (!strcmp(what, "transform")) {
         wl_surface_set_buffer_transform(s, -1);
@@ -1015,6 +1051,75 @@ static int mode_bad(const char* what) {
     return wl_expect_error("wp_viewport", WP_VIEWPORT_ERROR_BAD_VALUE);
 }
 
+// ---- rescale: scale and transform changed on content already there ----------
+// A commit that changes only the scale or transform validates the buffer the
+// surface already holds; a sync child validates against, and later takes its
+// scale and transform from, what its cache holds.
+static int mode_rescale(void) {
+    need(viewporter, "wp_viewporter");
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-rescale", 120, 80, 0xFF0000FF);
+    wl_surface_set_buffer_scale(t.surface, 2);
+    wl_surface_commit(t.surface);
+    wl_surface_set_buffer_transform(t.surface, WL_OUTPUT_TRANSFORM_90);
+    wl_surface_commit(t.surface);
+    roundtrip("rescale the toplevel");
+
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+
+    wl_subcompositor_get_subsurface(wl_subcomp, child, t.surface);
+    wl_surface_attach(child, wl_solid(64, 32, 0xFF00FF00), 0, 0);
+    wl_surface_commit(child);
+    wl_surface_commit(t.surface);
+    // cached: a scale on the child's current buffer, then a transform
+    wl_surface_set_buffer_scale(child, 2);
+    wl_surface_commit(child);
+    wl_surface_set_buffer_transform(child, WL_OUTPUT_TRANSFORM_270);
+    wl_surface_commit(child);
+    // a new buffer takes both from the cache, a source crop is checked
+    // against the cached transform
+    struct wp_viewport* vp = wp_viewporter_get_viewport(viewporter, child);
+
+    wp_viewport_set_source(vp, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(16), wl_fixed_from_int(32));
+    wl_surface_attach(child, wl_solid(64, 32, 0xFF00FFFF), 0, 0);
+    wl_surface_commit(child);
+    wl_surface_commit(t.surface);
+    roundtrip("rescale the child");
+    printf("rescale ok\n");
+    return 0;
+}
+
+// ---- vp-transforms: a source crop under every swapping transform ------------
+static int mode_vp_transforms(void) {
+    need(viewporter, "wp_viewporter");
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-vp-transforms", 64, 48, 0xFF0000FF);
+
+    struct wp_viewport* vp = wp_viewporter_get_viewport(viewporter, t.surface);
+    static const int transforms[] = {WL_OUTPUT_TRANSFORM_270, WL_OUTPUT_TRANSFORM_FLIPPED_90,
+                                     WL_OUTPUT_TRANSFORM_FLIPPED_270, WL_OUTPUT_TRANSFORM_FLIPPED};
+
+    // 40x60 fits the buffer only once the transform swaps its sides
+    wp_viewport_set_source(vp, wl_fixed_from_int(0), wl_fixed_from_int(0), wl_fixed_from_int(40), wl_fixed_from_int(60));
+    for (size_t i = 0; i < 3; i++) {
+        wl_surface_set_buffer_transform(t.surface, transforms[i]);
+        wl_surface_commit(t.surface);
+        roundtrip("swapping transform");
+    }
+    // without the swap the same crop is outside the buffer
+    wl_surface_set_buffer_transform(t.surface, transforms[3]);
+    wl_surface_commit(t.surface);
+    if (wl_expect_error("wp_viewport", WP_VIEWPORT_ERROR_OUT_OF_BUFFER)) {
+        return 1;
+    }
+    printf("vp transforms ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1047,6 +1152,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "input-region")) return mode_input_region();
     if (!strcmp(mode, "release")) return mode_release();
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
+    if (!strcmp(mode, "rescale")) return mode_rescale();
+    if (!strcmp(mode, "vp-transforms")) return mode_vp_transforms();
     if (!strncmp(mode, "bad-", 4)) return mode_bad(mode + 4);
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;
