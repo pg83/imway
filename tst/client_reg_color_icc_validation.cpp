@@ -64,9 +64,8 @@ static int dataFd(size_t size) {
     return fd;
 }
 
-static int profileFd(cmsProfileClassSignature profileClass, uint32_t& size) {
-    cmsHPROFILE profile = cmsCreate_sRGBProfile();
-    cmsSetDeviceClass(profile, profileClass);
+// serializes and closes the profile
+static int savedProfileFd(cmsHPROFILE profile, uint32_t& size) {
     cmsUInt32Number bytes = 0;
     cmsSaveProfileToMem(profile, nullptr, &bytes);
     std::vector<unsigned char> data(bytes);
@@ -79,6 +78,67 @@ static int profileFd(cmsProfileClassSignature profileClass, uint32_t& size) {
     }
     size = bytes;
     return fd;
+}
+
+static int profileFd(cmsProfileClassSignature profileClass, uint32_t& size) {
+    cmsHPROFILE profile = cmsCreate_sRGBProfile();
+    cmsSetDeviceClass(profile, profileClass);
+    return savedProfileFd(profile, size);
+}
+
+// an sRGB-primaries display profile whose three channels share one curve
+static cmsHPROFILE rgbProfile(cmsToneCurve* curve) {
+    cmsCIExyY white{0.3127, 0.3290, 1.0};
+    cmsCIExyYTRIPLE primaries{{0.64, 0.33, 1.0}, {0.30, 0.60, 1.0}, {0.15, 0.06, 1.0}};
+    cmsToneCurve* curves[3] = {curve, curve, curve};
+    cmsHPROFILE profile = cmsCreateRGBProfile(&white, &primaries, curves);
+
+    cmsFreeToneCurve(curve);
+    cmsSetDeviceClass(profile, cmsSigDisplayClass);
+    return profile;
+}
+
+// the profiles at the edges of what the compositor takes: null for an
+// unknown mode; `accepted` says whether it should be
+static cmsHPROFILE edgeProfile(const char* mode, bool& accepted) {
+    accepted = false;
+
+    if (!strcmp(mode, "linear")) {
+        accepted = true;
+        return rgbProfile(cmsBuildGamma(nullptr, 1.0));
+    }
+    if (!strcmp(mode, "gamma-high")) {
+        return rgbProfile(cmsBuildGamma(nullptr, 20.0));
+    }
+    if (!strcmp(mode, "curve-odd")) {
+        // a smoothstep: no power law comes near it
+        float table[256];
+        for (int i = 0; i < 256; i++) {
+            float x = (float)i / 255.f;
+            table[i] = x * x * (3.f - 2.f * x);
+        }
+        return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
+    }
+    if (!strcmp(mode, "version-low") || !strcmp(mode, "version-high")) {
+        cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
+        cmsSetProfileVersion(profile, !strcmp(mode, "version-low") ? 1.0 : 5.0);
+        return profile;
+    }
+    if (!strcmp(mode, "gray")) {
+        cmsToneCurve* curve = cmsBuildGamma(nullptr, 2.2);
+        cmsHPROFILE profile = cmsCreateGrayProfile(cmsD50_xyY(), curve);
+        cmsFreeToneCurve(curve);
+        cmsSetDeviceClass(profile, cmsSigDisplayClass);
+        return profile;
+    }
+    if (!strcmp(mode, "not-shaper")) {
+        cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
+        // writing no data deletes the tag: without its red colorant the
+        // profile is no matrix shaper
+        cmsWriteTag(profile, cmsSigRedColorantTag, nullptr);
+        return profile;
+    }
+    return nullptr;
 }
 
 int main(int argc, char** argv) {
@@ -166,5 +226,25 @@ int main(int argc, char** argv) {
     }
 
     close(fd);
+
+    bool accepted = false;
+    if (cmsHPROFILE profile = edgeProfile(argv[1], accepted)) {
+        uint32_t size = 0;
+        fd = savedProfileFd(profile, size);
+        if (fd < 0) {
+            return 2;
+        }
+        wp_image_description_creator_icc_v1_set_icc_file(creator, fd, 0, size);
+        close(fd);
+        wp_image_description_v1* description = wp_image_description_creator_icc_v1_create(creator);
+        wp_image_description_v1_add_listener(description, &descriptionListener, nullptr);
+        wl_display_roundtrip(wl_dpy);
+
+        if (accepted) {
+            return !ready || failed;
+        }
+        return !failed || failedCause != WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED;
+    }
+
     return 2;
 }

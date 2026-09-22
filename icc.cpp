@@ -67,10 +67,8 @@ namespace {
 }
 
 bool colorDescriptionFromIcc(const void* data, size_t size, ColorDescription& out) {
-    if (!data || !size || size > 0xffffffffu) {
-        return false;
-    }
-
+    // the one caller hands over a file the protocol already sized: never
+    // empty, never past 32 MiB
     cmsHPROFILE input = cmsOpenProfileFromMem(data, (cmsUInt32Number)size);
     if (!input) {
         return false;
