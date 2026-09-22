@@ -7338,8 +7338,9 @@ namespace {
         auto* h = (ForeignTLHandle*)wl_resource_get_user_data(handleRes);
 
         // a handle whose window already died still yields a source; every
-        // session on it stops immediately
-        makeCaptureSource(srv, client, id, h && h->toplevel ? h->toplevel->id : 0);
+        // session on it stops immediately. Its id is one no toplevel ever
+        // gets (they count up from 1), never 0, which would name the output
+        makeCaptureSource(srv, client, id, h->toplevel ? h->toplevel->id : ~(u64)0);
     }
 
     const struct ext_foreign_toplevel_image_capture_source_manager_v1_interface tlCaptureSourceManagerImpl = {
@@ -7541,23 +7542,20 @@ namespace {
         return found;
     }
 
-    void sendCaptureConstraints(WaylandImpl* srv, CaptureSession* cs, wl_resource* res, bool cursor, u64 toplevelId) {
+    void sendCaptureConstraints(WaylandImpl* srv, CaptureSession& cs) {
         int w = srv->scene->outW, h = srv->scene->outH;
 
-        if (cursor) {
+        if (cs.cursor) {
             Surface* cur = srv->scene->cursorSurface;
 
             w = cur && cur->viewW() > 0 ? cur->viewW() : 1;
             h = cur && cur->viewH() > 0 ? cur->viewH() : 1;
-        } else if (toplevelId) {
-            ToplevelImpl* t = captureToplevel(srv, toplevelId);
+        } else if (cs.toplevelId) {
+            ToplevelImpl* t = captureToplevel(srv, cs.toplevelId);
 
             if (!t) {
-                if (cs) {
-                    cs->stopped = true;
-                }
-
-                ext_image_copy_capture_session_v1_send_stopped(res);
+                cs.stopped = true;
+                ext_image_copy_capture_session_v1_send_stopped(cs.res);
 
                 return;
             }
@@ -7566,14 +7564,11 @@ namespace {
             h = t->surface->geomH() > 0 ? t->surface->geomH() : 1;
         }
 
-        if (cs) {
-            cs->sentW = (u32)w;
-            cs->sentH = (u32)h;
-        }
-
-        ext_image_copy_capture_session_v1_send_buffer_size(res, (u32)w, (u32)h);
-        ext_image_copy_capture_session_v1_send_shm_format(res, WL_SHM_FORMAT_XRGB8888);
-        ext_image_copy_capture_session_v1_send_done(res);
+        cs.sentW = (u32)w;
+        cs.sentH = (u32)h;
+        ext_image_copy_capture_session_v1_send_buffer_size(cs.res, (u32)w, (u32)h);
+        ext_image_copy_capture_session_v1_send_shm_format(cs.res, WL_SHM_FORMAT_XRGB8888);
+        ext_image_copy_capture_session_v1_send_done(cs.res);
     }
 
     void captureFrameDrop(CaptureFrame* f) {
@@ -7732,7 +7727,7 @@ namespace {
         cs->toplevelId = toplevelId;
         srv->captureSessions.pushBack(cs);
         wl_resource_set_implementation(r, &captureSessionImpl, cs, captureSessionResourceDestroyed);
-        sendCaptureConstraints(srv, cs, r, cursor, toplevelId);
+        sendCaptureConstraints(srv, *cs);
 
         return cs;
     }
@@ -7866,8 +7861,7 @@ namespace {
             // the window changed size since the client sized its buffer:
             // push fresh constraints and bounce this frame
             if (wantW != cs.sentW || wantH != cs.sentH) {
-                sendCaptureConstraints(srv, &cs, cs.res, false, cs.toplevelId);
-                ext_image_copy_capture_session_v1_send_done(cs.res);
+                sendCaptureConstraints(srv, cs);
                 captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_BUFFER_CONSTRAINTS);
 
                 return;
