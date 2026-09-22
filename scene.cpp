@@ -20,10 +20,6 @@ DmabufRef::DmabufRef(DmabufBuffer* buffer)
 {
 }
 
-const DmabufBuffer* DmabufRef::ptr() const noexcept {
-    return buffer_;
-}
-
 DmabufBuffer* DmabufRef::mutPtr() noexcept {
     return buffer_;
 }

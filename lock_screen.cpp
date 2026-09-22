@@ -872,11 +872,8 @@ void Dialog::onListen(void*) {
     comp->scene->needsFrame = true;
 }
 
+// the only caller, DesktopImpl::lock, opens only when there is no overlay
 void openLockOverlay(Composer& c, DialogState** state) {
-    if (*state) {
-        return;
-    }
-
     ObjPool* pool = ObjPool::fromMemoryRaw();
     DialogState* created = pool->make<DialogState>();
     Dialog* value = pool->make<Dialog>();

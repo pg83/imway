@@ -98,7 +98,6 @@ class DmabufRef {
 public:
     explicit DmabufRef(DmabufBuffer* buffer);
 
-    const DmabufBuffer* ptr() const noexcept;
     DmabufBuffer* mutPtr() noexcept;
 };
 
