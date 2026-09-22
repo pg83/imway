@@ -1455,12 +1455,17 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     connLinkBpc = getPropId(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "link bpc");
 
     u32 rangeProp = 0;
+    // the spelling this driver uses for the limited range: the enum value
+    // says nothing about which of the two names carries it
+    const char* limitedName = "Limited 16:235";
+
     getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Full", &rangeProp, &rangeFullValue);
-    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited 16:235", &rangeProp, &rangeLimitedValue)) {
-        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Limited", &rangeProp, &rangeLimitedValue);
+    if (!getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", limitedName, &rangeProp, &rangeLimitedValue)) {
+        limitedName = "Limited";
+        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", limitedName, &rangeProp, &rangeLimitedValue);
     }
 
-    const char* rangeName = config.range == OutputRange::limited ? (rangeLimitedValue ? "Limited 16:235" : "Limited") : config.range == OutputRange::full ? "Full" : "Automatic";
+    const char* rangeName = config.range == OutputRange::limited ? limitedName : config.range == OutputRange::full ? "Full" : "Automatic";
     getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", rangeName, &connRange, &rangeValue);
 
     if (config.range != OutputRange::automatic && !connRange) {
