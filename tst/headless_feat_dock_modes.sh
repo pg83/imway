@@ -53,8 +53,15 @@ for _ in 1 2 3; do
     await 30 moved && break
 done
 moved || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
-click_at 29 29
-await 50 back || { echo "cycle did not come back"; dump_state; exit 1; }
+# the same for the way back; the focus is read again before each retry, so
+# a late click that did come back is not followed by another. With two
+# windows the cycle alternates: even a doubled click only needs one more.
+for _ in 1 2 3; do
+    back && break
+    click_at 29 29
+    await 30 back && break
+done
+back || { echo "cycle did not come back"; dump_state; exit 1; }
 
 # the minimize action hides the focused group, a second click restores it
 set_setting desktop.active_click 1
