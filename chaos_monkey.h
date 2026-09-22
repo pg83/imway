@@ -52,6 +52,9 @@ struct ChaosMonkey {
     virtual VkResult clientTexture(VkResult result) = 0;
     // a finished frame's fence: its status, then its reset
     virtual VkResult frameFence(VkResult result) = 0;
+    // a GPU readback's fence as its poll delivers it: the screenshot's, or
+    // the frame capture's that screencopy clients wait on
+    virtual VkResult readbackFence(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

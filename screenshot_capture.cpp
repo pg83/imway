@@ -10,6 +10,7 @@
 #include "device_vk.h"
 #include "fence_poll.h"
 #include "offload_job.h"
+#include "chaos_monkey.h"
 #include "spawn.h"
 
 #include <std/ios/sys.h>
@@ -366,6 +367,8 @@ void ScreenshotCaptureImpl::pollRetire() {
 }
 
 void ScreenshotCaptureImpl::fenceDone(VkResult status) {
+    status = comp->chaos->readbackFence(status);
+
     if (status != VK_SUCCESS) {
         busy_ = false;
         *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status << ")"_sv << endL;

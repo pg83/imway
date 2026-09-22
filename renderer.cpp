@@ -4348,6 +4348,8 @@ bool RendererImpl::captureRecord() {
 }
 
 void RendererImpl::captureRetired(VkResult status) {
+    status = comp->chaos->readbackFence(status);
+
     if (status != VK_SUCCESS) {
         *(comp->log) << "imway: capture fence failed ("_sv << (long)status << ")"_sv << endL;
     } else if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {

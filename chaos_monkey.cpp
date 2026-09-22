@@ -44,6 +44,8 @@ using namespace stl;
 //   frame-fence=K     K finished-frame fence results pass, the one after
 //                     reports a lost device
 //   frame-hang=K      the same, reporting the wait timing out instead
+//   readback-fence=K  K readback fences pass, the one after reports a lost
+//                     device
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -62,6 +64,7 @@ namespace {
         int clientTextureSkip = -1;
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
+        int readbackFenceSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -82,6 +85,7 @@ namespace {
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
+        VkResult readbackFence(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -142,6 +146,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "frame-fence"_sv || fault == "frame-hang"_sv) {
         frameFenceSkip = (int)arg.stou();
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
+    } else if (fault == "readback-fence"_sv) {
+        readbackFenceSkip = (int)arg.stou();
     }
 }
 
@@ -291,6 +297,18 @@ VkResult TestChaosMonkey::frameFence(VkResult result) {
     return frameFenceFault;
 }
 
+VkResult TestChaosMonkey::readbackFence(VkResult result) {
+    if (readbackFenceSkip < 0) {
+        return result;
+    }
+
+    if (readbackFenceSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_DEVICE_LOST;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -314,6 +332,7 @@ namespace {
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
+        VkResult readbackFence(VkResult result) override;
     };
 }
 
@@ -363,6 +382,10 @@ VkResult IdleChaosMonkey::clientTexture(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::frameFence(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::readbackFence(VkResult result) {
     return result;
 }
 
