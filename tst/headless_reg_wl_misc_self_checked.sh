@@ -11,7 +11,9 @@
 # error), a pool resized to its own size with wl_shm released, and a second
 # get_release before a commit replacing the first, scale and transform
 # changed on content already shown (a sync child's taken from its cache),
-# and a source crop under every side-swapping transform.
+# a source crop under every side-swapping transform, sync grandchildren
+# (one stacked under its parent subsurface) applied only by the toplevel's
+# commit, and a commit-timing target on a desync subsurface.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -19,7 +21,8 @@ IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_wl_misc"
 next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next step
 
 for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab im-popup text-input \
-            foreign-gone foreign-bad-parent shm release rescale vp-transforms; do
+            foreign-gone foreign-bad-parent shm release rescale vp-transforms \
+            nested timed-subsurface; do
     "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
     expect_alive "the compositor died in $mode"
 done

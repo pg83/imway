@@ -22,6 +22,8 @@
 #include <text-input-unstable-v3-client-protocol.h>
 #include <xdg-foreign-unstable-v2-client-protocol.h>
 #include <xdg-toplevel-icon-v1-client-protocol.h>
+#include <commit-timing-v1-client-protocol.h>
+#include <time.h>
 
 static struct wp_viewporter* viewporter;
 static struct wp_tearing_control_manager_v1* tearing;
@@ -36,6 +38,7 @@ static struct zwp_text_input_manager_v3* text_inputs;
 static struct zxdg_exporter_v2* exporter;
 static struct zxdg_importer_v2* importer;
 static struct wl_shm* shm2;
+static struct wp_commit_timing_manager_v1* timing;
 static struct xdg_toplevel_icon_manager_v1* icons;
 static int icon_size;
 
@@ -76,6 +79,8 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
     else if (!strcmp(iface, xdg_toplevel_icon_manager_v1_interface.name)) {
         icons = wl_registry_bind(registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
         xdg_toplevel_icon_manager_v1_add_listener(icons, &icons_listener, NULL);
+    } else if (!strcmp(iface, wp_commit_timing_manager_v1_interface.name)) {
+        timing = wl_registry_bind(registry, name, &wp_commit_timing_manager_v1_interface, 1);
     } else if (!strcmp(iface, wl_shm_interface.name) && version >= 2)
         shm2 = wl_registry_bind(registry, name, &wl_shm_interface, 2);
 }
@@ -1120,6 +1125,113 @@ static int mode_vp_transforms(void) {
     return 0;
 }
 
+// ---- nested: sync grandchildren apply with their subsurface parent ----------
+static int frames_done[4];
+
+static void frame_done(void* d, struct wl_callback* cb, uint32_t t) {
+    (void)cb; (void)t;
+    frames_done[(intptr_t)d]++;
+}
+static const struct wl_callback_listener frame_listener = {frame_done};
+
+static void framed(struct wl_surface* s, intptr_t index) {
+    wl_callback_add_listener(wl_surface_frame(s), &frame_listener, (void*)index);
+}
+
+static int wait_frames(int index, int want) {
+    for (int i = 0; i < 200 && frames_done[index] < want; i++) {
+        roundtrip("frames");
+        usleep(10000);
+    }
+    return frames_done[index] >= want;
+}
+
+static int mode_nested(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-nested", 200, 150, 0xFF0000FF);
+
+    struct wl_surface* a = wl_compositor_create_surface(wl_comp);
+    struct wl_surface* below = wl_compositor_create_surface(wl_comp);
+    struct wl_surface* above = wl_compositor_create_surface(wl_comp);
+
+    wl_subcompositor_get_subsurface(wl_subcomp, a, t.surface);
+
+    struct wl_subsurface* bs = wl_subcompositor_get_subsurface(wl_subcomp, below, a);
+    struct wl_subsurface* as = wl_subcompositor_get_subsurface(wl_subcomp, above, a);
+
+    // one grandchild stacked under its parent subsurface, one desync above
+    wl_subsurface_place_below(bs, a);
+    wl_subsurface_set_desync(as);
+    wl_subsurface_set_position(bs, 20, 20);
+    wl_surface_attach(below, wl_solid(60, 60, 0xFF00FF00), 0, 0);
+    framed(below, 0);
+    wl_surface_commit(below);
+    wl_surface_attach(above, wl_solid(20, 20, 0xFFFFFF00), 0, 0);
+    wl_surface_commit(above);
+    wl_surface_attach(a, wl_solid(40, 40, 0xFF00FFFF), 0, 0);
+    framed(a, 1);
+    wl_surface_commit(a);
+    // nothing of the synced pair shows before the toplevel commits
+    roundtrip("cached");
+    usleep(100000);
+    roundtrip("cached");
+    if (frames_done[0] || frames_done[1]) {
+        fprintf(stderr, "a cached sync grandchild was shown before the toplevel commit\n");
+        return 1;
+    }
+    wl_surface_commit(t.surface);
+    if (!wait_frames(0, 1) || !wait_frames(1, 1)) {
+        fprintf(stderr, "the toplevel commit did not apply the grandchild below (%d) or its parent (%d)\n",
+                frames_done[0], frames_done[1]);
+        return 1;
+    }
+    printf("nested ok\n");
+    return 0;
+}
+
+// ---- timed-subsurface: a commit-timing target on a desync subsurface ---------
+static int mode_timed_subsurface(void) {
+    need(timing, "wp_commit_timing_manager_v1");
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-timed", 200, 150, 0xFF0000FF);
+
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+    struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, child, t.surface);
+
+    wl_subsurface_set_desync(sub);
+
+    struct wp_commit_timer_v1* timer = wp_commit_timing_manager_v1_get_timer(timing, child);
+    struct timespec now;
+
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    uint64_t target = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec + 200000000ull;
+
+    wp_commit_timer_v1_set_timestamp(timer, (uint32_t)((target / 1000000000ull) >> 32),
+                                     (uint32_t)(target / 1000000000ull), (uint32_t)(target % 1000000000ull));
+    wl_surface_attach(child, wl_solid(40, 40, 0xFF00FF00), 0, 0);
+    framed(child, 2);
+    wl_surface_commit(child);
+    if (!wait_frames(2, 1)) {
+        fprintf(stderr, "the timed subsurface commit never applied\n");
+        return 1;
+    }
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    uint64_t at = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+
+    if (at + 20000000ull < target) {
+        fprintf(stderr, "the timed subsurface commit applied %llu ms early\n",
+                (unsigned long long)((target - at) / 1000000ull));
+        return 1;
+    }
+    printf("timed subsurface ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1153,6 +1265,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "release")) return mode_release();
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
+    if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "timed-subsurface")) return mode_timed_subsurface();
     if (!strcmp(mode, "vp-transforms")) return mode_vp_transforms();
     if (!strncmp(mode, "bad-", 4)) return mode_bad(mode + 4);
     fprintf(stderr, "unknown mode %s\n", mode);
