@@ -4286,14 +4286,8 @@ bool RendererImpl::captureSubmit(int rx, int ry, int rw, int rh, Listener& done)
 // one full-frame GPU copy of the last presented image, retired by the
 // capture timer; every consumer registered this frame reads from it
 bool RendererImpl::captureRecord() {
-    if (captureBuf && (captureW != width || captureH != height)) {
-        vkDestroyBuffer(device, captureBuf, nullptr);
-        vkFreeMemory(device, captureMem, nullptr);
-        captureBuf = VK_NULL_HANDLE;
-        captureMem = VK_NULL_HANDLE;
-        captureMap = nullptr;
-    }
-
+    // a mode change drops the buffer (captureDropAll), so one that exists
+    // is the current size
     if (!captureBuf) {
         createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, captureBuf, captureMem, &captureMap);
         captureW = width;
