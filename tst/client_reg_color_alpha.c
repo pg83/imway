@@ -130,9 +130,18 @@ int main(void) {
     attach_stripes(overlay, 0);
     wl_surface_commit(top.surface);
     printf("client_reg_color_alpha: sdr-alpha\n");
-    // hold the phase long enough for the scenario's screenshot round trip
-    // even on a loaded software rasterizer
-    pump(3000);
+
+    // hold the phase until the scenario has read it: a fixed hold lost the
+    // race on a loaded runner, the phase moving on before the frame was
+    // sampled
+    for (int i = 0; access("go-pq", F_OK) != 0; i++) {
+        if (i == 3000) {
+            fprintf(stderr, "the scenario never read the sRGB phase\n");
+            return 1;
+        }
+
+        pump(20);
+    }
 
     struct wp_image_description_creator_params_v1* params =
         wp_color_manager_v1_create_parametric_creator(cm);

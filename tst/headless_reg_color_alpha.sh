@@ -119,6 +119,8 @@ if [[ "$sdr_ok" != 1 ]]; then
     assert_stripes sdr_actual sdr_expected "sRGB electrical alpha"
 fi
 
+# the client holds the sRGB phase until told the frame was read
+touch "$XDG_RUNTIME_DIR/go-pq"
 wait_client "pq-alpha"
 
 pq_ok=0
