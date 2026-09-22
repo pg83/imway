@@ -1,9 +1,11 @@
 /* wp-drm-lease when the kernel side cannot give the connector away: the
  * scenario breaks the lease path one way at a time (the connector unplugged,
- * its encoder gone, no crtc left for it, the kernel refusing the lease) and
- * signals each through a marker file. Every one of those requests must end
- * in `finished` without an fd, and once the path heals the same connector
- * leases out. */
+ * its encoder gone, no crtc left for it, the kernel refusing the lease, the
+ * driver failing to list its resources) and signals each through a marker
+ * file. Every one of those requests must end in `finished` without an fd,
+ * and a device bound while the connector or the resource list is gone
+ * offers no connector. With the lease crtc's plane unreadable the lease
+ * still goes out, without it; healed, the same connector leases out. */
 
 #include "wl_util.h"
 
@@ -12,6 +14,10 @@
 #include <sys/stat.h>
 
 static struct wp_drm_lease_device_v1* lease_dev;
+static struct wl_registry* registry;
+static uint32_t lease_name;
+static int fresh_connectors;
+static int fresh_done;
 static struct wp_drm_lease_connector_v1* offered;
 static int device_done;
 static int lease_fd = -1;
@@ -80,13 +86,48 @@ static const struct wp_drm_lease_v1_listener lease_listener = {
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t ver) {
     (void)d; (void)ver;
-    if (!strcmp(iface, wp_drm_lease_device_v1_interface.name))
+    if (!strcmp(iface, wp_drm_lease_device_v1_interface.name)) {
+        lease_name = name;
         lease_dev = wl_registry_bind(r, name, &wp_drm_lease_device_v1_interface, 1);
+    }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
     (void)d; (void)r; (void)n;
 }
 static const struct wl_registry_listener extra_listener = {extra_global, extra_remove};
+
+static void fresh_drm_fd(void* d, struct wp_drm_lease_device_v1* dev, int32_t fd) {
+    (void)d; (void)dev;
+    close(fd);
+}
+static void fresh_connector(void* d, struct wp_drm_lease_device_v1* dev,
+                            struct wp_drm_lease_connector_v1* c) {
+    (void)d; (void)dev;
+    fresh_connectors++;
+    wp_drm_lease_connector_v1_destroy(c);
+}
+static void fresh_device_done(void* d, struct wp_drm_lease_device_v1* dev) {
+    (void)d; (void)dev;
+    fresh_done = 1;
+}
+static const struct wp_drm_lease_device_v1_listener fresh_listener = {
+    fresh_drm_fd, fresh_connector, fresh_device_done, dev_released,
+};
+
+/* a second lease device bound now: how many connectors it offers, -1 when
+ * it never says done */
+static int fresh_bind(void) {
+    struct wp_drm_lease_device_v1* dev = wl_registry_bind(registry, lease_name, &wp_drm_lease_device_v1_interface, 1);
+
+    fresh_connectors = 0;
+    fresh_done = 0;
+    wp_drm_lease_device_v1_add_listener(dev, &fresh_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    wp_drm_lease_device_v1_destroy(dev);
+
+    return fresh_done ? fresh_connectors : -1;
+}
 
 static void wait_marker(const char* name) {
     char path[512];
@@ -127,7 +168,7 @@ int main(void) {
     alarm(60);
     if (wl_boot()) return 2;
 
-    struct wl_registry* registry = wl_display_get_registry(wl_dpy);
+    registry = wl_display_get_registry(wl_dpy);
     wl_registry_add_listener(registry, &extra_listener, NULL);
     wl_display_roundtrip(wl_dpy);
 
@@ -147,11 +188,17 @@ int main(void) {
 
     puts("offered");
 
-    for (int kind = 1; kind <= 4; kind++) {
+    for (int kind = 1; kind <= 5; kind++) {
         char marker[32];
 
         snprintf(marker, sizeof(marker), "go-%d", kind);
         wait_marker(marker);
+
+        // the connector gone, or no resource list: nothing to offer
+        if ((kind == 1 || kind == 5) && fresh_bind() != 0) {
+            fprintf(stderr, "lease fault %d: a fresh device offered %d connectors\n", kind, fresh_connectors);
+            return 1;
+        }
 
         if (try_lease()) {
             fprintf(stderr, "lease fault %d still handed out an fd\n", kind);
@@ -165,6 +212,15 @@ int main(void) {
 
         printf("refused %d\n", kind);
     }
+
+    wait_marker("go-6");
+
+    if (!try_lease()) {
+        fprintf(stderr, "an unreadable plane refused the whole lease\n");
+        return 1;
+    }
+
+    puts("leased without the plane");
 
     wait_marker("go-0");
 

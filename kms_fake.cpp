@@ -169,6 +169,16 @@ namespace {
         u64 dumbSize = 0; // nonzero marks a dumb buffer
     };
 
+    // a lookup the driver fails: which ioctl, on what, after how many that
+    // pass, for how many more (-1: for good)
+    struct LookupFault {
+        u32 req = 0;
+        u32 id = 0;
+        char name[32] = {};
+        int skip = 0;
+        int count = 0;
+    };
+
     struct FakeKms: KmsIntercept {
         int clientFd = -1; // handed to the compositor; events are read here
         int eventFd = -1;  // emulator's write end
@@ -227,6 +237,8 @@ namespace {
         bool tiledOnly = false; // the plane scans out no LINEAR buffer
         int failDumbCount = 0;
         int leaseFaultKind = 0;
+        Vector<LookupFault> lookupFaults;
+        bool noAsync = false;
 
         // the monitor behind the connector's DDC/CI bus (IMWAY_FAKE_KMS_DDC):
         // absent answers no address, silent never replies, a number is the
@@ -255,6 +267,9 @@ namespace {
         void failAddFb(int err, int count) override;
         void rejectCursor(int err) override;
         void leaseFault(int kind) override;
+        void failLookups(StringView rules) override;
+        void parseLookupFaults(StringView rules);
+        bool lookupFails(u32 req, void* arg);
         int openDdc(StringView bus) override;
         unsigned long long flips() override;
 
@@ -648,7 +663,7 @@ int FakeKms::emuGetCap(drm_get_cap* c) {
             c->value = cursorCap;
             return 0;
         case DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP:
-            c->value = 1;
+            c->value = noAsync ? 0 : 1;
             return 0;
         case DRM_CAP_ADDFB2_MODIFIERS:
         case DRM_CAP_PRIME:
@@ -1426,6 +1441,13 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
     // (dir bits reach the sign bit), so a libc-prototyped caller arrives
     // sign-extended while Mesa's raw-syscall path arrives zero-extended.
     // Truncate before dispatch so both spellings hit the same case.
+    if (lookupFails((u32)req, arg)) {
+        pthread_mutex_unlock(&mu);
+        errno = EIO;
+
+        return -1;
+    }
+
     switch ((u32)req) {
         case DRM_IOCTL_SET_CLIENT_CAP:
             rc = 0;
@@ -1666,6 +1688,10 @@ int FakeKms::openDevice() {
     const char* addFb = getenv("IMWAY_FAKE_KMS_FAIL_ADDFB");
     const char* ddc = getenv("IMWAY_FAKE_KMS_DDC");
     const char* commits = getenv("IMWAY_FAKE_KMS_FAIL_COMMITS");
+    const char* lookups = getenv("IMWAY_FAKE_KMS_FAIL_LOOKUPS");
+
+    noAsync = getenv("IMWAY_FAKE_KMS_NO_ASYNC") != nullptr;
+    parseLookupFaults(lookups ? StringView(lookups) : StringView());
 
     dropProps = drop ? StringView(drop) : StringView();
     edidKind = !edid ? 0 : StringView(edid) == "sdr"_sv ? 1 : StringView(edid) == "no-bt2020"_sv ? 3 : 2;
@@ -1746,6 +1772,104 @@ void FakeKms::failAddFb(int err, int count) {
 void FakeKms::rejectCursor(int err) {
     pthread_mutex_lock(&mu);
     rejectCursorErr = err;
+    pthread_mutex_unlock(&mu);
+}
+
+void FakeKms::parseLookupFaults(StringView rules) {
+    lookupFaults.clear();
+
+    while (!rules.empty()) {
+        StringView rule, rest;
+
+        if (rules.split(',', rule, rest)) {
+            rules = rest;
+        } else {
+            rule = rules;
+            rules = {};
+        }
+
+        StringView kind, target, skip, count;
+
+        if (!rule.split(':', kind, rest)) {
+            kind = rule;
+            rest = {};
+        }
+
+        if (!rest.split(':', target, rest)) {
+            target = rest;
+            rest = {};
+        }
+
+        if (!rest.split(':', skip, count)) {
+            skip = rest;
+            count = {};
+        }
+
+        LookupFault f;
+
+        f.req = kind == "props"_sv ? DRM_IOCTL_MODE_OBJ_GETPROPERTIES : kind == "prop"_sv ? DRM_IOCTL_MODE_GETPROPERTY : kind == "blob"_sv ? DRM_IOCTL_MODE_GETPROPBLOB : kind == "plane"_sv ? DRM_IOCTL_MODE_GETPLANE : DRM_IOCTL_MODE_GETRESOURCES;
+        f.id = (u32)target.stou();
+
+        size_t n = target.length() < sizeof(f.name) - 1 ? target.length() : sizeof(f.name) - 1;
+
+        memcpy(f.name, target.data(), n);
+        f.skip = skip.empty() ? 0 : (int)skip.stou();
+        f.count = count.empty() || count == "-1"_sv ? -1 : (int)count.stou();
+        lookupFaults.pushBack(f);
+    }
+}
+
+bool FakeKms::lookupFails(u32 req, void* arg) {
+    for (size_t i = 0; i < lookupFaults.length(); i++) {
+        LookupFault& f = lookupFaults.mut(i);
+
+        if (f.req != req || f.count == 0) {
+            continue;
+        }
+
+        bool match = true;
+
+        if (req == DRM_IOCTL_MODE_OBJ_GETPROPERTIES) {
+            match = ((drm_mode_obj_get_properties*)arg)->obj_id == f.id;
+        } else if (req == DRM_IOCTL_MODE_GETPLANE) {
+            match = ((drm_mode_get_plane*)arg)->plane_id == f.id;
+        } else if (req == DRM_IOCTL_MODE_GETPROPERTY) {
+            PropDef* p = findProp(((drm_mode_get_property*)arg)->prop_id);
+
+            match = p && StringView(p->name) == StringView(f.name);
+        } else if (req == DRM_IOCTL_MODE_GETPROPBLOB) {
+            u32 blob = ((drm_mode_get_blob*)arg)->blob_id;
+
+            match = false;
+
+            for (const PropDef& p : props) {
+                match = match || (StringView(p.name) == StringView(f.name) && p.value == blob);
+            }
+        }
+
+        if (!match) {
+            continue;
+        }
+
+        if (f.skip > 0) {
+            f.skip--;
+
+            continue;
+        }
+
+        if (f.count > 0) {
+            f.count--;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+void FakeKms::failLookups(StringView rules) {
+    pthread_mutex_lock(&mu);
+    parseLookupFaults(rules);
     pthread_mutex_unlock(&mu);
 }
 

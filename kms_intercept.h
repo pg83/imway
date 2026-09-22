@@ -41,6 +41,12 @@ struct KmsIntercept {
     // gone, 2 its encoder is, 3 the encoder reaches only the desktop crtc,
     // 4 the kernel refuses the lease; 0 heals it
     virtual void leaseFault(int kind) = 0;
+    // lookups the driver answers with an error, as comma-separated
+    // kind:target:skip:count rules (count -1: for good): props:<object id>,
+    // prop:<name>, blob:<name of the property holding it>, plane:<id>,
+    // resources. Each rule lets skip matching lookups through first; an
+    // empty list clears them
+    virtual void failLookups(stl::StringView rules) = 0;
     // the connector's DDC/CI bus, the i2c node the sysfs walk found: the
     // fd of an emulated monitor, or -errno when none answers on it
     virtual int openDdc(stl::StringView bus) = 0;
