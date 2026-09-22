@@ -388,7 +388,6 @@ int mainComposer(int argc, char** argv) {
             } else {
                 try {
                     session = Session::create(c);
-                    *log << "imway: libseat session on "_sv << session->seatName() << endL;
                 } catch (...) {
                     if (c.settings->seatBackend() == SeatBackend::libseat) {
                         throw;

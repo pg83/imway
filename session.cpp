@@ -26,7 +26,6 @@ using namespace stl;
 
 namespace {
     struct DirectSession: public Session {
-        StringView seatName() const override;
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
     };
@@ -50,8 +49,6 @@ namespace {
 
         SeatSession(Composer& comp);
         ~SeatSession() noexcept;
-
-        StringView seatName() const override;
 
         int openDevice(const char* path) override;
         void closeDevice(int fd) override;
@@ -82,10 +79,6 @@ namespace {
         .enable_seat = seatEnableCb,
         .disable_seat = seatDisableCb,
     };
-}
-
-StringView DirectSession::seatName() const {
-    return "seat0"_sv;
 }
 
 int DirectSession::openDevice(const char* path) {
@@ -123,6 +116,7 @@ SeatSession::SeatSession(Composer& comp)
     ev_io_init(&io, seatIoCb, libseat_get_fd(seat), EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
+    *(c->log) << "imway: libseat session on "_sv << StringView(libseat_seat_name(seat)) << endL;
 }
 
 SeatSession::~SeatSession() noexcept {
@@ -133,10 +127,6 @@ SeatSession::~SeatSession() noexcept {
     ev_io_stop(loop, &io);
     libseat_close_seat(seat);
     seat = nullptr;
-}
-
-StringView SeatSession::seatName() const {
-    return StringView(libseat_seat_name(seat));
 }
 
 int SeatSession::openDevice(const char* path) {
