@@ -1667,6 +1667,7 @@ int FakeKms::openDevice() {
     const char* dumb = getenv("IMWAY_FAKE_KMS_FAIL_DUMB");
     const char* addFb = getenv("IMWAY_FAKE_KMS_FAIL_ADDFB");
     const char* ddc = getenv("IMWAY_FAKE_KMS_DDC");
+    const char* commits = getenv("IMWAY_FAKE_KMS_FAIL_COMMITS");
 
     dropProps = drop ? StringView(drop) : StringView();
     edidKind = !edid ? 0 : StringView(edid) == "sdr"_sv ? 1 : 2;
@@ -1685,6 +1686,10 @@ int FakeKms::openDevice() {
     ddcSilent = ddc && StringView(ddc) == "silent"_sv;
     ddcMax = ddcArmed && !ddcAbsent && !ddcSilent ? (int)StringView(ddc).stou() : 0;
     ddcCur = ddcMax / 2;
+    // a display that refuses to light up: the first N commits, tests too
+    failErr = commits ? EINVAL : 0;
+    failCount = commits ? (int)StringView(commits).stou() : 0;
+    failTestToo = commits != nullptr;
     buildProps();
     pthread_create(&flipThread, nullptr, flipThreadTrampoline, this);
     // published last: the libc overrides start matching this fd only once

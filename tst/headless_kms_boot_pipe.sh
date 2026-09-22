@@ -42,6 +42,12 @@ kms_boot IMWAY_FAKE_KMS_NO_PRIME=1 -- --hdr 300
 boot_rc 1 "hdr without zero copy"
 boot_has "HDR requires 10-bit scanout"
 
+# the dumb-buffer path modesets in start(): a display refusing it is fatal
+kms_boot IMWAY_FAKE_KMS_NO_PRIME=1 IMWAY_FAKE_KMS_FAIL_COMMITS=1 --
+boot_rc 1 "refused first modeset"
+boot_has "atomic test modeset rejected color/link configuration, errno 22"
+boot_has "kms modeset failed"
+
 # the real card path, no emulator: a node that is not there
 rc=0
 out=$(env IMWAY_SETTINGS=advanced.seat_backend=2 timeout 60 "$(dirname "$IMWAY_TESTS_BIN")/imway_test" --device /nonexistent/card9 --socket imway-boot --frames 3 2>&1) || rc=$?
