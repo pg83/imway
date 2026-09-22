@@ -50,6 +50,8 @@ struct ChaosMonkey {
     // the result of one Vulkan call allocating a GPU resource sized by a
     // client's buffer: its texture, staging or upload buffer
     virtual VkResult clientTexture(VkResult result) = 0;
+    // a finished frame's fence: its status, then its reset
+    virtual VkResult frameFence(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

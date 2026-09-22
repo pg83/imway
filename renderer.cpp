@@ -998,6 +998,8 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         return false;
     }
 
+    status = comp->chaos->frameFence(status);
+
     if (status == VK_TIMEOUT) {
         // a frame fence that never signals is a hung gpu, not a slow one
         *(comp->log) << "imway: gpu hang (frame fence timeout), exiting"_sv << endL;
@@ -1012,7 +1014,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         return false;
     }
 
-    status = vkResetFences(device, 1, &fence);
+    status = comp->chaos->frameFence(vkResetFences(device, 1, &fence));
 
     if (status != VK_SUCCESS) {
         *(comp->log) << "imway: Vulkan frame fence reset failed ("_sv << (long)status << ")"_sv << endL;

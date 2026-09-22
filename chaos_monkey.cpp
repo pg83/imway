@@ -41,6 +41,9 @@ using namespace stl;
 //                     later one fails: the device refuses the client's buffers
 //   client-texture=K  K client-sized allocation calls pass, the one after
 //                     fails
+//   frame-fence=K     K finished-frame fence results pass, the one after
+//                     reports a lost device
+//   frame-hang=K      the same, reporting the wait timing out instead
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -57,6 +60,8 @@ namespace {
         // renderer
         int clientImportSkip = -1;
         int clientTextureSkip = -1;
+        int frameFenceSkip = -1;
+        VkResult frameFenceFault = VK_SUCCESS;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -76,6 +81,7 @@ namespace {
         // renderer
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
+        VkResult frameFence(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -133,6 +139,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         clientImportSkip = (int)arg.stou();
     } else if (fault == "client-texture"_sv) {
         clientTextureSkip = (int)arg.stou();
+    } else if (fault == "frame-fence"_sv || fault == "frame-hang"_sv) {
+        frameFenceSkip = (int)arg.stou();
+        frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
     }
 }
 
@@ -270,6 +279,18 @@ VkResult TestChaosMonkey::clientTexture(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+VkResult TestChaosMonkey::frameFence(VkResult result) {
+    if (frameFenceSkip < 0) {
+        return result;
+    }
+
+    if (frameFenceSkip-- > 0) {
+        return result;
+    }
+
+    return frameFenceFault;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -292,6 +313,7 @@ namespace {
         // renderer
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
+        VkResult frameFence(VkResult result) override;
     };
 }
 
@@ -337,6 +359,10 @@ VkResult IdleChaosMonkey::clientImport(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::clientTexture(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::frameFence(VkResult result) {
     return result;
 }
 
