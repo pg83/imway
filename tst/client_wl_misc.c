@@ -21,6 +21,7 @@
 #include <input-method-unstable-v2-client-protocol.h>
 #include <text-input-unstable-v3-client-protocol.h>
 #include <xdg-foreign-unstable-v2-client-protocol.h>
+#include <xdg-toplevel-icon-v1-client-protocol.h>
 
 static struct wp_viewporter* viewporter;
 static struct wp_tearing_control_manager_v1* tearing;
@@ -35,6 +36,15 @@ static struct zwp_text_input_manager_v3* text_inputs;
 static struct zxdg_exporter_v2* exporter;
 static struct zxdg_importer_v2* importer;
 static struct wl_shm* shm2;
+static struct xdg_toplevel_icon_manager_v1* icons;
+static int icon_size;
+
+static void icons_size(void* d, struct xdg_toplevel_icon_manager_v1* m, int32_t size) {
+    (void)d; (void)m;
+    if (!icon_size) icon_size = size;
+}
+static void icons_done(void* d, struct xdg_toplevel_icon_manager_v1* m) { (void)d; (void)m; }
+static const struct xdg_toplevel_icon_manager_v1_listener icons_listener = {icons_size, icons_done};
 
 static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
                          const char* iface, uint32_t version) {
@@ -63,7 +73,10 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
         exporter = wl_registry_bind(registry, name, &zxdg_exporter_v2_interface, 1);
     else if (!strcmp(iface, zxdg_importer_v2_interface.name))
         importer = wl_registry_bind(registry, name, &zxdg_importer_v2_interface, 1);
-    else if (!strcmp(iface, wl_shm_interface.name) && version >= 2)
+    else if (!strcmp(iface, xdg_toplevel_icon_manager_v1_interface.name)) {
+        icons = wl_registry_bind(registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
+        xdg_toplevel_icon_manager_v1_add_listener(icons, &icons_listener, NULL);
+    } else if (!strcmp(iface, wl_shm_interface.name) && version >= 2)
         shm2 = wl_registry_bind(registry, name, &wl_shm_interface, 2);
 }
 static void extra_remove(void* d, struct wl_registry* registry, uint32_t name) {
@@ -840,6 +853,11 @@ static int mode_input_region(void) {
 
     struct wl_region* empty = wl_compositor_create_region(wl_comp);
 
+    // degenerate rectangles add and take nothing; one reaching past the
+    // coordinate range is clamped, and lies far off the window anyway
+    wl_region_add(empty, 10, 10, 0, 20);
+    wl_region_subtract(empty, 10, 10, 20, -1);
+    wl_region_add(empty, INT32_MAX - 10, INT32_MAX - 10, 100, 100);
     wl_surface_set_input_region(t.surface, empty);
     wl_region_destroy(empty);
     // an opaque region set and taken back again
@@ -909,6 +927,32 @@ static int mode_release(void) {
     return 0;
 }
 
+// ---- icon-twice: a second pixel icon retires the first ----------------------
+static void set_pixel_icon(struct wl_toplevel_ctx* t, uint32_t color) {
+    int size = icon_size > 0 ? icon_size : 48;
+    struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icons);
+
+    xdg_toplevel_icon_v1_add_buffer(icon, wl_solid(size, size, color), 1);
+    xdg_toplevel_icon_manager_v1_set_icon(icons, t->tl, icon);
+    xdg_toplevel_icon_v1_destroy(icon);
+    wl_surface_commit(t->surface);
+}
+
+static int mode_icon_twice(void) {
+    need(icons, "xdg_toplevel_icon_manager_v1");
+    roundtrip("icon size");
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-icon", 160, 120, 0xFF0000FF);
+    set_pixel_icon(&t, 0xFF00FF00);
+    step(1);
+    set_pixel_icon(&t, 0xFFFF00FF);
+    step(2);
+    idle();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -940,6 +984,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "shm")) return mode_shm();
     if (!strcmp(mode, "input-region")) return mode_input_region();
     if (!strcmp(mode, "release")) return mode_release();
+    if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;
 }
