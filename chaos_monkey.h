@@ -73,6 +73,9 @@ struct ChaosMonkey {
     // waits on (creating it, importing the fd into it), or the frame's own
     // signal semaphore being recreated
     virtual VkResult syncWait(VkResult result) = 0;
+    // the result of one Vulkan call building the renderer's output-sized
+    // targets: at boot, and again whenever the output changes size
+    virtual VkResult outputTarget(VkResult result) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one

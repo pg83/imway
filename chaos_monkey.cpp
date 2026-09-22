@@ -59,6 +59,8 @@ using namespace stl;
 //   sync-file=K       K sync-file exports pass, the one after fails
 //   sync-wait=K       K sync-file semaphore creations and imports pass, the
 //                     one after fails
+//   output-target=K   K output-target calls pass, the one after runs out
+//                     of device memory
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -108,6 +110,7 @@ namespace {
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
         int syncWaitSkip = -1;
+        int outputTargetSkip = -1;
         // buses
         BusRule busRules[8];
         int busSendBuffer = 0;
@@ -138,6 +141,7 @@ namespace {
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
         VkResult syncWait(VkResult result) override;
+        VkResult outputTarget(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -218,6 +222,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         syncFileSkip = (int)arg.stou();
     } else if (fault == "sync-wait"_sv) {
         syncWaitSkip = (int)arg.stou();
+    } else if (fault == "output-target"_sv) {
+        outputTargetSkip = (int)arg.stou();
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -487,6 +493,14 @@ VkResult TestChaosMonkey::syncWait(VkResult result) {
     return VK_ERROR_OUT_OF_HOST_MEMORY;
 }
 
+VkResult TestChaosMonkey::outputTarget(VkResult result) {
+    if (outputTargetSkip < 0 || outputTargetSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 // buses
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
     if (!busFires(BusFault::message, built)) {
@@ -547,6 +561,7 @@ namespace {
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
         VkResult syncWait(VkResult result) override;
+        VkResult outputTarget(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -625,6 +640,10 @@ int IdleChaosMonkey::syncFile(int fd) {
 }
 
 VkResult IdleChaosMonkey::syncWait(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::outputTarget(VkResult result) {
     return result;
 }
 

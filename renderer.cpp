@@ -483,11 +483,19 @@ namespace {
         void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
-        // client: sized by a client's buffer, its failure a render fault
-        // for that client rather than the session's
-        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1, bool client = false);
-        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, bool client = false);
-        VkResult allocated(bool client, VkResult result);
+        // what a GPU allocation is for, which says which fault seam its
+        // results report through: a client's (sized by its buffer, its
+        // failure a render fault for that client), the output-sized
+        // targets, or the renderer's own
+        enum class GpuUse {
+            renderer,
+            client,
+            output,
+        };
+
+        void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1, GpuUse use = GpuUse::renderer);
+        void createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, GpuUse use = GpuUse::renderer);
+        VkResult allocated(GpuUse use, VkResult result);
         void setup();
         void loadFont();
         void scheduleFontReload();
@@ -1074,11 +1082,20 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return UINT32_MAX;
 }
 
-VkResult RendererImpl::allocated(bool client, VkResult result) {
-    return client ? comp->chaos->clientTexture(result) : result;
+VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
+    switch (use) {
+        case GpuUse::client:
+            return comp->chaos->clientTexture(result);
+        case GpuUse::output:
+            return comp->chaos->outputTarget(result);
+        case GpuUse::renderer:
+            return result;
+    }
+
+    return result;
 }
 
-void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips, bool client) {
+void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips, GpuUse use) {
     VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 
     ici.imageType = VK_IMAGE_TYPE_2D;
@@ -1090,7 +1107,7 @@ void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags 
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = usage;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VK_CHECK(allocated(client, vkCreateImage(device, &ici, nullptr, &img)));
+    VK_CHECK(allocated(use, vkCreateImage(device, &ici, nullptr, &img)));
 
     VkMemoryRequirements req{};
 
@@ -1100,16 +1117,16 @@ void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags 
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    VK_CHECK(allocated(client, vkAllocateMemory(device, &mai, nullptr, &mem)));
-    VK_CHECK(allocated(client, vkBindImageMemory(device, img, mem, 0)));
+    VK_CHECK(allocated(use, vkAllocateMemory(device, &mai, nullptr, &mem)));
+    VK_CHECK(allocated(use, vkBindImageMemory(device, img, mem, 0)));
 }
 
-void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, bool client) {
+void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf, VkDeviceMemory& mem, void** map, GpuUse use) {
     VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
 
     bci.size = size;
     bci.usage = usage;
-    VK_CHECK(allocated(client, vkCreateBuffer(device, &bci, nullptr, &buf)));
+    VK_CHECK(allocated(use, vkCreateBuffer(device, &bci, nullptr, &buf)));
 
     VkMemoryRequirements req{};
 
@@ -1119,9 +1136,9 @@ void RendererImpl::createHostBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(allocated(client, vkAllocateMemory(device, &mai, nullptr, &mem)));
-    VK_CHECK(allocated(client, vkBindBufferMemory(device, buf, mem, 0)));
-    VK_CHECK(allocated(client, vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map)));
+    VK_CHECK(allocated(use, vkAllocateMemory(device, &mai, nullptr, &mem)));
+    VK_CHECK(allocated(use, vkBindBufferMemory(device, buf, mem, 0)));
+    VK_CHECK(allocated(use, vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, map)));
 }
 
 ShmCache& RendererImpl::shmCache(ShmContent& content) {
@@ -1499,7 +1516,7 @@ ShmUpload* RendererImpl::makeCpuUpload(ShmContent& content, ShmCache& cache) {
     upload->device = device;
 
     try {
-        createHostBuffer((VkDeviceSize)content.width * content.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload->buffer, upload->memory, &upload->map, true);
+        createHostBuffer((VkDeviceSize)content.width * content.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, upload->buffer, upload->memory, &upload->map, GpuUse::client);
     } catch (...) {
         return nullptr;
     }
@@ -2162,10 +2179,16 @@ void RendererImpl::applyOutputSize() {
 
     if (!first) {
         finishGpuFrame(true);
+        // every handle goes null as it goes: a rebuild that fails below
+        // leaves the pool's guards the handles it did not replace
         vkDestroyFramebuffer(device, sceneFramebuffer, nullptr);
+        sceneFramebuffer = VK_NULL_HANDLE;
         vkDestroyImageView(device, sceneView, nullptr);
+        sceneView = VK_NULL_HANDLE;
         vkDestroyImage(device, sceneTarget, nullptr);
+        sceneTarget = VK_NULL_HANDLE;
         vkFreeMemory(device, sceneMemory, nullptr);
+        sceneMemory = VK_NULL_HANDLE;
         vkDestroyFramebuffer(device, framebuffer, nullptr);
         framebuffer = VK_NULL_HANDLE;
         vkDestroyImageView(device, targetView, nullptr);
@@ -2198,7 +2221,7 @@ void RendererImpl::applyOutputSize() {
     width = w;
     height = h;
 
-    createImage(width, height, kSceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, sceneTarget, sceneMemory);
+    createImage(width, height, kSceneFormat, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, sceneTarget, sceneMemory, 1, GpuUse::output);
 
     VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
@@ -2206,17 +2229,17 @@ void RendererImpl::applyOutputSize() {
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = kSceneFormat;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &sceneView));
+    VK_CHECK(allocated(GpuUse::output, vkCreateImageView(device, &vci, nullptr, &sceneView)));
 
     if (!scanout) {
-        createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory);
+        createImage(width, height, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, target, targetMemory, 1, GpuUse::output);
 
         vci.image = target;
         vci.format = fmt;
-        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &targetView));
+        VK_CHECK(allocated(GpuUse::output, vkCreateImageView(device, &vci, nullptr, &targetView)));
     }
 
-    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap);
+    createHostBuffer((VkDeviceSize)width * height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMemory, &readbackMap, GpuUse::output);
 
     VkFramebufferCreateInfo sceneFci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
@@ -2226,7 +2249,7 @@ void RendererImpl::applyOutputSize() {
     sceneFci.width = width;
     sceneFci.height = height;
     sceneFci.layers = 1;
-    VK_CHECK(vkCreateFramebuffer(device, &sceneFci, nullptr, &sceneFramebuffer));
+    VK_CHECK(allocated(GpuUse::output, vkCreateFramebuffer(device, &sceneFci, nullptr, &sceneFramebuffer)));
 
     if (scanout) {
         for (int i = 0; i < output->scanoutCount(); i++) {
@@ -2235,7 +2258,7 @@ void RendererImpl::applyOutputSize() {
 
             VkImageView view = VK_NULL_HANDLE;
 
-            VK_CHECK(vkCreateImageView(device, &vci, nullptr, &view));
+            VK_CHECK(allocated(GpuUse::output, vkCreateImageView(device, &vci, nullptr, &view)));
             scanImages.pushBack(vci.image);
             scanViews.pushBack(view);
 
@@ -2250,7 +2273,7 @@ void RendererImpl::applyOutputSize() {
 
             VkFramebuffer fb = VK_NULL_HANDLE;
 
-            VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &fb));
+            VK_CHECK(allocated(GpuUse::output, vkCreateFramebuffer(device, &fci, nullptr, &fb)));
             scanFbs.pushBack(fb);
         }
     } else {
@@ -2262,7 +2285,7 @@ void RendererImpl::applyOutputSize() {
         fci.width = width;
         fci.height = height;
         fci.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &framebuffer));
+        VK_CHECK(allocated(GpuUse::output, vkCreateFramebuffer(device, &fci, nullptr, &framebuffer)));
     }
 
     // the output pass samples the scene through this set; the view is new
@@ -2318,10 +2341,10 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
         s.frame = alloc->make<FrameResourceRef>(frame);
 
         try {
-            createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory, 1, true);
+            createImage(s.width, s.height, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, tex->image, tex->memory, 1, GpuUse::client);
 
             if (staging) {
-                createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap, true);
+                createHostBuffer((VkDeviceSize)s.width * s.height * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap, GpuUse::client);
             }
         } catch (...) {
             *(comp->log) << "imway: texture allocation failed "_sv << s.width << "x"_sv << s.height << endL;
@@ -2346,7 +2369,7 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
             vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
         }
 
-        if (allocated(true, vkCreateImageView(device, &vci, nullptr, &tex->view)) != VK_SUCCESS) {
+        if (allocated(GpuUse::client, vkCreateImageView(device, &vci, nullptr, &tex->view)) != VK_SUCCESS) {
             destroyTexture(tex);
             alloc->release(s.frame);
             s.frame = nullptr;
