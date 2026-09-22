@@ -3,6 +3,7 @@ import build.flags as flags
 import fnmatch
 import hashlib
 import os
+import re
 import shlex
 
 
@@ -427,6 +428,22 @@ harness = sorted(
 
 client_by_name = {target.name: target for target in tests}
 
+
+def referenced_clients(path, seen):
+    # the clients a scenario names, in itself and in every tst/ file it
+    # reaches by name (lib.sh, a *_case.sh, an .inc): scenarios and the
+    # helpers resolve them by path, so the name is the whole reference
+    relative = path.replace("$(S)/", "", 1)
+    if relative in seen or not os.path.isfile(relative):
+        return set()
+    seen.add(relative)
+    with open(relative) as f:
+        text = f.read()
+    found = {word for word in re.findall(r"\bclient_[a-z0-9_]+", text) if word in client_by_name}
+    for other in re.findall(r"\b[a-z0-9_]+\.(?:sh|inc)\b", text):
+        found |= referenced_clients(f"$(S)/tst/{other}", seen)
+    return found
+
 test_nodes = []
 for scenario in scenarios:
     name = os.path.basename(scenario)[:-len(".sh")]
@@ -438,10 +455,12 @@ for scenario in scenarios:
     client_name = name.replace("headless_", "client_", 1)
     client_target = client_by_name.get(client_name)
     # tests run against imway_test (the garbage-filled build) and depend on
-    # every client binary, since lib.sh and the *_case.sh/matrix_run.sh helpers
-    # resolve shared clients (the input-health probe, client_ok, the
-    # render-matrix client) by path next to the scenario's own client
-    node_deps = [imway_test, *tests]
+    # their own client plus every client they or their helpers name: a
+    # shard builds only what its scenarios run
+    wanted = referenced_clients(scenario, set())
+    if client_target:
+        wanted.add(client_name)
+    node_deps = [imway_test, *(client_by_name[client] for client in sorted(wanted))]
 
     for run_index in range(runs):
         out = f"$(B)/test-results/{name}.run{run_index}.json"
