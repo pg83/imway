@@ -55,7 +55,9 @@ static void step(int n) {
 
     wlk_watch_key = KEY_1;
     wlk_watch_hits = 0;
-    while (!wlk_watch_hits && wl_display_dispatch(wl_dpy) != -1) {
+    // the press and its release both count: waiting for the pair keeps a
+    // late release from answering the next step
+    while (wlk_watch_hits < 2 && wl_display_dispatch(wl_dpy) != -1) {
     }
 
     wl_surface_commit(top.surface);
