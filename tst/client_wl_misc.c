@@ -1500,6 +1500,37 @@ static int mode_cursor_enter(void) {
     return 0;
 }
 
+// ---- damage: surface damage that cannot be mapped onto the buffer -----------
+// Damage beyond the coordinate range once scaled, and any damage on a
+// surface with a viewport, stand for the whole buffer: each step replaces
+// the whole buffer while damaging almost nothing of it, and the scenario
+// sees all of the new colour.
+static int mode_damage(void) {
+    need(viewporter, "wp_viewporter");
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-damage", 120, 80, 0xFFFF0000);
+    wl_surface_set_buffer_scale(t.surface, 2);
+    wl_surface_commit(t.surface);
+    step(1); // red, 60x40
+    wl_surface_attach(t.surface, wl_solid(120, 80, 0xFF00FF00), 0, 0);
+    // twice this is past INT32_MAX
+    wl_surface_damage(t.surface, 0x40000000, 0x40000000, 1, 1);
+    wl_surface_commit(t.surface);
+    step(2); // green all over
+
+    struct wp_viewport* vp = wp_viewporter_get_viewport(viewporter, t.surface);
+
+    wp_viewport_set_destination(vp, 60, 40);
+    wl_surface_attach(t.surface, wl_solid(120, 80, 0xFF0000FF), 0, 0);
+    wl_surface_damage(t.surface, 0, 0, 1, 1);
+    wl_surface_commit(t.surface);
+    step(3); // blue all over
+    idle();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1534,6 +1565,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "damage")) return mode_damage();
     if (!strcmp(mode, "cursor-enter")) return mode_cursor_enter();
     if (!strcmp(mode, "reposition-pending")) return mode_reposition_pending();
     if (!strcmp(mode, "stale-move")) return mode_stale_move();
