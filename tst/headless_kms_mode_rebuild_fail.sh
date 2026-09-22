@@ -24,7 +24,9 @@ await 100 in_log "reconnected display refuses the current mode" || { echo "the r
 
 # the original display back: its mode is offered again
 ctl "kms-connector 0"
-await 50 test "$(grep -c "connector disconnected" "$IMWAY_LOG")" -ge 2 || { echo "second disconnect unnoticed"; exit 1; }
+# await re-runs its command, so the count is read inside a function
+disconnects() { [[ "$(grep -c "connector disconnected" "$IMWAY_LOG" || true)" -ge 2 ]]; }
+await 50 disconnects || { echo "second disconnect unnoticed"; cat "$IMWAY_LOG"; exit 1; }
 ctl "kms-modes 0"
 ctl "kms-connector 1"
 await 100 in_log "connector reconnected, remodeset" || { echo "the old display did not come back"; cat "$IMWAY_LOG"; exit 1; }
