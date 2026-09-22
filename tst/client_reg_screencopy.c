@@ -73,7 +73,15 @@ static const struct zwlr_screencopy_frame_v1_listener frame_listener = {
     .buffer_done = on_buffer_done,
 };
 
-int main(void) {
+static int frame_seen;
+static void on_frame(void* d, struct wl_callback* cb, uint32_t t) {
+    (void)d; (void)t;
+    wl_callback_destroy(cb);
+    frame_seen = 1;
+}
+static const struct wl_callback_listener frame_cb_listener = {on_frame};
+
+int main(int argc, char** argv) {
     alarm(10);
     if (wl_boot()) return 2;
     struct wl_registry* registry = wl_display_get_registry(wl_dpy);
@@ -87,6 +95,17 @@ int main(void) {
     struct wl_toplevel_ctx ctx;
     wl_make_toplevel(&ctx, "screencopy-target", 300, 300, 0xffff00ff);
     wl_display_roundtrip(wl_dpy);
+
+    // a dump is compared with a later capture: let the window's first
+    // frames settle on screen before copying
+    for (int i = 0; argc > 1 && i < 10; i++) {
+        struct wl_callback* cb = wl_surface_frame(ctx.surface);
+        frame_seen = 0;
+        wl_callback_add_listener(cb, &frame_cb_listener, NULL);
+        wl_surface_commit(ctx.surface);
+        while (!frame_seen && wl_display_dispatch(wl_dpy) != -1) {
+        }
+    }
 
     struct zwlr_screencopy_frame_v1* frame =
         zwlr_screencopy_manager_v1_capture_output(mgr, 0, output);
@@ -115,6 +134,28 @@ int main(void) {
     if (failed_seen) {
         fprintf(stderr, "screencopy failed\n");
         return 1;
+    }
+
+    // with a path: dump the copy as a PPM for the scenario to compare with
+    // the compositor's own capture, and stay mapped until killed
+    if (argc > 1) {
+        FILE* out = fopen(argv[1], "wb");
+        if (!out) return 2;
+        fprintf(out, "P6\n%u %u\n255\n", buf_w, buf_h);
+        for (uint32_t y = 0; y < buf_h; y++) {
+            const uint32_t* row = (const uint32_t*)((const uint8_t*)px + (size_t)y * buf_stride);
+            for (uint32_t x = 0; x < buf_w; x++) {
+                unsigned char rgb[3] = {(unsigned char)(row[x] >> 16), (unsigned char)(row[x] >> 8), (unsigned char)row[x]};
+                fwrite(rgb, 1, 3, out);
+            }
+        }
+        fclose(out);
+        printf("screencopy dumped\n");
+        fflush(stdout);
+        alarm(0);
+        while (wl_display_dispatch(wl_dpy) != -1) {
+        }
+        return 0;
     }
 
     long magenta = 0;
