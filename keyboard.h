@@ -51,8 +51,5 @@ struct Keyboard {
     virtual stl::StringView layoutName(u32 group) const = 0;
     virtual u32 activeLayout() const = 0;
 
-    // the xkb options string the keymap was compiled with, verbatim
-    virtual stl::StringView options() const = 0;
-
     static Keyboard* create(stl::ObjPool* pool, Log& log, stl::StringView layout, stl::StringView options);
 };

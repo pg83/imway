@@ -25,7 +25,6 @@ namespace {
         xkb_state* state = nullptr;
         int fd = -1;
         u32 size = 0;
-        Buffer opts;
 
         KeyboardImpl(Log& log, StringView layout, StringView options);
         ~KeyboardImpl() noexcept;
@@ -43,7 +42,6 @@ namespace {
         u32 layoutCount() const override;
         StringView layoutName(u32 group) const override;
         u32 activeLayout() const override;
-        StringView options() const override;
     };
 }
 
@@ -55,7 +53,6 @@ namespace {
 
 KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
     : log(&l)
-    , opts(options)
 {
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     STD_VERIFY(ctx);
@@ -157,7 +154,6 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
     size = nextSize;
     state = nextState;
     keymap = nextKeymap;
-    opts = Buffer(options);
 }
 
 void KeyboardImpl::updateKey(u32 evdevCode, bool pressed) {
@@ -256,10 +252,6 @@ StringView KeyboardImpl::layoutName(u32 group) const {
 
 u32 KeyboardImpl::activeLayout() const {
     return xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
-}
-
-StringView KeyboardImpl::options() const {
-    return sv(opts);
 }
 
 Keyboard* Keyboard::create(ObjPool* pool, Log& log, StringView layout, StringView options) {
