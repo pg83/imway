@@ -107,13 +107,25 @@ jobs:
             sudo tee /etc/pam.d/imway-test-ok >/dev/null
           vulkaninfo --summary || true
 
+      - name: Prepare a VM for the explicit-sync scenarios
+        run: |
+          # the runner's own DRM node has no timeline syncobjs; a virtme-ng
+          # VM on the runner's kernel with a virtio-gpu does, and
+          # dev/vng_wrap.sh runs single scenarios in one (-Dtest_wrap)
+          sudo apt-get install -y -qq qemu-system-x86 "linux-modules-extra-$(uname -r)" >/dev/null
+          pipx install virtme-ng >/dev/null
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo chmod 666 /dev/kvm
+          sudo chmod a+r "/boot/vmlinuz-$(uname -r)"
+
       - name: Run full test suite
         run: |
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -j 2 -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -182,6 +194,17 @@ jobs:
           printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
             sudo tee /etc/pam.d/imway-test-ok >/dev/null
 
+      - name: Prepare a VM for the explicit-sync scenarios
+        run: |
+          # the runner's own DRM node has no timeline syncobjs; a virtme-ng
+          # VM on the runner's kernel with a virtio-gpu does, and
+          # dev/vng_wrap.sh runs single scenarios in one (-Dtest_wrap)
+          sudo apt-get install -y -qq qemu-system-x86 "linux-modules-extra-$(uname -r)" >/dev/null
+          pipx install virtme-ng >/dev/null
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          sudo chmod 666 /dev/kvm
+          sudo chmod a+r "/boot/vmlinuz-$(uname -r)"
+
       - name: Run full test suite with coverage
         run: |
           set -o pipefail
@@ -201,6 +224,7 @@ jobs:
             python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k &&
             python3 ./build -B .b-cov -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j 2 -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 

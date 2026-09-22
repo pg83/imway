@@ -16,6 +16,15 @@ printf -v dir '%q' "$PWD"
 
 setup='modprobe virtio_gpu; modprobe udmabuf 2>/dev/null; chmod 666 /dev/dri/* /dev/udmabuf 2>/dev/null; export HOME=/tmp'
 
+# the VM starts from a clean environment: carry over what a run needs from
+# the host's, a coverage build's profile destination above all
+for name in LLVM_PROFILE_FILE; do
+    if [[ -n "${!name:-}" ]]; then
+        printf -v value '%q' "${!name}"
+        setup+="; export $name=$value"
+    fi
+done
+
 # blob resources want the guest's memory in a memfd qemu can hand to udmabuf
 memory=${VNG_MEMORY:-2G}
 
