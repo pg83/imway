@@ -10745,7 +10745,14 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
         double sy = ev.y - target->imgY;
 
         if (dev->focus != target) {
+            // a tool crossing surfaces in contact lifts off the one it leaves
+            // and lands on the one it enters, as tablet-v2 spells out for up
+            // and down; the contact itself goes on
             if (dev->focus) {
+                if (dev->down) {
+                    zwp_tablet_tool_v2_send_up(dev->tool);
+                }
+
                 zwp_tablet_tool_v2_send_proximity_out(dev->tool);
             }
 
@@ -10753,7 +10760,10 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
 
             zwp_tablet_tool_v2_send_proximity_in(dev->tool, serial, dev->tablet, resOf(target));
             dev->focus = target;
-            dev->down = false;
+
+            if (dev->down) {
+                zwp_tablet_tool_v2_send_down(dev->tool, wl_display_next_serial(srv->display));
+            }
         }
 
         if (ev.phase == TabletPhase::proximityOut) {
