@@ -27,5 +27,17 @@ screenshot "$XDG_RUNTIME_DIR/tv.ppm"
 dims=$(awk 'NR == 2 { print $1 "x" $2; exit }' "$XDG_RUNTIME_DIR/tv.ppm")
 [[ "$dims" == "1920x1080" ]] || { echo "screenshot is $dims, not 1920x1080"; exit 1; }
 
+# no scanout buffer to hand over here: the screenshot chord reads back
+shots="$XDG_RUNTIME_DIR/shots"
+ctl "set applications.screenshot_directory $shots"
+ctl "set applications.screenshot_name dumb"
+ctl "set applications.screenshot_format 1" # png
+ctl "set applications.screenshot_action 1" # save, no window
+await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+ctl "key 99 press"; ctl "key 99 release" # Print
+await 100 in_log "imway: screenshot readback" || { echo "the chord did not read back"; cat "$IMWAY_LOG"; exit 1; }
+saved() { [[ -s "$shots/dumb.png" ]]; }
+await 200 saved || { echo "the readback was not saved"; exit 1; }
+
 expect_alive "compositor died swapping modes on dumb buffers"
 echo "OK: the dumb buffers follow the new display's mode"
