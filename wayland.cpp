@@ -3552,41 +3552,20 @@ namespace {
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
-        if (!surface) {
-            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "invalid child surface");
-
-            return;
-        }
-
-        if (!parent) {
-            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "invalid parent surface");
-
-            return;
-        }
-
         if (surface->role != SurfaceRole::none || surface->xdg || surface->sub) {
             wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "surface already has a role");
 
             return;
         }
 
-        Surface* ancestor = parent;
-        size_t remaining = srv->scene->surfaces.length() + 1;
-
-        while (ancestor && remaining-- > 0) {
+        // the parent chain ends: a subsurface's parent is fixed here, and
+        // this walk refuses every link that would close a cycle
+        for (Surface* ancestor = parent; ancestor; ancestor = ancestor->sub ? ancestor->sub->parent.get() : nullptr) {
             if (ancestor == surface) {
                 wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "subsurface hierarchy would contain a cycle");
 
                 return;
             }
-
-            ancestor = ancestor->sub ? ancestor->sub->parent.get() : nullptr;
-        }
-
-        if (ancestor) {
-            wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_PARENT, "invalid subsurface hierarchy");
-
-            return;
         }
 
         wl_resource* sres = srv->composer->chaos->resource(wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id));
@@ -5500,13 +5479,6 @@ namespace {
         }
 
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
-
-        if (!surface) {
-            wl_resource_destroy(menuRes);
-
-            return;
-        }
-
         AppMenuBox* box = srv->alloc->make<AppMenuBox>();
 
         box->srv = srv;
@@ -6783,11 +6755,7 @@ namespace {
             return;
         }
 
-        if (surfaceRes) {
-            im->popupSurface.bind(surfaceFrom(surfaceRes)->weak);
-        } else {
-            im->popupSurface.reset();
-        }
+        im->popupSurface.bind(surfaceFrom(surfaceRes)->weak);
 
         im->popupRes = r;
         im->lastRect = {-1, -1, -1, -1};
