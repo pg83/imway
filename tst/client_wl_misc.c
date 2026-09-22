@@ -5,6 +5,7 @@
 //   usage: client_wl_misc MODE
 
 #define REG_XDG_VERSION 6
+#define REG_COMPOSITOR_VERSION 7
 #include "wl_util.h"
 
 #include <linux/input-event-codes.h>
@@ -831,6 +832,83 @@ static int mode_shm(void) {
     return 0;
 }
 
+// ---- input-region: an empty input region, then none (the whole surface) -----
+static int mode_input_region(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-input", 200, 150, 0xFF0000FF);
+
+    struct wl_region* empty = wl_compositor_create_region(wl_comp);
+
+    wl_surface_set_input_region(t.surface, empty);
+    wl_region_destroy(empty);
+    // an opaque region set and taken back again
+    struct wl_region* opaque = wl_compositor_create_region(wl_comp);
+
+    wl_region_add(opaque, 0, 0, 200, 150);
+    wl_surface_set_opaque_region(t.surface, opaque);
+    wl_region_destroy(opaque);
+    wl_surface_set_opaque_region(t.surface, NULL);
+    wl_surface_commit(t.surface);
+    step(1); // the scenario hovers the window: nothing to enter
+
+    int before = wlp_enter_count;
+
+    printf("enters %d\n", before);
+    wl_surface_set_input_region(t.surface, NULL);
+    wl_surface_commit(t.surface);
+    step(2); // hovered again: the whole surface takes input
+    printf("enters %d\n", wlp_enter_count);
+    if (before != 0 || wlp_enter_count == 0) {
+        fprintf(stderr, "input region: %d enters while empty, %d after reset\n", before, wlp_enter_count);
+        return 1;
+    }
+    printf("input region ok\n");
+    idle();
+    return 0;
+}
+
+// ---- release: a second get_release before commit replaces the first --------
+static int release_done[2];
+
+static void release_cb(void* d, struct wl_callback* cb, uint32_t t) {
+    (void)cb; (void)t;
+    release_done[(intptr_t)d]++;
+}
+static const struct wl_callback_listener release_listener = {release_cb};
+
+static int mode_release(void) {
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+    struct wl_subsurface* sub;
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-release", 120, 90, 0xFF0000FF);
+    sub = wl_subcompositor_get_subsurface(wl_subcomp, s, t.surface);
+    wl_subsurface_set_desync(sub);
+    wl_surface_attach(s, wl_solid(40, 40, 0xFF00FF00), 0, 0);
+
+    struct wl_callback* first = wl_surface_get_release(s);
+    struct wl_callback* second = wl_surface_get_release(s);
+
+    wl_callback_add_listener(first, &release_listener, (void*)0);
+    wl_callback_add_listener(second, &release_listener, (void*)1);
+    wl_surface_commit(s);
+    roundtrip("commit");
+    // the next buffer releases the first one
+    wl_surface_attach(s, wl_solid(40, 40, 0xFF0000FF), 0, 0);
+    wl_surface_commit(s);
+    for (int i = 0; i < 100 && !release_done[1]; i++) {
+        roundtrip("release");
+        usleep(10000);
+    }
+    if (release_done[0] || release_done[1] != 1) {
+        fprintf(stderr, "release callbacks: replaced %d, kept %d\n", release_done[0], release_done[1]);
+        return 1;
+    }
+    printf("release ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -860,6 +938,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "foreign-gone")) return mode_foreign_gone();
     if (!strcmp(mode, "foreign-bad-parent")) return mode_foreign_bad_parent();
     if (!strcmp(mode, "shm")) return mode_shm();
+    if (!strcmp(mode, "input-region")) return mode_input_region();
+    if (!strcmp(mode, "release")) return mode_release();
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;
 }

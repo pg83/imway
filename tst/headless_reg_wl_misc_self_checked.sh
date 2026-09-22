@@ -8,7 +8,8 @@
 # surface object destroyed before it, the active text input destroyed (after
 # a change cause the method must see), an exported toplevel destroyed under
 # its import, set_parent_of on a surface that is no toplevel (a protocol
-# error), and a pool resized to its own size with wl_shm released.
+# error), a pool resized to its own size with wl_shm released, and a second
+# get_release before a commit replacing the first.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -16,7 +17,7 @@ IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_wl_misc"
 next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next step
 
 for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab im-popup text-input \
-            foreign-gone foreign-bad-parent shm; do
+            foreign-gone foreign-bad-parent shm release; do
     "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
     expect_alive "the compositor died in $mode"
 done
