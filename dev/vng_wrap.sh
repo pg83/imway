@@ -6,7 +6,9 @@
 # where the host expects them. For build.py's -Dtest_wrap.
 #
 # needs: vng (virtme-ng), qemu-system-x86, /dev/kvm, the virtio-gpu module
-# (linux-modules-extra on ubuntu's cloud kernels), a readable /boot/vmlinuz
+# (linux-modules-extra on ubuntu's cloud kernels), a readable /boot/vmlinuz.
+# blob resources let virtio-gpu import dma-bufs it did not export (udmabuf
+# test buffers); VNG_GPU overrides the device
 set -euo pipefail
 
 printf -v command '%q ' "$@"
@@ -15,4 +17,4 @@ printf -v dir '%q' "$PWD"
 setup='modprobe virtio_gpu; modprobe udmabuf 2>/dev/null; chmod 666 /dev/dri/* /dev/udmabuf 2>/dev/null; export HOME=/tmp'
 
 exec vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "${VNG_MEMORY:-2G}" --cpus "${VNG_CPUS:-2}" \
-    --qemu-opts="-device virtio-gpu-pci" -- "$setup; cd $dir && $command"
+    --qemu-opts="-device ${VNG_GPU:-virtio-gpu-pci,blob=true}" -- "$setup; cd $dir && $command"
