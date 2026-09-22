@@ -68,8 +68,6 @@ namespace {
         void networksImpl(VisitorFace&& vis) override;
         void scan() override;
         void connect(StringView path) override;
-        void disconnect() override;
-        void forget(StringView path) override;
         bool passphraseWanted() override;
         StringView passphraseFor() override;
         void providePassphrase(StringView pw) override;
@@ -242,7 +240,9 @@ DBusMessage* IwdWifi::takeReply(DBusPendingCall* call) {
 
     dbus_pending_call_unref(call);
 
-    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+    // notified means complete, and libdbus completes a timed-out or
+    // disconnected call with a synthesized error: there is a reply
+    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
         dbus_message_unref(reply);
 
         return nullptr;
@@ -509,16 +509,6 @@ void IwdWifi::connect(StringView path) {
     callVoid(path, "net.connman.iwd.Network"_sv, "Connect"_sv);
 }
 
-void IwdWifi::disconnect() {
-    callVoid(sv(stationPath), "net.connman.iwd.Station"_sv, "Disconnect"_sv);
-}
-
-void IwdWifi::forget(StringView) {
-    // Forget lives on the KnownNetwork object, whose path we do not track
-    // yet; the v1 ui offers no forget button, so this stays a no-op until
-    // the known-network path is threaded through
-}
-
 bool IwdWifi::passphraseWanted() {
     return passMsg != nullptr;
 }
@@ -527,11 +517,8 @@ StringView IwdWifi::passphraseFor() {
     return sv(passNet);
 }
 
+// the picker only offers the prompt while one is pending
 void IwdWifi::providePassphrase(StringView pw) {
-    if (!passMsg) {
-        return;
-    }
-
     DBusMessage* reply = dbus_message_new_method_return(passMsg);
     Buffer p(pw);
     const char* pp = p.cStr();
@@ -666,11 +653,8 @@ namespace {
     }
 }
 
+// Wifi::create only asks with a system bus in hand
 Wifi* WifiIwd::create(Composer& c) {
-    if (!c.sysbus) {
-        return nullptr;
-    }
-
     DBusConnection* conn = c.sysbus->raw();
     DBusError err;
 

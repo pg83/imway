@@ -31,7 +31,8 @@ Wifi* Wifi::create(Composer& c) {
 }
 
 void wifiNotifyTransition(Composer& c, WifiState& last, WifiState now, StringView ssid) {
-    if (!c.notifier || !c.settings->notifyWifi()) {
+    // the notifier exists before any provider does
+    if (!c.settings->notifyWifi()) {
         return;
     }
 

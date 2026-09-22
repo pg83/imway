@@ -109,8 +109,6 @@ namespace {
         void networksImpl(VisitorFace&& vis) override;
         void scan() override;
         void connect(StringView path) override;
-        void disconnect() override;
-        void forget(StringView path) override;
         bool passphraseWanted() override;
         StringView passphraseFor() override;
         void providePassphrase(StringView pw) override;
@@ -145,7 +143,7 @@ namespace {
         void resetScratch();
 
         // actions (async fire-and-forget)
-        void activate(StringView apPath);
+        void activate(const WifiNetwork& n);
         void addAndActivate(StringView apPath, StringView ssid, StringView psk);
     };
 
@@ -349,8 +347,10 @@ DBusMessage* NmWifi::takeReply(DBusPendingCall* call) {
 
     dbus_pending_call_unref(call);
 
-    // An error reply is not a value reply; treat it as empty.
-    if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+    // notified means complete, and libdbus completes a timed-out or
+    // disconnected call with a synthesized error, so there is a reply; an
+    // error reply is not a value reply, treat it as empty
+    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
         dbus_message_unref(reply);
 
         return nullptr;
@@ -748,13 +748,12 @@ void NmWifi::scan() {
     dbus_message_unref(msg);
 }
 
-void NmWifi::activate(StringView apPath) {
-    WifiNetwork* n = byPath(apPath);
-    Known* k = n ? knownForSsid(sv(n->name)) : nullptr;
+void NmWifi::activate(const WifiNetwork& n) {
+    Known* k = knownForSsid(sv(n.name));
 
     Buffer connBuf(k ? sv(k->path) : "/"_sv);
     Buffer devBuf(sv(curDevice));
-    Buffer apBuf(apPath);
+    Buffer apBuf(sv(n.path));
     const char* conn_o = connBuf.cStr();
     const char* dev_o = devBuf.cStr();
     const char* ap_o = apBuf.cStr();
@@ -850,15 +849,12 @@ void NmWifi::addAndActivate(StringView apPath, StringView ssid, StringView psk) 
     dbus_message_unref(msg);
 }
 
+// the picker hands over the path of a row it is drawing from this list
 void NmWifi::connect(StringView path) {
     WifiNetwork* n = byPath(path);
 
-    if (!n) {
-        return;
-    }
-
     if (n->known || n->type == "open"_sv) {
-        activate(path);
+        activate(*n);
 
         return;
     }
@@ -871,22 +867,6 @@ void NmWifi::connect(StringView path) {
     notify();
 }
 
-void NmWifi::disconnect() {
-    if (curDevice.empty()) {
-        return;
-    }
-
-    Buffer db(sv(curDevice));
-    DBusMessage* msg = dbus_message_new_method_call(kNm, db.cStr(), kDev, "Disconnect");
-
-    dbus_connection_send(conn, msg, nullptr);
-    dbus_message_unref(msg);
-}
-
-void NmWifi::forget(StringView) {
-    // the v1 ui offers no forget button
-}
-
 bool NmWifi::passphraseWanted() {
     return wantPass;
 }
@@ -895,11 +875,8 @@ StringView NmWifi::passphraseFor() {
     return sv(passSsid);
 }
 
+// the picker only offers the prompt while one is wanted
 void NmWifi::providePassphrase(StringView pw) {
-    if (!wantPass) {
-        return;
-    }
-
     addAndActivate(sv(passAp), sv(passSsid), pw);
     wantPass = false;
     passAp.reset();
@@ -995,11 +972,8 @@ namespace {
     }
 }
 
+// Wifi::create only asks with a system bus in hand
 Wifi* WifiNm::create(Composer& c) {
-    if (!c.sysbus) {
-        return nullptr;
-    }
-
     DBusConnection* conn = c.sysbus->raw();
     DBusError err;
 

@@ -9,7 +9,7 @@
 struct Composer;
 
 // one visible network; path is the dbus object path, the handle for
-// connect/forget
+// connect
 struct WifiNetwork {
     stl::Buffer name;
     stl::Buffer path;
@@ -44,8 +44,6 @@ struct Wifi {
 
     virtual void scan() = 0;
     virtual void connect(stl::StringView path) = 0;
-    virtual void disconnect() = 0;
-    virtual void forget(stl::StringView path) = 0;
 
     // set while iwd waits for a secret; the dialog shows an input and calls
     // providePassphrase (reply) or cancelPassphrase (error back to iwd)
