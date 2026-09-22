@@ -85,13 +85,29 @@ namespace {
 
         void managedReply(DBusMessage* reply);
         void orderedReply(DBusMessage* reply);
-        void agentCall(DBusMessage* msg);
+        DBusHandlerResult agentCall(DBusMessage* msg);
         void registerAgent();
     };
 
     // read a string out of a variant iterator, empty on type mismatch
     StringView variantStr(DBusMessageIter* v) {
         if (dbus_message_iter_get_arg_type(v) != DBUS_TYPE_STRING) {
+            return {};
+        }
+
+        const char* s = "";
+
+        dbus_message_iter_get_basic(v, &s);
+
+        return StringView(s);
+    }
+
+    // an object path or a dict key; the peer picks the signature, so any
+    // other type reads as no name rather than being taken for a pointer
+    StringView iterName(DBusMessageIter* v) {
+        int t = dbus_message_iter_get_arg_type(v);
+
+        if (t != DBUS_TYPE_STRING && t != DBUS_TYPE_OBJECT_PATH) {
             return {};
         }
 
@@ -283,10 +299,16 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 
             dbus_message_iter_recurse(&objs, &obj);
 
-            const char* path = "";
+            // every level is read only if it has the type the walk expects
+            StringView path = iterName(&obj);
 
-            dbus_message_iter_get_basic(&obj, &path);
             dbus_message_iter_next(&obj);
+
+            if (dbus_message_iter_get_arg_type(&obj) != DBUS_TYPE_ARRAY) {
+                dbus_message_iter_next(&objs);
+
+                continue;
+            }
 
             NetInfo* net = nullptr;
 
@@ -299,28 +321,22 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 
                 dbus_message_iter_recurse(&ifaces, &iface);
 
-                const char* ifname = "";
+                StringView in = iterName(&iface);
 
-                dbus_message_iter_get_basic(&iface, &ifname);
                 dbus_message_iter_next(&iface);
 
-                StringView in(ifname);
                 bool isStation = in == "net.connman.iwd.Station"_sv;
                 bool isNetwork = in == "net.connman.iwd.Network"_sv;
 
                 if (isStation) {
-                    StringView value(path);
-
                     stationPath.reset();
-                    stationPath.append(value.data(), value.length());
+                    stationPath.append(path.data(), path.length());
                 }
 
                 if (isNetwork) {
-                    StringView value(path);
-
                     net = infoGen->make<NetInfo>();
                     net->path.reset();
-                    net->path.append(value.data(), value.length());
+                    net->path.append(path.data(), path.length());
                     net->name.reset();
                     net->type.reset();
                     net->connected = false;
@@ -328,7 +344,7 @@ void IwdWifi::managedReply(DBusMessage* reply) {
                     infos.pushBack(net);
                 }
 
-                if (!isStation && !isNetwork) {
+                if ((!isStation && !isNetwork) || dbus_message_iter_get_arg_type(&iface) != DBUS_TYPE_ARRAY) {
                     dbus_message_iter_next(&ifaces);
 
                     continue;
@@ -343,20 +359,23 @@ void IwdWifi::managedReply(DBusMessage* reply) {
 
                     dbus_message_iter_recurse(&props, &kv);
 
-                    const char* key = "";
+                    StringView k = iterName(&kv);
 
-                    dbus_message_iter_get_basic(&kv, &key);
                     dbus_message_iter_next(&kv);
+
+                    if (dbus_message_iter_get_arg_type(&kv) != DBUS_TYPE_VARIANT) {
+                        dbus_message_iter_next(&props);
+
+                        continue;
+                    }
 
                     DBusMessageIter var;
 
                     dbus_message_iter_recurse(&kv, &var);
 
-                    StringView k(key);
-
                     if (isStation && k == "State"_sv) {
                         stationState = variantStr(&var);
-                    } else if (isNetwork && net) {
+                    } else if (isNetwork) {
                         if (k == "Name"_sv) {
                             StringView value = variantStr(&var);
 
@@ -433,9 +452,8 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
 
             dbus_message_iter_recurse(&arr, &e);
 
-            const char* path = "";
+            StringView path = iterName(&e);
 
-            dbus_message_iter_get_basic(&e, &path);
             dbus_message_iter_next(&e);
 
             i16 strength = 0;
@@ -444,7 +462,7 @@ void IwdWifi::orderedReply(DBusMessage* reply) {
                 dbus_message_iter_get_basic(&e, &strength);
             }
 
-            if (NetInfo* info = infoByPath(StringView(path))) {
+            if (NetInfo* info = infoByPath(path)) {
                 WifiNetwork* n = netGen->make<WifiNetwork>();
 
                 n->name.reset();
@@ -551,13 +569,19 @@ void IwdWifi::registerAgent() {
     dbus_message_unref(msg);
 }
 
-void IwdWifi::agentCall(DBusMessage* msg) {
+DBusHandlerResult IwdWifi::agentCall(DBusMessage* msg) {
     if (dbus_message_is_method_call(msg, "net.connman.iwd.Agent", "RequestPassphrase")) {
         const char* netPath = "";
 
         dbus_message_get_args(msg, nullptr, DBUS_TYPE_OBJECT_PATH, &netPath, DBUS_TYPE_INVALID);
 
+        // one prompt at a time: the request it replaces is answered as
+        // cancelled, not left for iwd to time out
         if (passMsg) {
+            DBusMessage* err = dbus_message_new_error(passMsg, "net.connman.iwd.Agent.Error.Canceled", "superseded");
+
+            dbus_connection_send(conn, err, nullptr);
+            dbus_message_unref(err);
             dbus_message_unref(passMsg);
         }
 
@@ -586,7 +610,12 @@ void IwdWifi::agentCall(DBusMessage* msg) {
 
         dbus_connection_send(conn, reply, nullptr);
         dbus_message_unref(reply);
+    } else {
+        // libdbus answers what nobody handles with UnknownMethod
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
+
+    return DBUS_HANDLER_RESULT_HANDLED;
 }
 
 namespace {
@@ -630,9 +659,7 @@ namespace {
         auto* w = (IwdWifi*)data;
 
         if (dbus_message_get_type(msg) == DBUS_MESSAGE_TYPE_METHOD_CALL) {
-            w->agentCall(msg);
-
-            return DBUS_HANDLER_RESULT_HANDLED;
+            return w->agentCall(msg);
         }
 
         return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
