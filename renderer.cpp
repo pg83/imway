@@ -4444,6 +4444,15 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
     // a cursor off the plane is composited with its hotspot on exactly the
     // pixel asked for: sample a frame composed without it
     if (scene->drawCursor && !hwVisible) {
+        // frameNow composes nothing while the last frame is still on the GPU
+        // or a wl_shm copy is still running; a slow device leaves both, and
+        // the pick would read the frame with the cursor in it after all
+        finishGpuFrame(true);
+
+        while (shmCopyActive) {
+            shmCopyJob->drain();
+        }
+
         scene->drawCursor = false;
         forceComposition = true;
         scene->needsFrame = true;
