@@ -1,25 +1,38 @@
 #!/usr/bin/env bash
 # imway-env: IMWAY_FAKE_KMS=1 IMWAY_SETTINGS=display.lock_before_dpms=false
-# imway-args: --device auto --dpms 1
+# imway-args: --device auto --dpms 3
 # Power and session requests that change nothing: a "session enabled" with
 # no switch away before it remodesets nothing, the idle timeout while the
 # VT is switched away leaves the display alone (it is not ours to turn off
 # then), and waking a display that never went off commits nothing.
+#
+# The idle timeout runs from boot, and a slow (instrumented) build can reach
+# it before the scenario gets going: the checks look at what the log says
+# after the switch away, and input right before the switch restarts the
+# timeout either way.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 in_log "kms output" || { echo "no kms boot"; cat "$IMWAY_LOG"; exit 1; }
 
+# the log from the last line matching the pattern on
+since() { # <pattern>
+    awk -v pat="$1" '$0 ~ pat { buf = "" } { buf = buf $0 "\n" } END { printf "%s", buf }' "$IMWAY_LOG"
+}
+
 ctl "session 1"
 dump_state >/dev/null
 ! in_log "session enabled, remodeset" || { echo "a comeback without a switch away remodeset"; cat "$IMWAY_LOG"; exit 1; }
 
+# awake (a display that went idle during a slow boot comes back on here),
+# then away
+ctl "motion 100 100"
 ctl "session 0"
 await 50 in_log "session disabled (vt switch away)" || { echo "session did not disable"; exit 1; }
 
 # well past the idle timeout while away
-sleep 2
-! in_log "display off (idle)" || { echo "the display was switched off while the VT was away"; cat "$IMWAY_LOG"; exit 1; }
+sleep 4
+! since "session disabled" | grep -q "display off (idle)" || { echo "the display was switched off while the VT was away"; cat "$IMWAY_LOG"; exit 1; }
 
 ctl "session 1"
 await 50 in_log "session enabled, remodeset" || { echo "no remodeset on comeback"; cat "$IMWAY_LOG"; exit 1; }
@@ -27,7 +40,7 @@ await 50 in_log "session enabled, remodeset" || { echo "no remodeset on comeback
 # the idle state still says off: input wakes a display that never went off
 ctl "motion 100 100"
 dump_state >/dev/null
-! in_log "display back on" || { echo "a display that never went off was woken"; cat "$IMWAY_LOG"; exit 1; }
+! since "session enabled, remodeset" | grep -q "display back on" || { echo "a display that never went off was woken"; cat "$IMWAY_LOG"; exit 1; }
 
 flips() { dump_field '^kms' flips; }
 f0=$(flips)
