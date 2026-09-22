@@ -71,7 +71,13 @@ await 200 plugged || {
 
 touch go-aim
 await 200 grep -q "pointer aimed" "$DEV_LOG" || { echo "the pointer never moved"; cat "$DEV_LOG"; exit 1; }
-wait_client "entered"
+await 200 grep -q "entered" "$CLIENT_LOG" || {
+    echo "the absolute pointer never entered the listener"
+    cat "$DEV_LOG" "$CLIENT_LOG"
+    dump_state
+    grep -v "Invalid path" "$IMWAY_LOG" | tail -n 30
+    exit 1
+}
 
 touch go-hwheel
 await 200 grep -q "wheel tilted" "$DEV_LOG" || { echo "the wheel never tilted"; cat "$DEV_LOG"; exit 1; }

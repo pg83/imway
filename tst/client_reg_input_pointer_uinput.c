@@ -351,10 +351,22 @@ int main(int argc, char** argv) {
 
     printf("pointer aimed\n");
 
-    if (waitFor("go-hwheel")) {
-        fprintf(stderr, "the scenario never asked for the wheel\n");
+    // the enter needs a frame that has the window under the pointer: keep
+    // nudging it around the aim point until the scenario has seen it land
+    for (int i = 0; access("go-hwheel", F_OK) != 0; i++) {
+        if (i == 1200) {
+            fprintf(stderr, "the scenario never asked for the wheel\n");
 
-        return 1;
+            return 1;
+        }
+
+        int nudge = (i & 1) ? 64 : 0;
+
+        if (emit(gAbs, EV_ABS, ABS_X, aimX + nudge) || emit(gAbs, EV_ABS, ABS_Y, aimY + nudge) || syn(gAbs)) {
+            return 1;
+        }
+
+        usleep(50000);
     }
 
     for (int i = 0; i < 3; i++) {
