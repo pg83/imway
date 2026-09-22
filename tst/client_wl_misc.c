@@ -1029,6 +1029,25 @@ static int mode_bad(const char* what) {
         return wl_expect_error("xdg_toplevel", XDG_TOPLEVEL_ERROR_INVALID_SIZE);
     }
 
+    if (!strcmp(what, "actions-after-selection")) {
+        struct wl_toplevel_ctx t;
+
+        wl_make_toplevel(&t, "misc-selection-actions", 60, 40, 0xFF0000FF);
+        for (int i = 0; i < 100 && !wlk_enters; i++) {
+            roundtrip("focus");
+            usleep(10000);
+        }
+
+        struct wl_data_device* dev = wl_data_device_manager_get_data_device(wl_ddm, wl_seat_g);
+        struct wl_data_source* src = wl_data_device_manager_create_data_source(wl_ddm);
+
+        wl_data_source_offer(src, "text/plain");
+        wl_data_device_set_selection(dev, src, wlk_enter_serial);
+        // a source that became the selection can no longer carry drag actions
+        wl_data_source_set_actions(src, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+        return wl_expect_error("wl_data_source", WL_DATA_SOURCE_ERROR_INVALID_SOURCE);
+    }
+
     if (!strcmp(what, "unacked")) {
         struct xdg_surface* uxs = xdg_wm_base_get_xdg_surface(wl_wm, s);
 
