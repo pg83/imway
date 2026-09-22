@@ -1936,7 +1936,7 @@ namespace {
             u32 seq = 0;
             u32 flags;
 
-            if (s.srv->output && s.srv->output->lastFlip(flipNs, seq)) {
+            if (s.srv->output->lastFlip(flipNs, seq)) {
                 flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
             } else {
                 timespec ts{};
@@ -4668,11 +4668,11 @@ namespace {
         srv->outputResources.pushBack(res);
         srv->scene->needsFrame = true;
 
-        Buffer make(srv->output ? srv->output->make() : "imway"_sv);
-        Buffer model(srv->output ? srv->output->model() : "unknown"_sv);
-        Buffer name(srv->output ? srv->output->outputName() : "UNKNOWN-1"_sv);
+        Buffer make(srv->output->make());
+        Buffer model(srv->output->model());
+        Buffer name(srv->output->outputName());
 
-        wl_output_send_geometry(res, 0, 0, srv->output ? srv->output->physicalWidthMm() : 0, srv->output ? srv->output->physicalHeightMm() : 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_geometry(res, 0, 0, srv->output->physicalWidthMm(), srv->output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
         wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
