@@ -2297,12 +2297,6 @@ namespace {
     bool usableShmBuffer(WaylandImpl* srv, const ShmBuffer& shm) {
         Log& log = *srv->composer->log;
 
-        if (shm.format != WL_SHM_FORMAT_ARGB8888 && shm.format != WL_SHM_FORMAT_XRGB8888) {
-            log << "imway: unsupported shm format "_sv << shm.format << endL;
-
-            return false;
-        }
-
         if (shm.stride < (i64)shm.width * 4) {
             log << "imway: shm stride "_sv << shm.stride << " < width*4"_sv << endL;
 
