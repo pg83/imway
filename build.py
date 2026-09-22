@@ -1,6 +1,7 @@
 import build
 import build.flags as flags
 import fnmatch
+import hashlib
 import os
 import shlex
 
@@ -13,6 +14,7 @@ flags.allow({
     "runs": {"descr": "runs per test scenario", "default": "3"},
     "filter": {"descr": "glob restricting which test scenarios build", "default": ""},
     "allow_flaky": {"descr": "treat flaky tests as a warning, not a failure"},
+    "shard": {"descr": "K/N: run only the K-th of N stable slices of the scenarios (0-based)", "default": ""},
     "test_wrap": {"descr": "command prefix each scenario run executes under (e.g. dev/vng_wrap.sh: a VM with a virtio-gpu)", "default": ""},
 })
 
@@ -411,6 +413,10 @@ test_filter = flags.filter
 # still builds on the host, only the run itself moves (into a VM, say, for
 # devices the host does not have)
 test_wrap = shlex.split(flags.test_wrap)
+# -Dshard=K/N splits the scenarios into N slices by a hash of the name, so a
+# CI matrix can run them side by side; the slice a scenario falls in does
+# not move when others are added
+shard_index, shard_count = (int(part) for part in flags.shard.split("/")) if flags.shard else (0, 1)
 
 scenarios = sorted(build.glob("$(S)/tst/headless_*.sh"))
 # every non-scenario file a scenario may source (lib.sh, *_case.sh, *.inc),
@@ -425,6 +431,8 @@ test_nodes = []
 for scenario in scenarios:
     name = os.path.basename(scenario)[:-len(".sh")]
     if test_filter and not fnmatch.fnmatch(name, test_filter):
+        continue
+    if int(hashlib.sha1(name.encode()).hexdigest(), 16) % shard_count != shard_index:
         continue
 
     client_name = name.replace("headless_", "client_", 1)
