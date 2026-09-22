@@ -953,6 +953,68 @@ static int mode_icon_twice(void) {
     return 0;
 }
 
+// ---- bad-*: one invalid argument each, with only the last one out of range --
+// The validators check their arguments in order; each mode gets past the
+// earlier ones so the last check is what fails.
+static int mode_bad(const char* what) {
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+
+    if (!strcmp(what, "transform")) {
+        wl_surface_set_buffer_transform(s, -1);
+        return wl_expect_error("wl_surface", WL_SURFACE_ERROR_INVALID_TRANSFORM);
+    }
+
+    struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wl_wm, s);
+
+    if (!strcmp(what, "geometry")) {
+        xdg_toplevel_add_listener(xdg_surface_get_toplevel(xs), &wl_tl_listener, NULL);
+        xdg_surface_set_window_geometry(xs, 0, 0, 10, 0);
+        return wl_expect_error("xdg_surface", XDG_SURFACE_ERROR_INVALID_SIZE);
+    }
+    if (!strcmp(what, "max-size") || !strcmp(what, "min-size")) {
+        struct xdg_toplevel* t = xdg_surface_get_toplevel(xs);
+
+        xdg_toplevel_add_listener(t, &wl_tl_listener, NULL);
+        if (what[1] == 'a') {
+            xdg_toplevel_set_max_size(t, 10, -1);
+        } else {
+            xdg_toplevel_set_min_size(t, 10, -1);
+        }
+        return wl_expect_error("xdg_toplevel", XDG_TOPLEVEL_ERROR_INVALID_SIZE);
+    }
+
+    struct xdg_positioner* pos = xdg_wm_base_create_positioner(wl_wm);
+
+    if (!strcmp(what, "positioner-size")) {
+        xdg_positioner_set_size(pos, 10, 0);
+        return wl_expect_error("xdg_positioner", XDG_POSITIONER_ERROR_INVALID_INPUT);
+    }
+    if (!strcmp(what, "anchor-rect")) {
+        xdg_positioner_set_anchor_rect(pos, 0, 0, 10, 0);
+        return wl_expect_error("xdg_positioner", XDG_POSITIONER_ERROR_INVALID_INPUT);
+    }
+
+    need(viewporter, "wp_viewporter");
+
+    struct wp_viewport* vp = wp_viewporter_get_viewport(viewporter, wl_compositor_create_surface(wl_comp));
+    wl_fixed_t m1 = wl_fixed_from_int(-1), z = wl_fixed_from_int(0), ten = wl_fixed_from_int(10);
+
+    if (!strcmp(what, "source-x")) {
+        wp_viewport_set_source(vp, m1, z, ten, ten);
+    } else if (!strcmp(what, "source-y")) {
+        wp_viewport_set_source(vp, z, m1, ten, ten);
+    } else if (!strcmp(what, "source-h")) {
+        wp_viewport_set_source(vp, z, z, ten, z);
+    } else if (!strcmp(what, "destination-w")) {
+        wp_viewport_set_destination(vp, -1, 5);
+    } else if (!strcmp(what, "destination-h")) {
+        wp_viewport_set_destination(vp, 5, 0);
+    } else {
+        return 2;
+    }
+    return wl_expect_error("wp_viewport", WP_VIEWPORT_ERROR_BAD_VALUE);
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -985,6 +1047,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "input-region")) return mode_input_region();
     if (!strcmp(mode, "release")) return mode_release();
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
+    if (!strncmp(mode, "bad-", 4)) return mode_bad(mode + 4);
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;
 }
