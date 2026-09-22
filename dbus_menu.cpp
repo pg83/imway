@@ -8,6 +8,7 @@
 #include "dbus_conn.h"
 #include "icon_pool.h"
 #include "intr_list.h"
+#include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
 #include <std/sym/i_map.h>
@@ -510,7 +511,7 @@ void MenuImpl::resolveOwner() {
         return;
     }
 
-    DBusMessage* msg = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "GetNameOwner");
+    DBusMessage* msg = parent->composer->chaos->dbusMessage(dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS, "GetNameOwner"));
 
     if (!msg) {
         return;
@@ -525,7 +526,7 @@ void MenuImpl::resolveOwner() {
 
 void MenuImpl::refresh() {
     Buffer destination(text(service)), object(text(path));
-    DBusMessage* msg = dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "GetLayout");
+    DBusMessage* msg = parent->composer->chaos->dbusMessage(dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "GetLayout"));
 
     if (!msg) {
         return;
@@ -546,7 +547,7 @@ void MenuImpl::refresh() {
 
 void MenuImpl::prepare(i32 id) {
     Buffer destination(text(service)), object(text(path));
-    DBusMessage* msg = dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "AboutToShow");
+    DBusMessage* msg = parent->composer->chaos->dbusMessage(dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "AboutToShow"));
 
     if (!msg) {
         return;
@@ -558,7 +559,7 @@ void MenuImpl::prepare(i32 id) {
 
 void MenuImpl::activate(i32 id) {
     Buffer destination(text(service)), object(text(path));
-    DBusMessage* msg = dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "Event");
+    DBusMessage* msg = parent->composer->chaos->dbusMessage(dbus_message_new_method_call(destination.cStr(), object.cStr(), kMenuInterface, "Event"));
 
     if (!msg) {
         return;
@@ -815,7 +816,12 @@ void MenusImpl::disconnect(DBusMenu* base) {
 bool MenusImpl::send(MenuImpl& menu, DBusMessage* msg, CallKind kind, u64 sequence) {
     DBusPendingCall* call = nullptr;
 
-    if (!dbus_connection_send_with_reply(conn, msg, &call, kTimeout) || !call) {
+    // out of memory and a dropped connection both leave no pending call
+    if (DBusMessage* out = composer->chaos->dbusSend(msg)) {
+        dbus_connection_send_with_reply(conn, out, &call, kTimeout);
+    }
+
+    if (!call) {
         dbus_message_unref(msg);
 
         return false;
@@ -829,7 +835,7 @@ bool MenusImpl::send(MenuImpl& menu, DBusMessage* msg, CallKind kind, u64 sequen
     pending->sequence = sequence;
     menu.pending.pushBack(pending);
 
-    if (!dbus_pending_call_set_notify(call, pendingReply, pending, nullptr)) {
+    if (!composer->chaos->dbusNotify(msg, dbus_pending_call_set_notify(call, pendingReply, pending, nullptr))) {
         menu.pending.popBack();
         dbus_pending_call_cancel(call);
         dbus_pending_call_unref(call);
@@ -855,7 +861,7 @@ Registration* MenusImpl::registration(u32 window) {
 }
 
 void MenusImpl::emitRegistered(const char* member, const Registration& reg) {
-    DBusMessage* signal = dbus_message_new_signal(kRegistrarPath, kRegistrar, member);
+    DBusMessage* signal = composer->chaos->dbusMessage(dbus_message_new_signal(kRegistrarPath, kRegistrar, member));
 
     if (!signal) {
         return;

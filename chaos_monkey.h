@@ -10,6 +10,7 @@ struct passwd;
 struct wl_resource;
 struct pam_message;
 struct pam_response;
+struct DBusMessage;
 
 // The fault seam, one per board (Composer::chaos). A call site hands over
 // the object it is about to act on, or the result it has just got, and
@@ -55,6 +56,15 @@ struct ChaosMonkey {
     // a GPU readback's fence as its poll delivers it: the screenshot's, or
     // the frame capture's that screencopy clients wait on
     virtual VkResult readbackFence(VkResult result) = 0;
+
+    // the buses (dbus_menu, status_notifier, wifi): a message a site has
+    // just built, before it goes anywhere (a replacement takes over the one
+    // it was handed); a call about to be sent, null to have the send fail
+    // with the site still holding its message; whether a sent call's reply
+    // notify went in
+    virtual DBusMessage* dbusMessage(DBusMessage* built) = 0;
+    virtual DBusMessage* dbusSend(DBusMessage* call) = 0;
+    virtual bool dbusNotify(DBusMessage* sent, bool installed) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

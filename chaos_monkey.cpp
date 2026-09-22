@@ -12,9 +12,12 @@
 
     #include <errno.h>
     #include <stdlib.h>
+    #include <string.h>
     #include <unistd.h>
     #include <std/lib/vector.h>
     #include <wayland-server-core.h>
+
+    #include <dbus/dbus.h>
 #endif
 
 using namespace stl;
@@ -46,7 +49,27 @@ using namespace stl;
 //   frame-hang=K      the same, reporting the wait timing out instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
+// the buses, each word arming one fault on calls to the named D-Bus member;
+// MEMBER@K lets K matching calls through first:
+//   dbus-message=M    the next message built for M fails to allocate
+//   dbus-send=M       the next call to M is not sent and gets no pending
+//                     call, as on a connection without memory or dropped
+//   dbus-notify=M     the next call to M cannot install its reply notify
 namespace {
+    // buses: one armed fault
+    enum class BusFault {
+        message,
+        pending,
+        notify,
+    };
+
+    struct BusRule {
+        BusFault kind = BusFault::message;
+        char member[64] = "";
+        int skip = 0;
+        bool armed = false;
+    };
+
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
         bool messageArmed = false;
@@ -65,6 +88,8 @@ namespace {
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
         int readbackFenceSkip = -1;
+        // buses
+        BusRule busRules[8];
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -86,8 +111,14 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // buses
+        DBusMessage* dbusMessage(DBusMessage* built) override;
+        DBusMessage* dbusSend(DBusMessage* call) override;
+        bool dbusNotify(DBusMessage* sent, bool installed) override;
 
         void arm(StringView fault, StringView arg);
+        void armBus(BusFault kind, StringView arg);
+        bool busFires(BusFault kind, DBusMessage* msg);
     };
 
     static bool spend(int& count) {
@@ -148,7 +179,63 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
     } else if (fault == "readback-fence"_sv) {
         readbackFenceSkip = (int)arg.stou();
+    } else if (fault == "dbus-message"_sv) {
+        // buses
+        armBus(BusFault::message, arg);
+    } else if (fault == "dbus-send"_sv) {
+        armBus(BusFault::pending, arg);
+    } else if (fault == "dbus-notify"_sv) {
+        armBus(BusFault::notify, arg);
     }
+}
+
+void TestChaosMonkey::armBus(BusFault kind, StringView arg) {
+    StringView member, skip;
+
+    if (!arg.split('@', member, skip)) {
+        member = arg;
+        skip = {};
+    }
+
+    for (BusRule& rule : busRules) {
+        if (!rule.armed) {
+            size_t length = member.length() < sizeof(rule.member) - 1 ? member.length() : sizeof(rule.member) - 1;
+
+            memcpy(rule.member, member.data(), length);
+            rule.member[length] = 0;
+            rule.kind = kind;
+            rule.skip = skip.empty() ? 0 : (int)skip.stou();
+            rule.armed = true;
+
+            return;
+        }
+    }
+}
+
+// every armed rule for this member counts the call; the first one due
+// fires and is spent
+bool TestChaosMonkey::busFires(BusFault kind, DBusMessage* msg) {
+    const char* member = msg ? dbus_message_get_member(msg) : nullptr;
+    bool fire = false;
+
+    if (!member) {
+        return false;
+    }
+
+    for (BusRule& rule : busRules) {
+        if (!rule.armed || rule.kind != kind || StringView((const char*)rule.member) != StringView(member)) {
+            continue;
+        }
+
+        if (rule.skip > 0) {
+            rule.skip--;
+        } else if (!fire) {
+            rule.armed = false;
+            fire = true;
+        }
+    }
+
+    return fire;
 }
 
 passwd* TestChaosMonkey::account(passwd* found) {
@@ -309,6 +396,25 @@ VkResult TestChaosMonkey::readbackFence(VkResult result) {
     return VK_ERROR_DEVICE_LOST;
 }
 
+// buses
+DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
+    if (!busFires(BusFault::message, built)) {
+        return built;
+    }
+
+    dbus_message_unref(built);
+
+    return nullptr;
+}
+
+DBusMessage* TestChaosMonkey::dbusSend(DBusMessage* call) {
+    return busFires(BusFault::pending, call) ? nullptr : call;
+}
+
+bool TestChaosMonkey::dbusNotify(DBusMessage* sent, bool installed) {
+    return installed && !busFires(BusFault::notify, sent);
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -333,6 +439,10 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // buses
+        DBusMessage* dbusMessage(DBusMessage* built) override;
+        DBusMessage* dbusSend(DBusMessage* call) override;
+        bool dbusNotify(DBusMessage* sent, bool installed) override;
     };
 }
 
@@ -387,6 +497,19 @@ VkResult IdleChaosMonkey::frameFence(VkResult result) {
 
 VkResult IdleChaosMonkey::readbackFence(VkResult result) {
     return result;
+}
+
+// buses
+DBusMessage* IdleChaosMonkey::dbusMessage(DBusMessage* built) {
+    return built;
+}
+
+DBusMessage* IdleChaosMonkey::dbusSend(DBusMessage* call) {
+    return call;
+}
+
+bool IdleChaosMonkey::dbusNotify(DBusMessage*, bool installed) {
+    return installed;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

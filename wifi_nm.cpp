@@ -8,6 +8,7 @@
 #include "listener.h"
 #include "dbus_conn.h"
 #include "intr_list.h"
+#include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
@@ -317,7 +318,12 @@ void NmWifi::notify() {
 bool NmWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data) {
     DBusPendingCall* pc = nullptr;
 
-    if (!dbus_connection_send_with_reply(conn, msg, &pc, kTimeout) || !pc) {
+    // out of memory and a dropped connection both leave no pending call
+    if (DBusMessage* out = c->chaos->dbusSend(msg)) {
+        dbus_connection_send_with_reply(conn, out, &pc, kTimeout);
+    }
+
+    if (!pc) {
         dbus_message_unref(msg);
 
         return false;
@@ -327,7 +333,7 @@ bool NmWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb, void* data
     // invoke a notify immediately when the reply is already complete.
     pending.pushBack(pc);
 
-    if (!dbus_pending_call_set_notify(pc, cb, data, nullptr)) {
+    if (!c->chaos->dbusNotify(msg, dbus_pending_call_set_notify(pc, cb, data, nullptr))) {
         removeOne(pending, pc);
         dbus_pending_call_cancel(pc);
         dbus_pending_call_unref(pc);

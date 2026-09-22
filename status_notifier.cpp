@@ -9,6 +9,7 @@
 #include "dbus_menu.h"
 #include "icon_pool.h"
 #include "intr_list.h"
+#include "chaos_monkey.h"
 #include "icon_provider.h"
 
 #include <std/ios/sys.h>
@@ -474,15 +475,25 @@ void StatusNotifierImpl::changed(ItemBox&) {
 bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFunction cb, ItemBox& item) {
     DBusPendingCall* pc = nullptr;
 
-    if (!msg || !dbus_connection_send_with_reply(conn, msg, &pc, kTimeout) || !pc) {
-        if (msg) {
-            dbus_message_unref(msg);
-        }
+    // out of memory and a dropped connection both leave no pending call
+    if (DBusMessage* out = c->chaos->dbusSend(msg)) {
+        dbus_connection_send_with_reply(conn, out, &pc, kTimeout);
+    }
+
+    if (!pc) {
+        dbus_message_unref(msg);
 
         return false;
     }
 
-    dbus_pending_call_set_notify(pc, cb, &item, nullptr);
+    if (!c->chaos->dbusNotify(msg, dbus_pending_call_set_notify(pc, cb, &item, nullptr))) {
+        dbus_pending_call_cancel(pc);
+        dbus_pending_call_unref(pc);
+        dbus_message_unref(msg);
+
+        return false;
+    }
+
     // the initial pc ref rides here until the notify (which steals it) or
     // the burial (which cancels and drops it)
     item.pending.pushBack(pc);
@@ -494,7 +505,11 @@ bool StatusNotifierImpl::sendReply(DBusMessage* msg, DBusPendingCallNotifyFuncti
 void StatusNotifierImpl::getProperties(ItemBox& item) {
     const char* iface = kItem;
     Buffer service(text(item.service)), path(text(item.path));
-    DBusMessage* msg = dbus_message_new_method_call(service.cStr(), path.cStr(), kProps, "GetAll");
+    DBusMessage* msg = c->chaos->dbusMessage(dbus_message_new_method_call(service.cStr(), path.cStr(), kProps, "GetAll"));
+
+    if (!msg) {
+        return;
+    }
 
     dbus_message_append_args(msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_INVALID);
     sendReply(msg, propertiesReply, item);

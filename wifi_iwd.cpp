@@ -8,6 +8,7 @@
 #include "listener.h"
 #include "dbus_conn.h"
 #include "intr_list.h"
+#include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
@@ -210,7 +211,12 @@ void IwdWifi::notify() {
 bool IwdWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb) {
     DBusPendingCall* call = nullptr;
 
-    if (!dbus_connection_send_with_reply(conn, msg, &call, 5000) || !call) {
+    // out of memory and a dropped connection both leave no pending call
+    if (DBusMessage* out = c->chaos->dbusSend(msg)) {
+        dbus_connection_send_with_reply(conn, out, &call, 5000);
+    }
+
+    if (!call) {
         dbus_message_unref(msg);
 
         return false;
@@ -220,7 +226,7 @@ bool IwdWifi::call(DBusMessage* msg, DBusPendingCallNotifyFunction cb) {
     // dbus_pending_call_set_notify itself.
     pending.pushBack(call);
 
-    if (!dbus_pending_call_set_notify(call, cb, this, nullptr)) {
+    if (!c->chaos->dbusNotify(msg, dbus_pending_call_set_notify(call, cb, this, nullptr))) {
         removeOne(pending, call);
         dbus_pending_call_cancel(call);
         dbus_pending_call_unref(call);
