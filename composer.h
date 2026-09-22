@@ -15,6 +15,7 @@ namespace stl {
 
 struct ev_loop;
 
+struct ChaosMonkey;
 struct DBusConn;
 struct DBusMenus;
 struct Icon;
@@ -67,6 +68,9 @@ struct Composer {
     // logs through it from its first line
     Log* log = nullptr;
     stl::ObjPool* pool = nullptr;
+    // the fault seam, created right after the log: idle in production,
+    // breaking what IMWAY_CHAOS names in the test binary
+    ChaosMonkey* chaos = nullptr;
     stl::SmallObjAllocator* alloc = nullptr;
     struct ev_loop* loop = nullptr;
     // One shared background lane for bounded blocking/CPU work. Subsystems

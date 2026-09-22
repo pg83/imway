@@ -9,6 +9,7 @@
 #include "tex_pool.h"
 #include "device_vk.h"
 #include "offload_job.h"
+#include "chaos_monkey.h"
 #include "render_filter.h"
 
 #include <std/ios/sys.h>
@@ -93,6 +94,7 @@ namespace {
     struct PamInput {
         const char* user = nullptr;
         const char* password = nullptr;
+        ChaosMonkey* chaos = nullptr;
     };
 
     void freePamResponses(pam_response* responses, int count) noexcept {
@@ -116,7 +118,7 @@ namespace {
         }
 
         auto& input = *(PamInput*)data;
-        auto* responses = (pam_response*)calloc((size_t)count, sizeof(pam_response));
+        auto* responses = input.chaos->pamResponses((pam_response*)calloc((size_t)count, sizeof(pam_response)));
 
         if (!responses) {
             return PAM_BUF_ERR;
@@ -124,14 +126,15 @@ namespace {
 
         for (int i = 0; i < count; i++) {
             const char* answer = nullptr;
+            const pam_message* message = input.chaos->pamMessage(messages[i]);
 
-            if (!messages[i]) {
+            if (!message) {
                 freePamResponses(responses, count);
 
                 return PAM_CONV_ERR;
             }
 
-            switch (messages[i]->msg_style) {
+            switch (message->msg_style) {
                 case PAM_PROMPT_ECHO_OFF:
                     answer = input.password;
                     break;
@@ -148,7 +151,7 @@ namespace {
             }
 
             if (answer) {
-                responses[i].resp = strdup(answer);
+                responses[i].resp = input.chaos->pamAnswer(strdup(answer));
 
                 if (!responses[i].resp) {
                     freePamResponses(responses, count);
@@ -163,10 +166,10 @@ namespace {
         return PAM_SUCCESS;
     }
 
-    bool authenticateSystem(passwd& account, StringView password, StringView service) {
+    bool authenticateSystem(passwd& account, StringView password, StringView service, ChaosMonkey& chaos) {
         Buffer input(password);
         Buffer serviceName(service);
-        PamInput conversationInput = {account.pw_name, input.cStr()};
+        PamInput conversationInput = {account.pw_name, input.cStr(), &chaos};
         pam_conv conversation = {pamConversation, &conversationInput};
         pam_handle_t* handle = nullptr;
         int status = pam_start(serviceName.cStr(), account.pw_name, &conversation, &handle);
@@ -188,8 +191,9 @@ namespace {
         return status == PAM_SUCCESS;
     }
 #else
-    bool authenticateSystem(passwd& account, StringView password, StringView service) {
+    bool authenticateSystem(passwd& account, StringView password, StringView service, ChaosMonkey& chaos) {
         (void)service;
+        (void)chaos;
 
         if (!account.pw_passwd) {
             return false;
@@ -221,7 +225,7 @@ namespace {
     }
 #endif
 
-    bool authenticate(StringView password, StringView service) {
+    bool authenticate(StringView password, StringView service, ChaosMonkey& chaos) {
 #ifdef IMWAY_FOR_TESTS
         if (const char* delay = getenv("IMWAY_TEST_AUTH_DELAY_MS")) {
             long millis = strtol(delay, nullptr, 10);
@@ -243,13 +247,13 @@ namespace {
             return false;
         }
 
-        passwd* account = getpwuid(getuid());
+        passwd* account = chaos.account(getpwuid(getuid()));
 
         if (!account || !account->pw_name) {
             return false;
         }
 
-        return authenticateSystem(*account, password, service);
+        return authenticateSystem(*account, password, service, chaos);
     }
 
     void initDrawData(ImDrawData& out, const ImDrawData& src) {
@@ -338,6 +342,7 @@ u32 LockFilter::findMemoryType(u32 bits, VkMemoryPropertyFlags flags) const {
     VkPhysicalDeviceMemoryProperties props{};
 
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &props);
+    comp->chaos->memoryTypes(props);
 
     for (u32 i = 0; i < props.memoryTypeCount; i++) {
         if ((bits & (1u << i)) && (props.memoryTypes[i].propertyFlags & flags) == flags) {
@@ -360,7 +365,7 @@ void LockFilter::createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage
     ici.tiling = VK_IMAGE_TILING_OPTIMAL;
     ici.usage = usage;
     ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    VK_CHECK(vkCreateImage(device, &ici, nullptr, &image));
+    VK_CHECK(comp->chaos->vulkan(vkCreateImage(device, &ici, nullptr, &image)));
 
     VkMemoryRequirements req{};
 
@@ -370,8 +375,8 @@ void LockFilter::createImage(int w, int h, VkFormat fmt, VkImageUsageFlags usage
 
     mai.allocationSize = req.size;
     mai.memoryTypeIndex = findMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &memory));
-    VK_CHECK(vkBindImageMemory(device, image, memory, 0));
+    VK_CHECK(comp->chaos->vulkan(vkAllocateMemory(device, &mai, nullptr, &memory)));
+    VK_CHECK(comp->chaos->vulkan(vkBindImageMemory(device, image, memory, 0)));
 }
 
 void LockFilter::setup(RenderContext& ctx) {
@@ -393,7 +398,7 @@ void LockFilter::setup(RenderContext& ctx) {
     vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
     vci.format = format;
     vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &baseView));
+    VK_CHECK(comp->chaos->vulkan(vkCreateImageView(device, &vci, nullptr, &baseView)));
 
     VkAttachmentDescription attachment{};
 
@@ -419,7 +424,7 @@ void LockFilter::setup(RenderContext& ctx) {
     rpci.pAttachments = &attachment;
     rpci.subpassCount = 1;
     rpci.pSubpasses = &subpass;
-    VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &basePass));
+    VK_CHECK(comp->chaos->vulkan(vkCreateRenderPass(device, &rpci, nullptr, &basePass)));
 
     VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
@@ -429,14 +434,14 @@ void LockFilter::setup(RenderContext& ctx) {
     fci.width = (u32)width;
     fci.height = (u32)height;
     fci.layers = 1;
-    VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &baseFramebuffer));
+    VK_CHECK(comp->chaos->vulkan(vkCreateFramebuffer(device, &fci, nullptr, &baseFramebuffer)));
 
     for (int i = 0; i < 2; i++) {
         createImage(blurW, blurH, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT, blurImages[i], blurMemory[i]);
 
         vci.image = blurImages[i];
         vci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
-        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &blurViews[i]));
+        VK_CHECK(comp->chaos->vulkan(vkCreateImageView(device, &vci, nullptr, &blurViews[i])));
     }
 
     VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -444,7 +449,7 @@ void LockFilter::setup(RenderContext& ctx) {
     smci.codeSize = sizeof(lock_screen_blur_spv);
     smci.pCode = lock_screen_blur_spv;
     VkShaderModule module = VK_NULL_HANDLE;
-    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &module));
+    VK_CHECK(comp->chaos->vulkan(vkCreateShaderModule(device, &smci, nullptr, &module)));
 
     VkDescriptorSetLayoutBinding bindings[2] = {};
 
@@ -455,7 +460,7 @@ void LockFilter::setup(RenderContext& ctx) {
 
     dlci.bindingCount = 2;
     dlci.pBindings = bindings;
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &setLayout));
+    VK_CHECK(comp->chaos->vulkan(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &setLayout)));
 
     VkPushConstantRange push{VK_SHADER_STAGE_COMPUTE_BIT, 0, 2 * sizeof(i32)};
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -464,7 +469,7 @@ void LockFilter::setup(RenderContext& ctx) {
     plci.pSetLayouts = &setLayout;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &push;
-    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &pipeLayout));
+    VK_CHECK(comp->chaos->vulkan(vkCreatePipelineLayout(device, &plci, nullptr, &pipeLayout)));
 
     VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
 
@@ -473,8 +478,12 @@ void LockFilter::setup(RenderContext& ctx) {
     cpci.stage.module = module;
     cpci.stage.pName = "main";
     cpci.layout = pipeLayout;
-    VK_CHECK(vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline));
+    // the module is only an input to the pipeline: it goes whether or not
+    // the pipeline came out of it
+    VkResult built = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpci, nullptr, &pipeline);
+
     vkDestroyShaderModule(device, module, nullptr);
+    VK_CHECK(comp->chaos->vulkan(built));
 
     VkDescriptorPoolSize poolSizes[2] = {
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
@@ -485,7 +494,7 @@ void LockFilter::setup(RenderContext& ctx) {
     dpci.maxSets = 2;
     dpci.poolSizeCount = 2;
     dpci.pPoolSizes = poolSizes;
-    VK_CHECK(vkCreateDescriptorPool(device, &dpci, nullptr, &descriptorPool));
+    VK_CHECK(comp->chaos->vulkan(vkCreateDescriptorPool(device, &dpci, nullptr, &descriptorPool)));
 
     VkDescriptorSetLayout layouts[2] = {setLayout, setLayout};
     VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -493,7 +502,7 @@ void LockFilter::setup(RenderContext& ctx) {
     dsai.descriptorPool = descriptorPool;
     dsai.descriptorSetCount = 2;
     dsai.pSetLayouts = layouts;
-    VK_CHECK(vkAllocateDescriptorSets(device, &dsai, descriptorSets));
+    VK_CHECK(comp->chaos->vulkan(vkAllocateDescriptorSets(device, &dsai, descriptorSets)));
 
     for (int i = 0; i < 2; i++) {
         int destination = 1 - i;
@@ -876,7 +885,7 @@ void openLockOverlay(Composer& c, DialogState** state) {
     value->authJob = OffloadJob::create(c, *pool, [](void* self) {
         auto& dialog = *(Dialog*)self;
 
-        stdAtomicStore(&dialog.accepted, authenticate(StringView(dialog.authPassword), StringView(dialog.authService)), MemoryOrder::Release);
+        stdAtomicStore(&dialog.accepted, authenticate(StringView(dialog.authPassword), StringView(dialog.authService), *dialog.comp->chaos), MemoryOrder::Release);
         wipe(dialog.authPassword, sizeof(dialog.authPassword));
         wipe(dialog.authService, sizeof(dialog.authService));
     }, value, *value);

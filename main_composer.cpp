@@ -7,6 +7,7 @@
 #include "dbus_conn.h"
 #include "dbus_menu.h"
 #include "device_kms.h"
+#include "chaos_monkey.h"
 #include "device_headless.h"
 
 #ifdef IMWAY_FOR_TESTS
@@ -367,6 +368,7 @@ int mainComposer(int argc, char** argv) {
     c.settings->setOutputBpc(cfg.outputColor.bpc);
     c.settings->setOutputRange(cfg.outputColor.range);
     c.log = log;
+    c.chaos = ChaosMonkey::create(*pool);
     installExternLogHandlers(c);
     c.alloc = SmallObjAllocator::create(pool.mutPtr());
     c.loop = loop;
