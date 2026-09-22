@@ -7009,14 +7009,28 @@ namespace {
         wl_resource_set_implementation(seat, &tabletSeatImpl, dev, tabletDevDestroyed);
 
         // advertise a single virtual tablet and pen tool to this seat
-        dev->tablet = wl_resource_create(client, &zwp_tablet_v2_interface, version, 0);
+        dev->tablet = srv->composer->chaos->resource(wl_resource_create(client, &zwp_tablet_v2_interface, version, 0));
+
+        if (!dev->tablet) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         wl_resource_set_implementation(dev->tablet, &tabletImpl, dev, tabletChildDestroyed);
         zwp_tablet_seat_v2_send_tablet_added(seat, dev->tablet);
         zwp_tablet_v2_send_name(dev->tablet, "imway virtual tablet");
         zwp_tablet_v2_send_id(dev->tablet, 0, 0);
         zwp_tablet_v2_send_done(dev->tablet);
 
-        dev->tool = wl_resource_create(client, &zwp_tablet_tool_v2_interface, version, 0);
+        dev->tool = srv->composer->chaos->resource(wl_resource_create(client, &zwp_tablet_tool_v2_interface, version, 0));
+
+        if (!dev->tool) {
+            wl_client_post_no_memory(client);
+
+            return;
+        }
+
         wl_resource_set_implementation(dev->tool, &tabletToolImpl, dev, tabletChildDestroyed);
         zwp_tablet_seat_v2_send_tool_added(seat, dev->tool);
         zwp_tablet_tool_v2_send_type(dev->tool, ZWP_TABLET_TOOL_V2_TYPE_PEN);
