@@ -1,5 +1,9 @@
 #pragma once
 
+namespace stl {
+    class StringView;
+}
+
 // A userspace stand-in for the KMS device, handed to the KMS backend by
 // the composition root. openDevice() yields the fd the backend drives;
 // the test binary's libc-level overrides route that fd's ioctls into the
@@ -30,6 +34,13 @@ struct KmsIntercept {
     // err; shut-off cursor props still pass — a display that cannot do
     // hardware cursors
     virtual void rejectCursor(int err) = 0;
+    // the non-desktop connector's lease path breaks: 1 the connector is
+    // gone, 2 its encoder is, 3 the encoder reaches only the desktop crtc,
+    // 4 the kernel refuses the lease; 0 heals it
+    virtual void leaseFault(int kind) = 0;
+    // the connector's DDC/CI bus, the i2c node the sysfs walk found: the
+    // fd of an emulated monitor, or -errno when none answers on it
+    virtual int openDdc(stl::StringView bus) = 0;
     // page-flip events delivered so far: the ground truth for "a frame
     // made it to the screen", independent of the compositor's counters
     virtual unsigned long long flips() = 0;

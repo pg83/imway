@@ -8,6 +8,7 @@
 #include <std/str/view.h>
 #include <std/sys/types.h>
 #include <std/lib/vector.h>
+#include <std/str/builder.h>
 
 #include <time.h>
 #include <errno.h>
@@ -22,8 +23,10 @@
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <drm_fourcc.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <xf86drmMode.h>
+#include <linux/i2c-dev.h>
 
 // Everything KMS that device_kms.cpp needs, modeled in userspace: the
 // object/property tables, atomic commits with page-flip events on a real
@@ -46,6 +49,9 @@ namespace {
     constexpr u32 kLeaseConnectorId = 301;
     constexpr u32 kLeaseEncoderId = 302;
     constexpr u32 kLeaseCrtcId = 303;
+    // the second crtc's own primary plane, listed first: the desktop pipe
+    // walks past it, a lease picks it up
+    constexpr u32 kLeasePlaneId = 304;
 
     // property ids, one flat namespace across objects
     enum : u32 {
@@ -86,6 +92,7 @@ namespace {
         pCursorCrtcY,
         pCursorCrtcW,
         pCursorCrtcH,
+        pLeasePlaneType,
     };
 
     struct PropEnum {
@@ -114,6 +121,13 @@ namespace {
         {0, "Automatic"},
         {1, "Full"},
         {2, "Limited 16:235"},
+    };
+
+    // older drivers spell the limited range without the code values
+    const PropEnum kBroadcastLegacyEnums[] = {
+        {0, "Automatic"},
+        {1, "Full"},
+        {2, "Limited"},
     };
 
     const PropEnum kTypeEnums[] = {
@@ -193,9 +207,37 @@ namespace {
         int failPrimeSkip = 0;
         int failAddFbErr = 0;
         int failAddFbCount = 0;
+        int failAddFbSkip = 0;
         int rejectCursorErr = 0;
         bool rejectColor = false;
         bool internalPanel = false;
+
+        // the device's shape at boot, read from IMWAY_FAKE_KMS_* by
+        // openDevice: a scenario boots a different display or driver
+        StringView dropProps; // property names the driver does not expose
+        int edidKind = 0;     // 0 hdr panel, 1 sdr panel, 2 unparseable
+        u64 maxBpcCap = 16;
+        bool legacyLimited = false;
+        u64 cursorCap = 64;
+        bool unbound = false; // cold boot: no encoder or crtc bound yet
+        bool no10Bit = false; // the primary plane lacks the 2101010 formats
+        int failDumbCount = 0;
+        int leaseFaultKind = 0;
+
+        // the monitor behind the connector's DDC/CI bus (IMWAY_FAKE_KMS_DDC):
+        // absent answers no address, silent never replies, a number is the
+        // brightness maximum of one that does. The bus end is a socket; its
+        // identity, not its fd number, marks the I2C_SLAVE ioctl as ours,
+        // since the number is reused once the compositor lets go of it
+        bool ddcArmed = false;
+        bool ddcAbsent = false;
+        bool ddcSilent = false;
+        int ddcMax = 0;
+        int ddcCur = 0;
+        int ddcPeer = -1;
+        ino_t ddcIno = 0;
+        dev_t ddcDev = 0;
+        pthread_t ddcThread{};
 
         u64 flipsDone = 0;
         u32 lastLessee = 0;
@@ -208,6 +250,8 @@ namespace {
         void failPrime(int err, int count, int skip) override;
         void failAddFb(int err, int count) override;
         void rejectCursor(int err) override;
+        void leaseFault(int kind) override;
+        int openDdc(StringView bus) override;
         unsigned long long flips() override;
 
         PropDef* findProp(u32 id);
@@ -241,6 +285,8 @@ namespace {
         long fakeIoctl(unsigned long req, void* arg);
         int dumbMemFd(unsigned long long off);
         void flipLoop();
+        void ddcLoop();
+        bool isDdcBus(int fd);
     };
 
     FakeKms* g = nullptr;
@@ -323,27 +369,65 @@ namespace {
         count = n;
     }
 
-    // IN_FORMATS: the header, the format list, then one modifier struct
-    // (LINEAR) whose mask covers every format
-    void buildInFormatsBlob(Vector<u8>& out) {
-        constexpr u32 nFmt = (u32)(sizeof(kFormats) / sizeof(kFormats[0]));
+    // IN_FORMATS: the header, the format list, then the modifier structs:
+    // LINEAR for every format, and a vendor tiling for XRGB8888 alone that
+    // no renderer here can produce, so the intersection has to drop it
+    void buildInFormatsBlob(Vector<u8>& out, bool no10Bit) {
+        Vector<u32> formats;
+
+        for (u32 f : kFormats) {
+            bool tenBit = f == DRM_FORMAT_XRGB2101010 || f == DRM_FORMAT_ARGB2101010 || f == DRM_FORMAT_XBGR2101010 || f == DRM_FORMAT_ABGR2101010;
+
+            if (!no10Bit || !tenBit) {
+                formats.pushBack(f);
+            }
+        }
+
+        u32 nFmt = (u32)formats.length();
         struct drm_format_modifier_blob hdr{};
 
         hdr.version = 1;
         hdr.count_formats = nFmt;
         hdr.formats_offset = sizeof(hdr);
-        hdr.count_modifiers = 1;
-        hdr.modifiers_offset = sizeof(hdr) + sizeof(kFormats);
+        hdr.count_modifiers = 2;
+        hdr.modifiers_offset = (u32)(sizeof(hdr) + sizeof(u32) * nFmt);
 
-        struct drm_format_modifier mod{};
+        struct drm_format_modifier mods[2]{};
 
-        mod.formats = (1ull << nFmt) - 1;
-        mod.offset = 0;
-        mod.modifier = DRM_FORMAT_MOD_LINEAR;
+        mods[0].formats = (1ull << nFmt) - 1;
+        mods[0].modifier = DRM_FORMAT_MOD_LINEAR;
+        mods[1].formats = 1;
+        mods[1].modifier = DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED;
 
         out.append((const u8*)&hdr, sizeof(hdr));
-        out.append((const u8*)kFormats, sizeof(kFormats));
-        out.append((const u8*)&mod, sizeof(mod));
+        out.append((const u8*)formats.data(), sizeof(u32) * nFmt);
+        out.append((const u8*)mods, sizeof(mods));
+    }
+
+    // a comma-separated name list, as the boot knobs spell them
+    bool listed(StringView list, StringView name) {
+        while (!list.empty()) {
+            StringView item, rest;
+
+            if (list.split(',', item, rest)) {
+                list = rest;
+            } else {
+                item = list;
+                list = {};
+            }
+
+            if (item == name) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    void* ddcThreadTrampoline(void* self) {
+        ((FakeKms*)self)->ddcLoop();
+
+        return nullptr;
     }
 
     void* flipThreadTrampoline(void* self) {
@@ -374,6 +458,11 @@ FakeBlob* FakeKms::findBlob(u32 id) {
 }
 
 void FakeKms::addProp(u32 obj, u32 id, const char* name, u32 flags, const PropEnum* enums, int enumCount, u64 mn, u64 mx, u64 value) {
+    // a driver without the property: the lease pipe keeps its own
+    if (obj != kLeaseConnectorId && listed(dropProps, StringView(name))) {
+        return;
+    }
+
     PropDef p;
 
     p.id = id;
@@ -460,7 +549,14 @@ u32 FakeKms::makeEdidBlob() {
     c[13] = 0x60;
     c[14] = 0x1a;
 
-    for (int block = 0; block < 2; block++) {
+    // an sdr panel: the base block alone, no colorimetry, no HDR metadata
+    int blocks = edidKind == 1 ? 1 : 2;
+
+    if (edidKind == 1) {
+        e[126] = 0;
+    }
+
+    for (int block = 0; block < blocks; block++) {
         u8 sum = 0;
 
         for (int i = 0; i < 127; i++) {
@@ -470,10 +566,15 @@ u32 FakeKms::makeEdidBlob() {
         e[block * 128 + 127] = (u8)(0u - sum);
     }
 
+    // a corrupted read over the ddc wire: the fixed header is gone
+    if (edidKind == 2) {
+        e[0] = 0x12;
+    }
+
     auto* blob = new FakeBlob();
 
     blob->id = nextBlob++;
-    blob->data.append(e, 256);
+    blob->data.append(e, (size_t)blocks * 128);
     blobs.pushBack(blob);
 
     return blob->id;
@@ -482,8 +583,8 @@ u32 FakeKms::makeEdidBlob() {
 void FakeKms::buildProps() {
     addProp(kConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
     addProp(kConnectorId, pConnColorspace, "Colorspace", DRM_MODE_PROP_ENUM, kColorspaceEnums, 3, 0, 0, 0);
-    addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, 6, 16, 10);
-    addProp(kConnectorId, pConnBroadcastRgb, "Broadcast RGB", DRM_MODE_PROP_ENUM, kBroadcastEnums, 3, 0, 0, 0);
+    addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, 6, maxBpcCap, 10);
+    addProp(kConnectorId, pConnBroadcastRgb, "Broadcast RGB", DRM_MODE_PROP_ENUM, legacyLimited ? kBroadcastLegacyEnums : kBroadcastEnums, 3, 0, 0, 0);
     addProp(kConnectorId, pConnHdrMeta, "HDR_OUTPUT_METADATA", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
     addProp(kConnectorId, pConnEdid, "EDID", DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 0, makeEdidBlob());
 
@@ -514,7 +615,8 @@ void FakeKms::buildProps() {
     addProp(kPlaneId, pPlaneCrtcY, "CRTC_Y", DRM_MODE_PROP_SIGNED_RANGE, nullptr, 0, 0, ~0u, 0);
     addProp(kPlaneId, pPlaneCrtcW, "CRTC_W", DRM_MODE_PROP_RANGE, nullptr, 0, 0, ~0u, 0);
     addProp(kPlaneId, pPlaneCrtcH, "CRTC_H", DRM_MODE_PROP_RANGE, nullptr, 0, 0, ~0u, 0);
-    addProp(kPlaneId, pPlaneInFormats, "IN_FORMATS", DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 0, 0);
+    // the value is the sentinel emuGetPropBlob serves the format blob for
+    addProp(kPlaneId, pPlaneInFormats, "IN_FORMATS", DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 0, pPlaneInFormats);
 
     addProp(kCursorPlaneId, pCursorType, "type", DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE, kTypeEnums, 3, 0, 0, DRM_PLANE_TYPE_CURSOR);
     addProp(kCursorPlaneId, pCursorFbId, "FB_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
@@ -527,6 +629,8 @@ void FakeKms::buildProps() {
     addProp(kCursorPlaneId, pCursorCrtcY, "CRTC_Y", DRM_MODE_PROP_SIGNED_RANGE, nullptr, 0, 0, ~0u, 0);
     addProp(kCursorPlaneId, pCursorCrtcW, "CRTC_W", DRM_MODE_PROP_RANGE, nullptr, 0, 0, ~0u, 0);
     addProp(kCursorPlaneId, pCursorCrtcH, "CRTC_H", DRM_MODE_PROP_RANGE, nullptr, 0, 0, ~0u, 0);
+
+    addProp(kLeasePlaneId, pLeasePlaneType, "type", DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE, kTypeEnums, 3, 0, 0, DRM_PLANE_TYPE_PRIMARY);
 }
 
 int FakeKms::emuVersion(drm_version* v) {
@@ -560,7 +664,7 @@ int FakeKms::emuGetCap(drm_get_cap* c) {
     switch (c->capability) {
         case DRM_CAP_CURSOR_WIDTH:
         case DRM_CAP_CURSOR_HEIGHT:
-            c->value = 64;
+            c->value = cursorCap;
             return 0;
         case DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP:
             c->value = 1;
@@ -615,6 +719,11 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
 }
 
 int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
+    // the lease connector unplugged between the offer and the request
+    if (c->connector_id == kLeaseConnectorId && leaseFaultKind == 1) {
+        return -ENOENT;
+    }
+
     if (c->connector_id == kLeaseConnectorId) {
         drm_mode_modeinfo mode;
 
@@ -688,7 +797,7 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
     static const u32 encs[] = {kEncoderId};
 
     fillArray(c->encoders_ptr, c->count_encoders, encs, 1);
-    c->encoder_id = kEncoderId;
+    c->encoder_id = unbound ? 0 : kEncoderId;
     // an internal panel takes its brightness from the backlight class, an
     // external one over ddc/ci; scenarios pick which
     c->connector_type = internalPanel ? DRM_MODE_CONNECTOR_eDP : DRM_MODE_CONNECTOR_HDMIA;
@@ -702,10 +811,15 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
 }
 
 int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
+    if (e->encoder_id == kLeaseEncoderId && leaseFaultKind == 2) {
+        return -ENOENT;
+    }
+
     if (e->encoder_id == kLeaseEncoderId) {
         e->encoder_type = DRM_MODE_ENCODER_TMDS;
         e->crtc_id = kLeaseCrtcId;
-        e->possible_crtcs = 2; // the second crtc of the resource list
+        // the second crtc of the resource list, or only the desktop's
+        e->possible_crtcs = leaseFaultKind == 3 ? 1 : 2;
         e->possible_clones = 0;
 
         return 0;
@@ -716,7 +830,7 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
     }
 
     e->encoder_type = DRM_MODE_ENCODER_TMDS;
-    e->crtc_id = kCrtcId;
+    e->crtc_id = unbound ? 0 : kCrtcId;
     e->possible_crtcs = 1;
     e->possible_clones = 0;
 
@@ -731,11 +845,15 @@ int FakeKms::emuCreateLease(drm_mode_create_lease* l) {
         return -EINVAL;
     }
 
+    if (leaseFaultKind == 4) {
+        return -ENOSPC;
+    }
+
     const u32* ids = (const u32*)(uintptr_t)l->object_ids;
 
     for (u32 i = 0; i < l->object_count; i++) {
         u32 id = ids[i];
-        bool known = id == kLeaseConnectorId || id == kLeaseCrtcId || id == kConnectorId || id == kCrtcId || id == kPlaneId || id == kCursorPlaneId;
+        bool known = id == kLeaseConnectorId || id == kLeaseCrtcId || id == kLeasePlaneId || id == kConnectorId || id == kCrtcId || id == kPlaneId || id == kCursorPlaneId;
 
         if (!known) {
             return -ENOENT;
@@ -748,6 +866,16 @@ int FakeKms::emuCreateLease(drm_mode_create_lease* l) {
         return -errno;
     }
 
+    // what went out, for scenarios to check the lessee got a whole pipe
+    StringBuilder what;
+
+    what << "fake-kms: lease"_sv;
+
+    for (u32 i = 0; i < l->object_count; i++) {
+        what << " "_sv << ids[i];
+    }
+
+    sysE << sv(what) << endL;
     l->fd = (u32)fd;
     l->lessee_id = ++lastLessee;
 
@@ -759,20 +887,20 @@ int FakeKms::emuRevokeLease(drm_mode_revoke_lease* l) {
 }
 
 int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
-    static const u32 planes[] = {kPlaneId, kCursorPlaneId};
+    static const u32 planes[] = {kLeasePlaneId, kPlaneId, kCursorPlaneId};
 
-    fillArray(r->plane_id_ptr, r->count_planes, planes, 2);
+    fillArray(r->plane_id_ptr, r->count_planes, planes, 3);
 
     return 0;
 }
 
 int FakeKms::emuGetPlane(drm_mode_get_plane* p) {
-    if (p->plane_id != kPlaneId && p->plane_id != kCursorPlaneId) {
+    if (p->plane_id != kPlaneId && p->plane_id != kCursorPlaneId && p->plane_id != kLeasePlaneId) {
         return -ENOENT;
     }
 
     fillArray(p->format_type_ptr, p->count_format_types, kFormats, (u32)(sizeof(kFormats) / sizeof(kFormats[0])));
-    p->possible_crtcs = 1;
+    p->possible_crtcs = p->plane_id == kLeasePlaneId ? 2 : 1;
     p->crtc_id = 0;
     p->fb_id = 0;
     p->gamma_size = 0;
@@ -851,7 +979,7 @@ int FakeKms::emuGetPropBlob(drm_mode_get_blob* b) {
     if (b->blob_id == pPlaneInFormats) {
         Vector<u8> data;
 
-        buildInFormatsBlob(data);
+        buildInFormatsBlob(data, no10Bit);
 
         if (b->data && b->length >= data.length()) {
             memcpy((void*)(uintptr_t)b->data, data.data(), data.length());
@@ -951,6 +1079,12 @@ int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
         return -EINVAL;
     }
 
+    if (failDumbCount > 0) {
+        failDumbCount--;
+
+        return -ENOMEM;
+    }
+
     FakeGem gem;
 
     gem.dumbSize = (u64)c->width * 4 * c->height;
@@ -999,7 +1133,9 @@ int FakeKms::emuDestroyDumb(drm_mode_destroy_dumb* d) {
 }
 
 int FakeKms::emuAddFb2(drm_mode_fb_cmd2* f) {
-    if (failAddFbCount > 0) {
+    if (failAddFbSkip > 0) {
+        failAddFbSkip--;
+    } else if (failAddFbCount > 0) {
         failAddFbCount--;
 
         return -failAddFbErr;
@@ -1125,6 +1261,22 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
         for (u32 j = 0; j < counts[i]; j++, k++) {
             PropDef* p = findProp(propIds[k]);
 
+            // what the link was told to carry, for scenarios to hold the
+            // compositor to: link depth, rgb range, the HDR metadata
+            if (p->value != values[k] && (p->id == pConnMaxBpc || p->id == pConnBroadcastRgb)) {
+                sysE << "fake-kms: "_sv << StringView(p->name) << " = "_sv << values[k] << endL;
+            }
+
+            if (p->value != values[k] && p->id == pConnHdrMeta && values[k]) {
+                FakeBlob* blob = findBlob((u32)values[k]);
+
+                if (blob && blob->data.length() >= sizeof(hdr_output_metadata)) {
+                    const auto* meta = (const hdr_output_metadata*)blob->data.data();
+
+                    sysE << "fake-kms: hdr metadata max_cll "_sv << (u64)meta->hdmi_metadata_type1.max_cll << endL;
+                }
+            }
+
             p->value = values[k];
         }
     }
@@ -1187,6 +1339,78 @@ void FakeKms::flipLoop() {
 
         (void)n;
     }
+}
+
+// DDC/CI as a monitor speaks it: a Get VCP request is answered with the
+// 11-byte reply, a Set VCP lands in the log for the scenario to read
+void FakeKms::ddcLoop() {
+    bool first = true;
+
+    for (;;) {
+        u8 msg[16];
+        ssize_t n = read(ddcPeer, msg, sizeof(msg));
+
+        if (n <= 0) {
+            break;
+        }
+
+        // a monitor waking its DDC/CI engine drops the very first request
+        if (first || ddcSilent) {
+            first = false;
+
+            continue;
+        }
+
+        if (n == 5 && msg[1] == 0x82 && msg[2] == 0x01) {
+            u8 rep[11] = {0x6e, 0x88, 0x02, 0x00, msg[3], 0x00, (u8)(ddcMax >> 8), (u8)ddcMax, (u8)(ddcCur >> 8), (u8)ddcCur, 0};
+
+            for (int i = 0; i < 10; i++) {
+                rep[10] ^= rep[i];
+            }
+
+            ssize_t w = write(ddcPeer, rep, sizeof(rep));
+
+            (void)w;
+        } else if (n == 7 && msg[1] == 0x84 && msg[2] == 0x03) {
+            ddcCur = (msg[4] << 8) | msg[5];
+            sysE << "fake-kms: ddc set vcp "_sv << (i64)msg[3] << " = "_sv << ddcCur << endL;
+        }
+    }
+
+    close(ddcPeer);
+}
+
+bool FakeKms::isDdcBus(int fd) {
+    struct stat st{};
+
+    return ddcIno && syscall(SYS_fstat, fd, &st) == 0 && st.st_ino == ddcIno && st.st_dev == ddcDev;
+}
+
+int FakeKms::openDdc(StringView bus) {
+    if (!ddcArmed) {
+        return -ENOENT;
+    }
+
+    int sv[2];
+
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) != 0) {
+        return -errno;
+    }
+
+    // i2c-dev reads never block: an unanswered request is a short read
+    fcntl(sv[0], F_SETFL, O_NONBLOCK);
+
+    struct stat st{};
+
+    syscall(SYS_fstat, sv[0], &st);
+    ddcIno = st.st_ino;
+    ddcDev = st.st_dev;
+    ddcPeer = sv[1];
+    pthread_create(&ddcThread, nullptr, ddcThreadTrampoline, this);
+    pthread_detach(ddcThread);
+    sysE << "fake-kms: ddc monitor on "_sv << bus << endL;
+
+    return sv[0];
 }
 
 long FakeKms::fakeIoctl(unsigned long req, void* arg) {
@@ -1336,6 +1560,17 @@ extern "C" int ioctl(int fd, IoctlRequest req, ...) {
         return (int)g->fakeIoctl((unsigned long)req, arg);
     }
 
+    // addressing the monitor on the emulated bus: an absent one NAKs
+    if (g && (u32)req == I2C_SLAVE && g->isDdcBus(fd)) {
+        if (g->ddcAbsent) {
+            errno = ENXIO;
+
+            return -1;
+        }
+
+        return 0;
+    }
+
     long rc = syscall(SYS_ioctl, fd, (unsigned long)req, arg);
 
     return (int)rc;
@@ -1424,6 +1659,32 @@ int FakeKms::openDevice() {
     rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
     rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
     noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
+
+    const char* drop = getenv("IMWAY_FAKE_KMS_DROP_PROPS");
+    const char* edid = getenv("IMWAY_FAKE_KMS_EDID");
+    const char* bpc = getenv("IMWAY_FAKE_KMS_MAX_BPC");
+    const char* cursor = getenv("IMWAY_FAKE_KMS_CURSOR_CAP");
+    const char* dumb = getenv("IMWAY_FAKE_KMS_FAIL_DUMB");
+    const char* addFb = getenv("IMWAY_FAKE_KMS_FAIL_ADDFB");
+    const char* ddc = getenv("IMWAY_FAKE_KMS_DDC");
+
+    dropProps = drop ? StringView(drop) : StringView();
+    edidKind = !edid ? 0 : StringView(edid) == "sdr"_sv ? 1 : 2;
+    maxBpcCap = bpc ? StringView(bpc).stou() : 16;
+    legacyLimited = getenv("IMWAY_FAKE_KMS_LEGACY_RANGE") != nullptr;
+    cursorCap = cursor ? StringView(cursor).stou() : 64;
+    unbound = getenv("IMWAY_FAKE_KMS_UNBOUND") != nullptr;
+    no10Bit = getenv("IMWAY_FAKE_KMS_NO_10BIT") != nullptr;
+    failDumbCount = dumb ? (int)StringView(dumb).stou() : 0;
+    // the N-th framebuffer from boot on fails: the cursor's comes first
+    failAddFbErr = addFb ? ENOSPC : 0;
+    failAddFbCount = addFb ? 1 : 0;
+    failAddFbSkip = addFb ? (int)StringView(addFb).stou() - 1 : 0;
+    ddcArmed = ddc && *ddc;
+    ddcAbsent = ddc && StringView(ddc) == "absent"_sv;
+    ddcSilent = ddc && StringView(ddc) == "silent"_sv;
+    ddcMax = ddcArmed && !ddcAbsent && !ddcSilent ? (int)StringView(ddc).stou() : 0;
+    ddcCur = ddcMax / 2;
     buildProps();
     pthread_create(&flipThread, nullptr, flipThreadTrampoline, this);
     // published last: the libc overrides start matching this fd only once
@@ -1472,12 +1733,19 @@ void FakeKms::failAddFb(int err, int count) {
     pthread_mutex_lock(&mu);
     failAddFbErr = err;
     failAddFbCount = count;
+    failAddFbSkip = 0;
     pthread_mutex_unlock(&mu);
 }
 
 void FakeKms::rejectCursor(int err) {
     pthread_mutex_lock(&mu);
     rejectCursorErr = err;
+    pthread_mutex_unlock(&mu);
+}
+
+void FakeKms::leaseFault(int kind) {
+    pthread_mutex_lock(&mu);
+    leaseFaultKind = kind;
     pthread_mutex_unlock(&mu);
 }
 

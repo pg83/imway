@@ -316,3 +316,37 @@ screenshot() {
 
     return 1
 }
+
+# A fixed-length run of a second compositor on the KMS emulator, next to
+# the scenario's own: boots the display/driver shape the emulator's knobs
+# describe, renders three frames and exits. Output lands in BOOT_OUT, the
+# exit code in BOOT_RC; the direct seat keeps it off the scenario's VT.
+kms_boot() { # [VAR=value...] -- [imway args...]
+    local envs=() bin
+
+    while [[ $# -gt 0 && "$1" != "--" ]]; do
+        envs+=("$1")
+        shift
+    done
+
+    shift
+    bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
+    BOOT_RC=0
+    BOOT_OUT=$(env IMWAY_FAKE_KMS=1 IMWAY_SETTINGS=advanced.seat_backend=2 "${envs[@]}" timeout 60 "$bin" --device auto --socket imway-boot --frames 3 "$@" 2>&1) || BOOT_RC=$?
+    # the empty input directory's probe lines are noise here
+    BOOT_OUT=$(grep -v "libinput: client bug: Invalid path" <<<"$BOOT_OUT" || true)
+}
+
+# fail unless the last kms_boot printed (boot_has) or did not print
+# (boot_lacks) the pattern, or exited with the code (boot_rc)
+boot_has() { # <pattern> [what]
+    grep -q -- "$1" <<<"$BOOT_OUT" || { echo "${2:-boot}: no '$1' (rc=$BOOT_RC)"; echo "$BOOT_OUT"; exit 1; }
+}
+
+boot_lacks() { # <pattern> [what]
+    ! grep -q -- "$1" <<<"$BOOT_OUT" || { echo "${2:-boot}: unexpected '$1'"; echo "$BOOT_OUT"; exit 1; }
+}
+
+boot_rc() { # <code> [what]
+    [[ "$BOOT_RC" -eq "$1" ]] || { echo "${2:-boot}: exit $BOOT_RC, expected $1"; echo "$BOOT_OUT"; exit 1; }
+}

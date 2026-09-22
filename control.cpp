@@ -494,6 +494,8 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->scene->needsFrame = true;
     } else if (verb == "kms-modes"_sv && comp->kmsIntercept) {
         comp->kmsIntercept->setModes((int)args.stou());
+    } else if (verb == "kms-lease-fault"_sv && comp->kmsIntercept) {
+        comp->kmsIntercept->leaseFault((int)args.stou());
     } else if (verb == "session"_sv) {
         // fires the same listener lists a libseat VT switch would
         if (args.stou() != 0) {

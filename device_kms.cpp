@@ -2612,10 +2612,19 @@ namespace {
 
 void KmsOutput::initDdc(StringView connName) {
     // the connector's i2c bus: /sys/class/drm/<card>-<conn>/ddc/i2c-dev/i2c-N
+    StringView root = "/sys/class/drm"_sv;
+
+#ifdef IMWAY_FOR_TESTS
+    // a staged tree instead: a scenario cannot place buses in the real one
+    if (const char* staged = getenv("IMWAY_SYSFS_DRM"); staged && *staged) {
+        root = StringView(staged);
+    }
+#endif
+
     Buffer busDev;
 
     try {
-        listDir("/sys/class/drm"_sv, [connName, &busDev](const TPathInfo& e) {
+        listDir(root, [root, connName, &busDev](const TPathInfo& e) {
             // exact card<N>-<conn> match: endsWith would let "DP-1" hit
             // "eDP-1" or the other GPU's connector and poke a foreign monitor
             StringView item = e.item;
@@ -2634,7 +2643,7 @@ void KmsOutput::initDdc(StringView connName) {
             Buffer dir;
             StringBuilder builder((Buffer&&)dir);
 
-            builder << "/sys/class/drm/"_sv << e.item << "/ddc/i2c-dev"_sv;
+            builder << root << "/"_sv << e.item << "/ddc/i2c-dev"_sv;
             builder.xchg(dir);
 
             try {
@@ -2657,7 +2666,8 @@ void KmsOutput::initDdc(StringView connName) {
         return;
     }
 
-    ddcFd = open(Buffer(sv(busDev)).cStr(), O_RDWR | O_CLOEXEC);
+    // the emulator answers for the bus like it does for the card node
+    ddcFd = c->kmsIntercept ? c->kmsIntercept->openDdc(sv(busDev)) : open(Buffer(sv(busDev)).cStr(), O_RDWR | O_CLOEXEC);
 
     if (ddcFd < 0) {
         return;
