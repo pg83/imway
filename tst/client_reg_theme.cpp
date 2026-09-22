@@ -25,6 +25,30 @@ namespace {
         return a.x == b.r && a.y == b.g && a.z == b.b && a.w == b.a;
     }
 
+    // hsv hue in degrees
+    float hueOf(const ThemeColor& c) {
+        float maxv = fmaxf(c.r, fmaxf(c.g, c.b));
+        float minv = fminf(c.r, fminf(c.g, c.b));
+        float d = maxv - minv;
+        float h;
+
+        if (d <= 0.f) {
+            return 0.f;
+        }
+
+        if (maxv == c.r) {
+            h = fmodf((c.g - c.b) / d, 6.f);
+        } else if (maxv == c.g) {
+            h = (c.b - c.r) / d + 2.f;
+        } else {
+            h = (c.r - c.g) / d + 4.f;
+        }
+
+        h *= 60.f;
+
+        return h < 0.f ? h + 360.f : h;
+    }
+
     bool rampOk(const ThemePalette& p, const char* name) {
         float first = luminance(p[0]);
         float last = luminance(p[ThemePalette::toneCount - 1]);
@@ -97,6 +121,54 @@ int main() {
 
     if (sameColor(a.accent, b.accent) && sameColor(a.desktop, b.desktop)) {
         fprintf(stderr, "new seeds did not change the derived colors\n");
+        return 1;
+    }
+
+    // the accent is the selection's opposite hue: around the colour wheel
+    // through every sextant, a hue that wraps below red, and a colourless
+    // selection that keeps the default blue role and so an orange accent
+    const struct {
+        ThemeColor selection;
+        float hue;
+    } wheel[] = {
+        {{0.9f, 0.1f, 0.1f, 1.f}, 0.f},
+        {{0.9f, 0.1f, 0.5f, 1.f}, 330.f},
+        {{0.5f, 0.9f, 0.1f, 1.f}, 90.f},
+        {{0.1f, 0.9f, 0.9f, 1.f}, 180.f},
+        {{0.4f, 0.1f, 0.9f, 1.f}, 262.5f},
+        {{0.9f, 0.9f, 0.1f, 1.f}, 60.f},
+        {{0.5f, 0.5f, 0.5f, 1.f}, 212.f},
+    };
+
+    for (const auto& w : wheel) {
+        Theme t;
+
+        t.setSeeds(ThemeColor{0.14f, 0.14f, 0.14f, 1.f}, w.selection);
+
+        float want = fmodf(w.hue + 180.f, 360.f);
+        float got = hueOf(t.accent);
+        float miss = fabsf(got - want);
+
+        miss = miss > 180.f ? 360.f - miss : miss;
+
+        if (!channelsSane(t.accent) || miss > 30.f) {
+            fprintf(stderr, "selection hue %.0f: accent hue %.0f, expected about %.0f\n", w.hue, got, want);
+            return 1;
+        }
+    }
+
+    // seeds outside the unit cube are clamped into it, and a dark seed
+    // channel takes the linear segment of the sRGB curve
+    Theme clamped;
+
+    clamped.setSeeds(ThemeColor{-0.5f, 0.02f, 1.5f, 1.f}, ThemeColor{0.02f, 0.02f, 0.9f, 1.f});
+
+    if (clamped.neutralSeed.r != 0.f || clamped.neutralSeed.g != 0.02f || clamped.neutralSeed.b != 1.f) {
+        fprintf(stderr, "setSeeds did not clamp the neutral seed\n");
+        return 1;
+    }
+
+    if (!rampOk(clamped.neutral, "clamped neutral") || !rampOk(clamped.selection, "dark selection") || !channelsSane(clamped.desktop)) {
         return 1;
     }
 
