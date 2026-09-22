@@ -4689,7 +4689,7 @@ namespace {
         DataSource* src = sourceFrom(res);
         StringView mv(mime);
 
-        if (!src || src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
+        if (src->mimes.length() >= 64 || mv.length() >= sizeof(Mime::s)) {
             return;
         }
 
@@ -4701,24 +4701,23 @@ namespace {
     }
 
     void sourceSetActions(wl_client*, wl_resource* res, u32 actions) {
-        if (DataSource* src = sourceFrom(res)) {
-            constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
+        DataSource* src = sourceFrom(res);
+        constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
-            if (actions & ~valid) {
-                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_ACTION_MASK, "drag action mask contains unknown bits");
+        if (actions & ~valid) {
+            wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_ACTION_MASK, "drag action mask contains unknown bits");
 
-                return;
-            }
-
-            if (src->actionsSet || src->usedForSelection || src->usedForDrag) {
-                wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "set_actions is only valid once before start_drag");
-
-                return;
-            }
-
-            src->dndActions = actions;
-            src->actionsSet = true;
+            return;
         }
+
+        if (src->actionsSet || src->usedForSelection || src->usedForDrag) {
+            wl_resource_post_error(res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "set_actions is only valid once before start_drag");
+
+            return;
+        }
+
+        src->dndActions = actions;
+        src->actionsSet = true;
     }
 
     const struct wl_data_source_interface dataSourceImpl = {
@@ -4955,11 +4954,6 @@ namespace {
     void deviceStartDrag(wl_client* client, wl_resource* res, wl_resource* sourceRes, wl_resource* originRes, wl_resource* iconRes, u32 serial) {
         auto* seat = (SeatState*)wl_resource_get_user_data(res);
         DataSource* src = sourceFrom(sourceRes);
-
-        if (!seat || !originRes) {
-            return;
-        }
-
         SurfaceImpl* origin = surfaceFrom(originRes);
 
         if (seat->buttonsDown <= 0 || serial != seat->pointerGrabSerial || client != seat->pointerGrabClient || origin != seat->pointerGrabOrigin.get()) {
@@ -4998,31 +4992,30 @@ namespace {
     }
 
     void deviceSetSelection(wl_client* client, wl_resource* res, wl_resource* sourceRes, u32 serial) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            DataSource* src = sourceFrom(sourceRes);
+        auto* seat = (SeatState*)wl_resource_get_user_data(res);
+        DataSource* src = sourceFrom(sourceRes);
 
-            if (!seat->validSelectionSerial(client, serial)) {
-                return;
-            }
-
-            if (src && (src->usedForDrag || src->usedForSelection)) {
-                wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE, "data source was already used");
-
-                return;
-            }
-
-            if (src && src->actionsSet) {
-                wl_resource_post_error(src->res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "drag data source cannot become a selection");
-
-                return;
-            }
-
-            if (src) {
-                src->usedForSelection = true;
-            }
-
-            seat->setSelection(client, serial, src, false);
+        if (!seat->validSelectionSerial(client, serial)) {
+            return;
         }
+
+        if (src && (src->usedForDrag || src->usedForSelection)) {
+            wl_resource_post_error(res, WL_DATA_DEVICE_ERROR_USED_SOURCE, "data source was already used");
+
+            return;
+        }
+
+        if (src && src->actionsSet) {
+            wl_resource_post_error(src->res, WL_DATA_SOURCE_ERROR_INVALID_SOURCE, "drag data source cannot become a selection");
+
+            return;
+        }
+
+        if (src) {
+            src->usedForSelection = true;
+        }
+
+        seat->setSelection(client, serial, src, false);
     }
 
     const struct wl_data_device_interface dataDeviceImpl = {
@@ -5032,9 +5025,7 @@ namespace {
     };
 
     void dataDeviceResourceDestroyed(wl_resource* res) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            removeOne(seat->dataDevices, res);
-        }
+        removeOne(((SeatState*)wl_resource_get_user_data(res))->dataDevices, res);
     }
 
     void managerCreateDataSource(wl_client* client, wl_resource* res, u32 id) {
@@ -5216,9 +5207,7 @@ namespace {
     };
 
     void primaryDeviceSetSelection(wl_client* client, wl_resource* res, wl_resource* sourceRes, u32 serial) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            seat->setSelection(client, serial, sourceFrom(sourceRes), true);
-        }
+        ((SeatState*)wl_resource_get_user_data(res))->setSelection(client, serial, sourceFrom(sourceRes), true);
     }
 
     const struct zwp_primary_selection_device_v1_interface primaryDeviceImpl = {
@@ -5227,9 +5216,7 @@ namespace {
     };
 
     void primaryDeviceResourceDestroyed(wl_resource* res) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            removeOne(seat->primaryDevices, res);
-        }
+        removeOne(((SeatState*)wl_resource_get_user_data(res))->primaryDevices, res);
     }
 
     void primaryManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
