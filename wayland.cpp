@@ -8855,10 +8855,6 @@ namespace {
     void idleInhibitorResourceDestroyed(wl_resource* res) {
         auto* inhibitor = (IdleInhibitor*)wl_resource_get_user_data(res);
 
-        if (!inhibitor) {
-            return;
-        }
-
         inhibitor->unlink();
         inhibitor->srv->alloc->release(inhibitor);
     }
