@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # desktop.focus_policy "follows pointer": moving the pointer onto a window
-# focuses it (and raises it, raise_on_focus being on by default).
+# focuses it, with raise_on_focus on and off. With it off the window under
+# the pointer stays below the other one, and its focus must hold there
+# rather than snap back to the window on top; a click on the top window's
+# title bar then takes it back.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -55,9 +58,35 @@ aim() { # <app_id> <other app_id> <id>
     exit 1
 }
 
+# the focus stays put for a while, a dump every tenth of a second
+holds() { # <id>
+    local i
+    for ((i = 0; i < 10; i++)); do
+        focused_is "$1" || { echo "the focus on $1 snapped to $(dump_field '^focus ' id)"; dump_state; exit 1; }
+        sleep 0.1
+    done
+}
+
 aim ffp-a ffp-b "$ida"
 aim ffp-b ffp-a "$idb"
 aim ffp-a ffp-b "$ida"
+
+# raise off: ffp-a stays on top while ffp-b, under it, takes the focus
+ctl "set desktop.raise_on_focus 0"
+aim ffp-b ffp-a "$idb"
+holds "$idb"
+aim ffp-a ffp-b "$ida"
+holds "$ida"
+
+# ImGui still focuses ffp-a, the window on top, while the scene focus is on
+# ffp-b below it; a click on ffp-a's title bar must take the focus back
+# although ImGui sees no focus change. Clicks focus from here on.
+aim ffp-b ffp-a "$idb"
+holds "$idb"
+ctl "set desktop.focus_policy 0"
+click_at $(($(dump_field 'app_id=ffp-a ' x) + 20)) $(($(dump_field 'app_id=ffp-a ' y) + 8))
+await 50 focused_is "$ida" || { echo "a title bar click did not take the focus back"; dump_state; exit 1; }
+holds "$ida"
 
 expect_alive "compositor died with focus following the pointer"
 echo "OK: focus followed the pointer"

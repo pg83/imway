@@ -617,6 +617,10 @@ namespace {
         bool altTabActive = false;
         Weak<Toplevel> altTabSel;
 
+        // the toplevel ImGui focused last frame: its changes, not its
+        // state, move the scene focus (see buildUi)
+        Weak<Toplevel> imguiFocused;
+
         // lockscreen's self-owned arena also gates the input sink
         DialogState* lockState = nullptr;
         ev_timer autoLockTimer{};
@@ -1662,14 +1666,12 @@ void DesktopImpl::buildUi(Scene& scene) {
         scene.needsFrame = true;
     }
 
-    // The focus truth resets right before the windows rebind it, so
-    // everything drawn earlier in the frame (the chrome, the dock) reads
-    // last frame's value instead of an always-empty mid-frame one. An ImGui
-    // popup is compositor UI, however: its nav focus must not erase the
-    // Wayland client focus (and, for a global menu, its own data source).
-    if (GImGui->OpenPopupStack.empty()) {
-        scene.focusedToplevel.reset();
-    }
+    // Which toplevel ImGui focuses this frame, and whether it was clicked
+    // while already focused; the scene focus is settled from them after the
+    // windows are drawn, so everything drawn in the frame (the chrome, the
+    // dock) reads last frame's value.
+    Toplevel* imguiFocus = nullptr;
+    bool focusClicked = false;
 
     // client frames are half-scene.outW
     const ImVec2 fullPad = ImGui::GetStyle().WindowPadding;
@@ -1859,16 +1861,8 @@ void DesktopImpl::buildUi(Scene& scene) {
             t->curY = wp.y;
 
             if (ImGui::IsWindowFocused()) {
-                scene.focusedToplevel.bind(t->weak);
-
-                // gaining focus promotes the window in the dock MRU order;
-                // losing it changes nothing. Bump only when the latest
-                // holder actually changes, not every frame — the holder is
-                // the one whose stamp equals the counter (0 = nobody yet)
-                if (t->focusedAt != scene.focusSeq || !scene.focusSeq) {
-                    t->focusedAt = ++scene.focusSeq;
-                    scene.needsFrame = true;
-                }
+                imguiFocus = t;
+                focusClicked = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
             }
 
             if (t->moveRequested) {
@@ -2006,6 +2000,36 @@ void DesktopImpl::buildUi(Scene& scene) {
     });
 
     ImGui::PopStyleVar();
+
+    // ImGui's focus moves the scene focus only when it changes, or when the
+    // user clicks the window it already has: focus that follows the pointer
+    // without a raise hands the scene (and the keyboard) to a window ImGui
+    // keeps behind the one on top, and a per-frame rebind from ImGui's
+    // state took it straight back. An ImGui popup is compositor UI: its nav
+    // focus must not erase the Wayland client focus (and, for a global
+    // menu, its own data source).
+    if (imguiFocus != imguiFocused.get() && (imguiFocus || GImGui->OpenPopupStack.empty())) {
+        if (imguiFocus) {
+            imguiFocused.bind(imguiFocus->weak);
+            scene.focusedToplevel.bind(imguiFocus->weak);
+        } else {
+            imguiFocused.reset();
+            scene.focusedToplevel.reset();
+        }
+    } else if (focusClicked && scene.focusedToplevel.get() != imguiFocus) {
+        scene.focusedToplevel.bind(imguiFocus->weak);
+    }
+
+    // gaining focus promotes the window in the dock MRU order; losing it
+    // changes nothing. Bump only when the latest holder actually changes,
+    // not every frame: the holder is the one whose stamp equals the counter
+    // (0 = nobody yet)
+    if (Toplevel* ft = scene.focusedToplevel.get()) {
+        if (ft->focusedAt != scene.focusSeq || !scene.focusSeq) {
+            ft->focusedAt = ++scene.focusSeq;
+            scene.needsFrame = true;
+        }
+    }
 
     forEach<Popup>(scene.popups, [&](Popup& p) {
         Surface* ps = p.surface.get();
