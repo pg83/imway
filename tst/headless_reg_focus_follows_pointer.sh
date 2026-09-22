@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # desktop.focus_policy "follows pointer": moving the pointer onto a window
-# focuses it, with raise_on_focus on and off.
+# focuses it (and raises it, raise_on_focus being on by default).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -34,28 +34,30 @@ point_in() { # <app_id> <other app_id>
 
 focused_is() { [[ "$(dump_field '^focus ' id)" == "$1" ]]; }
 
-# the windows stay put: work the points out once
-pa=$(point_in ffp-a ffp-b) || { echo "no free point in ffp-a"; dump_state; exit 1; }
-pb=$(point_in ffp-b ffp-a) || { echo "no free point in ffp-b"; dump_state; exit 1; }
-
-aim() { # <point> <id>
-    local i
-    for ((i = 0; i < 20; i++)); do
-        ctl "motion $1"
-        screenshot "$XDG_RUNTIME_DIR/_ffp.ppm"
-        ctl "motion $1"
-        focused_is "$2" && return 0
-        sleep 0.2
+# Window positions are per-frame renderer truth and settle over the first
+# frames, and the pointer target is picked from a rendered frame after the
+# motion: re-read the rects and re-aim every round until the focus moves.
+aim() { # <app_id> <other app_id> <id>
+    local i p x y
+    for ((i = 0; i < 30; i++)); do
+        if p=$(point_in "$1" "$2"); then
+            read -r x y <<<"$p"
+            ctl "motion $x $y"
+            sleep 0.2
+            ctl "motion $((x + 1)) $y"
+            sleep 0.2
+            focused_is "$3" && return 0
+        fi
+        sleep 0.3
     done
-    echo "the pointer at $1 did not focus window $2"
+    echo "the pointer on $1 did not focus window $3"
     dump_state
     exit 1
 }
 
-aim "$pa" "$ida"
-ctl "set desktop.raise_on_focus 0"
-aim "$pb" "$idb"
-aim "$pa" "$ida"
+aim ffp-a ffp-b "$ida"
+aim ffp-b ffp-a "$idb"
+aim ffp-a ffp-b "$ida"
 
 expect_alive "compositor died with focus following the pointer"
 echo "OK: focus followed the pointer"

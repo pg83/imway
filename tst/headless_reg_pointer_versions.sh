@@ -15,6 +15,9 @@ y=$(dump_field 'app_id=pointer-versions' imgy)
 # pointer focus is worked out from a rendered frame: keep aiming until the
 # client says the pointer is in
 for _ in $(seq 1 20); do
+    # the window position settles over the first frames: re-read it
+    x=$(dump_field 'app_id=pointer-versions' imgx)
+    y=$(dump_field 'app_id=pointer-versions' imgy)
     ctl "motion $((x + 40)) $((y + 40))"
     sleep 0.2
     ctl "motion $((x + 41)) $((y + 40))"

@@ -16,6 +16,11 @@ py=$(dump_field '^popup mapped=1' y)
 # picking works from a rendered frame: keep aiming until the client says
 # the popup has the pointer
 for _ in $(seq 1 20); do
+    # positions settle over the first frames: re-read them
+    x=$(dump_field 'app_id=pointer-popup ' imgx)
+    y=$(dump_field 'app_id=pointer-popup ' imgy)
+    px=$(dump_field '^popup mapped=1' x)
+    py=$(dump_field '^popup mapped=1' y)
     ctl "motion $((x + px + 50)) $((y + py + 40))"
     sleep 0.2
     ctl "motion $((x + px + 51)) $((y + py + 40))"

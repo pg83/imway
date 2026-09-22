@@ -19,6 +19,9 @@ y=$(dump_field 'app_id=cursor-hide' imgy)
 # pointer focus is worked out from a rendered frame: keep aiming until the
 # client got its enter
 for _ in $(seq 1 20); do
+    # the window position settles over the first frames: re-read it
+    x=$(dump_field 'app_id=cursor-hide' imgx)
+    y=$(dump_field 'app_id=cursor-hide' imgy)
     ctl "motion $((x + 40)) $((y + 40))"
     sleep 0.2
     ctl "motion $((x + 41)) $((y + 40))"
