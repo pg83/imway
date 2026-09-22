@@ -50,7 +50,10 @@ namespace {
             t.minimized = false;
         }
 
-        if (!t.activated) {
+        // the compositor's focus, not xdg activated: a click on the dock
+        // itself takes the former and leaves the keyboard, and with it the
+        // activated flag, on the window
+        if (c.scene->focusedToplevel.get() != &t) {
             t.raiseRequested = true;
         }
 
