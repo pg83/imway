@@ -13,6 +13,7 @@
 #include "device_vk.h"
 #include "intr_list.h"
 #include "robustness.h"
+#include "chaos_monkey.h"
 #include "offload_job.h"
 #include "kms_intercept.h"
 #include "frame_listener.h"
@@ -302,7 +303,7 @@ namespace {
         sb = ScanBuf{};
     }
 
-    bool createScanBuf(Log& log, const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, VkFormat vkFmt, u32 fourcc, ScanBuf& sb) {
+    bool createScanBuf(Log& log, ChaosMonkey& chaos, const DeviceVk& vk, int fd, int w, int h, const u64* planeMods, u32 nPlaneMods, VkFormat vkFmt, u32 fourcc, ScanBuf& sb) {
         VkDrmFormatModifierPropertiesListEXT modList{VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT};
         VkFormatProperties2 fprops{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
 
@@ -405,7 +406,7 @@ namespace {
         ici.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
         ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        if (vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image) != VK_SUCCESS) {
+        if (chaos.scanout(vkCreateImage(vk.device, &ici, nullptr, &sb.pub.image)) != VK_SUCCESS) {
             log << "imway: scanout: vkCreateImage failed"_sv << endL;
 
             return false;
@@ -436,7 +437,7 @@ namespace {
         mai.allocationSize = req.size;
         mai.memoryTypeIndex = typeIdx;
 
-        if (vkAllocateMemory(vk.device, &mai, nullptr, &sb.memory) != VK_SUCCESS || vkBindImageMemory(vk.device, sb.pub.image, sb.memory, 0) != VK_SUCCESS) {
+        if (chaos.scanout(vkAllocateMemory(vk.device, &mai, nullptr, &sb.memory)) != VK_SUCCESS || chaos.scanout(vkBindImageMemory(vk.device, sb.pub.image, sb.memory, 0)) != VK_SUCCESS) {
             log << "imway: scanout: exportable allocation failed"_sv << endL;
             destroyScanBuf(vk, fd, sb);
 
@@ -448,7 +449,7 @@ namespace {
 
         VkImageDrmFormatModifierPropertiesEXT chosen{VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT};
 
-        if (!getModProps || !getMemoryFd || getModProps(vk.device, sb.pub.image, &chosen) != VK_SUCCESS) {
+        if (!getModProps || !getMemoryFd || chaos.scanout(getModProps(vk.device, sb.pub.image, &chosen)) != VK_SUCCESS) {
             destroyScanBuf(vk, fd, sb);
 
             return false;
@@ -470,7 +471,7 @@ namespace {
 
         int dmaFd = -1;
 
-        if (getMemoryFd(vk.device, &gfi, &dmaFd) != VK_SUCCESS || dmaFd < 0) {
+        if (chaos.scanout(getMemoryFd(vk.device, &gfi, &dmaFd)) != VK_SUCCESS || dmaFd < 0) {
             log << "imway: scanout: dmabuf export failed (udmabuf?)"_sv << endL;
             destroyScanBuf(vk, fd, sb);
 
@@ -1549,7 +1550,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
             ObjPool* trial = ObjPool::fromMemoryRaw();
 
             for (auto& sb : scan) {
-                if (createScanBuf(*c.log, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
+                if (createScanBuf(*c.log, *c.chaos, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
                     scanCount++;
 
                     ScanBuf* slot = &sb;
@@ -2096,7 +2097,7 @@ bool KmsOutput::rebuildScanout() {
         ObjPool* trial = ObjPool::fromMemoryRaw();
 
         for (auto& sb : scan) {
-            if (createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
+            if (createScanBuf(*c->log, *c->chaos, *vk, fd, mode.hdisplay, mode.vdisplay, mods, nmods, scanFormat, scanFourcc, sb)) {
                 scanCount++;
 
                 ScanBuf* slot = &sb;
@@ -3021,7 +3022,7 @@ bool KmsOutput::prepareScreenshot(Listener& readyListener) {
 
 // offload worker: the replacement scanout builds away from the loop
 void KmsOutput::screenshotPrepare() {
-    bool ok = createScanBuf(*c->log, *vk, fd, mode.hdisplay, mode.vdisplay, scanMods, scanModCount, scanFormat, scanFourcc, screenshotReplacement);
+    bool ok = createScanBuf(*c->log, *c->chaos, *vk, fd, mode.hdisplay, mode.vdisplay, scanMods, scanModCount, scanFormat, scanFourcc, screenshotReplacement);
 
     stdAtomicStore(&screenshotResult, ok ? 1 : -1, MemoryOrder::Release);
 }
@@ -3052,7 +3053,7 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
 
     int dmaFd = -1;
 
-    if (!getMemoryFd || getMemoryFd(vk->device, &info, &dmaFd) != VK_SUCCESS || dmaFd < 0) {
+    if (!getMemoryFd || c->chaos->scanout(getMemoryFd(vk->device, &info, &dmaFd)) != VK_SUCCESS || dmaFd < 0) {
         destroyScanBuf(*vk, fd, screenshotReplacement);
         screenshotState = 0;
 

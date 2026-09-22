@@ -36,6 +36,9 @@ struct ChaosMonkey {
     // or bind that asked for it fills it in; a null return stands for the
     // allocation failing (the replacement destroys what it was handed)
     virtual wl_resource* resource(wl_resource* created) = 0;
+    // KMS backend
+    // the result of a Vulkan call building or exporting a scanout buffer
+    virtual VkResult scanout(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

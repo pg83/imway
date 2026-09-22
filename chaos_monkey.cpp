@@ -31,6 +31,8 @@ using namespace stl;
 //   resource=IFACE    wayland: the next resource of wl_interface IFACE
 //                     (wl_shm_pool, xdg_popup, ...) fails to allocate; one
 //                     word per interface, each spent on its own
+//   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
+//                     one after fails
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -41,6 +43,8 @@ namespace {
         int memoryFaults = 0;
         int vulkanSkip = -1;
         Vector<StringView> resourceFaults;
+        // KMS backend
+        int scanoutSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -54,6 +58,8 @@ namespace {
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
         wl_resource* resource(wl_resource* created) override;
+        // KMS backend
+        VkResult scanout(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -102,6 +108,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         vulkanSkip = (int)arg.stou();
     } else if (fault == "resource"_sv) {
         resourceFaults.pushBack(arg);
+    } else if (fault == "scanout"_sv) {
+        // KMS backend
+        scanoutSkip = (int)arg.stou();
     }
 }
 
@@ -187,6 +196,19 @@ wl_resource* TestChaosMonkey::resource(wl_resource* created) {
     return created;
 }
 
+// KMS backend
+VkResult TestChaosMonkey::scanout(VkResult result) {
+    if (scanoutSkip < 0) {
+        return result;
+    }
+
+    if (scanoutSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -203,6 +225,8 @@ namespace {
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
         wl_resource* resource(wl_resource* created) override;
+        // KMS backend
+        VkResult scanout(VkResult result) override;
     };
 }
 
@@ -231,6 +255,11 @@ VkResult IdleChaosMonkey::vulkan(VkResult result) {
 
 wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
     return created;
+}
+
+// KMS backend
+VkResult IdleChaosMonkey::scanout(VkResult result) {
+    return result;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
