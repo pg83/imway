@@ -502,10 +502,6 @@ bool HdrOutputMetadata::operator==(const HdrOutputMetadata& o) const {
     return primaries == o.primaries && minNits == o.minNits && maxNits == o.maxNits && maxCll == o.maxCll && maxFall == o.maxFall && hdr == o.hdr;
 }
 
-bool HdrOutputMetadata::operator!=(const HdrOutputMetadata& o) const {
-    return !(*this == o);
-}
-
 HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrContentMetadata& content) {
     HdrOutputMetadata metadata;
 
@@ -539,10 +535,6 @@ HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrCon
     metadata.maxFall = (u32)lround(mappedFall);
 
     return metadata;
-}
-
-bool OutputColorState::operator!=(const OutputColorState& o) const {
-    return !(*this == o);
 }
 
 bool directScanoutColorCompatible(const OutputColorState& output, const ColorDescription& surface) {

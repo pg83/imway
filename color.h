@@ -108,7 +108,6 @@ struct OutputColorState {
     double hdrHeadroom() const;
     bool hdr() const;
     bool operator==(const OutputColorState& other) const;
-    bool operator!=(const OutputColorState& other) const;
 };
 
 struct ColorRgb {
@@ -151,7 +150,6 @@ struct HdrOutputMetadata {
     bool hdr = false;
 
     bool operator==(const HdrOutputMetadata& other) const;
-    bool operator!=(const HdrOutputMetadata& other) const;
 };
 
 bool parseEdidColorCapabilities(const void* data, size_t size, DisplayColorCapabilities& capabilities);
