@@ -280,13 +280,20 @@ struct popup_ctx {
     struct xdg_surface* xs;
     struct xdg_popup* popup;
     int configured;
+    // hold_ack: keep configures unacknowledged, the last in held_serial
+    int hold_ack;
+    uint32_t held_serial;
 };
 
 static void popup_xs_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
     struct popup_ctx* c = d;
 
-    xdg_surface_ack_configure(xs, serial);
-    c->configured = 1;
+    if (c->hold_ack) {
+        c->held_serial = serial;
+    } else {
+        xdg_surface_ack_configure(xs, serial);
+    }
+    c->configured++;
 }
 static const struct xdg_surface_listener popup_xs_listener = {popup_xs_configure};
 
@@ -1409,6 +1416,35 @@ static int mode_foreign_move(void) {
     return 0;
 }
 
+// ---- reposition-pending: a new position waits for its configure's ack -------
+static int mode_reposition_pending(void) {
+    struct wl_toplevel_ctx t;
+    struct popup_ctx p = {0};
+
+    wl_make_toplevel(&t, "misc-reposition", 200, 150, 0xFF0000FF);
+    map_popup(&p, t.xs, 0);
+    step(1); // mapped at its first position
+
+    struct xdg_positioner* moved = positioner(0);
+
+    xdg_positioner_set_anchor_rect(moved, 80, 60, 10, 10);
+    p.hold_ack = 1;
+
+    int before = p.configured;
+
+    xdg_popup_reposition(p.popup, moved, 7);
+    while (p.configured == before && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    // committed without acknowledging the reposition's configure
+    wl_surface_commit(p.surface);
+    step(2); // still at the first position
+    xdg_surface_ack_configure(p.xs, p.held_serial);
+    wl_surface_commit(p.surface);
+    step(3); // at the new one
+    idle();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1443,6 +1479,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "reposition-pending")) return mode_reposition_pending();
     if (!strcmp(mode, "stale-move")) return mode_stale_move();
     if (!strcmp(mode, "foreign-move")) return mode_foreign_move();
     if (!strcmp(mode, "state-repeats")) return mode_state_repeats();
