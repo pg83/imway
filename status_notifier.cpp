@@ -91,6 +91,7 @@ namespace {
         void watcherGet(DBusMessage* msg);
         void watcherGetAll(DBusMessage* msg);
         void emitItem(const char* member, ItemBox& item);
+        void refuse(DBusMessage* msg, const char* error, const char* text);
     };
 
     StringView text(const Buffer& b) {
@@ -516,6 +517,13 @@ void StatusNotifierImpl::clearMenu(ItemBox& item) {
     item.hasMenu = false;
 }
 
+void StatusNotifierImpl::refuse(DBusMessage* msg, const char* error, const char* text) {
+    DBusMessage* err = dbus_message_new_error(msg, error, text);
+
+    dbus_connection_send(conn, err, nullptr);
+    dbus_message_unref(err);
+}
+
 void StatusNotifierImpl::emitItem(const char* member, ItemBox& item) {
     DBusMessage* sig = dbus_message_new_signal(kWatcherPath, kWatcher, member);
     Buffer value;
@@ -534,10 +542,7 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
     const char* arg = "";
 
     if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &arg, DBUS_TYPE_INVALID) || !arg[0]) {
-        DBusMessage* err = dbus_message_new_error(msg, DBUS_ERROR_INVALID_ARGS, "expected service name or object path");
-
-        dbus_connection_send(conn, err, nullptr);
-        dbus_message_unref(err);
+        refuse(msg, DBUS_ERROR_INVALID_ARGS, "expected service name or object path");
 
         return;
     }
@@ -644,7 +649,11 @@ void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
 void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
     const char *iface = "", *property = "";
 
+    // a question the watcher cannot answer still gets an answer: the
+    // caller would otherwise block until its own timeout
     if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &property, DBUS_TYPE_INVALID) || StringView(iface) != kWatcher) {
+        refuse(msg, DBUS_ERROR_INVALID_ARGS, "expected the watcher interface and a property");
+
         return;
     }
 
@@ -686,6 +695,7 @@ void StatusNotifierImpl::watcherGet(DBusMessage* msg) {
         dbus_message_iter_close_container(&it, &var);
     } else {
         dbus_message_unref(reply);
+        refuse(msg, DBUS_ERROR_UNKNOWN_PROPERTY, "no such watcher property");
 
         return;
     }
@@ -772,7 +782,9 @@ namespace {
     DBusHandlerResult busSignal(DBusConnection*, DBusMessage* msg, void* data) {
         auto* impl = (StatusNotifierImpl*)data;
 
-        if (dbus_message_is_signal(msg, "org.freedesktop.DBus", "NameOwnerChanged")) {
+        // any peer can unicast a signal named like the bus's own; only the
+        // bus speaks for who owns a name
+        if (dbus_message_is_signal(msg, DBUS_INTERFACE_DBUS, "NameOwnerChanged") && dbus_message_has_sender(msg, DBUS_SERVICE_DBUS)) {
             const char *name = "", *oldOwner = "", *newOwner = "";
 
             if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID) && oldOwner[0] && !newOwner[0]) {
