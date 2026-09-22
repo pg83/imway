@@ -96,7 +96,7 @@ namespace {
         void nameOwnerChanged(DBusMessage* msg);
         void signal(DBusMessage* msg);
         Registration* registration(u32 window);
-        void eraseRegistration(size_t index, bool emit);
+        void eraseRegistration(size_t index);
         void emitRegistered(const char* member, const Registration& reg);
     };
 
@@ -273,7 +273,8 @@ namespace {
 
         image.version = PNG_IMAGE_VERSION;
 
-        if (!png_image_begin_read_from_memory(&image, data, (size_t)count) || !image.width || !image.height || image.width > 1024 || image.height > 1024) {
+        // libpng refuses a zero dimension in IHDR itself
+    if (!png_image_begin_read_from_memory(&image, data, (size_t)count) || image.width > 1024 || image.height > 1024) {
             png_image_free(&image);
 
             return nullptr;
@@ -493,11 +494,8 @@ void MenuImpl::clearModel() {
     ready = false;
 }
 
+// only propertiesUpdated asks, and only once a layout built the map
 DBusMenuItem* MenuImpl::find(i32 id) {
-    if (!byId) {
-        return nullptr;
-    }
-
     DBusMenuItem** item = byId->find((u64)(u32)id);
 
     return item ? *item : nullptr;
@@ -598,10 +596,10 @@ void MenuImpl::reply(Pending& pendingCall) {
 
     dbus_pending_call_unref(call);
 
-    if (!reply || dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
-        if (reply) {
-            dbus_message_unref(reply);
-        }
+    // a notified call is complete, and libdbus completes a timed-out or
+    // disconnected one with a synthesized error: there is always a reply
+    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        dbus_message_unref(reply);
 
         parent->composer->alloc->release(&pendingCall);
 
@@ -876,12 +874,10 @@ void MenusImpl::emitRegistered(const char* member, const Registration& reg) {
     dbus_message_unref(signal);
 }
 
-void MenusImpl::eraseRegistration(size_t index, bool emit) {
+void MenusImpl::eraseRegistration(size_t index) {
     Registration* reg = registrations[index];
 
-    if (emit) {
-        emitRegistered("WindowUnregistered", *reg);
-    }
+    emitRegistered("WindowUnregistered", *reg);
 
     registrations.mut(index) = registrations.back();
     registrations.popBack();
@@ -935,7 +931,7 @@ DBusHandlerResult MenusImpl::registrarMessage(DBusMessage* msg) {
 
         for (size_t i = 0; i < registrations.length(); i++) {
             if (registrations[i]->window == window && text(registrations[i]->sender) == StringView(sender)) {
-                eraseRegistration(i, true);
+                eraseRegistration(i);
 
                 break;
             }
@@ -1028,7 +1024,7 @@ void MenusImpl::nameOwnerChanged(DBusMessage* msg) {
 
     for (size_t i = registrations.length(); i > 0; i--) {
         if (text(registrations[i - 1]->sender) == StringView(oldOwner)) {
-            eraseRegistration(i - 1, true);
+            eraseRegistration(i - 1);
         }
     }
 }
