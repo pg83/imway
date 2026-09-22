@@ -3422,10 +3422,6 @@ namespace {
     void subsurfaceSetPosition(wl_client*, wl_resource* res, i32 x, i32 y) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (!sub) {
-            return;
-        }
-
         sub->pendingX = x;
         sub->pendingY = y;
         sub->pendingPos = true;
@@ -3474,7 +3470,7 @@ namespace {
     void subsurfacePlaceAbove(wl_client*, wl_resource* res, wl_resource* sibling) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (sub && sibling && !subsurfaceRestack(*sub, surfaceFrom(sibling), true)) {
+        if (!subsurfaceRestack(*sub, surfaceFrom(sibling), true)) {
             wl_resource_post_error(res, WL_SUBSURFACE_ERROR_BAD_SURFACE, "surface is not a sibling or parent");
         }
     }
@@ -3482,21 +3478,19 @@ namespace {
     void subsurfacePlaceBelow(wl_client*, wl_resource* res, wl_resource* sibling) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (sub && sibling && !subsurfaceRestack(*sub, surfaceFrom(sibling), false)) {
+        if (!subsurfaceRestack(*sub, surfaceFrom(sibling), false)) {
             wl_resource_post_error(res, WL_SUBSURFACE_ERROR_BAD_SURFACE, "surface is not a sibling or parent");
         }
     }
 
     void subsurfaceSetSync(wl_client*, wl_resource* res) {
-        if (SubsurfaceImpl* sub = subFrom(res)) {
-            sub->sync = true;
-        }
+        subFrom(res)->sync = true;
     }
 
     void subsurfaceSetDesync(wl_client*, wl_resource* res) {
         SubsurfaceImpl* sub = subFrom(res);
 
-        if (!sub || !sub->surface) {
+        if (!sub->surface) {
             return;
         }
 
@@ -3519,10 +3513,6 @@ namespace {
 
     void subsurfaceResourceDestroyed(wl_resource* res) {
         SubsurfaceImpl* sub = subFrom(res);
-
-        if (!sub) {
-            return;
-        }
 
         unlinkFromParent(*sub);
 
