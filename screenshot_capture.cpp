@@ -373,6 +373,15 @@ void ScreenshotCaptureImpl::fenceDone(VkResult status) {
         busy_ = false;
         *(comp->log) << "imway: screenshot fence failed ("_sv << (long)status << ")"_sv << endL;
 
+        // a handoff exported the scanout for a viewer that will not come;
+        // the output swaps its replacement in on its own
+        if (shared.fd >= 0) {
+            close(shared.fd);
+            shared.fd = -1;
+        }
+
+        handoff = false;
+
         return;
     }
 
