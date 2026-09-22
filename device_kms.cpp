@@ -1742,9 +1742,15 @@ int KmsOutput::physicalHeightMm() const {
 }
 
 void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
+    // every STD_VERIFY below throws out of here: what libdrm hands over is
+    // released by this arena on any way out, not by the happy path alone
+    ObjPool::Ref scratch = ObjPool::fromMemory();
     drmModeRes* res = drmModeGetResources(fd);
 
     STD_VERIFY(res);
+    pooledGuard(*scratch.mutPtr(), [res] {
+        drmModeFreeResources(res);
+    });
 
     drmModeConnector* conn = nullptr;
 
@@ -1777,6 +1783,9 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     }
 
     STD_VERIFY(conn);
+    pooledGuard(*scratch.mutPtr(), [conn] {
+        drmModeFreeConnector(conn);
+    });
 
     connectorId = conn->connector_id;
     StringBuilder label((Buffer&&)connectorLabel);
@@ -1826,6 +1835,9 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     }
 
     STD_VERIFY(enc);
+    pooledGuard(*scratch.mutPtr(), [enc] {
+        drmModeFreeEncoder(enc);
+    });
 
     if (enc->crtc_id) {
         crtcId = enc->crtc_id;
@@ -1839,8 +1851,6 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
         }
     }
 
-    drmModeFreeEncoder(enc);
-    drmModeFreeConnector(conn);
     STD_VERIFY(crtcId);
 
     int crtcIndex = -1;
@@ -1855,11 +1865,12 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
     // must not turn into an undefined negative or oversized shift below.
     STD_VERIFY(crtcIndex >= 0 && crtcIndex < 32);
 
-    drmModeFreeResources(res);
-
     drmModePlaneRes* planes = drmModeGetPlaneResources(fd);
 
     STD_VERIFY(planes);
+    pooledGuard(*scratch.mutPtr(), [planes] {
+        drmModeFreePlaneResources(planes);
+    });
 
     for (u32 i = 0; i < planes->count_planes && !(planeId && cursorPlaneId); i++) {
         drmModePlane* p = drmModeGetPlane(fd, planes->planes[i]);
@@ -1890,7 +1901,6 @@ void KmsOutput::pickPipe(StringView connector, StringView modeStr) {
         drmModeFreePlane(p);
     }
 
-    drmModeFreePlaneResources(planes);
     STD_VERIFY(planeId);
 }
 
