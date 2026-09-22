@@ -450,27 +450,7 @@ LibinputSource::~LibinputSource() noexcept {
 }
 
 namespace {
-    u32 tabletToolWireType(libinput_tablet_tool* tool) {
-        switch (libinput_tablet_tool_get_type(tool)) {
-            case LIBINPUT_TABLET_TOOL_TYPE_ERASER:
-                return 0x141;
-            case LIBINPUT_TABLET_TOOL_TYPE_BRUSH:
-                return 0x142;
-            case LIBINPUT_TABLET_TOOL_TYPE_PENCIL:
-                return 0x143;
-            case LIBINPUT_TABLET_TOOL_TYPE_AIRBRUSH:
-                return 0x144;
-            case LIBINPUT_TABLET_TOOL_TYPE_MOUSE:
-                return 0x146;
-            case LIBINPUT_TABLET_TOOL_TYPE_LENS:
-                return 0x147;
-            default:
-                return 0x140; // pen
-        }
-    }
-
     void tabletToolAxes(libinput_event_tablet_tool* t, TabletToolEvent& tev, int outW, int outH) {
-        tev.toolType = tabletToolWireType(libinput_event_tablet_tool_get_tool(t));
         tev.x = libinput_event_tablet_tool_get_x_transformed(t, (u32)outW);
         tev.y = libinput_event_tablet_tool_get_y_transformed(t, (u32)outH);
 

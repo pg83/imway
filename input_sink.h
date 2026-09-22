@@ -55,7 +55,6 @@ enum class TabletPhase : u8 {
 
 struct TabletToolEvent {
     TabletPhase phase = TabletPhase::motion;
-    u32 toolType = 0x140; // wp_tablet_tool_v2 type: pen
     double x = 0, y = 0;
 
     bool pressureSet = false;
