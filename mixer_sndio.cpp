@@ -13,6 +13,7 @@
     #include "util.h"
 
     #include <math.h>
+    #include <string.h>
     #include <poll.h>
 
     #include <ev.h>
@@ -29,6 +30,20 @@ namespace {
     void onDesc(void* arg, struct sioctl_desc* d, int val);
     void onVal(void* arg, unsigned addr, unsigned val);
 
+    // the values this client wrote to one control and sndiod has not yet
+    // reported back. sndiod reports every change to every client, the
+    // writer included, and it may skip intermediate values; an echo of a
+    // write the compositor has since moved past is not news
+    struct Writes {
+        static constexpr size_t capacity = 32;
+
+        unsigned values[capacity] = {};
+        size_t count = 0;
+
+        void sent(unsigned v);
+        bool echoed(unsigned v);
+    };
+
     // sndiod's server-level controls: output.level (NUM 0..maxval) and
     // output.mute (SW); per-app controls live in other groups and are not
     // our business
@@ -43,6 +58,8 @@ namespace {
         unsigned level = 0;
         unsigned mute = 0;
         float softSaved = 0.f; // soft-mute stash when there is no mute control
+        Writes levelWrites;
+        Writes muteWrites;
 
         SndioMixer(Composer& comp, struct sioctl_hdl* h);
 
@@ -56,6 +73,34 @@ namespace {
         void desc(struct sioctl_desc* d, int val);
         void val(unsigned addr, unsigned v);
     };
+}
+
+// the oldest write gives way when a burst outruns sndiod's reports
+void Writes::sent(unsigned v) {
+    if (count == capacity) {
+        memmove(values, values + 1, (capacity - 1) * sizeof(values[0]));
+        count--;
+    }
+
+    values[count++] = v;
+}
+
+// a reported value that is one of the writes in flight is their echo: it
+// and every write before it are done. Any other value came from outside
+// and supersedes them all
+bool Writes::echoed(unsigned v) {
+    for (size_t i = 0; i < count; i++) {
+        if (values[i] == v) {
+            memmove(values, values + i + 1, (count - i - 1) * sizeof(values[0]));
+            count -= i + 1;
+
+            return true;
+        }
+    }
+
+    count = 0;
+
+    return false;
 }
 
 SndioMixer::SndioMixer(Composer& comp, struct sioctl_hdl* h)
@@ -98,6 +143,7 @@ void SndioMixer::setVolume(float v) {
     }
 
     level = raw;
+    levelWrites.sent(raw);
     sioctl_setval(hdl, (unsigned)levelAddr, raw);
     rearm();
     notify();
@@ -114,6 +160,7 @@ void SndioMixer::setMuted(bool m) {
         }
 
         mute = m;
+        muteWrites.sent(m);
         sioctl_setval(hdl, (unsigned)muteAddr, m);
         rearm();
         notify();
@@ -184,13 +231,19 @@ void SndioMixer::desc(struct sioctl_desc* d, int v) {
     }
 }
 
+// an echo of a write the compositor has since moved past must not undo
+// it: the next volume step would start from the stale level
 void SndioMixer::val(unsigned addr, unsigned v) {
-    if ((int)addr == levelAddr && v != level) {
-        level = v;
-        notify();
-    } else if ((int)addr == muteAddr && v != mute) {
-        mute = v;
-        notify();
+    if ((int)addr == levelAddr) {
+        if (!levelWrites.echoed(v) && v != level) {
+            level = v;
+            notify();
+        }
+    } else if ((int)addr == muteAddr) {
+        if (!muteWrites.echoed(v) && v != mute) {
+            mute = v;
+            notify();
+        }
     }
 }
 
