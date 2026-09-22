@@ -62,9 +62,11 @@ click_at "$((file_x + 50))" 38
 wait_client "event 10"
 
 # File once more, and a second click on the open heading closes its popup
+# The menu is an ImGui popup window: the dump lists it while it is drawn. A
+# pixel difference against the start would also count the client's title
+# bar, whose colour follows ImGui's focus and not the menu.
 menu_shown() {
-    screenshot "$XDG_RUNTIME_DIR/menu-now.ppm" &&
-        (( $(region_diff "$XDG_RUNTIME_DIR/before-menu.ppm" "$XDG_RUNTIME_DIR/menu-now.ppm" 58 30 700 180) > 200 ))
+    dump_state | grep -q '^imgui name=##Popup'
 }
 menu_hidden() { ! menu_shown; }
 click_at "$file_x" 10
