@@ -119,7 +119,7 @@ jobs:
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j 2 -k -Druns=1 -Dshard=${{ matrix.shard }}/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=${{ matrix.shard }}/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -211,7 +211,7 @@ jobs:
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j 2 -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
+            python3 ./build -j "$(nproc)" -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -309,8 +309,8 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-cov -j "$(nproc)" -k &&
-            python3 ./build -B .b-cov -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -B .b-cov -j 2 -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -463,7 +463,7 @@ jobs:
           {
             python3 ./build -B .b-ta -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-ta -j "$(nproc)" -k &&
-            python3 ./build -B .b-ta -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -B .b-ta -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-asan.log"
 
       - name: Summarize failure
@@ -578,7 +578,7 @@ jobs:
           {
             python3 ./build -B .b-tu -j "$(nproc)" -k imway_test &&
             python3 ./build -B .b-tu -j "$(nproc)" -k &&
-            python3 ./build -B .b-tu -j 2 -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -B .b-tu -j "$(nproc)" -k -Druns=1 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests-ubsan.log"
 
       - name: Summarize failure
