@@ -89,8 +89,8 @@ void SndioMixer::setVolume(float v) {
         return;
     }
 
-    v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
-
+    // both callers, the volume keys and the settings slider, clamp to 0..1,
+    // and the soft mute only parks at zero and restores a stashed level
     unsigned raw = (unsigned)lroundf(v * (float)levelMax);
 
     if (raw == level) {

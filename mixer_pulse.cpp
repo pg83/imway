@@ -140,16 +140,22 @@ namespace {
         e->destroy = cb;
     }
 
-    double delayUntil(const struct timeval* tv) {
-        if (!tv) {
-            return 0.;
-        }
+    // libpulse's marker for a monotonic time (PA_TIMEVAL_RTCLOCK, private
+    // to pulsecore): a bit in tv_usec far above any real microsecond count
+    constexpr long kRtClockFlag = 1L << 30;
 
+    // the seconds until an absolute pulse time. A context on a foreign
+    // loop hands out wall-clock times (it keeps the monotonic ones for its
+    // own mainloop, flagged as above), so both clocks are honoured: read
+    // against the monotonic clock, a wall-clock time lies decades ahead and
+    // the timer, a reply timeout among them, never fires
+    double delayUntil(const struct timeval& tv) {
+        bool monotonic = (tv.tv_usec & kRtClockFlag) != 0;
         struct timespec now{};
 
-        clock_gettime(CLOCK_MONOTONIC, &now);
+        clock_gettime(monotonic ? CLOCK_MONOTONIC : CLOCK_REALTIME, &now);
 
-        double target = (double)tv->tv_sec + (double)tv->tv_usec / 1e6;
+        double target = (double)tv.tv_sec + (double)(tv.tv_usec & ~kRtClockFlag) / 1e6;
         double n = (double)now.tv_sec + (double)now.tv_nsec / 1e9;
         double d = target - n;
 
@@ -163,6 +169,19 @@ namespace {
         e->cb(e->api, e, &tv, e->userdata);
     }
 
+    // a null time disarms the event, as on pulse's own mainloop; it is
+    // not a time that has already passed
+    void timeRestart(pa_time_event* e, const struct timeval* tv) {
+        ev_timer_stop(e->loop, &e->timer);
+
+        if (!tv) {
+            return;
+        }
+
+        ev_timer_set(&e->timer, delayUntil(*tv), 0.);
+        ev_timer_start(e->loop, &e->timer);
+    }
+
     pa_time_event* timeNew(pa_mainloop_api* a, const struct timeval* tv, pa_time_event_cb_t cb, void* userdata) {
         pa_time_event* e = apiCtx(a)->alloc->make<pa_time_event>();
 
@@ -170,17 +189,11 @@ namespace {
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
-        ev_timer_init(&e->timer, timeEvCb, delayUntil(tv), 0.);
+        ev_timer_init(&e->timer, timeEvCb, 0., 0.);
         e->timer.data = e;
-        ev_timer_start(e->loop, &e->timer);
+        timeRestart(e, tv);
 
         return e;
-    }
-
-    void timeRestart(pa_time_event* e, const struct timeval* tv) {
-        ev_timer_stop(e->loop, &e->timer);
-        ev_timer_set(&e->timer, delayUntil(tv), 0.);
-        ev_timer_start(e->loop, &e->timer);
     }
 
     void timeFree(pa_time_event* e) {
@@ -331,8 +344,8 @@ float PulseMixer::volume() {
     return vol;
 }
 
+// both callers, the volume keys and the settings slider, clamp to 0..1
 void PulseMixer::setVolume(float v) {
-    v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
     vol = v;
 
     if (!ready || sinkIndex == PA_INVALID_INDEX) {
@@ -394,6 +407,10 @@ namespace {
 
                 break;
             case PA_CONTEXT_FAILED:
+                *(m->c->log) << "imway: pulse connection failed: "_sv << StringView(pa_strerror(pa_context_errno(ctx))) << ", volume control disabled"_sv << endL;
+                m->ready = false;
+
+                break;
             case PA_CONTEXT_TERMINATED:
                 m->ready = false;
 
@@ -417,8 +434,10 @@ namespace {
         }
     }
 
+    // libpulse hands out each sink with eol 0 and a record, then an eol
+    // (1 at the end, -1 on error) without one
     void sinkInfoCb(pa_context*, const pa_sink_info* info, int eol, void* data) {
-        if (eol || !info) {
+        if (eol) {
             return;
         }
 
