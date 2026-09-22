@@ -107,11 +107,8 @@ void drawWindowShadow(ImDrawList* dl, ImVec2 pos, ImVec2 size, float rounding, I
         strength = 2.f;
     }
 
+    // strength is held to 0..2, so the alpha stays within 2 * kAlpha
     int alpha = (int)(kAlpha * strength + .5f);
-
-    if (alpha > 255) {
-        alpha = 255;
-    }
 
     ImU32 col = IM_COL32(0, 0, 0, alpha);
 
