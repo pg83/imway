@@ -11,6 +11,7 @@ struct wl_resource;
 struct pam_message;
 struct pam_response;
 struct DBusMessage;
+struct DBusConnection;
 
 // The fault seam, one per board (Composer::chaos). A call site hands over
 // the object it is about to act on, or the result it has just got, and
@@ -68,6 +69,10 @@ struct ChaosMonkey {
     virtual DBusMessage* dbusMessage(DBusMessage* built) = 0;
     virtual DBusMessage* dbusSend(DBusMessage* call) = 0;
     virtual bool dbusNotify(DBusMessage* sent, bool installed) = 0;
+    // a bus connection fresh from the bus, before the loop takes over its
+    // watches: the test build may shrink its socket's send buffer and its
+    // incoming queue, so libdbus has to toggle them under backpressure
+    virtual void dbusConnection(DBusConnection* conn) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

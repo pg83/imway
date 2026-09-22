@@ -475,7 +475,7 @@ int mainComposer(int argc, char** argv) {
         // post to it regardless of a bus); the dbus service is layered on
         // top only when the session bus is reachable
         c.notifier = Notifier::create(c);
-        c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, false);
+        c.bus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, *c.chaos, false);
 
         if (c.bus) {
             c.dbusMenus = DBusMenus::create(c);
@@ -485,7 +485,7 @@ int mainComposer(int argc, char** argv) {
 
         c.mixer = Mixer::create(c);
 
-        c.sysbus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, true);
+        c.sysbus = DBusConn::create(pool.mutPtr(), c.alloc, loop, *log, *c.chaos, true);
         c.wifi = c.sysbus ? Wifi::create(c) : nullptr;
 
         Wayland* wayland = Wayland::create(c, wcfg);

@@ -13,6 +13,7 @@
     #include <errno.h>
     #include <stdlib.h>
     #include <string.h>
+    #include <sys/socket.h>
     #include <unistd.h>
     #include <std/lib/vector.h>
     #include <wayland-server-core.h>
@@ -57,6 +58,11 @@ using namespace stl;
 //   dbus-send=M       the next call to M is not sent and gets no pending
 //                     call, as on a connection without memory or dropped
 //   dbus-notify=M     the next call to M cannot install its reply notify
+//   dbus-sndbuf=N     every bus connection's socket gets an N byte send
+//                     buffer (the kernel's floor applies), so long writes
+//                     go out in parts
+//   dbus-recv-limit=N every bus connection holds at most N bytes of
+//                     undispatched messages before it stops reading
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -93,6 +99,8 @@ namespace {
         int readbackFenceSkip = -1;
         // buses
         BusRule busRules[8];
+        int busSendBuffer = 0;
+        long busReceiveLimit = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -119,6 +127,7 @@ namespace {
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
         bool dbusNotify(DBusMessage* sent, bool installed) override;
+        void dbusConnection(DBusConnection* conn) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -193,6 +202,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         armBus(BusFault::pending, arg);
     } else if (fault == "dbus-notify"_sv) {
         armBus(BusFault::notify, arg);
+    } else if (fault == "dbus-sndbuf"_sv) {
+        busSendBuffer = (int)arg.stou();
+    } else if (fault == "dbus-recv-limit"_sv) {
+        busReceiveLimit = (long)arg.stou();
     }
 }
 
@@ -426,6 +439,18 @@ bool TestChaosMonkey::dbusNotify(DBusMessage* sent, bool installed) {
     return installed && !busFires(BusFault::notify, sent);
 }
 
+void TestChaosMonkey::dbusConnection(DBusConnection* conn) {
+    int fd = -1;
+
+    if (busSendBuffer > 0 && dbus_connection_get_socket(conn, &fd)) {
+        setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &busSendBuffer, sizeof(busSendBuffer));
+    }
+
+    if (busReceiveLimit >= 0) {
+        dbus_connection_set_max_received_size(conn, busReceiveLimit);
+    }
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -455,6 +480,7 @@ namespace {
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
         bool dbusNotify(DBusMessage* sent, bool installed) override;
+        void dbusConnection(DBusConnection* conn) override;
     };
 }
 
@@ -526,6 +552,9 @@ DBusMessage* IdleChaosMonkey::dbusSend(DBusMessage* call) {
 
 bool IdleChaosMonkey::dbusNotify(DBusMessage*, bool installed) {
     return installed;
+}
+
+void IdleChaosMonkey::dbusConnection(DBusConnection*) {
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

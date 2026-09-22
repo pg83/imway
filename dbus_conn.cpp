@@ -3,6 +3,7 @@
 #include "log.h"
 #include "util.h"
 #include "pooled.h"
+#include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
@@ -69,10 +70,9 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* 
     ev_prepare* prepare = pool->make<ev_prepare>();
     struct ev_loop* heldLoop = loop;
 
+    // started below and never stopped before this guard runs
     pooledGuard(*pool, [heldLoop, prepare] {
-        if (ev_is_active(prepare)) {
-            ev_prepare_stop(heldLoop, prepare);
-        }
+        ev_prepare_stop(heldLoop, prepare);
     });
     ev_prepare_init(prepare, prepareCb);
     prepare->data = this;
@@ -169,24 +169,20 @@ namespace {
         return TRUE;
     }
 
+    // libdbus removes and toggles only watches it added, and watchAdd never
+    // refuses one: every watch it hands back carries its box
     void watchRemove(DBusWatch* w, void* data) {
         auto* impl = (DBusConnImpl*)data;
         auto* box = (WatchBox*)dbus_watch_get_data(w);
 
-        if (box) {
-            ev_io_stop(impl->loop, &box->io);
-            dbus_watch_set_data(w, nullptr, nullptr);
-            impl->alloc->release(box);
-        }
+        ev_io_stop(impl->loop, &box->io);
+        dbus_watch_set_data(w, nullptr, nullptr);
+        impl->alloc->release(box);
     }
 
     void watchToggle(DBusWatch* w, void* data) {
         auto* impl = (DBusConnImpl*)data;
         auto* box = (WatchBox*)dbus_watch_get_data(w);
-
-        if (!box) {
-            return;
-        }
 
         ev_io_stop(impl->loop, &box->io);
         ev_io_set(&box->io, dbus_watch_get_unix_fd(w), watchEvents(w));
@@ -214,24 +210,19 @@ namespace {
         return TRUE;
     }
 
+    // as with watches: every timeout libdbus hands back carries its box
     void timeoutRemove(DBusTimeout* t, void* data) {
         auto* impl = (DBusConnImpl*)data;
         auto* box = (TimeoutBox*)dbus_timeout_get_data(t);
 
-        if (box) {
-            ev_timer_stop(impl->loop, &box->timer);
-            dbus_timeout_set_data(t, nullptr, nullptr);
-            impl->alloc->release(box);
-        }
+        ev_timer_stop(impl->loop, &box->timer);
+        dbus_timeout_set_data(t, nullptr, nullptr);
+        impl->alloc->release(box);
     }
 
     void timeoutToggle(DBusTimeout* t, void* data) {
         auto* impl = (DBusConnImpl*)data;
         auto* box = (TimeoutBox*)dbus_timeout_get_data(t);
-
-        if (!box) {
-            return;
-        }
 
         ev_timer_stop(impl->loop, &box->timer);
 
@@ -244,19 +235,22 @@ namespace {
     }
 }
 
-DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, Log& log, bool system) {
+DBusConn* DBusConn::create(ObjPool* pool, SmallObjAllocator* alloc, struct ev_loop* loop, Log& log, ChaosMonkey& chaos, bool system) {
     DBusError err;
 
     dbus_error_init(&err);
 
     DBusConnection* conn = dbus_bus_get_private(system ? DBUS_BUS_SYSTEM : DBUS_BUS_SESSION, &err);
 
+    // libdbus names the reason whenever it hands back no connection
     if (!conn) {
-        log << "imway: no "_sv << (system ? "system"_sv : "session"_sv) << " bus ("_sv << (err.message ? err.message : "?") << "), dbus services disabled"_sv << endL;
+        log << "imway: no "_sv << (system ? "system"_sv : "session"_sv) << " bus ("_sv << err.message << "), dbus services disabled"_sv << endL;
         dbus_error_free(&err);
 
         return nullptr;
     }
+
+    chaos.dbusConnection(conn);
 
     return pool->make<DBusConnImpl>(pool, alloc, loop, conn);
 }
