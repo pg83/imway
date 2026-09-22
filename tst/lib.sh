@@ -298,6 +298,24 @@ await_mean() { # <ppm> <dump-pattern> <cond>
 
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
+# screenshot until <check> passes on it: a buffer committed before the
+# call can still be a frame away from the output, so one shot after a
+# sleep is a coin toss on a loaded runner. The last try runs the check
+# with its output, so a real failure still says why
+shot_until() { # <ppm> <check-command...>
+    local ppm=$1 i
+
+    shift
+
+    for ((i = 0; i < 50; i++)); do
+        screenshot "$ppm"
+        "$@" "$ppm" >/dev/null 2>&1 && break
+        sleep 0.1
+    done
+
+    "$@" "$ppm"
+}
+
 screenshot() {
     rm -f "$1"
 
