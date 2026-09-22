@@ -1,7 +1,6 @@
 #include "tex_pool.h"
 
 #include "util.h"
-#include "pooled.h"
 #include "chaos_monkey.h"
 
 #include <std/lib/vector.h>
@@ -17,6 +16,7 @@ namespace {
 
     struct VkTexturePoolImpl: public VkTexturePool {
         VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
+        ~VkTexturePoolImpl() noexcept;
 
         VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
@@ -55,11 +55,19 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosM
     dlci.bindingCount = 2;
     dlci.pBindings = bindings;
     STD_VERIFY(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout) == VK_SUCCESS);
-    pooledGuard(pool, [this] {
-        vkDestroyDescriptorSetLayout(device, layout, nullptr);
-    });
 
     grow();
+}
+
+// the chunks die with the chain, not with guards of their own: a chunk grown
+// after boot would get a guard later in the arena than the renderer, which
+// frees the sets still allocated from it only as it dies
+VkTexturePoolImpl::~VkTexturePoolImpl() noexcept {
+    for (VkDescriptorPool chunk : chunks) {
+        vkDestroyDescriptorPool(device, chunk, nullptr);
+    }
+
+    vkDestroyDescriptorSetLayout(device, layout, nullptr);
 }
 
 VkDescriptorPool VkTexturePoolImpl::grow() {
@@ -77,12 +85,13 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
     VkDescriptorPool p = VK_NULL_HANDLE;
 
     if (chaos->descriptorPool(vkCreateDescriptorPool(device, &dpci, nullptr, &p)) != VK_SUCCESS) {
+        // a failed creation leaves no pool; one the fault seam refused after
+        // the fact is released here
+        vkDestroyDescriptorPool(device, p, nullptr);
+
         return VK_NULL_HANDLE;
     }
 
-    pooledGuard(pool, [this, p] {
-        vkDestroyDescriptorPool(device, p, nullptr);
-    });
     chunks.pushBack(p);
 
     return p;
