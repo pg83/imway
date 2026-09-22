@@ -10393,10 +10393,12 @@ void Positioner::place(int& outX, int& outY, int& outW, int& outH, int minX, int
         }
     }
 
+    // a flip only moves the popup when it clears the axis, so a still bad
+    // axis is still off one of its two edges
     if (badX && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_X) && outW <= maxX - minX) {
         if (outX < minX) {
             outX = minX;
-        } else if ((i64)outX + outW > maxX) {
+        } else {
             outX = maxX - outW;
         }
 
@@ -10406,7 +10408,7 @@ void Positioner::place(int& outX, int& outY, int& outW, int& outH, int minX, int
     if (badY && (constraints & XDG_POSITIONER_CONSTRAINT_ADJUSTMENT_SLIDE_Y) && outH <= maxY - minY) {
         if (outY < minY) {
             outY = minY;
-        } else if ((i64)outY + outH > maxY) {
+        } else {
             outY = maxY - outH;
         }
 

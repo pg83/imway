@@ -107,6 +107,17 @@ static const struct Case cases[] = {
     {"flip-then-slide-y", 200, 700, -2, -2, 20, 20, XDG_POSITIONER_ANCHOR_BOTTOM,  XDG_POSITIONER_GRAVITY_BOTTOM,       FLIP | SLIDE},
     /* larger than the output on both axes: only a resize can place it */
     {"resize",      1400, 900, -2, -2, 20, 20, XDG_POSITIONER_ANCHOR_NONE,         XDG_POSITIONER_GRAVITY_NONE,         RESIZE},
+    /* off the left edge: the slide pulls it back in */
+    {"slide-left",   200, 150,  0, -2, 20, 20, XDG_POSITIONER_ANCHOR_LEFT,         XDG_POSITIONER_GRAVITY_LEFT,         SLIDE},
+    /* wider or taller than the output: no slide can place it, the resize does */
+    {"too-wide",    1400, 150, -2, -2, 20, 20, XDG_POSITIONER_ANCHOR_NONE,         XDG_POSITIONER_GRAVITY_NONE,         SLIDE | RESIZE},
+    {"too-tall",     200, 900, -2, -2, 20, 20, XDG_POSITIONER_ANCHOR_NONE,         XDG_POSITIONER_GRAVITY_NONE,         SLIDE | RESIZE},
+    /* partly above the top: the resize keeps the part that is on screen */
+    {"resize-top",   200, 150, -2, 50, 20, 20, XDG_POSITIONER_ANCHOR_TOP,          XDG_POSITIONER_GRAVITY_TOP,          RESIZE},
+    /* wholly beside the output: nothing of it is left to keep, so the
+     * resize spans the whole axis */
+    {"resize-left",  200, 150,  0, -2, 20, 20, XDG_POSITIONER_ANCHOR_LEFT,         XDG_POSITIONER_GRAVITY_LEFT,         RESIZE},
+    {"resize-above", 200, 150, -2,  0, 20, 20, XDG_POSITIONER_ANCHOR_TOP,          XDG_POSITIONER_GRAVITY_TOP,          RESIZE},
 };
 
 static int anchor_coord(int value, int extent, int rect) {

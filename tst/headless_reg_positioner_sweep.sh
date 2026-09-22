@@ -24,6 +24,20 @@ check() { # <case name>
         (( pw < 1400 && ph < 900 )) || { echo "resize did not shrink the popup"; exit 1; }
     fi
 
+    # the adjustments whose outcome is exact: slid flush to the edge, cut to
+    # the part on screen, or spanning the axis when no part is
+    local want=""
+    case "$1" in
+        slide-left) want="0 $py 200 150" ;;
+        resize-top) want="$px 0 200 50" ;;
+        resize-left) want="0 $py 1280 150" ;;
+        resize-above) want="$px 0 200 800" ;;
+    esac
+    [[ -z "$want" || "$px $py $pw $ph" == "$want" ]] || {
+        echo "$1: placed at $px $py ${pw}x${ph}, want $want"
+        exit 1
+    }
+
     (( px >= 0 && py >= 0 && px + pw <= 1280 && py + ph <= 800 )) || {
         echo "$1: the popup is off screen"
         cat "$CLIENT_LOG"
@@ -34,7 +48,8 @@ check() { # <case name>
 }
 
 for name in top bottom left right top-left bottom-left top-right bottom-right \
-            none flip-then-slide-x flip-then-slide-y resize; do
+            none flip-then-slide-x flip-then-slide-y resize slide-left too-wide \
+            too-tall resize-top resize-left resize-above; do
     check "$name"
 done
 
