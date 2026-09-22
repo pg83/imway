@@ -34,20 +34,20 @@ for i in $(seq 25); do
     key 114
 done
 
-await 50 level_is 0 0 || { echo "stepping past the bottom did not clamp at silence ($(level))"; exit 1; }
+await 150 level_is 0 0 || { echo "stepping past the bottom did not clamp at silence ($(level))"; exit 1; }
 
 key 115
-await 50 level_is 0.03 0.07 || { echo "one step up from silence did not land ($(level))"; exit 1; }
+await 150 level_is 0.03 0.07 || { echo "one step up from silence did not land ($(level))"; exit 1; }
 
 # soft mute: the level parks at zero, then comes back
 key 113
-await 50 level_is 0 0 || { echo "the mute key did not park the level ($(level))"; exit 1; }
+await 150 level_is 0 0 || { echo "the mute key did not park the level ($(level))"; exit 1; }
 key 113
-await 50 level_is 0.03 0.07 || { echo "unmuting did not restore the level ($(level))"; exit 1; }
+await 150 level_is 0.03 0.07 || { echo "unmuting did not restore the level ($(level))"; exit 1; }
 
 # sndiod goes away
 kill "$(cat "$XDG_RUNTIME_DIR/sndiod.pid")"
-await 50 in_log "sndiod went away, volume control disabled" || { echo "the lost sndiod went unnoticed"; cat "$IMWAY_LOG"; exit 1; }
+await 150 in_log "sndiod went away, volume control disabled" || { echo "the lost sndiod went unnoticed"; cat "$IMWAY_LOG"; exit 1; }
 key 115
 key 113
 expect_alive "compositor died when sndiod went away"

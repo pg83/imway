@@ -317,6 +317,13 @@ int main(void) {
         return 2;
     }
 
+    /* the bus announced the new owner before answering the request; a
+     * call to the compositor after it lands behind that announcement, so
+     * the menu below is created after the compositor saw it, and has to
+     * look the owner up itself */
+    reply = call_blocking(kRegistrar, kRegistrarPath, kRegistrar, "GetMenus", DBUS_TYPE_INVALID);
+    dbus_message_unref(reply);
+
     org_kde_kwin_appmenu_set_address(appmenu, kName, "/Menu");
     wl_display_roundtrip(wl_dpy);
 
