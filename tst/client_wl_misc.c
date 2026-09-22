@@ -1288,6 +1288,84 @@ static int mode_inert_subsurface(void) {
     return 0;
 }
 
+// ---- state-repeats: window-state requests sent twice, minimize off focus ----
+static int st_maximized, st_fullscreen, st_configures;
+
+static void st_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t h, struct wl_array* states) {
+    (void)d; (void)t; (void)w; (void)h;
+    uint32_t* s;
+
+    st_maximized = st_fullscreen = 0;
+    wl_array_for_each(s, states) {
+        if (*s == XDG_TOPLEVEL_STATE_MAXIMIZED) st_maximized = 1;
+        if (*s == XDG_TOPLEVEL_STATE_FULLSCREEN) st_fullscreen = 1;
+    }
+    st_configures++;
+}
+static const struct xdg_toplevel_listener st_listener = {
+    .configure = st_configure,
+    .close = wl_tl_close,
+    .configure_bounds = wl_tl_configure_bounds,
+    .wm_capabilities = wl_tl_wm_capabilities,
+};
+
+static void st_settle(void) {
+    for (int i = 0; i < 10; i++) {
+        roundtrip("state");
+        usleep(10000);
+    }
+}
+
+static int st_expect(int maximized, int fullscreen, const char* what) {
+    st_settle();
+    if (st_maximized != maximized || st_fullscreen != fullscreen) {
+        fprintf(stderr, "%s: maximized=%d fullscreen=%d\n", what, st_maximized, st_fullscreen);
+        return 1;
+    }
+    return 0;
+}
+
+static int mode_state_repeats(void) {
+    struct wl_toplevel_ctx other;
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+    struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wl_wm, s);
+
+    xdg_surface_add_listener(xs, &sus_xs_listener, NULL);
+
+    struct xdg_toplevel* tl = xdg_surface_get_toplevel(xs);
+
+    xdg_toplevel_add_listener(tl, &st_listener, NULL);
+    xdg_toplevel_set_app_id(tl, "misc-state");
+    wl_surface_commit(s);
+    while (!sus_configured && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    wl_surface_attach(s, wl_solid(160, 120, 0xFF0000FF), 0, 0);
+    wl_surface_commit(s);
+    wl_make_toplevel(&other, "misc-state-other", 100, 80, 0xFF00FF00);
+    st_settle();
+
+    xdg_toplevel_set_maximized(tl);
+    xdg_toplevel_set_maximized(tl);
+    if (st_expect(1, 0, "maximized twice")) return 1;
+    xdg_toplevel_unset_maximized(tl);
+    xdg_toplevel_unset_maximized(tl);
+    if (st_expect(0, 0, "unmaximized twice")) return 1;
+    xdg_toplevel_set_fullscreen(tl, NULL);
+    xdg_toplevel_set_fullscreen(tl, NULL);
+    if (st_expect(0, 1, "fullscreen twice")) return 1;
+    xdg_toplevel_unset_fullscreen(tl);
+    xdg_toplevel_unset_fullscreen(tl);
+    if (st_expect(0, 0, "unfullscreened twice")) return 1;
+    // minimizing the window that does not hold the focus, then the one that
+    // does
+    xdg_toplevel_set_minimized(tl);
+    st_settle();
+    xdg_toplevel_set_minimized(other.tl);
+    st_settle();
+    printf("state repeats ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1322,6 +1400,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "state-repeats")) return mode_state_repeats();
     if (!strcmp(mode, "inert-subsurface")) return mode_inert_subsurface();
     if (!strcmp(mode, "timed-subsurface")) return mode_timed_subsurface();
     if (!strcmp(mode, "vp-transforms")) return mode_vp_transforms();
