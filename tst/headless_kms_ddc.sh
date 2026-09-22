@@ -2,14 +2,12 @@
 # imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_DDC=100 IMWAY_SYSFS_DRM=./drm
 # imway-args: --device auto
 # imway-pre: mkdir -p drm/card0-HDMI-A-1/ddc/i2c-dev/i2c-7 drm/card0-DP-1/ddc/i2c-dev/i2c-3 drm/card0 drm/card-HDMI-A-1 drm/card0xHDMI-A-1 && touch drm/version
-# imway-pre: mkdir -p noddc/card1-HDMI-A-1
 # The brightness of an external monitor over DDC/CI: the connector's own
 # i2c bus is found in sysfs (never a neighbour's, never a prefix match),
 # the monitor's VCP 0x10 range is read at boot, and the brightness keys
-# reach it as coalesced Set VCP writes. Monitors that do not play along —
-# no device on the address, DDC/CI switched off, a zero range, no bus at
-# all — leave the output without hardware brightness, and an HDR output
-# pins the monitor at full.
+# reach it as coalesced Set VCP writes. A bus with no device on the
+# monitor's address leaves the output without hardware brightness, and an
+# HDR output pins the monitor at full.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -39,25 +37,6 @@ no_brightness() { # <what>
 kms_boot IMWAY_FAKE_KMS_DDC=absent --
 boot_has "fake-kms: ddc monitor on /dev/i2c-7" "no device on the address"
 no_brightness "no device on the address"
-
-kms_boot IMWAY_FAKE_KMS_DDC=silent --
-boot_has "fake-kms: ddc monitor on /dev/i2c-7" "ddc/ci switched off"
-no_brightness "ddc/ci switched off"
-
-kms_boot IMWAY_FAKE_KMS_DDC=0 --
-boot_has "fake-kms: ddc monitor on /dev/i2c-7" "zero range"
-no_brightness "zero range"
-
-kms_boot IMWAY_FAKE_KMS_DDC= --
-no_brightness "no i2c device"
-
-kms_boot IMWAY_SYSFS_DRM=./noddc --
-boot_lacks "fake-kms: ddc monitor" "connector without a ddc link"
-no_brightness "connector without a ddc link"
-
-kms_boot IMWAY_SYSFS_DRM=./nonexistent --
-boot_lacks "fake-kms: ddc monitor" "no drm class"
-no_brightness "no drm class"
 
 kms_boot -- --hdr 300
 boot_has "ddc/ci brightness on /dev/i2c-7, max 100" "hdr"

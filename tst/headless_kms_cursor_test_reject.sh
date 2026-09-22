@@ -13,10 +13,10 @@ in_log "cursor plane 105" || { echo "no hardware cursor at boot"; cat "$IMWAY_LO
 
 flips() { dump_field '^kms' flips; }
 
-# the cursor is on the plane once a frame has drawn it
+# the cursor is on the plane once a frame has drawn it there
 ctl "motion 200 200"
 ctl "key 2 press"; ctl "key 2 release"
-sleep 0.5
+await 100 in_log "fake-kms: cursor plane on" || { echo "the cursor never reached its plane"; cat "$IMWAY_LOG"; exit 1; }
 
 comeback() { # <fault> — away, arm the fault while nothing commits, back
     ctl "session 0"

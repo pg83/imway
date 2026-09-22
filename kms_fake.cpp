@@ -183,6 +183,7 @@ namespace {
         int modeSet = 0; // 0 default, 1 tv, 2 small, 3 1366x768 panel
         bool noPrime = false;
         bool asyncFlipLogged = false;
+        bool cursorOnLogged = false;
         Vector<PropDef> props;
         Vector<FakeBlob*> blobs;
         Vector<FakeFb> fbs;
@@ -1255,6 +1256,12 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
             // compositor to: link depth, rgb range, the HDR metadata
             if (p->value != values[k] && (p->id == pConnMaxBpc || p->id == pConnBroadcastRgb)) {
                 sysE << "fake-kms: "_sv << StringView(p->name) << " = "_sv << values[k] << endL;
+            }
+
+            // one-shot: scenarios wait for the cursor to reach its plane
+            if (p->id == pCursorFbId && values[k] && !cursorOnLogged) {
+                sysE << "fake-kms: cursor plane on"_sv << endL;
+                cursorOnLogged = true;
             }
 
             if (p->value != values[k] && p->id == pConnHdrMeta && values[k]) {
