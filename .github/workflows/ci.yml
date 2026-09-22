@@ -53,17 +53,13 @@ jobs:
           retention-days: 7
           compression-level: 9
 
-  tests:
-    name: Tests (${{ matrix.shard }}/4)
+  # the suite in four stable slices side by side (build.py -Dshard): one
+  # runner took twenty minutes over all of it
+  tests-0:
+    name: Tests (0/4)
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    strategy:
-      # the suite in four stable slices side by side: one runner took
-      # twenty minutes over it
-      fail-fast: false
-      matrix:
-        shard: [0, 1, 2, 3]
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,7 +115,7 @@ jobs:
           {
             python3 ./build -j "$(nproc)" -k imway_test &&
             python3 ./build -j "$(nproc)" -k &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=${{ matrix.shard }}/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -127,14 +123,257 @@ jobs:
         run: |
           python3 dev/ci_report.py \
             --log "$RUNNER_TEMP/tests.log" \
-            --title "Tests (${{ matrix.shard }}/4)" \
-            --reproduce "./build -Druns=1 -Dshard=${{ matrix.shard }}/4 test"
+            --title "Tests (0/4)" \
+            --reproduce "./build -Druns=1 -Dshard=0/4 test"
 
       - name: Upload failure log
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: tests-log-${{ matrix.shard }}
+          name: tests-log-0
+          path: ${{ runner.temp }}/tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-1:
+    name: Tests (1/4)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the test environment
+        run: |
+          # nested user namespaces for the sndio scenario's private /var/run
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # dmabuf test buffers come from udmabuf (built into the azure
+          # kernel; modprobe is the fallback for modular kernels)
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
+          sudo chmod 666 /dev/udmabuf
+          # a drm node backs dmabuf fd validation and the KMS emulator's
+          # companion identity: a render node when the kernel offers one,
+          # else the hypervisor's card
+          sudo modprobe vgem 2>/dev/null || true
+          ls -l /dev/dri
+          sudo chmod 666 /dev/dri/*
+          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
+          sudo chmod 666 /dev/tty[0-9]*
+          # the input scenario plugs virtual devices in through uinput; the
+          # nodes it creates have to be openable by the runner as well, and
+          # a missing uinput only makes that scenario skip
+          sudo modprobe uinput 2>/dev/null || true
+          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
+          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
+            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
+          sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
+          vulkaninfo --summary || true
+
+      - name: Run full test suite
+        run: |
+          set -o pipefail
+          {
+            python3 ./build -j "$(nproc)" -k imway_test &&
+            python3 ./build -j "$(nproc)" -k &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests.log" \
+            --title "Tests (1/4)" \
+            --reproduce "./build -Druns=1 -Dshard=1/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-log-1
+          path: ${{ runner.temp }}/tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-2:
+    name: Tests (2/4)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the test environment
+        run: |
+          # nested user namespaces for the sndio scenario's private /var/run
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # dmabuf test buffers come from udmabuf (built into the azure
+          # kernel; modprobe is the fallback for modular kernels)
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
+          sudo chmod 666 /dev/udmabuf
+          # a drm node backs dmabuf fd validation and the KMS emulator's
+          # companion identity: a render node when the kernel offers one,
+          # else the hypervisor's card
+          sudo modprobe vgem 2>/dev/null || true
+          ls -l /dev/dri
+          sudo chmod 666 /dev/dri/*
+          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
+          sudo chmod 666 /dev/tty[0-9]*
+          # the input scenario plugs virtual devices in through uinput; the
+          # nodes it creates have to be openable by the runner as well, and
+          # a missing uinput only makes that scenario skip
+          sudo modprobe uinput 2>/dev/null || true
+          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
+          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
+            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
+          sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
+          vulkaninfo --summary || true
+
+      - name: Run full test suite
+        run: |
+          set -o pipefail
+          {
+            python3 ./build -j "$(nproc)" -k imway_test &&
+            python3 ./build -j "$(nproc)" -k &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests.log" \
+            --title "Tests (2/4)" \
+            --reproduce "./build -Druns=1 -Dshard=2/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-log-2
+          path: ${{ runner.temp }}/tests.log
+          if-no-files-found: ignore
+          retention-days: 7
+          compression-level: 9
+
+  tests-3:
+    name: Tests (3/4)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up build environment
+        uses: ./.github/actions/setup
+
+      - name: Prepare the runner for the test environment
+        run: |
+          # nested user namespaces for the sndio scenario's private /var/run
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          # dmabuf test buffers come from udmabuf (built into the azure
+          # kernel; modprobe is the fallback for modular kernels)
+          [ -e /dev/udmabuf ] || sudo modprobe udmabuf || true
+          [ -e /dev/udmabuf ] || {
+            echo "no udmabuf device; kernel config:"
+            grep -i udmabuf "/boot/config-$(uname -r)" || true
+            exit 1
+          }
+          sudo chmod 666 /dev/udmabuf
+          # a drm node backs dmabuf fd validation and the KMS emulator's
+          # companion identity: a render node when the kernel offers one,
+          # else the hypervisor's card
+          sudo modprobe vgem 2>/dev/null || true
+          ls -l /dev/dri
+          sudo chmod 666 /dev/dri/*
+          # the KMS-emulator scenarios open a seat: embedded seatd wants a VT
+          sudo chmod 666 /dev/tty[0-9]*
+          # the input scenario plugs virtual devices in through uinput; the
+          # nodes it creates have to be openable by the runner as well, and
+          # a missing uinput only makes that scenario skip
+          sudo modprobe uinput 2>/dev/null || true
+          [ -e /dev/uinput ] && sudo chmod 666 /dev/uinput
+          printf 'KERNEL=="event*", SUBSYSTEM=="input", MODE="0666"\n' |
+            sudo tee /etc/udev/rules.d/99-imway-input.rules >/dev/null
+          sudo udevadm control --reload-rules 2>/dev/null || true
+          # the lock screen's PAM path needs a service that exists before it
+          # can get as far as asking for the password: this one asks and
+          # then refuses, which is the whole conversation
+          printf 'auth     required  pam_unix.so nodelay\naccount  required  pam_unix.so\n' |
+            sudo tee /etc/pam.d/imway-test >/dev/null
+          # and one that says yes, so the other half of the exchange runs:
+          # the account check after a successful authentication, and a
+          # message from the stack that is neither of the two prompts
+          echo 'imway coverage stack' | sudo tee /etc/imway-test-echo >/dev/null
+          printf 'auth     optional  pam_echo.so file=/etc/imway-test-echo\nauth     required  pam_permit.so\naccount  required  pam_permit.so\n' |
+            sudo tee /etc/pam.d/imway-test-ok >/dev/null
+          vulkaninfo --summary || true
+
+      - name: Run full test suite
+        run: |
+          set -o pipefail
+          {
+            python3 ./build -j "$(nproc)" -k imway_test &&
+            python3 ./build -j "$(nproc)" -k &&
+            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test
+          } 2>&1 | tee "$RUNNER_TEMP/tests.log"
+
+      - name: Summarize failure
+        if: failure()
+        run: |
+          python3 dev/ci_report.py \
+            --log "$RUNNER_TEMP/tests.log" \
+            --title "Tests (3/4)" \
+            --reproduce "./build -Druns=1 -Dshard=3/4 test"
+
+      - name: Upload failure log
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tests-log-3
           path: ${{ runner.temp }}/tests.log
           if-no-files-found: ignore
           retention-days: 7
@@ -234,7 +473,7 @@ jobs:
 
   coverage:
     name: Coverage
-    needs: tests
+    needs: [tests-0, tests-1, tests-2, tests-3]
     permissions:
       contents: read
       id-token: write
@@ -404,7 +643,7 @@ jobs:
 
   tests-asan:
     name: Tests ASan
-    needs: [tests, build-asan]
+    needs: [tests-0, tests-1, tests-2, tests-3, build-asan]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
@@ -525,7 +764,7 @@ jobs:
 
   tests-ubsan:
     name: Tests UBSan
-    needs: [tests, build-ubsan]
+    needs: [tests-0, tests-1, tests-2, tests-3, build-ubsan]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
