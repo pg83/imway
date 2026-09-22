@@ -91,7 +91,8 @@ namespace {
         DBusMenu* connect(StringView service, StringView path) override;
         void disconnect(DBusMenu* menu) override;
         bool send(MenuImpl& menu, DBusMessage* msg, CallKind kind, u64 sequence);
-        void registrarMessage(DBusMessage* msg);
+        DBusHandlerResult registrarMessage(DBusMessage* msg);
+        void refuse(DBusMessage* msg);
         void nameOwnerChanged(DBusMessage* msg);
         void signal(DBusMessage* msg);
         Registration* registration(u32 window);
@@ -429,9 +430,7 @@ namespace {
     }
 
     DBusHandlerResult registrarMessage(DBusConnection*, DBusMessage* msg, void* data) {
-        ((MenusImpl*)data)->registrarMessage(msg);
-
-        return DBUS_HANDLER_RESULT_HANDLED;
+        return ((MenusImpl*)data)->registrarMessage(msg);
     }
 
     DBusHandlerResult busFilter(DBusConnection*, DBusMessage* msg, void* data) {
@@ -889,15 +888,28 @@ void MenusImpl::eraseRegistration(size_t index, bool emit) {
     composer->alloc->release(reg);
 }
 
-void MenusImpl::registrarMessage(DBusMessage* msg) {
+// a call whose arguments do not parse gets an error back, never silence:
+// the caller would otherwise block until its own timeout
+void MenusImpl::refuse(DBusMessage* msg) {
+    DBusMessage* error = dbus_message_new_error(msg, DBUS_ERROR_INVALID_ARGS, "unexpected arguments");
+
+    dbus_connection_send(conn, error, nullptr);
+    dbus_message_unref(error);
+}
+
+// the bus stamps every message it routes with its sender, so a registration
+// always has an owner to be dropped with
+DBusHandlerResult MenusImpl::registrarMessage(DBusMessage* msg) {
     const char* sender = dbus_message_get_sender(msg);
 
     if (dbus_message_is_method_call(msg, kRegistrar, "RegisterWindow")) {
         u32 window = 0;
         const char* path = "";
 
-        if (!sender || !dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &window, DBUS_TYPE_OBJECT_PATH, &path, DBUS_TYPE_INVALID)) {
-            return;
+        if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &window, DBUS_TYPE_OBJECT_PATH, &path, DBUS_TYPE_INVALID)) {
+            refuse(msg);
+
+            return DBUS_HANDLER_RESULT_HANDLED;
         }
 
         Registration* reg = registration(window);
@@ -916,11 +928,13 @@ void MenusImpl::registrarMessage(DBusMessage* msg) {
         u32 window = 0;
 
         if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &window, DBUS_TYPE_INVALID)) {
-            return;
+            refuse(msg);
+
+            return DBUS_HANDLER_RESULT_HANDLED;
         }
 
         for (size_t i = 0; i < registrations.length(); i++) {
-            if (registrations[i]->window == window && (!sender || text(registrations[i]->sender) == StringView(sender))) {
+            if (registrations[i]->window == window && text(registrations[i]->sender) == StringView(sender)) {
                 eraseRegistration(i, true);
 
                 break;
@@ -930,7 +944,9 @@ void MenusImpl::registrarMessage(DBusMessage* msg) {
         u32 window = 0;
 
         if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &window, DBUS_TYPE_INVALID)) {
-            return;
+            refuse(msg);
+
+            return DBUS_HANDLER_RESULT_HANDLED;
         }
 
         Registration* reg = registration(window);
@@ -941,7 +957,7 @@ void MenusImpl::registrarMessage(DBusMessage* msg) {
             dbus_connection_send(conn, error, nullptr);
             dbus_message_unref(error);
 
-            return;
+            return DBUS_HANDLER_RESULT_HANDLED;
         }
 
         DBusMessage* reply = dbus_message_new_method_return(msg);
@@ -953,7 +969,7 @@ void MenusImpl::registrarMessage(DBusMessage* msg) {
         dbus_connection_send(conn, reply, nullptr);
         dbus_message_unref(reply);
 
-        return;
+        return DBUS_HANDLER_RESULT_HANDLED;
     } else if (dbus_message_is_method_call(msg, kRegistrar, "GetMenus")) {
         DBusMessage* reply = dbus_message_new_method_return(msg);
         DBusMessageIter it, array;
@@ -979,15 +995,18 @@ void MenusImpl::registrarMessage(DBusMessage* msg) {
         dbus_connection_send(conn, reply, nullptr);
         dbus_message_unref(reply);
 
-        return;
+        return DBUS_HANDLER_RESULT_HANDLED;
     } else {
-        return;
+        // libdbus answers what nobody handles with UnknownMethod
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
     }
 
     DBusMessage* reply = dbus_message_new_method_return(msg);
 
     dbus_connection_send(conn, reply, nullptr);
     dbus_message_unref(reply);
+
+    return DBUS_HANDLER_RESULT_HANDLED;
 }
 
 void MenusImpl::nameOwnerChanged(DBusMessage* msg) {
