@@ -25,11 +25,14 @@ PY
 
 # a frame read right after the client says it committed can still be the
 # frame before: read frames until the counts settle on the committed state
-# (or give up and report the last one)
+# (or give up and report the last one). The window's rect is read again on
+# every try: it is per-frame truth and can still settle (the work area the
+# dock reserves) after the first read on a slow build.
 settle() { # <name> <predicate>
     local i
 
     for ((i = 0; i < 50; i++)); do
+        imgx=$(dump_field 'app_id=damage' imgx); imgy=$(dump_field 'app_id=damage' imgy)
         screenshot "$XDG_RUNTIME_DIR/$1.ppm"
         read -r red green blue < <(counts "$XDG_RUNTIME_DIR/$1.ppm" "$imgx" "$imgy")
         "$2" && return 0
