@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# imway-env: IMWAY_CHAOS="resource=zwp_tablet_manager_v2 resource=wp_security_context_manager_v1 resource=ext_output_image_capture_source_manager_v1 resource=ext_foreign_toplevel_image_capture_source_manager_v1 resource=ext_image_copy_capture_manager_v1 resource=zwlr_screencopy_manager_v1 resource=wp_content_type_manager_v1 resource=xdg_system_bell_v1 resource=wp_alpha_modifier_v1 resource=zxdg_output_manager_v1 resource=wp_fractional_scale_manager_v1 resource=zwp_relative_pointer_manager_v1 resource=zwp_pointer_gestures_v1 resource=zwp_pointer_constraints_v1 resource=zwp_keyboard_shortcuts_inhibit_manager_v1 resource=zwp_idle_inhibit_manager_v1 resource=ext_idle_notifier_v1 resource=xdg_toplevel_icon_manager_v1 resource=wp_presentation resource=xdg_activation_v1 resource=wp_single_pixel_buffer_manager_v1 resource=zwp_linux_dmabuf_v1 resource=wp_cursor_shape_manager_v1 resource=wl_seat resource=wp_color_manager_v1 resource=wp_color_representation_manager_v1"
+# Each global of the second half of the protocol table fails to allocate
+# its first bind: the client binding it gets no_memory.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+resource_fault_late_runs="
+bind zwp_tablet_manager_v2
+bind wp_security_context_manager_v1
+bind ext_output_image_capture_source_manager_v1
+bind ext_foreign_toplevel_image_capture_source_manager_v1
+bind ext_image_copy_capture_manager_v1
+bind zwlr_screencopy_manager_v1
+bind wp_content_type_manager_v1
+bind xdg_system_bell_v1
+bind wp_alpha_modifier_v1
+bind zxdg_output_manager_v1
+bind wp_fractional_scale_manager_v1
+bind zwp_relative_pointer_manager_v1
+bind zwp_pointer_gestures_v1
+bind zwp_pointer_constraints_v1
+bind zwp_keyboard_shortcuts_inhibit_manager_v1
+bind zwp_idle_inhibit_manager_v1
+bind ext_idle_notifier_v1
+bind xdg_toplevel_icon_manager_v1
+bind wp_presentation
+bind xdg_activation_v1
+bind wp_single_pixel_buffer_manager_v1
+bind zwp_linux_dmabuf_v1
+bind wp_cursor_shape_manager_v1
+bind wl_seat
+bind wp_color_manager_v1
+bind wp_color_representation_manager_v1
+"
+. "$(dirname "$0")/resource_fault_late_case.sh"

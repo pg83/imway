@@ -7247,7 +7247,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_security_context_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &wp_security_context_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7272,7 +7272,7 @@ namespace {
     };
 
     void securityManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_security_context_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_security_context_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -7295,7 +7295,7 @@ namespace {
     }
 
     wl_resource* makeCaptureSource(WaylandImpl* srv, wl_client* client, u32 id, u64 toplevelId) {
-        wl_resource* r = wl_resource_create(client, &ext_image_capture_source_v1_interface, 1, id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_image_capture_source_v1_interface, 1, id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7322,7 +7322,7 @@ namespace {
     };
 
     void captureSourceManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &ext_output_image_capture_source_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &ext_output_image_capture_source_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -7349,7 +7349,7 @@ namespace {
     };
 
     void tlCaptureSourceManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -7425,7 +7425,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_drm_lease_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &wp_drm_lease_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7473,7 +7473,7 @@ namespace {
 
     void leaseDeviceCreateRequest(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &wp_drm_lease_request_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &wp_drm_lease_request_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7499,7 +7499,7 @@ namespace {
 
     void leaseDeviceBind(wl_client* client, void* data, u32 version, u32 id) {
         auto* srv = (WaylandImpl*)data;
-        wl_resource* res = wl_resource_create(client, &wp_drm_lease_device_v1_interface, version, id);
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_drm_lease_device_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -7513,7 +7513,7 @@ namespace {
         wp_drm_lease_device_v1_send_drm_fd(res, srv->drmFd);
 
         srv->composer->device->leaseConnectors([&](const LeaseConnector& lc) {
-            wl_resource* cr = wl_resource_create(client, &wp_drm_lease_connector_v1_interface, version, 0);
+            wl_resource* cr = srv->composer->chaos->resource(wl_resource_create(client, &wp_drm_lease_connector_v1_interface, version, 0));
 
             if (!cr) {
                 return;
@@ -7686,7 +7686,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_frame_v1_interface, 1, id);
+        wl_resource* r = cs->srv->composer->chaos->resource(wl_resource_create(client, &ext_image_copy_capture_frame_v1_interface, 1, id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7710,7 +7710,7 @@ namespace {
     };
 
     CaptureSession* makeCaptureSession(WaylandImpl* srv, wl_client* client, u32 id, bool cursor, u64 toplevelId) {
-        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_session_v1_interface, 1, id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_image_copy_capture_session_v1_interface, 1, id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7773,7 +7773,7 @@ namespace {
 
     void captureManagerCreateCursorSession(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes, wl_resource*) {
         auto* srv = ((CaptureSourceBox*)wl_resource_get_user_data(sourceRes))->srv;
-        wl_resource* r = wl_resource_create(client, &ext_image_copy_capture_cursor_session_v1_interface, 1, id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_image_copy_capture_cursor_session_v1_interface, 1, id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -7798,7 +7798,7 @@ namespace {
     };
 
     void captureManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &ext_image_copy_capture_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &ext_image_copy_capture_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8069,7 +8069,7 @@ namespace {
     };
 
     void wlrCopyCapture(WaylandImpl* srv, wl_client* client, wl_resource* managerRes, u32 id, int x, int y, int w, int h) {
-        wl_resource* r = wl_resource_create(client, &zwlr_screencopy_frame_v1_interface, wl_resource_get_version(managerRes), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zwlr_screencopy_frame_v1_interface, wl_resource_get_version(managerRes), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8124,7 +8124,7 @@ namespace {
     };
 
     void wlrCopyManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwlr_screencopy_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &zwlr_screencopy_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8251,7 +8251,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_content_type_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_content_type_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8269,7 +8269,7 @@ namespace {
     };
 
     void contentTypeManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_content_type_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_content_type_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8307,7 +8307,7 @@ namespace {
     };
 
     void systemBellBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_system_bell_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &xdg_system_bell_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8355,7 +8355,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_alpha_modifier_surface_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_alpha_modifier_surface_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8373,7 +8373,7 @@ namespace {
     };
 
     void alphaModManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_alpha_modifier_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_alpha_modifier_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8406,7 +8406,7 @@ namespace {
     void xdgOutputManagerGetXdgOutput(wl_client* client, wl_resource* res, u32 id, wl_resource* outputRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         u32 version = wl_resource_get_version(res);
-        wl_resource* xres = wl_resource_create(client, &zxdg_output_v1_interface, version, id);
+        wl_resource* xres = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_output_v1_interface, version, id));
 
         if (!xres) {
             wl_client_post_no_memory(client);
@@ -8442,7 +8442,7 @@ namespace {
     };
 
     void xdgOutputManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zxdg_output_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &zxdg_output_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8475,7 +8475,7 @@ namespace {
             return;
         }
 
-        wl_resource* fres = wl_resource_create(client, &wp_fractional_scale_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* fres = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_fractional_scale_v1_interface, wl_resource_get_version(res), id));
 
         if (!fres) {
             wl_client_post_no_memory(client);
@@ -8499,7 +8499,7 @@ namespace {
     };
 
     void fracManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_fractional_scale_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_fractional_scale_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8531,7 +8531,7 @@ namespace {
 
     void relPointerManagerGetRelativePointer(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
         auto* seat = (SeatState*)wl_resource_get_user_data(pointerRes);
-        wl_resource* r = wl_resource_create(client, &zwp_relative_pointer_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = seat->srv->composer->chaos->resource(wl_resource_create(client, &zwp_relative_pointer_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8549,7 +8549,7 @@ namespace {
     };
 
     void relPointerManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_relative_pointer_manager_v1_interface, version, id);
+        wl_resource* res = ((SeatState*)data)->srv->composer->chaos->resource(wl_resource_create(client, &zwp_relative_pointer_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8587,7 +8587,7 @@ namespace {
     template <typename Iface>
     void gestureCreate(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes, const wl_interface* iface, const Iface* impl, Vector<wl_resource*> SeatState::* list, void (*destroyed)(wl_resource*)) {
         auto* seat = (SeatState*)wl_resource_get_user_data(pointerRes);
-        wl_resource* r = wl_resource_create(client, iface, wl_resource_get_version(res), id);
+        wl_resource* r = seat->srv->composer->chaos->resource(wl_resource_create(client, iface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8619,7 +8619,7 @@ namespace {
     };
 
     void pointerGesturesBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_pointer_gestures_v1_interface, version, id);
+        wl_resource* res = ((SeatState*)data)->srv->composer->chaos->resource(wl_resource_create(client, &zwp_pointer_gestures_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8701,7 +8701,7 @@ namespace {
         }
 
         const wl_interface* iface = isLock ? &zwp_locked_pointer_v1_interface : &zwp_confined_pointer_v1_interface;
-        wl_resource* r = wl_resource_create(client, iface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, iface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8751,7 +8751,7 @@ namespace {
     };
 
     void pointerConstraintsBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_pointer_constraints_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &zwp_pointer_constraints_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8820,7 +8820,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &zwp_keyboard_shortcuts_inhibitor_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &zwp_keyboard_shortcuts_inhibitor_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8840,7 +8840,7 @@ namespace {
     };
 
     void kbInhibitManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8880,7 +8880,7 @@ namespace {
 
     void idleInhibitManagerCreateInhibitor(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_idle_inhibitor_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zwp_idle_inhibitor_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8903,7 +8903,7 @@ namespace {
     };
 
     void idleInhibitManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_idle_inhibit_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &zwp_idle_inhibit_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -8944,7 +8944,7 @@ namespace {
 
     void idleMakeNotification(wl_client* client, wl_resource* res, u32 id, u32 timeoutMs, bool ignoreInhibitors) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &ext_idle_notification_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_idle_notification_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -8983,7 +8983,7 @@ namespace {
     };
 
     void idleNotifierBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &ext_idle_notifier_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &ext_idle_notifier_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9170,7 +9170,7 @@ namespace {
 
     void spbCreateBuffer(wl_client* client, wl_resource* res, u32 id, u32 r, u32 g, u32 b, u32 a) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* buf = wl_resource_create(client, &wl_buffer_interface, 1, id);
+        wl_resource* buf = srv->composer->chaos->resource(wl_resource_create(client, &wl_buffer_interface, 1, id));
 
         if (!buf) {
             wl_client_post_no_memory(client);
@@ -9340,7 +9340,7 @@ namespace {
 
     void iconManagerCreateIcon(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &xdg_toplevel_icon_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_icon_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -9399,7 +9399,7 @@ namespace {
     };
 
     void iconManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_toplevel_icon_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_icon_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9412,8 +9412,8 @@ namespace {
         xdg_toplevel_icon_manager_v1_send_done(res);
     }
 
-    void presentationFeedback(wl_client* client, wl_resource*, wl_resource* surfRes, u32 id) {
-        wl_resource* fb = wl_resource_create(client, &wp_presentation_feedback_interface, 1, id);
+    void presentationFeedback(wl_client* client, wl_resource* res, wl_resource* surfRes, u32 id) {
+        wl_resource* fb = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_presentation_feedback_interface, 1, id));
 
         if (!fb) {
             wl_client_post_no_memory(client);
@@ -9433,7 +9433,7 @@ namespace {
     };
 
     void presentationBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_presentation_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_presentation_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9541,7 +9541,7 @@ namespace {
     }
 
     void activationGetToken(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* t = wl_resource_create(client, &xdg_activation_token_v1_interface, 1, id);
+        wl_resource* t = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &xdg_activation_token_v1_interface, 1, id));
 
         if (!t) {
             wl_client_post_no_memory(client);
@@ -9591,7 +9591,7 @@ namespace {
     };
 
     void activationBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_activation_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &xdg_activation_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9603,7 +9603,7 @@ namespace {
     }
 
     void spbManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_single_pixel_buffer_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_single_pixel_buffer_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9845,7 +9845,7 @@ namespace {
             return nullptr;
         }
 
-        wl_resource* bres = wl_resource_create(client, &wl_buffer_interface, 1, bufferId);
+        wl_resource* bres = p->srv->composer->chaos->resource(wl_resource_create(client, &wl_buffer_interface, 1, bufferId));
 
         if (!bres) {
             wl_client_post_no_memory(client);
@@ -9887,7 +9887,7 @@ namespace {
 
     void dmabufCreateParams(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* pres = wl_resource_create(client, &zwp_linux_buffer_params_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* pres = srv->composer->chaos->resource(wl_resource_create(client, &zwp_linux_buffer_params_v1_interface, wl_resource_get_version(res), id));
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -9913,7 +9913,7 @@ namespace {
     };
 
     void sendFeedback(WaylandImpl* srv, wl_client* client, wl_resource* parent, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_linux_dmabuf_feedback_v1_interface, wl_resource_get_version(parent), id);
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_linux_dmabuf_feedback_v1_interface, wl_resource_get_version(parent), id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -9982,7 +9982,7 @@ namespace {
 
     void dmabufBind(wl_client* client, void* data, u32 version, u32 id) {
         auto* srv = (WaylandImpl*)data;
-        wl_resource* res = wl_resource_create(client, &zwp_linux_dmabuf_v1_interface, version, id);
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_linux_dmabuf_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -10054,7 +10054,7 @@ namespace {
     }
 
     void cursorShapeGetPointer(wl_client* client, wl_resource* res, u32 id, wl_resource* pointerRes) {
-        wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* d = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id));
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -10069,11 +10069,15 @@ namespace {
     }
 
     void cursorShapeGetTabletTool(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
-        wl_resource* d = wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* d = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_cursor_shape_device_v1_interface, wl_resource_get_version(res), id));
 
-        if (d) {
-            wl_resource_set_implementation(d, &cursorShapeDeviceImpl, nullptr, cursorShapeDeviceDestroyed);
+        if (!d) {
+            wl_client_post_no_memory(client);
+
+            return;
         }
+
+        wl_resource_set_implementation(d, &cursorShapeDeviceImpl, nullptr, cursorShapeDeviceDestroyed);
     }
 
     const struct wp_cursor_shape_manager_v1_interface cursorShapeManagerImpl = {
@@ -10083,7 +10087,7 @@ namespace {
     };
 
     void cursorShapeManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_cursor_shape_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_cursor_shape_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -10153,7 +10157,7 @@ namespace {
 
     void seatGetPointer(wl_client* client, wl_resource* res, u32 id) {
         SeatState* seat = seatOf(res);
-        wl_resource* p = wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(res), id);
+        wl_resource* p = seat->srv->composer->chaos->resource(wl_resource_create(client, &wl_pointer_interface, wl_resource_get_version(res), id));
 
         if (!p) {
             wl_client_post_no_memory(client);
@@ -10183,7 +10187,7 @@ namespace {
 
     void seatGetKeyboard(wl_client* client, wl_resource* res, u32 id) {
         SeatState* seat = seatOf(res);
-        wl_resource* k = wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(res), id);
+        wl_resource* k = seat->srv->composer->chaos->resource(wl_resource_create(client, &wl_keyboard_interface, wl_resource_get_version(res), id));
 
         if (!k) {
             wl_client_post_no_memory(client);
@@ -10221,11 +10225,15 @@ namespace {
     }
 
     void seatGetTouch(wl_client* client, wl_resource* res, u32 id) {
-        wl_resource* t = wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(res), id);
+        wl_resource* t = seatOf(res)->srv->composer->chaos->resource(wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(res), id));
 
-        if (t) {
-            wl_resource_set_implementation(t, &touchImpl, nullptr, nullptr);
+        if (!t) {
+            wl_client_post_no_memory(client);
+
+            return;
         }
+
+        wl_resource_set_implementation(t, &touchImpl, nullptr, nullptr);
     }
 
     const struct wl_seat_interface seatImpl = {
@@ -10236,7 +10244,7 @@ namespace {
     };
 
     void seatBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wl_seat_interface, version, id);
+        wl_resource* res = ((SeatState*)data)->srv->composer->chaos->resource(wl_resource_create(client, &wl_seat_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -12508,7 +12516,7 @@ void cmImageDescGetInfo(wl_client* client, wl_resource* res, u32 id) {
         return;
     }
 
-    wl_resource* info = wl_resource_create(client, &wp_image_description_info_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* info = d->srv->composer->chaos->resource(wl_resource_create(client, &wp_image_description_info_v1_interface, wl_resource_get_version(res), id));
 
     if (!info) {
         wl_client_post_no_memory(client);
@@ -12556,7 +12564,7 @@ void cmImageDescResourceDestroyed(wl_resource* res) {
 
 // build an image description resource carrying `d`, sent ready
 wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, const CImgDesc& d) {
-    wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
+    wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_image_description_v1_interface, version, id));
 
     if (!res) {
         wl_client_post_no_memory(client);
@@ -12585,7 +12593,7 @@ wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u
 }
 
 wl_resource* cmMakeFailedImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u32 id, u32 cause, const char* message) {
-    wl_resource* res = wl_resource_create(client, &wp_image_description_v1_interface, version, id);
+    wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_image_description_v1_interface, version, id));
 
     if (!res) {
         wl_client_post_no_memory(client);
@@ -13039,7 +13047,7 @@ void cmManagerDestroy(wl_client*, wl_resource* res) {
 }
 
 void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
-    wl_resource* out = wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* out = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_color_management_output_v1_interface, wl_resource_get_version(res), id));
 
     if (!out) {
         wl_client_post_no_memory(client);
@@ -13065,7 +13073,7 @@ void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resourc
         return;
     }
 
-    wl_resource* cs = wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* cs = surface->srv->composer->chaos->resource(wl_resource_create(client, &wp_color_management_surface_v1_interface, wl_resource_get_version(res), id));
 
     if (!cs) {
         wl_client_post_no_memory(client);
@@ -13078,7 +13086,7 @@ void cmManagerGetSurface(wl_client* client, wl_resource* res, u32 id, wl_resourc
 }
 
 void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
-    wl_resource* fb = wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* fb = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_color_management_surface_feedback_v1_interface, wl_resource_get_version(res), id));
 
     if (!fb) {
         wl_client_post_no_memory(client);
@@ -13098,7 +13106,7 @@ void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl
 
 void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
     auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-    wl_resource* pr = wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* pr = srv->composer->chaos->resource(wl_resource_create(client, &wp_image_description_creator_params_v1_interface, wl_resource_get_version(res), id));
 
     if (!pr) {
         wl_client_post_no_memory(client);
@@ -13206,7 +13214,7 @@ void cmIccResourceDestroyed(wl_resource* res) {
 }
 
 void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
-    wl_resource* creator = wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, wl_resource_get_version(res), id);
+    wl_resource* creator = ((WaylandImpl*)wl_resource_get_user_data(res))->composer->chaos->resource(wl_resource_create(client, &wp_image_description_creator_icc_v1_interface, wl_resource_get_version(res), id));
 
     if (!creator) {
         wl_client_post_no_memory(client);
@@ -13259,7 +13267,7 @@ const struct wp_color_manager_v1_interface cmManagerImpl = {
 };
 
 void colorManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-    wl_resource* res = wl_resource_create(client, &wp_color_manager_v1_interface, version, id);
+    wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_color_manager_v1_interface, version, id));
 
     if (!res) {
         wl_client_post_no_memory(client);
@@ -13389,7 +13397,7 @@ void representationManagerGetSurface(wl_client* client, wl_resource* res, u32 id
         wl_resource_post_error(res, WP_COLOR_REPRESENTATION_MANAGER_V1_ERROR_SURFACE_EXISTS, "surface already has a color representation object");
         return;
     }
-    wl_resource* object = wl_resource_create(client, &wp_color_representation_surface_v1_interface, 1, id);
+    wl_resource* object = surface->srv->composer->chaos->resource(wl_resource_create(client, &wp_color_representation_surface_v1_interface, 1, id));
     if (!object) {
         wl_client_post_no_memory(client);
         return;
@@ -13404,7 +13412,7 @@ const struct wp_color_representation_manager_v1_interface representationManagerI
 };
 
 void representationManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-    wl_resource* res = wl_resource_create(client, &wp_color_representation_manager_v1_interface, version, id);
+    wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_color_representation_manager_v1_interface, version, id));
     if (!res) {
         wl_client_post_no_memory(client);
         return;
