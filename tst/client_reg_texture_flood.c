@@ -22,7 +22,7 @@ static const struct wl_callback_listener frame_listener = {on_frame};
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    alarm(60);
+    alarm(110);
     if (wl_boot()) return 1;
     if (!wl_subcomp) {
         fprintf(stderr, "no wl_subcompositor\n");

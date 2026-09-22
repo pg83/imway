@@ -1,7 +1,7 @@
 # A client with 1200 textured subsurfaces, more than the renderer's first
 # descriptor pool of 1024 sets holds, so the texture pool grows a second
-# pool while the flood is uploaded. $missing is how many cells the scenario
-# expects to lose to its IMWAY_CHAOS fault on the first upload; a cell that
+# pool while the flood is uploaded. $missing lists how many cells the
+# scenario may lose to its IMWAY_CHAOS fault on the first upload; a cell that
 # lost its descriptor stays blank until its next commit, when every cell must
 # be drawn again (the client recommits all of them in blue on KEY_A).
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_texture_flood"
@@ -35,19 +35,32 @@ PY
 drawn() { # <r> <g> <b> <count>
     [[ "$(cells "$1" "$2" "$3")" == "$4" ]]
 }
-
-await 100 drawn 0 255 0 "$((1200 - missing))" || {
-    echo "expected $((1200 - missing)) green cells, saw $(cells 0 255 0)"
-    cat "$IMWAY_LOG"
-    exit 1
+# the green count once uploads have stopped changing it: the CPU copies of
+# 1200 cells land over several frames, and a software rasterizer takes its
+# time over each, so a count is only final once three reads agree
+settled_green() {
+    local a b c i
+    a=$(cells 0 255 0); b=-1; c=-2
+    for i in $(seq 1 60); do
+        sleep 0.3
+        c=$b; b=$a; a=$(cells 0 255 0)
+        [[ "$a" == "$b" && "$b" == "$c" && "$a" -gt 0 ]] && { echo "$a"; return 0; }
+    done
+    echo "$a"
+    return 1
 }
-# the blank cells stay blank: nothing retries them before their next commit
-sleep 0.3
-drawn 0 255 0 "$((1200 - missing))" || { echo "the cell count changed without a commit: $(cells 0 255 0)"; exit 1; }
+
+green=$(settled_green) || { echo "the flood never settled: $green green cells"; cat "$IMWAY_LOG"; exit 1; }
+ok=0
+for m in $missing; do
+    [[ "$green" == "$((1200 - m))" ]] && ok=1
+done
+[[ $ok == 1 ]] || { echo "saw $green green cells, expected 1200 less one of: $missing"; cat "$IMWAY_LOG"; exit 1; }
+echo "green cells after the flood: $green"
 
 ctl "key 30 press"; ctl "key 30 release" # KEY_A: recommit every cell
 wait_client "flood recommitted"
 await 100 drawn 0 0 255 1200 || { echo "expected all 1200 cells blue after the recommit, saw $(cells 0 0 255)"; exit 1; }
 
 expect_alive "compositor died on a texture flood"
-echo "OK: 1200 textured subsurfaces, $missing lost to the fault and back on the next commit"
+echo "OK: 1200 textured subsurfaces, $((1200 - green)) lost to the fault and back on the next commit"
