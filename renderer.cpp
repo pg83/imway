@@ -438,7 +438,11 @@ namespace {
         Weak<Surface> hwSurf;
         bool hwSurfStale = false;
         Vector<u32> hwShapeCache[(int)CursorKind::hidden];
+        // the cursor surface's pixels at the plane's pitch, taken when its
+        // buffer is uploaded: the wl_shm buffer goes back to the client
+        // with that frame, the texture is all that stays
         Vector<u32> hwScratch;
+        Weak<Surface> hwScratchFrom;
 
         // one-off offscreen rendering of cursor shapes
         VkImage curImg = VK_NULL_HANDLE;
@@ -495,6 +499,7 @@ namespace {
         void drawSurfaceTreeOverlay(Surface& s, float x, float y) override;
         void drawSurfaceRect(Surface& s, void* drawList, float x0, float y0, float x1, float y1) override;
         bool cursorPlane(int kind, Surface* cursorSurface, double x, double y, int hotX, int hotY) override;
+        void copyCursorPixels(Surface& cs);
         void cursorPlaneMove(double x, double y) override;
         void inspectorInfo(InspectorInfo& info) override;
         ShmCache& shmCache(ShmContent& content);
@@ -3360,7 +3365,7 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         // the color pipeline (managed description, non-default alpha)
         bool plainBuffer = cs->bufferScale == 1 && cs->bufferTransform == 0 && !cs->vp.hasSrc && !cs->vp.hasDst;
         bool plainColor = !cs->color.managed() && cs->representation.alphaMode == 0 && !cs->representation.coefficients;
-        bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && cs->width > 0 && cs->height > 0 && cs->width <= hwCapW && cs->height <= hwCapH && cs->pixels.length() >= (size_t)cs->width * cs->height * 4;
+        bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && hwScratchFrom.get() == cs;
 
         if (!hwOk) {
             if (hwCursor) {
@@ -3372,12 +3377,6 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         }
 
         if (hwSurf.get() != cs || hwSurfStale) {
-            hwScratch.zero((size_t)hwCapW * hwCapH);
-
-            for (int sy = 0; sy < cs->height; sy++) {
-                memcpy(hwScratch.mutData() + (size_t)sy * hwCapW, (const u32*)cs->pixels.data() + (size_t)sy * cs->width, (size_t)cs->width * 4);
-            }
-
             output->setCursorImage(hwScratch.data());
             hwSurf.bind(cs->weak);
             hwKind = -3;
@@ -3432,6 +3431,61 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
     output->setCursorPos((int)x - hwHotX, (int)y - hwHotY, true);
 
     return true;
+}
+
+// the committed cursor surface's pixels into hwScratch at the plane's pitch
+// while they are still readable: a single-pixel buffer's own copy, or the
+// client's wl_shm pool under the pool's SIGBUS guard (a pool that shrank
+// under us faults its client). Anything else, or anything larger than the
+// plane, leaves the cursor to composition. XRGB gets its opaque alpha here,
+// the plane blends every byte it is given
+void RendererImpl::copyCursorPixels(Surface& cs) {
+    hwScratchFrom.reset();
+
+    if (cs.width <= 0 || cs.height <= 0 || cs.width > hwCapW || cs.height > hwCapH) {
+        return;
+    }
+
+    hwScratch.zero((size_t)hwCapW * hwCapH);
+
+    if (!cs.shm) {
+        if (cs.pixels.length() < (size_t)cs.width * cs.height * 4) {
+            return;
+        }
+
+        for (int sy = 0; sy < cs.height; sy++) {
+            memcpy(hwScratch.mutData() + (size_t)sy * hwCapW, (const u32*)cs.pixels.data() + (size_t)sy * cs.width, (size_t)cs.width * 4);
+        }
+
+        hwScratchFrom.bind(cs.weak);
+
+        return;
+    }
+
+    ShmContent& content = *cs.shm->mutPtr();
+
+    if (content.width != cs.width || content.height != cs.height || !content.beginAccess(&content)) {
+        return;
+    }
+
+    u32 alpha = content.format == WL_SHM_FORMAT_XRGB8888 ? 0xff000000u : 0;
+
+    for (int sy = 0; sy < cs.height; sy++) {
+        const u32* row = (const u32*)(content.data() + (size_t)sy * content.stride);
+        u32* dst = hwScratch.mutData() + (size_t)sy * hwCapW;
+
+        for (int sx = 0; sx < cs.width; sx++) {
+            dst[sx] = row[sx] | alpha;
+        }
+    }
+
+    if (!content.endAccess(&content)) {
+        content.accessFailed(&content);
+
+        return;
+    }
+
+    hwScratchFrom.bind(cs.weak);
 }
 
 // input-rate plane moves: the cursor tracks the pointer between frames
@@ -4471,6 +4525,7 @@ void RendererImpl::frameNow() {
             }
 
             if (&s == scene->cursorSurface) {
+                copyCursorPixels(s);
                 hwSurfStale = true;
             }
 
