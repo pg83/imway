@@ -67,6 +67,22 @@ static void park_pump(int wait_ms) {
     }
 }
 
+/* one more commit of the 1x1 dmabuf behind a fresh acquire point nobody
+ * signals yet */
+static void park_hostile_commit(struct wp_linux_drm_syncobj_surface_v1* sync_surface,
+                                struct wp_linux_drm_syncobj_timeline_v1* acquire,
+                                struct wp_linux_drm_syncobj_timeline_v1* release,
+                                struct wl_toplevel_ctx* hostile, struct wl_buffer* buffer, uint64_t* point) {
+    (*point)++;
+    wp_linux_drm_syncobj_surface_v1_set_acquire_point(
+        sync_surface, acquire, (uint32_t)(*point >> 32), (uint32_t)*point);
+    wp_linux_drm_syncobj_surface_v1_set_release_point(
+        sync_surface, release, (uint32_t)(*point >> 32), (uint32_t)*point);
+    wl_surface_attach(hostile->surface, buffer, 0, 0);
+    wl_surface_damage(hostile->surface, 0, 0, 1, 1);
+    wl_surface_commit(hostile->surface);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
@@ -79,34 +95,55 @@ int main(void) {
     if (!buffer) buffer = park_dumb_dmabuf();
     if (!acquire || !release || !buffer) return 77;
 
+    /* the hostile window starts flooding before the victim even exists and
+     * before the compositor has drawn a client frame: a parked commit must
+     * park its own surface only, whenever it lands */
     struct wl_toplevel_ctx victim, hostile;
-    wl_make_toplevel(&victim, "syncobj-park-victim", 200, 150, 0xff2040c0);
     wl_make_toplevel(&hostile, "syncobj-park-hostile", 200, 150, 0xffc04020);
 
     struct wp_linux_drm_syncobj_surface_v1* sync_surface =
         wp_linux_drm_syncobj_manager_v1_get_surface(sync_manager, hostile.surface);
+    uint64_t point = 0;
 
-    /* measure the victim's frame-callback rate while the hostile surface
-     * commits a fresh never-signaled acquire point every ~30 ms */
+    park_hostile_commit(sync_surface, acquire, release, &hostile, buffer, &point);
+    wl_make_toplevel(&victim, "syncobj-park-victim", 200, 150, 0xff2040c0);
+    park_hostile_commit(sync_surface, acquire, release, &hostile, buffer, &point);
+
+    /* the victim's first frame: a software renderer in a small VM can take
+     * seconds to build its first textured frame, which says nothing about
+     * parking; a loop parked for good never gets here at all */
     struct wl_callback* cb = wl_surface_frame(victim.surface);
     wl_callback_add_listener(cb, &park_frame_listener, NULL);
     wl_surface_commit(victim.surface);
 
-    uint64_t start = park_now_ms(), last_hostile = 0;
-    uint64_t point = 0;
+    uint64_t start = park_now_ms(), last_hostile = park_now_ms();
+
+    while (!frames_seen && park_now_ms() - start < 15000) {
+        if (park_now_ms() - last_hostile >= 30) {
+            park_hostile_commit(sync_surface, acquire, release, &hostile, buffer, &point);
+            last_hostile = park_now_ms();
+        }
+        park_pump(20);
+    }
+    if (!frames_seen) {
+        fprintf(stderr, "compositor frame loop never drew the victim behind parked acquire points\n");
+        return 1;
+    }
+
+    /* measure the victim's frame-callback rate while the hostile surface
+     * commits a fresh never-signaled acquire point every ~30 ms */
+    frames_seen = 0;
+    cb = wl_surface_frame(victim.surface);
+    wl_callback_add_listener(cb, &park_frame_listener, NULL);
+    wl_surface_commit(victim.surface);
+
+    start = park_now_ms();
     int last_seen = 0;
 
     while (park_now_ms() - start < 1200) {
         uint64_t now = park_now_ms();
         if (now - last_hostile >= 30) {
-            point++;
-            wp_linux_drm_syncobj_surface_v1_set_acquire_point(
-                sync_surface, acquire, (uint32_t)(point >> 32), (uint32_t)point);
-            wp_linux_drm_syncobj_surface_v1_set_release_point(
-                sync_surface, release, (uint32_t)(point >> 32), (uint32_t)point);
-            wl_surface_attach(hostile.surface, buffer, 0, 0);
-            wl_surface_damage(hostile.surface, 0, 0, 1, 1);
-            wl_surface_commit(hostile.surface);
+            park_hostile_commit(sync_surface, acquire, release, &hostile, buffer, &point);
             last_hostile = now;
         }
         if (frames_seen != last_seen) {
