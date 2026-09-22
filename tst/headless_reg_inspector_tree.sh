@@ -19,22 +19,26 @@ wy=$(dump_field '^imgui name=inspector ' y)
 ww=$(dump_field '^imgui name=inspector ' w)
 wh=$(dump_field '^imgui name=inspector ' h)
 
-screenshot "$XDG_RUNTIME_DIR/closed.ppm"
-
-# The toplevel row is the first thing under the frame graph and the three
-# lines of counters, and exactly where depends on the font. Walk down the
-# left edge until a click opens something, which only a tree node does.
-expanded() {
+# The toplevel row is the first thing under the frame graph, the three lines
+# of counters and the separator, and exactly where depends on the font. Walk
+# down the left edge until a click opens something under the clicked line:
+# only the tree node puts anything there. The counters above change on
+# their own (the focus line with every click), so they are left out.
+expanded() { # <y>
     screenshot "$XDG_RUNTIME_DIR/open.ppm" &&
         [[ "$(region_diff "$XDG_RUNTIME_DIR/closed.ppm" "$XDG_RUNTIME_DIR/open.ppm" \
-            $((wx + 4)) $((wy + 100)) $((wx + ww - 4)) $((wy + wh - 4)))" -gt 200 ]]
+            $((wx + 4)) $(($1 + 12)) $((wx + ww - 4)) $(($1 + 72)))" -gt 200 ]]
 }
 
 opened=0
 
-for y in $(seq $((wy + 110)) 6 $((wy + 200))); do
+for y in $(seq $((wy + 146)) 4 $((wy + 190))); do
+    ctl "motion $((wx + ww / 2)) $((wy + wh - 20))"
+    screenshot "$XDG_RUNTIME_DIR/_settle.ppm"
+    screenshot "$XDG_RUNTIME_DIR/closed.ppm"
     click_at $((wx + 24)) "$y"
-    expanded && { opened=1; break; }
+    ctl "motion $((wx + ww / 2)) $((wy + wh - 20))"
+    await 10 expanded "$y" && { opened=1; break; }
 done
 
 (( opened )) || {
