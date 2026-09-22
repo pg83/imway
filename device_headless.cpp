@@ -414,11 +414,20 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
         // them (vgem on a virtual test host) still authenticates client
         // dmabuf fds through the PRIME import probe, so keep one as fallback
         int fallback = -1;
+        StringView dri = "/dev/dri"_sv;
+
+#ifdef IMWAY_FOR_TESTS
+        // a staged node directory: a scenario decides which nodes the host
+        // has, since the runner's own set is whatever the machine offers
+        if (const char* staged = getenv("IMWAY_DRI_DIR"); staged && *staged) {
+            dri = StringView(staged);
+        }
+#endif
 
         for (int i = 128; i < 136 && syncFd < 0; i++) {
             auto& pth = sb();
 
-            pth << "/dev/dri/renderD"_sv << i;
+            pth << dri << "/renderD"_sv << i;
 
             int fd = open(pth.cStr(), O_RDWR | O_CLOEXEC);
 
@@ -442,7 +451,7 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
         for (int i = 0; i < 8 && syncFd < 0 && fallback < 0; i++) {
             auto& pth = sb();
 
-            pth << "/dev/dri/card"_sv << i;
+            pth << dri << "/card"_sv << i;
 
             fallback = open(pth.cStr(), O_RDWR | O_CLOEXEC);
         }
