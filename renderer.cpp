@@ -35,6 +35,7 @@
 #include "input_sink.h"
 #include "lock_screen.h"
 #include "offload_job.h"
+#include "chaos_monkey.h"
 #include "frame_capture.h"
 #include "render_filter.h"
 #include "window_shadow.h"
@@ -2964,7 +2965,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
         ici.flags |= VK_IMAGE_CREATE_DISJOINT_BIT;
     }
 
-    if (vkCreateImage(device, &ici, nullptr, &tex->image) != VK_SUCCESS) {
+    if (comp->chaos->clientImport(vkCreateImage(device, &ici, nullptr, &tex->image)) != VK_SUCCESS) {
         *(comp->log) << "imway: dmabuf vkCreateImage failed"_sv << endL;
         return nullptr;
     }
@@ -2972,7 +2973,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
     auto pickType = [&](u32 bits, int fd) -> u32 {
         VkMemoryFdPropertiesKHR fdProps{VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR};
 
-        if (getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps) != VK_SUCCESS) {
+        if (comp->chaos->clientImport(getMemoryFdProps(device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT, fd, &fdProps)) != VK_SUCCESS) {
             return UINT32_MAX;
         }
 
@@ -3020,7 +3021,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
             close(fd);
         }
 
-        bound = allocated && vkBindImageMemory(device, tex->image, tex->memory, 0) == VK_SUCCESS;
+        bound = allocated && comp->chaos->clientImport(vkBindImageMemory(device, tex->image, tex->memory, 0)) == VK_SUCCESS;
     } else {
         constexpr VkImageAspectFlagBits kPlaneAspects[kDmabufMaxPlanes] = {VK_IMAGE_ASPECT_MEMORY_PLANE_0_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_2_BIT_EXT, VK_IMAGE_ASPECT_MEMORY_PLANE_3_BIT_EXT};
         VkBindImageMemoryInfo binds[kDmabufMaxPlanes] = {};
@@ -3110,7 +3111,7 @@ SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
         vci.components.a = VK_COMPONENT_SWIZZLE_ONE;
     }
 
-    if (vkCreateImageView(device, &vci, nullptr, &tex->view) != VK_SUCCESS) {
+    if (comp->chaos->clientImport(vkCreateImageView(device, &vci, nullptr, &tex->view)) != VK_SUCCESS) {
         *(comp->log) << "imway: dmabuf image view failed"_sv << endL;
         destroyTexture(tex);
 
@@ -4457,7 +4458,12 @@ void RendererImpl::frameNow() {
             bool ready = true;
 
             if (s.dmabuf) {
-                ready = importDmabuf(s);
+                // an import the device refuses is refused again next frame:
+                // fault the owner and render on without this buffer rather
+                // than hold every frame for a texture that never comes
+                if (!importDmabuf(s)) {
+                    faultSurfaceOwner(s);
+                }
             } else if (s.shm) {
                 ready = uploadShm(s);
             } else {

@@ -37,6 +37,8 @@ using namespace stl;
 //                     one after fails
 //   lease=N           wayland drm-lease: the next N lease creations fail
 //                     with EBUSY, as when another lessee holds the objects
+//   client-import=K   renderer: K client-buffer import calls pass, every
+//                     later one fails: the device refuses the client's buffers
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -50,6 +52,8 @@ namespace {
         // KMS backend
         int scanoutSkip = -1;
         int leaseFaults = 0;
+        // renderer
+        int clientImportSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -66,6 +70,8 @@ namespace {
         // KMS backend
         VkResult scanout(VkResult result) override;
         int leaseFd(int fd) override;
+        // renderer
+        VkResult clientImport(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -119,6 +125,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         scanoutSkip = (int)arg.stou();
     } else if (fault == "lease"_sv) {
         leaseFaults = (int)arg.stou();
+    } else if (fault == "client-import"_sv) {
+        clientImportSkip = (int)arg.stou();
     }
 }
 
@@ -229,6 +237,21 @@ int TestChaosMonkey::leaseFd(int fd) {
     return -EBUSY;
 }
 
+// renderer
+VkResult TestChaosMonkey::clientImport(VkResult result) {
+    if (clientImportSkip < 0) {
+        return result;
+    }
+
+    if (clientImportSkip > 0) {
+        clientImportSkip--;
+
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -248,6 +271,8 @@ namespace {
         // KMS backend
         VkResult scanout(VkResult result) override;
         int leaseFd(int fd) override;
+        // renderer
+        VkResult clientImport(VkResult result) override;
     };
 }
 
@@ -285,6 +310,11 @@ VkResult IdleChaosMonkey::scanout(VkResult result) {
 
 int IdleChaosMonkey::leaseFd(int fd) {
     return fd;
+}
+
+// renderer
+VkResult IdleChaosMonkey::clientImport(VkResult result) {
+    return result;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

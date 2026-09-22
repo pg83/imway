@@ -43,6 +43,10 @@ struct ChaosMonkey {
     // wayland drm-lease: the fd the device's lease creation returned (or its
     // negative errno); a replacement failure closes the fd it was handed
     virtual int leaseFd(int fd) = 0;
+    // renderer: client buffers onto the GPU
+    // the result of one Vulkan call that imports a client's buffer: a
+    // dma-buf image, or a wl_shm pool as a udmabuf or a host pointer
+    virtual VkResult clientImport(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
