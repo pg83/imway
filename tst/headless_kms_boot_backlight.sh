@@ -23,6 +23,12 @@ panel() { # <backlight root> [imway args...]
     kms_boot IMWAY_FAKE_KMS_INTERNAL=1 IMWAY_SYSFS_BACKLIGHT="$root" -- "$@"
 }
 
+# an empty override is no override: the kernel's own class is read, and
+# whatever this host has there, the panel boots
+panel ""
+boot_rc 0 "the kernel's backlight class"
+boot_has "kms output: 1280x800@60"
+
 for broken in missing empty notype nomax zero; do
     panel "$bl/$broken"
     boot_rc 0 "$broken backlight"

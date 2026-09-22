@@ -31,6 +31,18 @@ boot_has "HDR unsupported here, staying SDR"
 boot_has "10-bit scanout"
 boot_has "clean exit after"
 
+# a format list property with no blob behind it reads as LINEAR only
+kms_boot IMWAY_FAKE_KMS_ZERO_PROPS=IN_FORMATS --
+boot_rc 0 "empty format list"
+boot_has "imway: 10-bit scanout"
+boot_has "scanout swapchain: 2 images"
+
+# a plane that scans out only a tiling no renderer here produces
+kms_boot IMWAY_FAKE_KMS_TILED_ONLY=1 --
+boot_rc 0 "tiled-only plane"
+boot_has "scanout: no common modifier (vulkan x plane)"
+boot_has "dumb-buffer path (no zero-copy scanout)"
+
 # an SDR link without depth control keeps whatever depth it has
 kms_boot IMWAY_FAKE_KMS_DROP_PROPS="max bpc" --
 boot_rc 0 "sdr without depth control"

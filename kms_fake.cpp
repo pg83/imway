@@ -215,6 +215,7 @@ namespace {
         // the device's shape at boot, read from IMWAY_FAKE_KMS_* by
         // openDevice: a scenario boots a different display or driver
         StringView dropProps; // property names the driver does not expose
+        StringView zeroProps; // exposed, but reading 0 (no blob behind it)
         int edidKind = 0;     // 0 hdr, 1 sdr, 2 unparseable, 3 no BT.2020 RGB
         u64 minBpcCap = 6;
         u64 maxBpcCap = 16;
@@ -222,6 +223,7 @@ namespace {
         u64 cursorCap = 64;
         bool unbound = false; // cold boot: no encoder or crtc bound yet
         bool no10Bit = false; // the primary plane lacks the 2101010 formats
+        bool tiledOnly = false; // the plane scans out no LINEAR buffer
         int failDumbCount = 0;
         int leaseFaultKind = 0;
 
@@ -372,7 +374,7 @@ namespace {
     // IN_FORMATS: the header, the format list, then the modifier structs:
     // LINEAR for every format, and a vendor tiling for XRGB8888 alone that
     // no renderer here can produce, so the intersection has to drop it
-    void buildInFormatsBlob(Vector<u8>& out, bool no10Bit) {
+    void buildInFormatsBlob(Vector<u8>& out, bool no10Bit, bool tiledOnly) {
         Vector<u32> formats;
 
         for (u32 f : kFormats) {
@@ -394,7 +396,7 @@ namespace {
 
         struct drm_format_modifier mods[2]{};
 
-        mods[0].formats = (1ull << nFmt) - 1;
+        mods[0].formats = tiledOnly ? 0 : (1ull << nFmt) - 1;
         mods[0].modifier = DRM_FORMAT_MOD_LINEAR;
         mods[1].formats = 1;
         mods[1].modifier = DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED;
@@ -473,7 +475,7 @@ void FakeKms::addProp(u32 obj, u32 id, const char* name, u32 flags, const PropEn
     p.enumCount = enumCount;
     p.rangeMin = mn;
     p.rangeMax = mx;
-    p.value = value;
+    p.value = listed(zeroProps, StringView(name)) ? 0 : value;
     props.pushBack(p);
 }
 
@@ -963,7 +965,7 @@ int FakeKms::emuGetPropBlob(drm_mode_get_blob* b) {
     if (b->blob_id == pPlaneInFormats) {
         Vector<u8> data;
 
-        buildInFormatsBlob(data, no10Bit);
+        buildInFormatsBlob(data, no10Bit, tiledOnly);
 
         if (b->data && b->length >= data.length()) {
             memcpy((void*)(uintptr_t)b->data, data.data(), data.length());
@@ -1642,6 +1644,7 @@ int FakeKms::openDevice() {
     noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
 
     const char* drop = getenv("IMWAY_FAKE_KMS_DROP_PROPS");
+    const char* zero = getenv("IMWAY_FAKE_KMS_ZERO_PROPS");
     const char* edid = getenv("IMWAY_FAKE_KMS_EDID");
     const char* bpc = getenv("IMWAY_FAKE_KMS_MAX_BPC");
     const char* minBpc = getenv("IMWAY_FAKE_KMS_MIN_BPC");
@@ -1659,6 +1662,8 @@ int FakeKms::openDevice() {
     cursorCap = cursor ? StringView(cursor).stou() : 64;
     unbound = getenv("IMWAY_FAKE_KMS_UNBOUND") != nullptr;
     no10Bit = getenv("IMWAY_FAKE_KMS_NO_10BIT") != nullptr;
+    tiledOnly = getenv("IMWAY_FAKE_KMS_TILED_ONLY") != nullptr;
+    zeroProps = zero ? StringView(zero) : StringView();
     failDumbCount = dumb ? (int)StringView(dumb).stou() : 0;
     // the N-th framebuffer from boot on fails: the cursor's comes first
     failAddFbErr = addFb ? ENOSPC : 0;
