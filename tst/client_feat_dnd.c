@@ -1,7 +1,8 @@
 // Feature: full drag-and-drop. Start a real drag over our own surface (so it
 // becomes the drop target), accept the offer, and on drop pipe the payload
 // through. Exercises start_drag -> enter -> accept/set_actions -> drop ->
-// receive -> source.send -> finish.
+// receive -> source.send -> finish. With the argument "icon" the drag
+// carries a 32x32 green icon surface.
 
 #include "wl_util.h"
 
@@ -61,8 +62,9 @@ static const struct wl_data_device_listener dev_listener = {
     dev_data_offer, dev_enter, dev_leave, dev_motion, dev_drop, dev_selection,
 };
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
+    int withIcon = argc > 1 && !strcmp(argv[1], "icon");
     if (wl_boot()) return 1;
     if (!wl_ddm || !wl_seat_g || !wl_ptr) { fprintf(stderr, "missing globals\n"); return 1; }
 
@@ -81,7 +83,15 @@ int main(void) {
             wl_data_source_add_listener(src, &src_listener, NULL);
             wl_data_source_offer(src, "text/plain");
             wl_data_source_set_actions(src, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
-            wl_data_device_start_drag(dev, src, top.surface, NULL, wlp_button_serial);
+            struct wl_surface* icon = withIcon ? wl_compositor_create_surface(wl_comp) : NULL;
+
+            wl_data_device_start_drag(dev, src, top.surface, icon, wlp_button_serial);
+
+            if (icon) {
+                wl_surface_attach(icon, wl_solid(32, 32, 0xFF00FF00), 0, 0);
+                wl_surface_damage(icon, 0, 0, 32, 32);
+                wl_surface_commit(icon);
+            }
             drag_started = 1;
             printf("client_feat_dnd: drag started\n");
         }
