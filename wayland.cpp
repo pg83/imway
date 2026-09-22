@@ -11802,12 +11802,16 @@ void SeatState::endDrag() {
     // a drop only lands on a target that accepted a mime type; otherwise
     // the spec calls for cancelling the operation (the target still gets
     // its leave). without a source (client-internal drag) accept state is
-    // unknowable — deliver the drop as before
+    // unknowable — deliver the drop as before. Where both sides negotiate
+    // actions (a source that set them, a v3 offer) a drop whose action came
+    // out none cancels too; without that negotiation the drop is a copy
     bool accepted = !src;
 
     if (src) {
         forEach<Offer>(src->offers, [&](Offer& offer) {
-            if (offer.dnd && offer.accepted) {
+            bool negotiated = src->actionsSet && wl_resource_get_version(offer.res) >= 3;
+
+            if (offer.dnd && offer.accepted && (!negotiated || offer.action != WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE)) {
                 accepted = true;
             }
         });
