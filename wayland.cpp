@@ -10,6 +10,7 @@
 #include "desktop.h"
 #include "session.h"
 #include "composer.h"
+#include "chaos_monkey.h"
 #include "keyboard.h"
 #include "listener.h"
 #include "weak_ptr.h"
@@ -120,13 +121,20 @@ namespace {
         void operator delete(ShmMapping* mapping, std::destroying_delete_t) noexcept;
     };
 
+    // the wl_shm global's data: what every pool it creates allocates from
+    struct ShmGlobal {
+        SmallObjAllocator* alloc = nullptr;
+        ChaosMonkey* chaos = nullptr;
+    };
+
     struct ShmPool final: public ARC {
         SmallObjAllocator* alloc;
+        ChaosMonkey* chaos;
         wl_resource* resource = nullptr;
         IntrusivePtr<ShmMapping> mapping;
         int fd;
 
-        ShmPool(SmallObjAllocator* alloc, int fd, ShmMapping* mapping);
+        ShmPool(SmallObjAllocator* alloc, ChaosMonkey* chaos, int fd, ShmMapping* mapping);
         ~ShmPool() noexcept;
         void operator delete(ShmPool* pool, std::destroying_delete_t) noexcept;
     };
@@ -355,7 +363,7 @@ namespace {
         ObjPool::Ref cacheLifetime = ObjPool::fromMemory();
         IntrusivePtr<ShmBuffer> buffer = pool->alloc->make<ShmBuffer>(pool->alloc, pool, cacheLifetime.mutPtr(), offset, width, height, stride, format);
 
-        buffer->resource = wl_resource_create(client, &wl_buffer_interface, 1, id);
+        buffer->resource = pool->chaos->resource(wl_resource_create(client, &wl_buffer_interface, 1, id));
 
         if (!buffer->resource) {
             wl_client_post_no_memory(client);
@@ -411,7 +419,8 @@ namespace {
     }
 
     void shmCreatePool(wl_client* client, wl_resource* resource, u32 id, int fd, i32 size) {
-        auto* alloc = (SmallObjAllocator*)wl_resource_get_user_data(resource);
+        auto* shm = (ShmGlobal*)wl_resource_get_user_data(resource);
+        SmallObjAllocator* alloc = shm->alloc;
 
         if (size <= 0) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_STRIDE, "invalid size (%d)", size);
@@ -429,10 +438,10 @@ namespace {
             return;
         }
 
-        IntrusivePtr<ShmPool> pool = alloc->make<ShmPool>(alloc, fd, mapping);
+        IntrusivePtr<ShmPool> pool = alloc->make<ShmPool>(alloc, shm->chaos, fd, mapping);
 
         mappingUpdateStable(pool.mutPtr(), mapping);
-        pool->resource = wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id);
+        pool->resource = shm->chaos->resource(wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id));
 
         if (!pool->resource) {
             wl_client_post_no_memory(client);
@@ -454,7 +463,8 @@ namespace {
     };
 
     void bindShm(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* resource = wl_resource_create(client, &wl_shm_interface, version, id);
+        auto* shm = (ShmGlobal*)data;
+        wl_resource* resource = shm->chaos->resource(wl_resource_create(client, &wl_shm_interface, version, id));
 
         if (!resource) {
             wl_client_post_no_memory(client);
@@ -467,8 +477,8 @@ namespace {
         wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
     }
 
-    bool initWaylandShm(wl_display* display, SmallObjAllocator* alloc) {
-        return wl_global_create(display, &wl_shm_interface, 2, alloc, bindShm) != nullptr;
+    bool initWaylandShm(wl_display* display, ShmGlobal* shm) {
+        return wl_global_create(display, &wl_shm_interface, 2, shm, bindShm) != nullptr;
     }
 
     ShmBuffer* shmBufferFromResource(wl_resource* resource) {
@@ -494,8 +504,9 @@ namespace {
         mapping->alloc->release(mapping);
     }
 
-    ShmPool::ShmPool(SmallObjAllocator* a, int f, ShmMapping* m)
+    ShmPool::ShmPool(SmallObjAllocator* a, ChaosMonkey* c, int f, ShmMapping* m)
         : alloc(a)
+        , chaos(c)
         , mapping(m)
         , fd(f)
     {
@@ -1606,6 +1617,7 @@ namespace {
         Composer* composer = nullptr;
         ObjPool* pool = nullptr;
         SmallObjAllocator* alloc = nullptr;
+        ShmGlobal shmGlobal;
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
         wl_display* display = nullptr;
@@ -2233,7 +2245,7 @@ namespace {
             return;
         }
 
-        wl_resource* cb = wl_resource_create(client, &wl_callback_interface, 1, id);
+        wl_resource* cb = s.srv->composer->chaos->resource(wl_resource_create(client, &wl_callback_interface, 1, id));
 
         if (!cb) {
             wl_client_post_no_memory(client);
@@ -3129,7 +3141,7 @@ namespace {
         // double-buffered, one per commit: a second get_release before commit
         // replaces the first (its buffer is the same pending buffer)
         dropReleaseCb(s.pending.releaseCb);
-        s.pending.releaseCb = wl_resource_create(client, &wl_callback_interface, 1, id);
+        s.pending.releaseCb = s.srv->composer->chaos->resource(wl_resource_create(client, &wl_callback_interface, 1, id));
 
         if (!s.pending.releaseCb) {
             wl_client_post_no_memory(client);
@@ -3339,7 +3351,7 @@ namespace {
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* sres = wl_resource_create(client, &wl_surface_interface, wl_resource_get_version(res), id);
+        wl_resource* sres = srv->composer->chaos->resource(wl_resource_create(client, &wl_surface_interface, wl_resource_get_version(res), id));
 
         if (!sres) {
             wl_client_post_no_memory(client);
@@ -3365,7 +3377,7 @@ namespace {
 
     void compositorCreateRegion(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* rres = wl_resource_create(client, &wl_region_interface, wl_resource_get_version(res), id);
+        wl_resource* rres = srv->composer->chaos->resource(wl_resource_create(client, &wl_region_interface, wl_resource_get_version(res), id));
 
         if (!rres) {
             wl_client_post_no_memory(client);
@@ -3385,7 +3397,8 @@ namespace {
     };
 
     void compositorBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wl_compositor_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wl_compositor_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -3576,7 +3589,7 @@ namespace {
             return;
         }
 
-        wl_resource* sres = wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id);
+        wl_resource* sres = srv->composer->chaos->resource(wl_resource_create(client, &wl_subsurface_interface, wl_resource_get_version(res), id));
 
         if (!sres) {
             wl_client_post_no_memory(client);
@@ -3603,7 +3616,8 @@ namespace {
     };
 
     void subcompositorBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wl_subcompositor_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wl_subcompositor_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -3898,7 +3912,7 @@ namespace {
             return;
         }
 
-        wl_resource* tres = wl_resource_create(client, &xdg_toplevel_interface, wl_resource_get_version(res), id);
+        wl_resource* tres = xs->srv->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_interface, wl_resource_get_version(res), id));
 
         if (!tres) {
             wl_client_post_no_memory(client);
@@ -4266,7 +4280,7 @@ namespace {
             return;
         }
 
-        wl_resource* pres = wl_resource_create(client, &xdg_popup_interface, wl_resource_get_version(res), id);
+        wl_resource* pres = xs->srv->composer->chaos->resource(wl_resource_create(client, &xdg_popup_interface, wl_resource_get_version(res), id));
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -4310,7 +4324,7 @@ namespace {
 
     void wmBaseCreatePositioner(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* pres = wl_resource_create(client, &xdg_positioner_interface, wl_resource_get_version(res), id);
+        wl_resource* pres = srv->composer->chaos->resource(wl_resource_create(client, &xdg_positioner_interface, wl_resource_get_version(res), id));
 
         if (!pres) {
             wl_client_post_no_memory(client);
@@ -4339,7 +4353,7 @@ namespace {
             return;
         }
 
-        wl_resource* xres = wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id);
+        wl_resource* xres = srv->composer->chaos->resource(wl_resource_create(client, &xdg_surface_interface, wl_resource_get_version(res), id));
 
         if (!xres) {
             wl_client_post_no_memory(client);
@@ -4368,7 +4382,8 @@ namespace {
     };
 
     void wmBaseBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_wm_base_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &xdg_wm_base_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -4377,8 +4392,6 @@ namespace {
         }
 
         wl_resource_set_implementation(res, &wmBaseImpl, data, wmBaseResourceDestroyed);
-
-        auto* srv = (WaylandImpl*)data;
 
         auto* ping = srv->alloc->make<WaylandImpl::WmBasePing>();
 
@@ -4665,7 +4678,7 @@ namespace {
 
     void outputBind(wl_client* client, void* data, u32 version, u32 id) {
         auto* srv = (WaylandImpl*)data;
-        wl_resource* res = wl_resource_create(client, &wl_output_interface, version, id);
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wl_output_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -4929,7 +4942,7 @@ namespace {
         src->offers.pushFront(offer);
 
         if (src->primary) {
-            resource = wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0);
+            resource = src->srv->composer->chaos->resource(wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0));
 
             if (!resource) {
                 offer->unlink();
@@ -4949,7 +4962,7 @@ namespace {
             return resource;
         }
 
-        resource = wl_resource_create(client, &wl_data_offer_interface, (int)version, 0);
+        resource = src->srv->composer->chaos->resource(wl_resource_create(client, &wl_data_offer_interface, (int)version, 0));
 
         if (!resource) {
             offer->unlink();
@@ -5060,7 +5073,7 @@ namespace {
 
     void managerCreateDataSource(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* s = wl_resource_create(client, &wl_data_source_interface, wl_resource_get_version(res), id);
+        wl_resource* s = srv->composer->chaos->resource(wl_resource_create(client, &wl_data_source_interface, wl_resource_get_version(res), id));
 
         if (!s) {
             wl_client_post_no_memory(client);
@@ -5085,7 +5098,7 @@ namespace {
 
     void managerGetDataDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* d = wl_resource_create(client, &wl_data_device_interface, wl_resource_get_version(res), id);
+        wl_resource* d = srv->composer->chaos->resource(wl_resource_create(client, &wl_data_device_interface, wl_resource_get_version(res), id));
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -5115,7 +5128,8 @@ namespace {
     };
 
     void dataManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wl_data_device_manager_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wl_data_device_manager_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5190,7 +5204,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &xdg_toplevel_drag_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_drag_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -5214,7 +5228,8 @@ namespace {
     };
 
     void toplevelDragManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_toplevel_drag_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_drag_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5253,7 +5268,7 @@ namespace {
 
     void primaryManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* s = wl_resource_create(client, &zwp_primary_selection_source_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* s = srv->composer->chaos->resource(wl_resource_create(client, &zwp_primary_selection_source_v1_interface, wl_resource_get_version(res), id));
 
         if (!s) {
             wl_client_post_no_memory(client);
@@ -5278,7 +5293,7 @@ namespace {
 
     void primaryManagerGetDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* d = wl_resource_create(client, &zwp_primary_selection_device_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* d = srv->composer->chaos->resource(wl_resource_create(client, &zwp_primary_selection_device_v1_interface, wl_resource_get_version(res), id));
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -5304,7 +5319,8 @@ namespace {
     };
 
     void primaryManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_primary_selection_device_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_primary_selection_device_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5380,7 +5396,8 @@ namespace {
     };
 
     void decoManagerGetToplevelDecoration(wl_client* client, wl_resource* res, u32 id, wl_resource* toplevelRes) {
-        wl_resource* d = wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface, wl_resource_get_version(res), id);
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
+        wl_resource* d = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_toplevel_decoration_v1_interface, wl_resource_get_version(res), id));
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -5410,7 +5427,8 @@ namespace {
     };
 
     void decoManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zxdg_decoration_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_decoration_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5469,7 +5487,7 @@ namespace {
 
     void appMenuManagerCreate(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* menuRes = wl_resource_create(client, &org_kde_kwin_appmenu_interface, wl_resource_get_version(res), id);
+        wl_resource* menuRes = srv->composer->chaos->resource(wl_resource_create(client, &org_kde_kwin_appmenu_interface, wl_resource_get_version(res), id));
 
         if (!menuRes) {
             wl_client_post_no_memory(client);
@@ -5498,7 +5516,8 @@ namespace {
     };
 
     void appMenuManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &org_kde_kwin_appmenu_manager_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &org_kde_kwin_appmenu_manager_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5604,7 +5623,7 @@ namespace {
             return;
         }
 
-        wl_resource* vres = wl_resource_create(client, &wp_viewport_interface, wl_resource_get_version(res), id);
+        wl_resource* vres = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_viewport_interface, wl_resource_get_version(res), id));
 
         if (!vres) {
             wl_client_post_no_memory(client);
@@ -5622,7 +5641,8 @@ namespace {
     };
 
     void viewporterBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_viewporter_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_viewporter_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5695,8 +5715,9 @@ namespace {
     };
 
     void xdgWmDialogGetDialog(wl_client* client, wl_resource* res, u32 id, wl_resource* toplevelRes) {
+        auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
-        wl_resource* d = wl_resource_create(client, &xdg_dialog_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* d = srv->composer->chaos->resource(wl_resource_create(client, &xdg_dialog_v1_interface, wl_resource_get_version(res), id));
 
         if (!d) {
             wl_client_post_no_memory(client);
@@ -5714,7 +5735,8 @@ namespace {
     };
 
     void xdgWmDialogBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_wm_dialog_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &xdg_wm_dialog_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5745,7 +5767,8 @@ namespace {
     };
 
     void toplevelTagManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &xdg_toplevel_tag_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &xdg_toplevel_tag_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5810,7 +5833,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &zxdg_exported_v2_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_exported_v2_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -5842,7 +5865,8 @@ namespace {
     };
 
     void foreignExporterBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zxdg_exporter_v2_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_exporter_v2_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5886,7 +5910,7 @@ namespace {
 
     void foreignImportToplevel(wl_client* client, wl_resource* res, u32 id, const char* handle) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zxdg_imported_v2_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_imported_v2_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -5922,7 +5946,8 @@ namespace {
     };
 
     void foreignImporterBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zxdg_importer_v2_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zxdg_importer_v2_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -5958,7 +5983,7 @@ namespace {
 
     void foreignListAnnounce(ForeignList* list, ToplevelImpl* t) {
         wl_client* client = wl_resource_get_client(list->res);
-        wl_resource* r = wl_resource_create(client, &ext_foreign_toplevel_handle_v1_interface, wl_resource_get_version(list->res), 0);
+        wl_resource* r = list->srv->composer->chaos->resource(wl_resource_create(client, &ext_foreign_toplevel_handle_v1_interface, wl_resource_get_version(list->res), 0));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6030,7 +6055,7 @@ namespace {
 
     void foreignListBind(wl_client* client, void* data, u32 version, u32 id) {
         auto* srv = (WaylandImpl*)data;
-        wl_resource* res = wl_resource_create(client, &ext_foreign_toplevel_list_v1_interface, version, id);
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &ext_foreign_toplevel_list_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6088,7 +6113,8 @@ namespace {
     };
 
     void pointerWarpBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_pointer_warp_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_pointer_warp_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6129,7 +6155,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_tearing_control_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_tearing_control_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6147,7 +6173,8 @@ namespace {
     };
 
     void tearingManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_tearing_control_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_tearing_control_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6210,7 +6237,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_fifo_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_fifo_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6232,7 +6259,8 @@ namespace {
     };
 
     void fifoManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_fifo_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_fifo_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6325,7 +6353,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_commit_timer_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_commit_timer_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6347,7 +6375,8 @@ namespace {
     };
 
     void commitTimingManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_commit_timing_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &wp_commit_timing_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6380,7 +6409,7 @@ namespace {
     wl_resource* makeDcOffer(wl_resource* device, DataSource* src) {
         wl_client* client = wl_resource_get_client(device);
         u32 version = (u32)wl_resource_get_version(device);
-        wl_resource* resource = wl_resource_create(client, &ext_data_control_offer_v1_interface, (int)version, 0);
+        wl_resource* resource = src->srv->composer->chaos->resource(wl_resource_create(client, &ext_data_control_offer_v1_interface, (int)version, 0));
 
         if (!resource) {
             return nullptr;
@@ -6432,7 +6461,7 @@ namespace {
 
     void dcManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &ext_data_control_source_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_data_control_source_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6488,7 +6517,7 @@ namespace {
 
     void dcManagerGetDevice(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &ext_data_control_device_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &ext_data_control_device_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6510,7 +6539,8 @@ namespace {
     };
 
     void dcManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &ext_data_control_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &ext_data_control_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6632,7 +6662,7 @@ namespace {
 
     void textInputManagerGetTextInput(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_text_input_v3_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zwp_text_input_v3_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6662,7 +6692,8 @@ namespace {
     };
 
     void textInputManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_text_input_manager_v3_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_text_input_manager_v3_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6740,7 +6771,7 @@ namespace {
 
     void imGetPopupSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* im = (InputMethod*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_input_popup_surface_v2_interface, wl_resource_get_version(res), id);
+        wl_resource* r = im->srv->composer->chaos->resource(wl_resource_create(client, &zwp_input_popup_surface_v2_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6764,7 +6795,7 @@ namespace {
 
     void imGrabKeyboard(wl_client* client, wl_resource* res, u32 id) {
         auto* im = (InputMethod*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_input_method_keyboard_grab_v2_interface, wl_resource_get_version(res), id);
+        wl_resource* r = im->srv->composer->chaos->resource(wl_resource_create(client, &zwp_input_method_keyboard_grab_v2_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6823,7 +6854,7 @@ namespace {
 
     void imManagerGetInputMethod(wl_client* client, wl_resource* res, wl_resource*, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_input_method_v2_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zwp_input_method_v2_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6862,7 +6893,8 @@ namespace {
     };
 
     void imManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_input_method_manager_v2_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_input_method_manager_v2_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6901,7 +6933,7 @@ namespace {
 
     void vkManagerCreate(wl_client* client, wl_resource* res, wl_resource*, u32 id) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        wl_resource* r = wl_resource_create(client, &zwp_virtual_keyboard_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &zwp_virtual_keyboard_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -6917,7 +6949,8 @@ namespace {
     };
 
     void vkManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_virtual_keyboard_manager_v1_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_virtual_keyboard_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -6989,7 +7022,7 @@ namespace {
     void tabletManagerGetSeat(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         u32 version = wl_resource_get_version(res);
-        wl_resource* seat = wl_resource_create(client, &zwp_tablet_seat_v2_interface, version, id);
+        wl_resource* seat = srv->composer->chaos->resource(wl_resource_create(client, &zwp_tablet_seat_v2_interface, version, id));
 
         if (!seat) {
             wl_client_post_no_memory(client);
@@ -7032,7 +7065,8 @@ namespace {
     };
 
     void tabletManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &zwp_tablet_manager_v2_interface, version, id);
+        auto* srv = (WaylandImpl*)data;
+        wl_resource* res = srv->composer->chaos->resource(wl_resource_create(client, &zwp_tablet_manager_v2_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
@@ -12295,6 +12329,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     : composer(&comp)
     , pool(comp.pool)
     , alloc(comp.alloc)
+    , shmGlobal{comp.alloc, comp.chaos}
     , loop(comp.loop)
     , scene(comp.scene)
     , socketName(cfg.socketName)
@@ -12346,7 +12381,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
-    STD_VERIFY(initWaylandShm(display, alloc));
+    STD_VERIFY(initWaylandShm(display, &shmGlobal));
     createGlobals();
 
     ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
