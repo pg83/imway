@@ -1812,7 +1812,11 @@ void FakeKms::parseLookupFaults(StringView rules) {
 
         size_t n = target.length() < sizeof(f.name) - 1 ? target.length() : sizeof(f.name) - 1;
 
-        memcpy(f.name, target.data(), n);
+        // an empty target is a null view: nothing to copy, and memcpy takes
+        // no null source even for zero bytes
+        if (n) {
+            memcpy(f.name, target.data(), n);
+        }
         f.skip = skip.empty() ? 0 : (int)skip.stou();
         f.count = count.empty() || count == "-1"_sv ? -1 : (int)count.stou();
         lookupFaults.pushBack(f);
