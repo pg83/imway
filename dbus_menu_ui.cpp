@@ -69,7 +69,9 @@ namespace {
         return out.cStr();
     }
 
-    void recordBarRect(DBusMenuItem& item) {
+#ifdef IMWAY_FOR_TESTS
+    // the state dump reports each heading where the bar drew it
+    static void recordBarRect(DBusMenuItem& item) {
         ImVec2 min = ImGui::GetItemRectMin();
         ImVec2 max = ImGui::GetItemRectMax();
 
@@ -78,6 +80,7 @@ namespace {
         item.barRect[2] = max.x;
         item.barRect[3] = max.y;
     }
+#endif
 
     void drawItems(Composer& c, DBusMenu& menu, Vector<DBusMenuItem*>& items) {
         for (DBusMenuItem* item : items) {
@@ -165,7 +168,9 @@ void drawDBusMenuBar(Composer& c, DBusMenu& menu) {
         if (submenu) {
             bool clicked = ImGui::MenuItem(label, nullptr, item->open, item->enabled);
 
+#ifdef IMWAY_FOR_TESTS
             recordBarRect(*item);
+#endif
 
             if (clicked) {
                 if (item->open) {
@@ -193,7 +198,9 @@ void drawDBusMenuBar(Composer& c, DBusMenu& menu) {
                 menu.activate(item->id);
             }
 
+#ifdef IMWAY_FOR_TESTS
             recordBarRect(*item);
+#endif
         }
 
         ImGui::PopStyleColor();
