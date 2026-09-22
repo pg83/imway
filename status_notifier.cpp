@@ -320,7 +320,9 @@ namespace {
 
         dbus_pending_call_unref(pc);
 
-        if (reply && dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        // notified means complete, and libdbus completes a timed-out or
+        // disconnected call with a synthesized error: never without a reply
+        if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
             dbus_message_unref(reply);
 
             return nullptr;
@@ -501,7 +503,7 @@ void StatusNotifierImpl::getProperties(ItemBox& item) {
 void StatusNotifierImpl::readProperties(ItemBox& item, DBusMessage* reply) {
     DBusMessageIter it;
 
-    if (!reply || !dbus_message_iter_init(reply, &it)) {
+    if (!dbus_message_iter_init(reply, &it)) {
         return;
     }
 
@@ -547,7 +549,8 @@ void StatusNotifierImpl::registerItem(DBusMessage* msg) {
         return;
     }
 
-    StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
+    // a method call the bus routed always carries its sender
+    StringView sender(dbus_message_get_sender(msg));
     StringView service = arg[0] == '/' ? sender : StringView(arg);
     StringView path = arg[0] == '/' ? StringView(arg) : "/StatusNotifierItem"_sv;
     Peer* peer = peerFor(sender);
@@ -626,11 +629,8 @@ void StatusNotifierImpl::sendSimple(ItemBox& item, const char* iface, const char
 }
 
 void StatusNotifierImpl::activate(const StatusAction& action, int x, int y) {
+    // the dock only hands back actions registerItem stamped on a live item
     auto* item = (ItemBox*)action.item;
-
-    if (!item || item->impl != this) {
-        return;
-    }
 
     switch (action.kind) {
         case StatusActionKind::primary:
@@ -751,9 +751,6 @@ namespace {
 
         if (reply) {
             item->impl->readProperties(*item, reply);
-        }
-
-        if (reply) {
             dbus_message_unref(reply);
         }
     }
