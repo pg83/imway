@@ -3,6 +3,7 @@
 #include "log.h"
 #include "icon.h"
 #include "util.h"
+#include "wifi.h"
 #include "scene.h"
 #include "output.h"
 #include "pooled.h"
@@ -15,8 +16,10 @@
 #include "wayland.h"
 #include "imgui_wm.h"
 #include "intr_list.h"
+#include "dbus_menu.h"
 #include "input_sink.h"
 #include "kms_intercept.h"
+#include "status_notifier.h"
 
 #include <std/sys/fd.h>
 #include <std/ios/sys.h>
@@ -169,6 +172,20 @@ namespace {
 
         memcpy(out, value.data(), length);
         out[length] = 0;
+    }
+
+    // a DBusMenu model as the compositor holds it: the menu, then its items
+    // depth-first, the label (free text) last on each line
+    static void dumpMenuItems(StringBuilder& out, const Vector<DBusMenuItem*>& items, int depth) {
+        for (DBusMenuItem* item : items) {
+            out << "menuitem depth="_sv << depth << " id="_sv << item->id << " enabled="_sv << (int)item->enabled << " visible="_sv << (int)item->visible << " separator="_sv << (int)item->separator << " toggle="_sv << (int)item->toggle << " state="_sv << item->toggleState << " submenu="_sv << (int)item->submenu << " disposition="_sv << (int)item->disposition << " icon_w="_sv << (item->iconData ? item->iconData->width : 0) << " icon_name="_sv << sv(item->iconName) << " shortcut="_sv << sv(item->shortcut) << " label="_sv << sv(item->label) << "\n"_sv;
+            dumpMenuItems(out, item->children, depth + 1);
+        }
+    }
+
+    static void dumpMenu(StringBuilder& out, StringView owner, const DBusMenu& menu) {
+        out << "menu "_sv << owner << " ready="_sv << (int)menu.ready << " revision="_sv << menu.revision << " activation="_sv << (menu.hasActivationRequest ? menu.activationRequested : 0) << "\n"_sv;
+        dumpMenuItems(out, menu.items, 0);
     }
 }
 
@@ -650,6 +667,45 @@ void ControlImpl::dumpState(StringView outPath) {
     }
 
     out << "notifications active="_sv << activeToasts << " history="_sv << keptToasts << "\n"_sv;
+
+    // the session-bus peers' models: each window's global menu, each tray
+    // item (its pixmap as the dock resolves it) and its menu
+    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+        Surface* s = t.surface.get();
+
+        if (s && s->appMenu) {
+            auto& owner = sb();
+
+            owner << "appmenu="_sv << t.id;
+            dumpMenu(out, sv(owner), *s->appMenu);
+        }
+    });
+
+    if (comp->statusNotifier) {
+        comp->statusNotifier->items([&](StatusNotifierItem& item) {
+            Icon* pixmap = comp->findIcon(item.iconSym, 16);
+            Icon* attention = comp->findIcon(item.attentionIconSym, 16);
+
+            out << "tray id="_sv << sv(item.id) << " status="_sv << sv(item.status) << " desktop="_sv << sv(item.desktopEntry) << " icon_name="_sv << sv(item.iconName) << " attention_name="_sv << sv(item.attentionIconName) << " pixmap_w="_sv << (pixmap ? pixmap->width : 0) << " attention_w="_sv << (attention ? attention->width : 0) << " menu="_sv << (int)item.hasMenu << " item_is_menu="_sv << (int)item.itemIsMenu << " title="_sv << sv(item.title) << "\n"_sv;
+
+            if (item.menu) {
+                dumpMenu(out, "tray="_sv, *item.menu);
+            }
+        });
+    }
+
+    if (comp->wifi) {
+        int networks = 0;
+
+        comp->wifi->networks([&networks](WifiNetwork&) {
+            networks++;
+        });
+        out << "wifi state="_sv << (int)comp->wifi->state() << " networks="_sv << networks << " passphrase="_sv << (int)comp->wifi->passphraseWanted() << "\n"_sv;
+
+        comp->wifi->networks([&](WifiNetwork& n) {
+            out << "wifinet strength="_sv << n.strength << " connected="_sv << (int)n.connected << " known="_sv << (int)n.known << " type="_sv << sv(n.type) << " path="_sv << sv(n.path) << " name="_sv << sv(n.name) << "\n"_sv;
+        });
+    }
     out << "bar app_id="_sv << StringView(scene->barAppId[0] ? scene->barAppId : "-") << "\n"_sv;
     out << "battery pct="_sv << (i64)scene->batteryPct << " discharging="_sv << (int)scene->batteryDischarging << "\n"_sv;
     out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
