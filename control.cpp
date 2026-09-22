@@ -659,6 +659,13 @@ void ControlImpl::dumpState(StringView outPath) {
         // taking input: a dialog that lost this cannot be typed into
         out << "imgui focus name="_sv << StringView(g->NavWindow ? g->NavWindow->Name : "-") << " want_text="_sv << (int)ImGui::GetIO().WantTextInput << " active_id="_sv << (int)(g->ActiveId != 0) << "\n"_sv;
 
+        // the text the active field holds: typed characters trickle in one
+        // frame at a time, so a scenario presses Enter only once they are all
+        // there
+        if (g->ActiveId && g->InputTextState.ID == g->ActiveId) {
+            out << "imgui input len="_sv << (i64)g->InputTextState.TextLen << " text="_sv << StringView((const u8*)g->InputTextState.TextA.Data, (size_t)g->InputTextState.TextLen) << "\n"_sv;
+        }
+
         for (ImGuiWindow* w : g->Windows) {
             if (w->WasActive && !w->Hidden && !(w->Flags & ImGuiWindowFlags_ChildWindow)) {
                 out << "imgui name="_sv << StringView(w->Name) << " x="_sv << (int)w->Pos.x << " y="_sv << (int)w->Pos.y << " w="_sv << (int)w->Size.x << " h="_sv << (int)w->Size.y << "\n"_sv;

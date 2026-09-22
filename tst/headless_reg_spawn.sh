@@ -28,6 +28,7 @@ launch() { # <command typed into the launcher>
     # characters and sh cannot find it
     await_typing '##launcher' || { echo "the launcher did not open for '$1'"; exit 1; }
     ctl "type $1"
+    await_input "$1" || { echo "the launcher never held '$1'"; dump_state; exit 1; }
     ctl "key 28 press"; ctl "key 28 release" # Enter: nothing highlighted, the text runs as a command
     await_no_imgui '##launcher' || { echo "the launcher did not run '$1'"; exit 1; }
 }

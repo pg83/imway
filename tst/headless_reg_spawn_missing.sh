@@ -13,8 +13,14 @@ launch() { # <command typed into the launcher>
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
     await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
     ctl "type $1"
-    sleep 0.3
+    # characters reach the field one frame at a time, while the next
+    # launcher shortcut is taken at once: without these waits, under a slow
+    # build, the next Super+F2 found this launcher still open, and the new
+    # command's first characters landed between the two and were lost
+    # ("./env" ran as "/env")
+    await_input "$1" || { echo "the launcher never held \"$1\""; dump_state; exit 1; }
     ctl "key 28 press"; ctl "key 28 release"
+    await_no_imgui '##launcher' || { echo "the launcher did not run \"$1\""; exit 1; }
 }
 
 launch "imway-no-such-command"

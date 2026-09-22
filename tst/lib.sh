@@ -242,6 +242,13 @@ await_no_imgui() { await 100 imgui_gone "$1"; }           # <name>
 # of whatever the text was meant to change.
 await_typing() { await 100 imgui_typing "$1"; }           # <name>
 
+# true once the active text field holds exactly this text: characters
+# trickle into ImGui a frame at a time, so Enter waits for all of them
+imgui_input_is() { # <text>
+    [[ "$(dump_state | sed -n 's/^imgui input len=[0-9]* text=//p')" == "$1" ]]
+}
+await_input() { await 100 imgui_input_is "$1"; }             # <text>
+
 # Print rounded mean R G B and pixel count from the inset client content box.
 # Averaging makes color assertions compatible with output dithering while
 # retaining their sub-code luminance/chromaticity checks.
