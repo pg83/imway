@@ -13,7 +13,7 @@ await 20 in_log "control: set notifications.rule_count" || { echo "settings are 
 
 open_settings() {
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
-    sleep 0.2
+    await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
     ctl "type settings"
     sleep 0.3
     ctl "key 103 press"; ctl "key 103 release" # Up: select the action

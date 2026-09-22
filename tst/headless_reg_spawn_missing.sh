@@ -11,7 +11,7 @@ await 50 in_log "spawn: imway-no-such-command not found" || { echo "the missing 
 
 launch() { # <command typed into the launcher>
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
-    sleep 0.3
+    await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
     ctl "type $1"
     sleep 0.3
     ctl "key 28 press"; ctl "key 28 release"

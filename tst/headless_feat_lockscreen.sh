@@ -43,6 +43,7 @@ for _ in $(seq 1 30); do
 done
 [[ "$live" -gt 1000 ]] || { echo "locked background is not live ($live)"; exit 1; }
 
+await_typing '##lock-overlay' || { echo "the lock screen never took the keyboard"; dump_state; exit 1; }
 ctl "type nope"
 sleep 0.4 # let ImGui's trickle queue consume all text before Enter
 ctl "key 28 press"; ctl "key 28 release" # Enter
