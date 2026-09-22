@@ -1550,6 +1550,73 @@ static int mode_damage(void) {
     return 0;
 }
 
+// ---- tearing-dead-surface: a tearing control outliving its surface ----------
+static int mode_tearing_dead_surface(void) {
+    need(tearing, "wp_tearing_control_manager_v1");
+
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+    struct wp_tearing_control_v1* tc = wp_tearing_control_manager_v1_get_tearing_control(tearing, s);
+
+    wl_surface_destroy(s);
+    // the control is inert now: a hint changes nothing and is no error
+    wp_tearing_control_v1_set_presentation_hint(tc, WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC);
+    roundtrip("hint on a dead surface");
+    wp_tearing_control_v1_destroy(tc);
+    roundtrip("destroy");
+    printf("tearing dead surface ok\n");
+    return 0;
+}
+
+// ---- dc-offer-limits: what a data-control source keeps of its offers --------
+static int dc_mimes;
+
+static void dcl_offer_mime(void* d, struct ext_data_control_offer_v1* o, const char* mime) {
+    (void)d; (void)o; (void)mime;
+    dc_mimes++;
+}
+static const struct ext_data_control_offer_v1_listener dcl_offer_listener = {dcl_offer_mime};
+
+static void dcl_data_offer(void* d, struct ext_data_control_device_v1* dev, struct ext_data_control_offer_v1* o) {
+    (void)d; (void)dev;
+    dc_mimes = 0;
+    ext_data_control_offer_v1_add_listener(o, &dcl_offer_listener, NULL);
+}
+static const struct ext_data_control_device_v1_listener dcl_device_listener = {
+    dcl_data_offer, dc_selection, dc_finished, dc_primary,
+};
+
+static int mode_dc_offer_limits(void) {
+    need(dc, "ext_data_control_manager_v1");
+
+    struct ext_data_control_device_v1* dev = ext_data_control_manager_v1_get_data_device(dc, wl_seat_g);
+
+    ext_data_control_device_v1_add_listener(dev, &dcl_device_listener, NULL);
+    roundtrip("device");
+
+    struct ext_data_control_source_v1* src = ext_data_control_manager_v1_create_data_source(dc);
+    char mime[300];
+
+    // 70 types: the source keeps the first 64
+    for (int i = 0; i < 70; i++) {
+        snprintf(mime, sizeof(mime), "text/x-limit-%d", i);
+        ext_data_control_source_v1_offer(src, mime);
+    }
+    // a type too long to store is dropped
+    memset(mime, 'x', sizeof(mime) - 1);
+    mime[sizeof(mime) - 1] = 0;
+    ext_data_control_source_v1_offer(src, mime);
+    ext_data_control_device_v1_set_selection(dev, src);
+    // offers after the source became the selection are ignored
+    ext_data_control_source_v1_offer(src, "text/x-late");
+    roundtrip("selection");
+    if (!dc_offer || dc_mimes != 64) {
+        fprintf(stderr, "the selection offer lists %d types, want 64\n", dc_mimes);
+        return 1;
+    }
+    printf("dc offer limits ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1584,6 +1651,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "tearing-dead-surface")) return mode_tearing_dead_surface();
+    if (!strcmp(mode, "dc-offer-limits")) return mode_dc_offer_limits();
     if (!strcmp(mode, "damage")) return mode_damage();
     if (!strcmp(mode, "cursor-enter")) return mode_cursor_enter();
     if (!strcmp(mode, "reposition-pending")) return mode_reposition_pending();
