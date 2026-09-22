@@ -3063,7 +3063,7 @@ bool KmsOutput::takeScreenshot(int i, SharedScanout& image) {
     image.stride = sb.stride;
     image.modifier = sb.modifier;
     image.allocationSize = sb.allocationSize;
-    image.renderDevice = vk->renderDev;
+    memcpy(image.deviceUuid, vk->deviceUuid, sizeof(image.deviceUuid));
     image.color = color;
 
     screenshotIndex = i;

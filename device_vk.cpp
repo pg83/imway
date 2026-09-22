@@ -222,11 +222,17 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
         }
     }
 
-    VkPhysicalDeviceProperties props{};
+    VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
+    VkPhysicalDeviceProperties2 props2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 
-    vkGetPhysicalDeviceProperties(this->phys, &props);
+    props2.pNext = &ids;
+    vkGetPhysicalDeviceProperties2(this->phys, &props2);
+
+    const VkPhysicalDeviceProperties& props = props2.properties;
+
     *log << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
     this->maxImageDim = props.limits.maxImageDimension2D;
+    memcpy(this->deviceUuid, ids.deviceUUID, VK_UUID_SIZE);
 
     if (hasExt(this->phys, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
         VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};

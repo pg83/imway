@@ -21,7 +21,8 @@ struct SharedScanout {
     u32 stride = 0;
     u64 modifier = 0;
     u64 allocationSize = 0;
-    u64 renderDevice = 0;
+    // the exporting GPU's VkPhysicalDeviceIDProperties::deviceUUID
+    u8 deviceUuid[16] = {};
     OutputColorState color;
 };
 

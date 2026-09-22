@@ -4,9 +4,10 @@
 # The screenshot chord on a KMS session hands the scanout buffer itself to
 # the viewer instead of reading pixels back: the compositor swaps in a
 # replacement scanout and the old one travels to the viewer as a dma-buf.
-# A CI runner renders through a software device that does not own the drm
-# node, so the viewer cannot import the buffer there and says so; the
-# compositor must keep running either way.
+# The viewer finds the exporting GPU by its deviceUUID, which a software
+# device without a drm node has as well, imports the buffer and encodes the
+# PNG from it. Only a device without the import extensions may refuse, and
+# must say so; the compositor keeps running either way.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -57,12 +58,12 @@ if saved; then
     await 100 in_log "exited with status 0" || { echo "the viewer did not exit cleanly"; cat "$IMWAY_LOG"; exit 1; }
 else
     viewer_spoke || { echo "the viewer neither encoded nor reported anything"; cat "$IMWAY_LOG"; exit 1; }
-    grep -q "shared screenshot gpu is unavailable" "$XDG_RUNTIME_DIR/viewer.log" || {
-        echo "the viewer failed for an unexpected reason:"
+    grep -q "vulkan cannot import shared screenshot" "$XDG_RUNTIME_DIR/viewer.log" || {
+        echo "the viewer failed to import the shared buffer:"
         cat "$XDG_RUNTIME_DIR/viewer.log"
         exit 1
     }
-    echo "note: this host cannot import the shared buffer, the viewer reported it"
+    echo "note: this device has no dma-buf image import, the viewer reported it"
 fi
 
 # the session keeps flipping on its replacement scanout

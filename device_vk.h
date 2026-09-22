@@ -45,6 +45,9 @@ struct DeviceVk {
     bool tryShmUdmabufBuffer = false;
     bool tryShmExternalHost = false;
     u64 renderDev = 0;
+    // VkPhysicalDeviceIDProperties::deviceUUID: names this GPU to another
+    // process, drm node or not (a software device has none)
+    u8 deviceUuid[VK_UUID_SIZE] = {};
     u32 maxImageDim = 0; // limits.maxImageDimension2D, a client-buffer ceiling
     size_t udmabufSizeLimit = 0;
     VkDeviceSize hostPointerAlignment = 0;

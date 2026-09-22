@@ -21,7 +21,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
-#include <sys/sysmacros.h>
 
 // vulkan_wayland.h only names these through pointers
 struct wl_display;
@@ -94,7 +93,7 @@ namespace {
         u32 stride = 0;
         u64 modifier = 0;
         u64 allocationSize = 0;
-        u64 renderDevice = 0;
+        u8 deviceUuid[VK_UUID_SIZE] = {};
         bool dmabuf = false;
         OutputColorState color;
         Buffer rgb16;
@@ -111,11 +110,13 @@ namespace {
         return dmabuf;
     }
 
+    // W:H:FORMAT:OFFSET:STRIDE:MODIFIER:SIZE:UUID, seven decimal fields and
+    // the exporting GPU's deviceUUID as 32 hex digits
     bool parseShared(StringView spec, Image& img) {
-        u64 values[8] = {};
+        u64 values[7] = {};
         size_t pos = 0;
 
-        for (int i = 0; i < 8; i++) {
+        for (int i = 0; i < 7; i++) {
             size_t begin = pos;
 
             while (pos < spec.length() && spec[pos] >= '0' && spec[pos] <= '9') {
@@ -129,11 +130,26 @@ namespace {
                 pos++;
             }
 
-            if (pos == begin || (i < 7 ? pos >= spec.length() || spec[pos] != ':' : pos != spec.length())) {
+            if (pos == begin || pos >= spec.length() || spec[pos] != ':') {
                 return false;
             }
 
             pos++;
+        }
+
+        if (spec.length() - pos != 2 * VK_UUID_SIZE) {
+            return false;
+        }
+
+        for (size_t i = 0; i < 2 * VK_UUID_SIZE; i++) {
+            char c = spec[pos + i];
+            int nibble = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+
+            if (nibble < 0) {
+                return false;
+            }
+
+            img.deviceUuid[i / 2] = (u8)(img.deviceUuid[i / 2] << 4 | nibble);
         }
 
         img.w = (u32)values[0];
@@ -143,7 +159,6 @@ namespace {
         img.stride = (u32)values[4];
         img.modifier = values[5];
         img.allocationSize = values[6];
-        img.renderDevice = values[7];
 
         return img.w && img.h && img.stride && img.allocationSize;
     }
@@ -580,21 +595,17 @@ namespace {
             devices.zero(count);
             vkEnumeratePhysicalDevices(gInstance, &count, devices.mutData());
 
+            // the buffer is only known to import on the GPU that exported
+            // it; its deviceUUID names that GPU in any process, a software
+            // device without a drm node included
             for (VkPhysicalDevice device : devices) {
-                if (!hasDeviceExtension(device, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
-                    continue;
-                }
-
-                VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+                VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};
                 VkPhysicalDeviceProperties2 props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 
-                props.pNext = &drm;
+                props.pNext = &ids;
                 vkGetPhysicalDeviceProperties2(device, &props);
 
-                bool render = drm.hasRender && (u64)makedev((u32)drm.renderMajor, (u32)drm.renderMinor) == img.renderDevice;
-                bool primary = drm.hasPrimary && (u64)makedev((u32)drm.primaryMajor, (u32)drm.primaryMinor) == img.renderDevice;
-
-                if (render || primary) {
+                if (memcmp(ids.deviceUUID, img.deviceUuid, VK_UUID_SIZE) == 0) {
                     gPhys = device;
 
                     break;

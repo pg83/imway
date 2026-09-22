@@ -547,7 +547,14 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     if (image) {
         StringBuilder builder((Buffer&&)metadata);
 
-        builder << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv << (unsigned long long)image->renderDevice;
+        builder << "IMWAY_SHOT_DMABUF="_sv << (unsigned long long)image->width << ":"_sv << (unsigned long long)image->height << ":"_sv << (unsigned long long)image->format << ":"_sv << (unsigned long long)image->offset << ":"_sv << (unsigned long long)image->stride << ":"_sv << (unsigned long long)image->modifier << ":"_sv << (unsigned long long)image->allocationSize << ":"_sv;
+
+        const u8* digits = (const u8*)"0123456789abcdef";
+
+        for (u8 byte : image->deviceUuid) {
+            builder << StringView(digits + (byte >> 4), 1) << StringView(digits + (byte & 15), 1);
+        }
+
         builder.xchg(metadata);
     }
 
