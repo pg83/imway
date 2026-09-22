@@ -2887,7 +2887,7 @@ void KmsOutput::setupVt() {
     const char* probes[] = {"/dev/tty", "/dev/tty0"};
 
     for (const char* probe : probes) {
-        int fd = open(probe, O_RDWR | O_CLOEXEC);
+        int fd = open(probe, O_RDWR | O_NOCTTY | O_CLOEXEC);
 
         if (fd < 0) {
             continue;
@@ -2915,7 +2915,10 @@ void KmsOutput::setupVt() {
     auto& p = sb();
 
     p << "/dev/tty"_sv << vt;
-    ttyFd = open(p.cStr(), O_RDWR | O_CLOEXEC);
+    // O_NOCTTY here and in the probes: a compositor without a controlling
+    // terminal (a service, its own session) would otherwise adopt the
+    // console and die of the SIGHUP its next hangup sends
+    ttyFd = open(p.cStr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
 
     if (ttyFd < 0) {
         *(c->log) << "imway: "_sv << sv(p) << " unavailable, input will leak to console"_sv << endL;
