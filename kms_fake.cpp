@@ -1370,7 +1370,11 @@ void FakeKms::ddcLoop() {
             (void)w;
         } else if (n == 7 && msg[1] == 0x84 && msg[2] == 0x03) {
             ddcCur = (msg[4] << 8) | msg[5];
+            // the emulator's log lines share one stream: the ioctl path
+            // writes under the same lock
+            pthread_mutex_lock(&mu);
             sysE << "fake-kms: ddc set vcp "_sv << (i64)msg[3] << " = "_sv << ddcCur << endL;
+            pthread_mutex_unlock(&mu);
         }
     }
 
@@ -1405,7 +1409,9 @@ int FakeKms::openDdc(StringView bus) {
     ddcPeer = sv[1];
     pthread_create(&ddcThread, nullptr, ddcThreadTrampoline, this);
     pthread_detach(ddcThread);
+    pthread_mutex_lock(&mu);
     sysE << "fake-kms: ddc monitor on "_sv << bus << endL;
+    pthread_mutex_unlock(&mu);
 
     return sv[0];
 }
