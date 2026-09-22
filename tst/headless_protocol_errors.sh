@@ -17,7 +17,8 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             dmabuf-params-incomplete representation-dead-alpha \
             representation-dead-coefficients representation-dead-chroma \
             negative-max-size dmabuf-params-plane-gap export-plain-surface \
-            icon-not-shm icon-not-square reposition-bad-positioner \
+            icon-not-shm icon-not-square icon-zero-scale icon-thin-stride \
+            icon-sigbus reposition-bad-positioner \
             security-bad-listen-fd security-incomplete security-engine-after-commit \
             security-appid-after-commit security-instance-after-commit \
             security-commit-twice security-listen-not-socket security-no-app-id \

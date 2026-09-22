@@ -9252,18 +9252,12 @@ namespace {
             return;
         }
 
+        // wl_shm only makes ARGB8888 and XRGB8888 buffers of a positive size
         u32 fmt = shm->format;
-
-        if (fmt != WL_SHM_FORMAT_ARGB8888 && fmt != WL_SHM_FORMAT_XRGB8888) {
-            wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "unsupported icon buffer format");
-
-            return;
-        }
-
         int w = shm->width;
         int h = shm->height;
 
-        if (w <= 0 || h <= 0 || w != h || scale <= 0) {
+        if (w != h || scale <= 0) {
             wl_resource_post_error(res, XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER, "icon buffer must be square with a positive scale");
 
             return;

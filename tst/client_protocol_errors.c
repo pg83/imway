@@ -772,6 +772,44 @@ int main(int argc, char** argv) {
                             XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER);
     }
 
+    // an icon buffer square and shm but wrong on one count: its scale, its
+    // stride
+    if (!strcmp(argv[1], "icon-zero-scale") || !strcmp(argv[1], "icon-thin-stride")) {
+        struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icons);
+        int thin = !strcmp(argv[1], "icon-thin-stride");
+        int stride = thin ? 32 * 4 - 4 : 32 * 4;
+        struct wl_shm_pool* pool = make_pool(stride * 32);
+
+        if (!pool) return 2;
+
+        struct wl_buffer* buf = wl_shm_pool_create_buffer(pool, 0, 32, 32, stride, WL_SHM_FORMAT_ARGB8888);
+
+        xdg_toplevel_icon_v1_add_buffer(icon, buf, !strcmp(argv[1], "icon-zero-scale") ? 0 : 1);
+
+        return expect_error(display, xdg_toplevel_icon_v1_interface.name,
+                            XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER);
+    }
+
+    // the pool's file shrank under the compositor's mapping: copying the
+    // icon out faults, and the buffer's owner is told
+    if (!strcmp(argv[1], "icon-sigbus")) {
+        struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icons);
+        int size = 32 * 32 * 4;
+        int fd = memfd_create("errors-icon", 0);
+
+        if (fd < 0 || ftruncate(fd, size) < 0) return 2;
+
+        struct wl_shm_pool* pool = wl_shm_create_pool(shm, fd, size);
+        struct wl_buffer* buf = wl_shm_pool_create_buffer(pool, 0, 32, 32, 32 * 4, WL_SHM_FORMAT_ARGB8888);
+
+        if (ftruncate(fd, 0) < 0) return 2;
+
+        close(fd);
+        xdg_toplevel_icon_v1_add_buffer(icon, buf, 1);
+
+        return expect_error(display, wl_buffer_interface.name, WL_SHM_ERROR_INVALID_FD);
+    }
+
     if (!strcmp(argv[1], "reposition-bad-positioner")) {
         struct xdg_surface* parent_xs = xdg_wm_base_get_xdg_surface(wm_base3, surface);
         struct xdg_toplevel* parent_tl = xdg_surface_get_toplevel(parent_xs);
