@@ -6,8 +6,11 @@
 # spec hides -- NoDisplay, Hidden, no Name, no Exec, not an Application, an
 # empty file, a non-.desktop file or directory -- must not take a cell: they
 # are named to sort between the real ones, so any of them showing up would
-# move every pick after it.
-# imway-env: XDG_DATA_HOME=./xdg
+# move every pick after it. The host's own data dirs stay out of the search, so
+# its desktop entries do too; the Vulkan loader finds its drivers through
+# them, which vk/ lends it alone.
+# imway-env: XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./vk
+# imway-pre: mkdir -p vk && ln -s /usr/share/vulkan vk/vulkan
 # imway-pre: mkdir -p xdg/applications/sub.desktop
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -35,11 +38,16 @@ open_launcher() {
 }
 
 # the column count from the window's width: padding on both sides, then
-# cells of the dock's icon size with the slot's breathing room between them
+# cells of the dock's icon size with the slot's breathing room between them,
+# one dock slot per column (the dock's own width)
 open_launcher
 lw=$(dump_field '^imgui name=##launcher ' w)
 lx=$(dump_field '^imgui name=##launcher ' x); ly=$(dump_field '^imgui name=##launcher ' y)
-cols=$(((lw - 16 + 10) / 58))
+slot=$(dump_field '^imgui name=##dock ' w)
+grid=$((lw - 16 + 10))
+(( grid % slot == 0 )) || grid=$((grid - 14)) # a scrollbar beside the grid
+(( grid % slot == 0 )) || { echo "a ${lw}px launcher is no whole number of ${slot}px slots"; exit 1; }
+cols=$((grid / slot))
 echo "launcher ${lw}px wide at $lx,$ly: $cols columns"
 
 # the compositor's walk, replayed: sel 0 is the input line, 1.. the cells,
