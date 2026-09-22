@@ -260,7 +260,6 @@ namespace {
         u32 makeEdidBlob();
         void buildProps();
         u32 currentModes(drm_mode_modeinfo* modes);
-        int emuVersion(drm_version* v);
         int emuGetCap(drm_get_cap* c);
         int emuGetResources(drm_mode_card_res* r);
         int emuGetConnector(drm_mode_get_connector* c);
@@ -631,33 +630,6 @@ void FakeKms::buildProps() {
     addProp(kCursorPlaneId, pCursorCrtcH, "CRTC_H", DRM_MODE_PROP_RANGE, nullptr, 0, 0, ~0u, 0);
 
     addProp(kLeasePlaneId, pLeasePlaneType, "type", DRM_MODE_PROP_ENUM | DRM_MODE_PROP_IMMUTABLE, kTypeEnums, 3, 0, 0, DRM_PLANE_TYPE_PRIMARY);
-}
-
-int FakeKms::emuVersion(drm_version* v) {
-    static const char kName[] = "fakekms";
-    static const char kDate[] = "2026";
-    static const char kDesc[] = "imway userspace kms emulator";
-
-    if (v->name && v->name_len >= sizeof(kName) - 1) {
-        memcpy(v->name, kName, sizeof(kName) - 1);
-    }
-
-    if (v->date && v->date_len >= sizeof(kDate) - 1) {
-        memcpy(v->date, kDate, sizeof(kDate) - 1);
-    }
-
-    if (v->desc && v->desc_len >= sizeof(kDesc) - 1) {
-        memcpy(v->desc, kDesc, sizeof(kDesc) - 1);
-    }
-
-    v->version_major = 1;
-    v->version_minor = 0;
-    v->version_patchlevel = 0;
-    v->name_len = sizeof(kName) - 1;
-    v->date_len = sizeof(kDate) - 1;
-    v->desc_len = sizeof(kDesc) - 1;
-
-    return 0;
 }
 
 int FakeKms::emuGetCap(drm_get_cap* c) {
@@ -1424,9 +1396,6 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
     // sign-extended while Mesa's raw-syscall path arrives zero-extended.
     // Truncate before dispatch so both spellings hit the same case.
     switch ((u32)req) {
-        case DRM_IOCTL_VERSION:
-            rc = emuVersion((drm_version*)arg);
-            break;
         case DRM_IOCTL_SET_CLIENT_CAP:
             rc = 0;
             break;
@@ -1612,10 +1581,6 @@ KmsIntercept* installInterceptor() {
 }
 
 int FakeKms::openDevice() {
-    if (clientFd >= 0) {
-        return -EBUSY;
-    }
-
     int pipeFds[2];
 
     if (pipe2(pipeFds, O_CLOEXEC) != 0) {
