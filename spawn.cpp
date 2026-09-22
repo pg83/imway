@@ -26,8 +26,6 @@ extern char** environ;
 using namespace stl;
 
 namespace {
-    constexpr size_t maxStrings = 1024;
-
     struct SpawnerImpl: Spawner {
         SpawnerImpl(Composer& c);
         ~SpawnerImpl() noexcept override;
@@ -103,10 +101,10 @@ namespace {
         return false;
     }
 
+    // keyValue is a KEY=VALUE entry, as SpawnSpec requires
     static bool sameKey(const char* entry, StringView keyValue) {
         const char* key = (const char*)keyValue.data();
-        const char* eq = (const char*)memchr(key, '=', keyValue.length());
-        size_t keyLen = eq ? (size_t)(eq - key) : keyValue.length();
+        size_t keyLen = (size_t)((const char*)memchr(key, '=', keyValue.length()) - key);
 
         return strncmp(entry, key, keyLen) == 0 && entry[keyLen] == '=';
     }
@@ -213,14 +211,10 @@ SpawnerImpl::~SpawnerImpl() noexcept {
 }
 
 void SpawnerImpl::spawn(const SpawnSpec& spec) {
-    if (!spec.args || !spec.argCount || spec.argCount > maxStrings || spec.envCount > maxStrings || nullFd < 0) {
+    // every caller builds its spec from literals: an argv of three or five
+    // words and a handful of KEY=VALUE entries
+    if (nullFd < 0) {
         return;
-    }
-
-    for (size_t i = 0; i < spec.envCount; i++) {
-        if (!memchr(spec.env[i].data(), '=', spec.env[i].length())) {
-            return;
-        }
     }
 
     Buffer path;
