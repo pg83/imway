@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # private-session-bus
-# imway-env: XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./xdg2::./no-such-dir
+# imway-env: XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./xdg2::./no-such-dir:/usr/local/share:/usr/share
 # The icon store's odd corners, staged after startup and picked up by an
 # icon-theme change (which reloads the store; setting it to hicolor itself
 # must not index hicolor twice). Desktop files whose Icon= is an absolute
@@ -8,7 +8,9 @@
 # directories where desktop files, svgs and pngs belong, size directories
 # that are not plain NxN, a png present in two data dirs, a name with only
 # a smaller png, and pngs and svgs that cannot be decoded. Notification
-# icons take the string paths: absolute files and a mixed-case name.
+# icons take the string paths: absolute files and a mixed-case name. The
+# system data dirs stay at the end of XDG_DATA_DIRS: on a distribution
+# install the Vulkan loader finds its drivers through them.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

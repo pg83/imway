@@ -6,8 +6,10 @@
 # section and a line with no key, up to a last line with no newline. A pin
 # that names a running application's id is that application's slot, not a
 # second one. A Terminal=true entry needs a terminal: with none configured
-# it does not run at all, with one it runs inside it.
-# imway-env: XDG_DATA_HOME=./nothing XDG_DATA_DIRS=./xdg
+# it does not run at all, with one it runs inside it. The system data dirs
+# stay at the end of XDG_DATA_DIRS: on a distribution install the Vulkan
+# loader finds its drivers through them.
+# imway-env: XDG_DATA_HOME=./nothing XDG_DATA_DIRS=./xdg:/usr/local/share:/usr/share
 # imway-pre: mkdir -p nothing xdg/applications
 # imway-pre: printf '# before any section\n[Desktop Action other]\nExec=sh -c "echo wrong > pinned.out"\n[Desktop Entry]\nno key on this line\nType=Application\nName=Quirks\nTerminal=false\nExec=sh -c "echo quirks > pinned.out"' > xdg/applications/pinned-quirks.desktop
 # imway-pre: printf '[Desktop Entry]\nType=Application\nName=Term\nTerminal=true\nExec=term-payload\n' > xdg/applications/term.desktop
