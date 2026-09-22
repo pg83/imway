@@ -46,8 +46,13 @@ set_setting desktop.active_click 2
 before=$(focus_id)
 moved() { local id; id=$(focus_id); [[ "$id" != "$before" && "$id" != 0 ]]; }
 back() { [[ "$(focus_id)" == "$before" ]]; }
-click_at 29 29
-await 50 moved || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
+# a click can land before the frame that puts the slot under the pointer;
+# one that did not act is repeated (one that did moved the focus)
+for _ in 1 2 3; do
+    click_at 29 29
+    await 30 moved && break
+done
+moved || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
 click_at 29 29
 await 50 back || { echo "cycle did not come back"; dump_state; exit 1; }
 

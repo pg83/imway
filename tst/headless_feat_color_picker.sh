@@ -16,7 +16,9 @@ notes_active() {
 
 # the launcher arms it: Super+F2, type the action, Up selects it, Enter runs
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
-sleep 0.3
+# type only once the launcher's field has the keyboard, then let ImGui's
+# trickle queue take the text before the keys that act on it
+await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
 ctl "type color picker"
 sleep 0.3
 ctl "key 103 press"; ctl "key 103 release" # Up: into the action row
