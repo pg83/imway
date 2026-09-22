@@ -2,6 +2,7 @@ import build
 import build.flags as flags
 import fnmatch
 import os
+import shlex
 
 
 std_build = os.path.join("ext", "libstd", "build.py")
@@ -12,6 +13,7 @@ flags.allow({
     "runs": {"descr": "runs per test scenario", "default": "3"},
     "filter": {"descr": "glob restricting which test scenarios build", "default": ""},
     "allow_flaky": {"descr": "treat flaky tests as a warning, not a failure"},
+    "test_wrap": {"descr": "command prefix each scenario run executes under (e.g. dev/vng_wrap.sh: a VM with a virtio-gpu)", "default": ""},
 })
 
 
@@ -405,6 +407,10 @@ install(imway, *tests)
 # that fails `./build test`. -Dfilter=GLOB restricts which scenarios build.
 runs = int(flags.runs)
 test_filter = flags.filter
+# -Dtest_wrap=CMD runs each scenario under an external wrapper: the graph
+# still builds on the host, only the run itself moves (into a VM, say, for
+# devices the host does not have)
+test_wrap = shlex.split(flags.test_wrap)
 
 scenarios = sorted(build.glob("$(S)/tst/headless_*.sh"))
 # every non-scenario file a scenario may source (lib.sh, *_case.sh, *.inc),
@@ -432,6 +438,7 @@ for scenario in scenarios:
     for run_index in range(runs):
         out = f"$(B)/test-results/{name}.run{run_index}.json"
         cmd = [
+            *test_wrap,
             "python3", "$(S)/dev/run_test.py",
             "--scenario", scenario,
             "--imway", "$(B)/imway_test",
