@@ -12,10 +12,13 @@ namespace stl {
 struct KmsIntercept {
     virtual int openDevice() = 0;
 
-    // connector hotplug: flip the link and re-probe via Output::hotplug()
-    virtual void setConnected(bool connected) = 0;
+    // connector hotplug: flip the link and re-probe via Output::hotplug();
+    // 0 unplugged, 1 plugged, 2 the connector object itself gone for the
+    // moment (an MST port going away under the probe)
+    virtual void setConnected(int state) = 0;
     // the connector's mode list: 0 default, 1 tv (1080p only), 2 small
-    // (800p only) — a swapped display without touching the link
+    // (800p only), 3 a 1366x768 panel whose dumb buffers need padded rows
+    // — a swapped display without touching the link
     virtual void setModes(int set) = 0;
     // the next atomic commits fail with err until count runs out; testToo
     // extends that to TEST_ONLY commits — the shape of losing drm master

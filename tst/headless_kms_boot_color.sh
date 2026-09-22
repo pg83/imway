@@ -12,6 +12,11 @@ boot_rc 0 "sdr panel"
 boot_has "display EDID does not advertise PQ + BT.2020 RGB"
 boot_lacks "HDR output"
 
+kms_boot IMWAY_FAKE_KMS_EDID=no-bt2020 -- --hdr 300
+boot_rc 0 "pq panel without bt.2020"
+boot_has "display EDID does not advertise PQ + BT.2020 RGB"
+boot_lacks "HDR output"
+
 kms_boot IMWAY_FAKE_KMS_EDID=garbage -- --hdr 300
 boot_rc 0 "unreadable EDID"
 boot_has "display EDID unavailable or invalid"
@@ -27,6 +32,16 @@ boot_has "HDR output: BT.2020 + PQ, target .*\.\.800"
 kms_boot IMWAY_FAKE_KMS_MAX_BPC=8 -- --bpc 10
 boot_rc 1 "bpc beyond the link"
 boot_has "requested 10 bpc is outside connector range 6..8"
+
+kms_boot IMWAY_FAKE_KMS_MIN_BPC=10 -- --bpc 8
+boot_rc 1 "bpc below the link"
+boot_has "requested 8 bpc is outside connector range 10..16"
+
+# an explicit depth is the user's, the 10-bit framebuffer does not raise it
+kms_boot -- --bpc 12
+boot_rc 0 "explicit bpc"
+boot_has "fake-kms: max bpc = 12"
+boot_lacks "for the 10-bit framebuffer"
 
 # the 10-bit framebuffer asks for the deepest link the connector has
 kms_boot IMWAY_FAKE_KMS_MAX_BPC=8 --

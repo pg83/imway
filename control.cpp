@@ -456,7 +456,7 @@ void ControlImpl::handleLine(StringView cmd) {
         dumpIconSize = (u32)args.stou();
     } else if (verb == "kms-connector"_sv && comp->kmsIntercept) {
         // flip the fake connector and re-probe, like a udev hotplug would
-        comp->kmsIntercept->setConnected(args.stou() != 0);
+        comp->kmsIntercept->setConnected((int)args.stou());
         comp->output->hotplug();
         comp->scene->needsFrame = true;
     } else if (verb == "kms-fail-commit"_sv && comp->kmsIntercept) {

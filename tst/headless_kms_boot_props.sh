@@ -31,6 +31,12 @@ boot_has "HDR unsupported here, staying SDR"
 boot_has "10-bit scanout"
 boot_has "clean exit after"
 
+# an SDR link without depth control keeps whatever depth it has
+kms_boot IMWAY_FAKE_KMS_DROP_PROPS="max bpc" --
+boot_rc 0 "sdr without depth control"
+boot_has "10-bit scanout"
+boot_lacks "for the 10-bit framebuffer"
+
 kms_boot IMWAY_FAKE_KMS_DROP_PROPS="max bpc" -- --bpc 10
 boot_rc 1 "explicit bpc without the property"
 boot_has "connector has no max bpc property for explicit --bpc"

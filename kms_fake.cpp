@@ -179,8 +179,8 @@ namespace {
         pthread_cond_t cv = PTHREAD_COND_INITIALIZER;
         pthread_t flipThread{};
 
-        bool connected = true;
-        int modeSet = 0; // 0 default, 1 tv (1080p only), 2 small (800p only)
+        int connected = 1; // 0 unplugged, 1 plugged, 2 connector gone
+        int modeSet = 0; // 0 default, 1 tv, 2 small, 3 1366x768 panel
         bool noPrime = false;
         bool asyncFlipLogged = false;
         Vector<PropDef> props;
@@ -215,7 +215,8 @@ namespace {
         // the device's shape at boot, read from IMWAY_FAKE_KMS_* by
         // openDevice: a scenario boots a different display or driver
         StringView dropProps; // property names the driver does not expose
-        int edidKind = 0;     // 0 hdr panel, 1 sdr panel, 2 unparseable
+        int edidKind = 0;     // 0 hdr, 1 sdr, 2 unparseable, 3 no BT.2020 RGB
+        u64 minBpcCap = 6;
         u64 maxBpcCap = 16;
         bool legacyLimited = false;
         u64 cursorCap = 64;
@@ -243,7 +244,7 @@ namespace {
         u32 lastLessee = 0;
 
         int openDevice() override;
-        void setConnected(bool connected) override;
+        void setConnected(int state) override;
         void setModes(int set) override;
         void failCommits(int err, int count, bool testToo) override;
         void failNewFb(int err) override;
@@ -548,6 +549,11 @@ u32 FakeKms::makeEdidBlob() {
     c[13] = 0x60;
     c[14] = 0x1a;
 
+    // a PQ panel that cannot take BT.2020 RGB signalling
+    if (edidKind == 3) {
+        c[6] = 0x00;
+    }
+
     // an sdr panel: the base block alone, no colorimetry, no HDR metadata
     int blocks = edidKind == 1 ? 1 : 2;
 
@@ -582,7 +588,7 @@ u32 FakeKms::makeEdidBlob() {
 void FakeKms::buildProps() {
     addProp(kConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
     addProp(kConnectorId, pConnColorspace, "Colorspace", DRM_MODE_PROP_ENUM, kColorspaceEnums, 3, 0, 0, 0);
-    addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, 6, maxBpcCap, 10);
+    addProp(kConnectorId, pConnMaxBpc, "max bpc", DRM_MODE_PROP_RANGE, nullptr, 0, minBpcCap, maxBpcCap, 10);
     addProp(kConnectorId, pConnBroadcastRgb, "Broadcast RGB", DRM_MODE_PROP_ENUM, legacyLimited ? kBroadcastLegacyEnums : kBroadcastEnums, 3, 0, 0, 0);
     addProp(kConnectorId, pConnHdrMeta, "HDR_OUTPUT_METADATA", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
     addProp(kConnectorId, pConnEdid, "EDID", DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 0, makeEdidBlob());
@@ -684,6 +690,12 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
         return 1;
     }
 
+    if (modeSet == 3) {
+        fillMode(modes[0], 1366, 768, 60, true);
+
+        return 1;
+    }
+
     fillMode(modes[0], 1280, 800, 60, true);
     fillMode(modes[1], 1920, 1080, 60, false);
 
@@ -737,7 +749,7 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
         return 0;
     }
 
-    if (c->connector_id != kConnectorId) {
+    if (c->connector_id != kConnectorId || connected == 2) {
         return -ENOENT;
     }
 
@@ -1059,7 +1071,11 @@ int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
 
     FakeGem gem;
 
-    gem.dumbSize = (u64)c->width * 4 * c->height;
+    // rows padded to 256 bytes, the way display engines want them: a
+    // 1366-wide buffer is no longer width * 4 apart
+    u32 pitch = (c->width * 4 + 255) & ~255u;
+
+    gem.dumbSize = (u64)pitch * c->height;
     gem.fd = (int)syscall(SYS_memfd_create, "fake-kms-dumb", (unsigned)MFD_CLOEXEC);
 
     if (gem.fd < 0) {
@@ -1078,7 +1094,7 @@ int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
     gem.refs = 1;
     gems.pushBack(gem);
     c->handle = gem.handle;
-    c->pitch = c->width * 4;
+    c->pitch = pitch;
     c->size = gem.dumbSize;
 
     return 0;
@@ -1628,6 +1644,7 @@ int FakeKms::openDevice() {
     const char* drop = getenv("IMWAY_FAKE_KMS_DROP_PROPS");
     const char* edid = getenv("IMWAY_FAKE_KMS_EDID");
     const char* bpc = getenv("IMWAY_FAKE_KMS_MAX_BPC");
+    const char* minBpc = getenv("IMWAY_FAKE_KMS_MIN_BPC");
     const char* cursor = getenv("IMWAY_FAKE_KMS_CURSOR_CAP");
     const char* dumb = getenv("IMWAY_FAKE_KMS_FAIL_DUMB");
     const char* addFb = getenv("IMWAY_FAKE_KMS_FAIL_ADDFB");
@@ -1635,7 +1652,8 @@ int FakeKms::openDevice() {
     const char* commits = getenv("IMWAY_FAKE_KMS_FAIL_COMMITS");
 
     dropProps = drop ? StringView(drop) : StringView();
-    edidKind = !edid ? 0 : StringView(edid) == "sdr"_sv ? 1 : 2;
+    edidKind = !edid ? 0 : StringView(edid) == "sdr"_sv ? 1 : StringView(edid) == "no-bt2020"_sv ? 3 : 2;
+    minBpcCap = minBpc ? StringView(minBpc).stou() : 6;
     maxBpcCap = bpc ? StringView(bpc).stou() : 16;
     legacyLimited = getenv("IMWAY_FAKE_KMS_LEGACY_RANGE") != nullptr;
     cursorCap = cursor ? StringView(cursor).stou() : 64;
@@ -1664,7 +1682,7 @@ int FakeKms::openDevice() {
     return clientFd;
 }
 
-void FakeKms::setConnected(bool value) {
+void FakeKms::setConnected(int value) {
     pthread_mutex_lock(&mu);
     connected = value;
     pthread_mutex_unlock(&mu);

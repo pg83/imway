@@ -25,9 +25,15 @@ boot_rc 0 "cold boot"
 boot_has "kms output: 1280x800@60, connector 101, crtc 103, plane 104"
 boot_has "cursor plane 105, 64x64"
 
-# the cursor's dumb buffer is the first one the output allocates
+# the cursor's dumb buffer and its framebuffer are the first the output
+# allocates
 kms_boot IMWAY_FAKE_KMS_FAIL_DUMB=1 --
 boot_rc 0 "no cursor buffer"
+boot_has "cursor plane setup failed: .*, software cursor"
+boot_has "clean exit after"
+
+kms_boot IMWAY_FAKE_KMS_FAIL_ADDFB=1 --
+boot_rc 0 "no cursor framebuffer"
 boot_has "cursor plane setup failed: .*, software cursor"
 boot_has "clean exit after"
 
