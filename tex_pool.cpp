@@ -1,6 +1,7 @@
 #include "tex_pool.h"
 
 #include "util.h"
+#include "pooled.h"
 #include "chaos_monkey.h"
 
 #include <std/lib/vector.h>
@@ -16,7 +17,6 @@ namespace {
 
     struct VkTexturePoolImpl: public VkTexturePool {
         VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
-        ~VkTexturePoolImpl() noexcept;
 
         VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
@@ -29,7 +29,7 @@ namespace {
         VkSampler sampler;
         ChaosMonkey* chaos;
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
-        Vector<VkDescriptorPool> chunks;
+        Vector<VkDescriptorPool>* chunks = nullptr;
     };
 }
 
@@ -56,22 +56,29 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosM
     dlci.pBindings = bindings;
     STD_VERIFY(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout) == VK_SUCCESS);
 
+    // one guard for the whole chain, registered now: a chunk grown later
+    // than the renderer that frees sets into it still dies where the chain
+    // was made, not after its own growth. It holds the list, not this, which
+    // is gone by then
+    chunks = pool.make<Vector<VkDescriptorPool>>();
+
+    Vector<VkDescriptorPool>* list = chunks;
+    VkDevice owner = device;
+    VkDescriptorSetLayout setLayout = layout;
+
+    pooledGuard(pool, [list, owner, setLayout] {
+        for (VkDescriptorPool chunk : *list) {
+            vkDestroyDescriptorPool(owner, chunk, nullptr);
+        }
+
+        vkDestroyDescriptorSetLayout(owner, setLayout, nullptr);
+    });
+
     grow();
 }
 
-// the chunks die with the chain, not with guards of their own: a chunk grown
-// after boot would get a guard later in the arena than the renderer, which
-// frees the sets still allocated from it only as it dies
-VkTexturePoolImpl::~VkTexturePoolImpl() noexcept {
-    for (VkDescriptorPool chunk : chunks) {
-        vkDestroyDescriptorPool(device, chunk, nullptr);
-    }
-
-    vkDestroyDescriptorSetLayout(device, layout, nullptr);
-}
-
 VkDescriptorPool VkTexturePoolImpl::grow() {
-    u32 shift = chunks.length() < kMaxShift ? (u32)chunks.length() : kMaxShift;
+    u32 shift = chunks->length() < kMaxShift ? (u32)chunks->length() : kMaxShift;
     u32 cap = kFirstChunk << shift;
 
     VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, cap * 2};
@@ -92,7 +99,7 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
         return VK_NULL_HANDLE;
     }
 
-    chunks.pushBack(p);
+    chunks->pushBack(p);
 
     return p;
 }
@@ -123,8 +130,8 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
 
     // walk the chain; a full or fragmented pool is skipped, a fresh one is
     // grown only when none had room
-    for (size_t i = 0; i <= chunks.length(); i++) {
-        VkDescriptorPool p = i < chunks.length() ? chunks[i] : grow();
+    for (size_t i = 0; i <= chunks->length(); i++) {
+        VkDescriptorPool p = i < chunks->length() ? (*chunks)[i] : grow();
 
         if (!p) {
             break; // device out of memory even for a new pool
