@@ -35,6 +35,8 @@ static struct xdg_toplevel_drag_manager_v1* drags;
 static struct zwp_input_method_manager_v2* ims;
 static uint32_t foreign_list_name;
 static struct zwp_text_input_manager_v3* text_inputs;
+// bound so the surfaces of this client can be told which output shows them
+static struct wl_output* output;
 static struct zxdg_exporter_v2* exporter;
 static struct zxdg_importer_v2* importer;
 static struct wl_shm* shm2;
@@ -70,6 +72,8 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
         ims = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
     else if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name))
         foreign_list_name = name;
+    else if (!strcmp(iface, wl_output_interface.name) && !output)
+        output = wl_registry_bind(registry, name, &wl_output_interface, 1);
     else if (!strcmp(iface, zwp_text_input_manager_v3_interface.name))
         text_inputs = wl_registry_bind(registry, name, &zwp_text_input_manager_v3_interface, 1);
     else if (!strcmp(iface, zxdg_exporter_v2_interface.name))
@@ -1445,6 +1449,57 @@ static int mode_reposition_pending(void) {
     return 0;
 }
 
+// ---- cursor-enter: a cursor surface is on the output it is drawn on ---------
+static int cursor_entered;
+
+static void cursor_enter(void* d, struct wl_surface* s, struct wl_output* o) {
+    (void)d; (void)s; (void)o;
+    cursor_entered++;
+}
+static void cursor_leave(void* d, struct wl_surface* s, struct wl_output* o) {
+    (void)d; (void)s; (void)o;
+}
+static void cursor_scale(void* d, struct wl_surface* s, int32_t f) {
+    (void)d; (void)s; (void)f;
+}
+static void cursor_transform(void* d, struct wl_surface* s, uint32_t t) {
+    (void)d; (void)s; (void)t;
+}
+static const struct wl_surface_listener cursor_surface_listener = {
+    .enter = cursor_enter,
+    .leave = cursor_leave,
+    .preferred_buffer_scale = cursor_scale,
+    .preferred_buffer_transform = cursor_transform,
+};
+
+static int mode_cursor_enter(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-cursor", 200, 150, 0xFF0000FF);
+    printf("ready\n");
+    while (!wlp_enter_count && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    struct wl_surface* cursor = wl_compositor_create_surface(wl_comp);
+
+    wl_surface_add_listener(cursor, &cursor_surface_listener, NULL);
+    wl_surface_attach(cursor, wl_solid(16, 16, 0xFF00FF00), 0, 0);
+    wl_surface_damage(cursor, 0, 0, 16, 16);
+    wl_surface_commit(cursor);
+    wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, cursor, 0, 0);
+    printf("cursor set\n");
+    for (int i = 0; i < 300 && !cursor_entered; i++) {
+        roundtrip("cursor");
+        usleep(10000);
+    }
+    if (!cursor_entered) {
+        fprintf(stderr, "the cursor surface never entered the output\n");
+        return 1;
+    }
+    printf("cursor enter ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1479,6 +1534,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "cursor-enter")) return mode_cursor_enter();
     if (!strcmp(mode, "reposition-pending")) return mode_reposition_pending();
     if (!strcmp(mode, "stale-move")) return mode_stale_move();
     if (!strcmp(mode, "foreign-move")) return mode_foreign_move();
