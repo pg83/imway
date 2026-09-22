@@ -111,7 +111,9 @@ static void step(int n) {
     printf("step %d\n", n);
     wlk_watch_key = KEY_1;
     wlk_watch_hits = 0;
-    while (!wlk_watch_hits && wl_display_dispatch(wl_dpy) != -1) {
+    // the press and its release both count: waiting for the pair keeps a
+    // late release from answering the next step
+    while (wlk_watch_hits < 2 && wl_display_dispatch(wl_dpy) != -1) {
     }
 }
 
@@ -863,6 +865,7 @@ static int mode_input_region(void) {
     wl_region_add(empty, 10, 10, 0, 20);
     wl_region_subtract(empty, 10, 10, 20, -1);
     wl_region_add(empty, INT32_MAX - 10, INT32_MAX - 10, 100, 100);
+    wl_region_add(empty, INT32_MAX, 0, 10, 10);
     wl_surface_set_input_region(t.surface, empty);
     wl_region_destroy(empty);
     // an opaque region set and taken back again
@@ -987,6 +990,33 @@ static int mode_bad(const char* what) {
     }
 
     struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+
+    if (!strcmp(what, "place-self")) {
+        struct wl_toplevel_ctx t;
+
+        wl_make_toplevel(&t, "misc-place-self", 60, 40, 0xFF0000FF);
+
+        struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, s, t.surface);
+
+        wl_subsurface_place_above(sub, s);
+        return wl_expect_error("wl_subsurface", WL_SUBSURFACE_ERROR_BAD_SURFACE);
+    }
+    if (!strcmp(what, "subsurface-of-xdg")) {
+        // an xdg_surface without a role yet still claims the wl_surface
+        xdg_wm_base_get_xdg_surface(wl_wm, s);
+        wl_subcompositor_get_subsurface(wl_subcomp, s, wl_compositor_create_surface(wl_comp));
+        return wl_expect_error("wl_subcompositor", WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE);
+    }
+    if (!strcmp(what, "min-over-max-height")) {
+        struct wl_toplevel_ctx t;
+
+        wl_make_toplevel(&t, "misc-min-max", 60, 40, 0xFF0000FF);
+        // the widths agree, the heights do not
+        xdg_toplevel_set_min_size(t.tl, 10, 50);
+        xdg_toplevel_set_max_size(t.tl, 100, 20);
+        wl_surface_commit(t.surface);
+        return wl_expect_error("xdg_toplevel", XDG_TOPLEVEL_ERROR_INVALID_SIZE);
+    }
 
     if (!strcmp(what, "unacked")) {
         struct xdg_surface* uxs = xdg_wm_base_get_xdg_surface(wl_wm, s);
@@ -1232,6 +1262,32 @@ static int mode_timed_subsurface(void) {
     return 0;
 }
 
+// ---- inert-subsurface: requests on a subsurface whose surface is gone --------
+static int mode_inert_subsurface(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-inert", 120, 90, 0xFF0000FF);
+
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+    struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, child, t.surface);
+
+    wl_surface_attach(child, wl_solid(20, 20, 0xFF00FF00), 0, 0);
+    wl_surface_commit(child);
+    wl_surface_commit(t.surface);
+    roundtrip("child");
+    // the wl_subsurface outlives its wl_surface as an inert object
+    wl_surface_destroy(child);
+    wl_subsurface_set_position(sub, 5, 5);
+    wl_subsurface_set_sync(sub);
+    wl_subsurface_set_desync(sub);
+    wl_surface_commit(t.surface);
+    roundtrip("inert requests");
+    wl_subsurface_destroy(sub);
+    roundtrip("inert destroy");
+    printf("inert subsurface ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1266,6 +1322,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "inert-subsurface")) return mode_inert_subsurface();
     if (!strcmp(mode, "timed-subsurface")) return mode_timed_subsurface();
     if (!strcmp(mode, "vp-transforms")) return mode_vp_transforms();
     if (!strncmp(mode, "bad-", 4)) return mode_bad(mode + 4);
