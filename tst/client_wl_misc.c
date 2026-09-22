@@ -18,6 +18,8 @@
 #include <tablet-v2-client-protocol.h>
 #include <xdg-toplevel-drag-v1-client-protocol.h>
 #include <input-method-unstable-v2-client-protocol.h>
+#include <text-input-unstable-v3-client-protocol.h>
+#include <xdg-foreign-unstable-v2-client-protocol.h>
 
 static struct wp_viewporter* viewporter;
 static struct wp_tearing_control_manager_v1* tearing;
@@ -28,6 +30,10 @@ static struct zwp_tablet_manager_v2* tablets;
 static struct xdg_toplevel_drag_manager_v1* drags;
 static struct zwp_input_method_manager_v2* ims;
 static uint32_t foreign_list_name;
+static struct zwp_text_input_manager_v3* text_inputs;
+static struct zxdg_exporter_v2* exporter;
+static struct zxdg_importer_v2* importer;
+static struct wl_shm* shm2;
 
 static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
                          const char* iface, uint32_t version) {
@@ -50,6 +56,14 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
         ims = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
     else if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name))
         foreign_list_name = name;
+    else if (!strcmp(iface, zwp_text_input_manager_v3_interface.name))
+        text_inputs = wl_registry_bind(registry, name, &zwp_text_input_manager_v3_interface, 1);
+    else if (!strcmp(iface, zxdg_exporter_v2_interface.name))
+        exporter = wl_registry_bind(registry, name, &zxdg_exporter_v2_interface, 1);
+    else if (!strcmp(iface, zxdg_importer_v2_interface.name))
+        importer = wl_registry_bind(registry, name, &zxdg_importer_v2_interface, 1);
+    else if (!strcmp(iface, wl_shm_interface.name) && version >= 2)
+        shm2 = wl_registry_bind(registry, name, &wl_shm_interface, 2);
 }
 static void extra_remove(void* d, struct wl_registry* registry, uint32_t name) {
     (void)d; (void)registry; (void)name;
@@ -601,6 +615,222 @@ static int mode_im_grab(void) {
     return 0;
 }
 
+
+// ---- im-popup: the popup surface object destroyed before its input method ---
+static int mode_im_popup(void) {
+    need(ims, "zwp_input_method_manager_v2");
+
+    struct zwp_input_method_v2* im = zwp_input_method_manager_v2_get_input_method(ims, wl_seat_g);
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+    struct zwp_input_popup_surface_v2* popup = zwp_input_method_v2_get_input_popup_surface(im, s);
+
+    roundtrip("popup");
+    zwp_input_popup_surface_v2_destroy(popup);
+    roundtrip("popup destroy");
+    // the input method outlives it and can wrap a surface again
+    popup = zwp_input_method_v2_get_input_popup_surface(im, wl_compositor_create_surface(wl_comp));
+    roundtrip("second popup");
+    printf("im popup ok\n");
+    return 0;
+}
+
+// ---- text-input: the active text input destroyed deactivates the method -----
+static int im_active = -1, im_cause = -1, im_dones;
+static int ti_entered;
+
+static void im_activate(void* d, struct zwp_input_method_v2* im) { (void)d; (void)im; im_active = 1; }
+static void im_deactivate(void* d, struct zwp_input_method_v2* im) { (void)d; (void)im; im_active = 0; }
+static void im_surrounding(void* d, struct zwp_input_method_v2* im, const char* t, uint32_t c, uint32_t a) {
+    (void)d; (void)im; (void)t; (void)c; (void)a;
+}
+static void im_change_cause(void* d, struct zwp_input_method_v2* im, uint32_t cause) {
+    (void)d; (void)im;
+    im_cause = (int)cause;
+}
+static void im_content_type(void* d, struct zwp_input_method_v2* im, uint32_t h, uint32_t p) {
+    (void)d; (void)im; (void)h; (void)p;
+}
+static void im_done(void* d, struct zwp_input_method_v2* im) { (void)d; (void)im; im_dones++; }
+static void im_unavailable(void* d, struct zwp_input_method_v2* im) {
+    (void)d; (void)im;
+    fprintf(stderr, "input method unavailable\n");
+    exit(1);
+}
+static const struct zwp_input_method_v2_listener im_listener = {
+    im_activate, im_deactivate, im_surrounding, im_change_cause, im_content_type, im_done, im_unavailable,
+};
+
+static void ti_enter(void* d, struct zwp_text_input_v3* ti, struct wl_surface* s) { (void)d; (void)ti; (void)s; ti_entered = 1; }
+static void ti_leave(void* d, struct zwp_text_input_v3* ti, struct wl_surface* s) { (void)d; (void)ti; (void)s; }
+static void ti_preedit(void* d, struct zwp_text_input_v3* ti, const char* t, int32_t b, int32_t e) {
+    (void)d; (void)ti; (void)t; (void)b; (void)e;
+}
+static void ti_commit_string(void* d, struct zwp_text_input_v3* ti, const char* t) { (void)d; (void)ti; (void)t; }
+static void ti_delete(void* d, struct zwp_text_input_v3* ti, uint32_t b, uint32_t a) { (void)d; (void)ti; (void)b; (void)a; }
+static void ti_done(void* d, struct zwp_text_input_v3* ti, uint32_t serial) { (void)d; (void)ti; (void)serial; }
+static const struct zwp_text_input_v3_listener ti_listener = {
+    ti_enter, ti_leave, ti_preedit, ti_commit_string, ti_delete, ti_done,
+};
+
+static int mode_text_input(void) {
+    need(ims, "zwp_input_method_manager_v2");
+    need(text_inputs, "zwp_text_input_manager_v3");
+
+    struct zwp_input_method_v2* im = zwp_input_method_manager_v2_get_input_method(ims, wl_seat_g);
+
+    zwp_input_method_v2_add_listener(im, &im_listener, NULL);
+
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-text-input", 160, 120, 0xFF0000FF);
+
+    struct zwp_text_input_v3* ti = zwp_text_input_manager_v3_get_text_input(text_inputs, wl_seat_g);
+
+    zwp_text_input_v3_add_listener(ti, &ti_listener, NULL);
+    for (int i = 0; i < 100 && !ti_entered; i++) {
+        roundtrip("enter");
+        usleep(10000);
+    }
+    if (!ti_entered) {
+        fprintf(stderr, "the text input never entered the focused surface\n");
+        return 1;
+    }
+    zwp_text_input_v3_enable(ti);
+    zwp_text_input_v3_set_text_change_cause(ti, ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_OTHER);
+    zwp_text_input_v3_commit(ti);
+    roundtrip("enable");
+    roundtrip("enable");
+    if (im_active != 1 || im_cause != ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_OTHER) {
+        fprintf(stderr, "enable: input method active=%d cause=%d\n", im_active, im_cause);
+        return 1;
+    }
+
+    int dones = im_dones;
+
+    // the active text input going away deactivates the input method
+    zwp_text_input_v3_destroy(ti);
+    roundtrip("destroy");
+    roundtrip("destroy");
+    if (im_active != 0 || im_dones == dones) {
+        fprintf(stderr, "destroy: input method active=%d\n", im_active);
+        return 1;
+    }
+    printf("text input ok\n");
+    return 0;
+}
+
+// ---- foreign-gone: an exported toplevel destroyed under its import -----------
+static char export_handle[128];
+static int import_destroyed;
+
+static void exported_handle(void* d, struct zxdg_exported_v2* e, const char* handle) {
+    (void)d; (void)e;
+    snprintf(export_handle, sizeof(export_handle), "%s", handle);
+}
+static const struct zxdg_exported_v2_listener exported_listener = {exported_handle};
+
+static void imported_destroyed(void* d, struct zxdg_imported_v2* i) {
+    (void)d; (void)i;
+    import_destroyed = 1;
+}
+static const struct zxdg_imported_v2_listener imported_listener = {imported_destroyed};
+
+static int mode_foreign_gone(void) {
+    need(exporter, "zxdg_exporter_v2");
+    need(importer, "zxdg_importer_v2");
+
+    struct wl_toplevel_ctx parent, child;
+
+    wl_make_toplevel(&parent, "misc-foreign-parent", 160, 120, 0xFF0000FF);
+    wl_make_toplevel(&child, "misc-foreign-child", 120, 90, 0xFF00FF00);
+
+    struct zxdg_exported_v2* ex = zxdg_exporter_v2_export_toplevel(exporter, parent.surface);
+
+    zxdg_exported_v2_add_listener(ex, &exported_listener, NULL);
+    roundtrip("export");
+    if (!export_handle[0]) {
+        fprintf(stderr, "no export handle\n");
+        return 1;
+    }
+
+    struct zxdg_imported_v2* im = zxdg_importer_v2_import_toplevel(importer, export_handle);
+
+    zxdg_imported_v2_add_listener(im, &imported_listener, NULL);
+    zxdg_imported_v2_set_parent_of(im, child.surface);
+    roundtrip("import");
+    if (import_destroyed) {
+        fprintf(stderr, "a live export's import was destroyed\n");
+        return 1;
+    }
+
+    // the exported toplevel goes: its import is told, and parents nothing
+    xdg_toplevel_destroy(parent.tl);
+    xdg_surface_destroy(parent.xs);
+    wl_surface_destroy(parent.surface);
+    roundtrip("toplevel destroy");
+    if (!import_destroyed) {
+        fprintf(stderr, "the import outlived its exported toplevel\n");
+        return 1;
+    }
+    zxdg_imported_v2_set_parent_of(im, child.surface);
+    roundtrip("set_parent_of a dead import");
+    printf("foreign gone ok\n");
+    return 0;
+}
+
+// ---- foreign-bad-parent: set_parent_of a surface that is no toplevel ---------
+static int mode_foreign_bad_parent(void) {
+    need(exporter, "zxdg_exporter_v2");
+    need(importer, "zxdg_importer_v2");
+
+    struct wl_toplevel_ctx parent;
+
+    wl_make_toplevel(&parent, "misc-foreign-parent", 160, 120, 0xFF0000FF);
+
+    struct zxdg_exported_v2* ex = zxdg_exporter_v2_export_toplevel(exporter, parent.surface);
+
+    zxdg_exported_v2_add_listener(ex, &exported_listener, NULL);
+    roundtrip("export");
+
+    struct zxdg_imported_v2* im = zxdg_importer_v2_import_toplevel(importer, export_handle);
+
+    zxdg_imported_v2_set_parent_of(im, wl_compositor_create_surface(wl_comp));
+    if (wl_expect_error("zxdg_imported_v2", ZXDG_IMPORTED_V2_ERROR_INVALID_SURFACE)) {
+        return 1;
+    }
+    printf("foreign bad parent ok\n");
+    return 0;
+}
+
+// ---- shm: a pool resized to its own size, and wl_shm.release (v2) -----------
+static int mode_shm(void) {
+    need(shm2, "wl_shm v2");
+
+    int fd = memfd_create("misc-shm", 0);
+
+    if (fd < 0 || ftruncate(fd, 64 * 64 * 4) < 0) return 2;
+
+    struct wl_shm_pool* pool = wl_shm_create_pool(shm2, fd, 64 * 64 * 4);
+
+    close(fd);
+    // resizing to the current size is allowed and changes nothing
+    wl_shm_pool_resize(pool, 64 * 64 * 4);
+
+    struct wl_buffer* buf = wl_shm_pool_create_buffer(pool, 0, 64, 64, 256, WL_SHM_FORMAT_XRGB8888);
+
+    wl_shm_pool_destroy(pool);
+    // the pool and its buffer outlive the released wl_shm
+    wl_shm_release(shm2);
+
+    struct wl_surface* s = wl_compositor_create_surface(wl_comp);
+
+    wl_surface_attach(s, buf, 0, 0);
+    wl_surface_commit(s);
+    roundtrip("shm");
+    printf("shm ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -625,6 +855,11 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "dc-receive")) return mode_dc_receive();
     if (!strcmp(mode, "toplevel-drag")) return mode_toplevel_drag();
     if (!strcmp(mode, "im-grab")) return mode_im_grab();
+    if (!strcmp(mode, "im-popup")) return mode_im_popup();
+    if (!strcmp(mode, "text-input")) return mode_text_input();
+    if (!strcmp(mode, "foreign-gone")) return mode_foreign_gone();
+    if (!strcmp(mode, "foreign-bad-parent")) return mode_foreign_bad_parent();
+    if (!strcmp(mode, "shm")) return mode_shm();
     fprintf(stderr, "unknown mode %s\n", mode);
     return 2;
 }

@@ -4,14 +4,19 @@
 # destroyed after its objects, a minimized v6 toplevel told it is suspended,
 # a foreign-toplevel list bound after a map and stopped, the data-control
 # loopback offer received, a toplevel-drag object destroyed before a drag,
-# and an input method's keyboard grab released and taken again.
+# an input method's keyboard grab released and taken again, its popup
+# surface object destroyed before it, the active text input destroyed (after
+# a change cause the method must see), an exported toplevel destroyed under
+# its import, set_parent_of on a surface that is no toplevel (a protocol
+# error), and a pool resized to its own size with wl_shm released.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_wl_misc"
 next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next step
 
-for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab; do
+for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab im-popup text-input \
+            foreign-gone foreign-bad-parent shm; do
     "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
     expect_alive "the compositor died in $mode"
 done
