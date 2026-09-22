@@ -1094,10 +1094,6 @@ void KmsDevice::leaseConnectorsImpl(VisitorFace&& vis) {
 }
 
 int KmsDevice::createLease(const u32* connectorIds, int count, u32& lesseeId) {
-    if (count <= 0) {
-        return -EINVAL;
-    }
-
     // each leased connector needs a crtc and its planes; pick free ones,
     // avoiding the crtc the desktop output drives
     Vector<u32> objects;
@@ -2317,6 +2313,8 @@ int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceF
     return ret == 0 ? 0 : -ret;
 }
 
+// commitErr reports why a flip failed; only the direct-scanout flip asks,
+// and a modeset never carries a client buffer
 bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) {
     bool withCursor = true;
 
@@ -2328,10 +2326,6 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
         // plane off them would outlive the transient cause by a session
         if (testErr == EACCES || testErr == EPERM || testErr == EBUSY) {
             *(c->log) << "imway: modeset commit unavailable, errno "_sv << testErr << endL;
-
-            if (commitErr) {
-                *commitErr = testErr;
-            }
 
             return false;
         }
@@ -2356,19 +2350,10 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
             color = outputColorState(sdrConfig, displayCapabilities);
             withCursor = true;
             testErr = tryCommit(fbId, true, true, inFenceFd, true);
-
-            if (testErr != 0 && cursorPlaneId && cursorEnabled) {
-                testErr = tryCommit(fbId, true, false, inFenceFd, true);
-                withCursor = false;
-            }
         }
 
         if (testErr != 0) {
             *(c->log) << "imway: atomic test modeset rejected color/link configuration, errno "_sv << testErr << endL;
-
-            if (commitErr) {
-                *commitErr = testErr;
-            }
 
             return false;
         }
