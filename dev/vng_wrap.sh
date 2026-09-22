@@ -28,6 +28,8 @@ done
 # blob resources want the guest's memory in a memfd qemu can hand to udmabuf
 memory=${VNG_MEMORY:-2G}
 
-exec vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
+# a VM that never powers off would hold its build node forever: the
+# scenario's own timeout lives inside the guest and cannot reach it
+exec timeout --kill-after=15 "${VNG_TIMEOUT:-300}" vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
     --qemu-opts="-object memory-backend-memfd,id=imway-mem,size=$memory,share=on -machine memory-backend=imway-mem -device ${VNG_GPU:-virtio-gpu-pci,blob=true}" \
     -- "$setup; cd $dir && $command"
