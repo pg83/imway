@@ -4443,6 +4443,18 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
         return false;
     }
 
+    // a cursor off the plane is composited with its hotspot on exactly the
+    // pixel asked for: sample a frame composed without it
+    if (scene->drawCursor && !hwVisible) {
+        scene->drawCursor = false;
+        forceComposition = true;
+        scene->needsFrame = true;
+        frameNow();
+        forceComposition = false;
+        scene->drawCursor = true;
+        scene->needsFrame = true;
+    }
+
     finishGpuFrame(true);
 
     if (!readbackLastFrame()) {
