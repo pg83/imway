@@ -11169,12 +11169,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
             if (pressed && buttonsDown == 0) {
                 pointerGrabSerial = serial;
                 pointerGrabClient = client;
-
-                if (ptrFocus) {
-                    pointerGrabOrigin.bind(ptrFocus->weak);
-                } else {
-                    pointerGrabOrigin.reset();
-                }
+                pointerGrabOrigin.bind(ptrFocus->weak);
             }
         }
     }
@@ -13231,8 +13226,12 @@ void cmManagerCreateWindowsScrgb(wl_client* client, wl_resource* res, u32 id) {
     cmMakeImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client, wl_resource_get_version(res), id, d);
 }
 
-void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource* reference) {
-    (void)reference;
+// Unreachable today: no request of any protocol this compositor serves
+// creates a wp_image_description_reference_v1, and libwayland refuses an
+// object argument of the wrong interface before dispatch. The slot keeps a
+// handler rather than null so that an extension adding references later
+// gets a failed description instead of a jump through a null pointer.
+void cmManagerGetImageDesc(wl_client* client, wl_resource* res, u32 id, wl_resource*) {
     cmMakeFailedImageDesc((WaylandImpl*)wl_resource_get_user_data(res), client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_UNSUPPORTED, "foreign image description references are unsupported");
 }
 
