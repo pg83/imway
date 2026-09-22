@@ -88,8 +88,12 @@ int main(void) {
 #if DMABUF_VERSION >= 4
     return !formats && !modifiers && fb_done && fb_table && fb_main &&
            fb_tranche_done && fb_target && fb_formats && fb_flags ? 0 : 1;
-#else
+#elif DMABUF_VERSION >= 3
     return !formats && modifiers && !fb_done && !fb_table && !fb_main &&
+           !fb_tranche_done && !fb_target && !fb_formats && !fb_flags ? 0 : 1;
+#else
+    // before modifiers: the bare format list
+    return formats && !modifiers && !fb_done && !fb_table && !fb_main &&
            !fb_tranche_done && !fb_target && !fb_formats && !fb_flags ? 0 : 1;
 #endif
 }
