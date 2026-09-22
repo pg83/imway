@@ -24,10 +24,12 @@ launch() { # <command typed into the launcher>
     ctl "key 60 press"   # F2
     ctl "key 60 release"
     ctl "key 125 release"
-    sleep 0.3
+    # typed before the field takes input, the command loses its first
+    # characters and sh cannot find it
+    await_typing '##launcher' || { echo "the launcher did not open for '$1'"; exit 1; }
     ctl "type $1"
-    sleep 0.3
     ctl "key 28 press"; ctl "key 28 release" # Enter: nothing highlighted, the text runs as a command
+    await_no_imgui '##launcher' || { echo "the launcher did not run '$1'"; exit 1; }
 }
 
 locked() {

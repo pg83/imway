@@ -27,12 +27,14 @@ open(f"{rt}/bad.shot", "wb").write(struct.pack("<III", 0x12345678, w, h) + pixel
 open(f"{rt}/trunc.shot", "wb").write(struct.pack("<III", 0x31574d49, w, h) + pixels[: len(pixels) // 2])
 PY
 
+# typed before the launcher's field takes input, the command loses its
+# first characters and sh cannot find it (status 127)
 launch() { # <command typed into the launcher>
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
-    sleep 0.3
+    await_typing '##launcher' || { echo "the launcher did not open for '$1'"; exit 1; }
     ctl "type $1"
-    sleep 0.3
     ctl "key 28 press"; ctl "key 28 release"
+    await_no_imgui '##launcher' || { echo "the launcher did not run '$1'"; exit 1; }
 }
 viewer_up() {
     [[ -n "$(dump_field 'title=imway screenshot' id)" ]]
