@@ -2446,37 +2446,18 @@ bool RendererImpl::uploadShm(Surface& s) {
     return true;
 }
 
+// the one content with CPU pixels is a single-pixel buffer: every commit of
+// one is a whole 1x1 image, damaged whole (wayland.cpp sets damageAll with
+// it), so it always replaces the texture's one pixel
 void RendererImpl::uploadSurface(Surface& s) {
-    if (s.width <= 0 || s.height <= 0) {
-        return;
-    }
-
-    SurfaceTexture* old = s.texture.get();
-    bool fresh = !old || old->external || old->w != s.width || old->h != s.height || old->xrgb;
     SurfaceTexture* tex = uploadTexture(s, false, true);
 
     if (!tex) {
         return;
     }
 
-    RectI r{0, 0, tex->w, tex->h};
-
-    if (!fresh && !s.damageAll && !s.damage.empty()) {
-        r = s.damage;
-        clipRect(r, tex->w, tex->h);
-    }
-
-    if (r.x == 0 && r.y == 0 && r.w == tex->w && r.h == tex->h) {
-        memcpy(tex->stagingMap, s.pixels.data(), s.pixels.length());
-    } else {
-        for (i32 y = r.y; y < r.y + r.h; y++) {
-            size_t off = ((size_t)y * tex->w + r.x) * 4;
-
-            memcpy((u8*)tex->stagingMap + off, s.pixels.data() + off, (size_t)r.w * 4);
-        }
-    }
-
-    unionRect(tex->uploadRect, r);
+    memcpy(tex->stagingMap, s.pixels.data(), s.pixels.length());
+    unionRect(tex->uploadRect, RectI{0, 0, tex->w, tex->h});
     tex->needsUpload = true;
     s.damage = {};
     s.damageAll = false;
