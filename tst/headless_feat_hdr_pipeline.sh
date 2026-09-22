@@ -50,9 +50,10 @@ done
 
 wait_client "managed"
 # the converted frame follows the commit; poll until the surface samples
-# at the managed values
+# at the managed values. The client holds this phase to the end, so the
+# wait can be as long as a loaded software rasterizer needs
 hn=0
-for _ in $(seq 1 20); do
+for _ in $(seq 1 100); do
     sleep 0.2
     screenshot "$XDG_RUNTIME_DIR/hdr.ppm"
     read -r hr hg hb hn < <(surface_color "$XDG_RUNTIME_DIR/hdr.ppm" "$x" "$y" "$w" "$h")

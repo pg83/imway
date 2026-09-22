@@ -10,9 +10,13 @@ wait_client "ready"
 wait_rect 'app_id=misc-cursor '
 x=$(( $(dump_field 'app_id=misc-cursor ' imgx) + 100 ))
 y=$(( $(dump_field 'app_id=misc-cursor ' imgy) + 75 ))
-# the hover follows the pointer one composed frame behind
-ctl "motion $x $y"; screenshot "$XDG_RUNTIME_DIR/_h.ppm"
-ctl "motion $((x + 1)) $y"; screenshot "$XDG_RUNTIME_DIR/_h.ppm"
+# the hover follows the pointer one composed frame behind, and on a loaded
+# runner the window's frame can still be on its way: aim again until the
+# client has had the enter and set its cursor
+for i in $(seq 0 40); do
+    ctl "motion $((x + i % 2)) $y"; screenshot "$XDG_RUNTIME_DIR/_h.ppm"
+    grep -q "cursor set" "$CLIENT_LOG" && break
+done
 wait_client "cursor set"
 # frames compose the cursor, and the output membership follows them
 screenshot "$XDG_RUNTIME_DIR/_h.ppm"

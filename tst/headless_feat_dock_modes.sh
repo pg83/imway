@@ -44,24 +44,24 @@ setting_taken() {
 # one grouped slot: the cycle action alternates the two windows
 set_setting desktop.active_click 2
 before=$(focus_id)
-moved() { local id; id=$(focus_id); [[ "$id" != "$before" && "$id" != 0 ]]; }
-back() { [[ "$(focus_id)" == "$before" ]]; }
-# a click can land before the frame that puts the slot under the pointer;
-# one that did not act is repeated (one that did moved the focus)
-for _ in 1 2 3; do
-    click_at 29 29
-    await 30 moved && break
-done
-moved || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
-# the same for the way back; the focus is read again before each retry, so
-# a late click that did come back is not followed by another. With two
-# windows the cycle alternates: even a doubled click only needs one more.
-for _ in 1 2 3; do
-    back && break
-    click_at 29 29
-    await 30 back && break
-done
-back || { echo "cycle did not come back"; dump_state; exit 1; }
+# every focus change raises the newest focus_seq, so a click that acted is
+# told from one that did not by that alone; a click is repeated only when
+# nothing at all changed, never because the change came late
+focus_seq() { dump_state | sed -n 's/^toplevel .* focus_seq=\([0-9]*\) .*/\1/p' | sort -n | tail -n 1; }
+cycle_once() { # click the slot until one focus change comes of it
+    local seq0
+    seq0=$(focus_seq)
+    changed() { [[ "$(focus_seq)" -gt "$seq0" ]]; }
+    for _ in 1 2 3; do
+        click_at 29 29
+        await 100 changed && return 0
+    done
+    return 1
+}
+cycle_once || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
+[[ "$(focus_id)" != "$before" && "$(focus_id)" != 0 ]] || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
+cycle_once || { echo "cycle did not come back"; dump_state; exit 1; }
+[[ "$(focus_id)" == "$before" ]] || { echo "cycle did not come back"; dump_state; exit 1; }
 
 # the minimize action hides the focused group, a second click restores it
 set_setting desktop.active_click 1
