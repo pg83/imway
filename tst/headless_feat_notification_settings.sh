@@ -32,7 +32,9 @@ posted() { # <app> [critical]: post one and wait for the notifier to take it
     local before
     before=$(grep -c "control: notification" "$IMWAY_LOG" || true)
     ctl "notify $1 0 ${2:-0} from-$1"
-    await 50 test "$(grep -c "control: notification" "$IMWAY_LOG" || true)" -gt "$before" || { echo "notify $1 was not taken"; exit 1; }
+    # the count is re-read on every try: await runs its command, not its value
+    taken() { (( $(grep -c "control: notification" "$IMWAY_LOG" || true) > before )); }
+    await 50 taken || { echo "notify $1 was not taken"; exit 1; }
 }
 await_active() { # <count> <why>
     await 50 active_is "$1" || { echo "$2: $(active) toasts on screen, expected $1"; dump_state; exit 1; }
