@@ -3,7 +3,9 @@
  * rather than left unanswered; hints of the wrong shape (integer keys, a
  * string urgency, an urgency that is no variant) and a missing timeout
  * must not keep a well-formed notification from posting; a bare
- * CloseNotification and an unknown method get answers too. */
+ * CloseNotification and an unknown method get answers too. A notification
+ * that expires is closed once, by its expiry: closing it again, or closing
+ * an id nobody posted, closes nothing. */
 #include <dbus/dbus.h>
 
 #include <stdint.h>
@@ -25,7 +27,11 @@ enum shape {
     SHAPE_STRING_HINTS,
     SHAPE_STRING_URGENCY,
     SHAPE_NO_TIMEOUT,
+    SHAPE_BRIEF,
 };
+
+static uint32_t closed_id;
+static int closed_count;
 
 static DBusMessage* call(const char* method) {
     return dbus_message_new_method_call("org.freedesktop.Notifications", "/org/freedesktop/Notifications",
@@ -106,7 +112,7 @@ static void append(DBusMessage* msg, enum shape shape) {
     }
 
     if (shape != SHAPE_NO_TIMEOUT) {
-        number = -1;
+        number = shape == SHAPE_BRIEF ? 1 : -1;
         dbus_message_iter_append_basic(&it, DBUS_TYPE_INT32, &number);
     }
 }
@@ -133,6 +139,30 @@ static DBusMessage* ask(DBusMessage* msg, const char* what) {
     }
 
     return reply;
+}
+
+static DBusHandlerResult closed_filter(DBusConnection* c, DBusMessage* msg, void* data) {
+    uint32_t id = 0, reason = 0;
+
+    (void)c;
+    (void)data;
+
+    if (dbus_message_is_signal(msg, "org.freedesktop.Notifications", "NotificationClosed") &&
+        dbus_message_get_args(msg, NULL, DBUS_TYPE_UINT32, &id, DBUS_TYPE_UINT32, &reason, DBUS_TYPE_INVALID) &&
+        id == closed_id) {
+        closed_count++;
+        printf("closed %u reason %u\n", id, reason);
+    }
+
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+static DBusMessage* close_call(uint32_t id) {
+    DBusMessage* msg = call("CloseNotification");
+
+    dbus_message_append_args(msg, DBUS_TYPE_UINT32, &id, DBUS_TYPE_INVALID);
+
+    return msg;
 }
 
 int main(void) {
@@ -181,6 +211,53 @@ int main(void) {
     }
 
     puts("odd hints posted");
+
+    dbus_connection_add_filter(conn, closed_filter, NULL, NULL);
+    dbus_bus_add_match(conn, "type='signal',interface='org.freedesktop.Notifications',member='NotificationClosed'", NULL);
+
+    DBusMessage* brief = call("Notify");
+
+    append(brief, SHAPE_BRIEF);
+
+    DBusMessage* posted = ask(brief, "a brief notification");
+
+    if (!posted || !dbus_message_get_args(posted, NULL, DBUS_TYPE_UINT32, &closed_id, DBUS_TYPE_INVALID)) {
+        fprintf(stderr, "the brief notification was not posted\n");
+        return 1;
+    }
+
+    dbus_message_unref(posted);
+
+    for (int i = 0; i < 300 && !closed_count; i++) {
+        dbus_connection_read_write_dispatch(conn, 10);
+    }
+
+    if (closed_count != 1) {
+        fprintf(stderr, "the brief notification did not expire\n");
+        return 1;
+    }
+
+    DBusMessage* again = ask(close_call(closed_id), "closing an expired notification");
+    DBusMessage* stranger = ask(close_call(999999), "closing an unknown notification");
+
+    if (!again || !stranger) {
+        fprintf(stderr, "a CloseNotification was refused\n");
+        return 1;
+    }
+
+    dbus_message_unref(again);
+    dbus_message_unref(stranger);
+
+    for (int i = 0; i < 30; i++) {
+        dbus_connection_read_write_dispatch(conn, 10);
+    }
+
+    if (closed_count != 1) {
+        fprintf(stderr, "an expired notification was closed again\n");
+        return 1;
+    }
+
+    puts("expired notification closed once");
 
     DBusMessage* reply = ask(call("CloseNotification"), "a bare CloseNotification");
 
