@@ -91,6 +91,21 @@ int main(void) {
         return 1;
     }
 
+    // with a sandboxed client connected, an ordinary one still sees the
+    // privileged globals: the sandbox tag is that client's, not ours
+    saw_compositor = saw_data_control = 0;
+
+    struct wl_registry* own_reg = wl_display_get_registry(wl_dpy);
+
+    wl_registry_add_listener(own_reg, &sb_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+
+    if (!saw_data_control) {
+        fprintf(stderr, "an unsandboxed client lost ext_data_control to the sandbox\n");
+        return 1;
+    }
+
+    wl_registry_destroy(own_reg);
     wl_registry_destroy(sb_reg);
     wl_display_disconnect(sb);
     printf("security-context done\n");
