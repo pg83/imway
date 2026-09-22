@@ -474,7 +474,6 @@ namespace {
         VkImage lastImage = VK_NULL_HANDLE;
         VkImageLayout lastLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
-        bool hasDmabuf = false;
         PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
 
         RendererImpl(Composer& comp, DeviceVk& vk, int limit);
@@ -522,6 +521,8 @@ namespace {
         u64 iconTexture(const Icon* icon) override;
         SurfaceTexture* makeIconTexture(const u32* argb, int w, int h);
 
+        // buffer: a validated linux-dmabuf buffer or makeUdmabuf's, both of
+        // which exist only on a device with dma-buf import
         SurfaceTexture* importDmabufTexture(DmabufBuffer* buffer);
         bool importDmabuf(Surface& s, DmabufBuffer* buffer);
         bool importDmabuf(Surface& s);
@@ -748,7 +749,6 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     , vkDevice(&vk)
     , shmCopyDoneListener(this)
     , shmCopyLifetime(ObjPool::fromMemory())
-    , hasDmabuf(vk.hasDmabuf)
     , getMemoryFdProps(vk.getMemoryFdProps)
 {
     weak.anchor(this);
@@ -1509,10 +1509,6 @@ ShmUpload* RendererImpl::makeCpuUpload(ShmContent& content, ShmCache& cache) {
 }
 
 bool RendererImpl::prepareShm(ShmState& state) {
-    if (state.prepared) {
-        return true;
-    }
-
     ShmContent& content = *state.content;
     ShmCache& cache = shmCache(content);
     bool attempted = false;
@@ -2893,14 +2889,6 @@ void RendererImpl::recordCursorTransform(VkCommandBuffer commands, VkFramebuffer
 }
 
 SurfaceTexture* RendererImpl::importDmabufTexture(DmabufBuffer* b) {
-    if (!b || !hasDmabuf) {
-        return nullptr;
-    }
-
-    if (b->nplanes < 1 || b->nplanes > kDmabufMaxPlanes) {
-        return nullptr;
-    }
-
     SurfaceTexture* cached = cacheFind(b);
 
     if (cached) {
