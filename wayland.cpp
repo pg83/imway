@@ -2979,17 +2979,13 @@ namespace {
             double contentH = (double)(swapped ? targetW : targetH) / targetScale;
 
             if (sx + sw > contentW || sy + sh > contentH) {
-                if (s.vpRes) {
-                    wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_OUT_OF_BUFFER, "source rectangle is outside the buffer");
-                }
+                wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_OUT_OF_BUFFER, "source rectangle is outside the buffer");
 
                 return;
             }
 
             if (!targetHasDst && (sw != (int)sw || sh != (int)sh)) {
-                if (s.vpRes) {
-                    wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_BAD_SIZE, "fractional source size requires a destination size");
-                }
+                wl_resource_post_error(s.vpRes, WP_VIEWPORT_ERROR_BAD_SIZE, "fractional source size requires a destination size");
 
                 return;
             }
