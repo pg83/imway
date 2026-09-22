@@ -16,5 +16,9 @@ printf -v dir '%q' "$PWD"
 
 setup='modprobe virtio_gpu; modprobe udmabuf 2>/dev/null; chmod 666 /dev/dri/* /dev/udmabuf 2>/dev/null; export HOME=/tmp'
 
-exec vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "${VNG_MEMORY:-2G}" --cpus "${VNG_CPUS:-2}" \
-    --qemu-opts="-device ${VNG_GPU:-virtio-gpu-pci,blob=true}" -- "$setup; cd $dir && $command"
+# blob resources want the guest's memory in a memfd qemu can hand to udmabuf
+memory=${VNG_MEMORY:-2G}
+
+exec vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
+    --qemu-opts="-object memory-backend-memfd,id=imway-mem,size=$memory,share=on -machine memory-backend=imway-mem -device ${VNG_GPU:-virtio-gpu-pci,blob=true}" \
+    -- "$setup; cd $dir && $command"
