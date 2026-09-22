@@ -38,6 +38,8 @@ using namespace stl;
 //                     word per interface, each spent on its own
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
+//   scanout-modifier=N the next N scanout modifier queries come back
+//                     unsupported
 //   lease=N           wayland drm-lease: the next N lease creations fail
 //                     with EBUSY, as when another lessee holds the objects
 //   client-import=K   renderer: K client-buffer import calls pass, every
@@ -81,6 +83,7 @@ namespace {
         Vector<StringView> resourceFaults;
         // KMS backend
         int scanoutSkip = -1;
+        int modifierFaults = 0;
         int leaseFaults = 0;
         // renderer
         int clientImportSkip = -1;
@@ -105,6 +108,7 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
+        VkResult scanoutModifier(VkResult result) override;
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
@@ -168,6 +172,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "scanout"_sv) {
         // KMS backend
         scanoutSkip = (int)arg.stou();
+    } else if (fault == "scanout-modifier"_sv) {
+        // KMS backend
+        modifierFaults = (int)arg.stou();
     } else if (fault == "lease"_sv) {
         leaseFaults = (int)arg.stou();
     } else if (fault == "client-import"_sv) {
@@ -333,6 +340,10 @@ VkResult TestChaosMonkey::scanout(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+VkResult TestChaosMonkey::scanoutModifier(VkResult result) {
+    return spend(modifierFaults) ? VK_ERROR_FORMAT_NOT_SUPPORTED : result;
+}
+
 int TestChaosMonkey::leaseFd(int fd) {
     if (!spend(leaseFaults)) {
         return fd;
@@ -433,6 +444,7 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
+        VkResult scanoutModifier(VkResult result) override;
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
@@ -475,6 +487,10 @@ wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
 
 // KMS backend
 VkResult IdleChaosMonkey::scanout(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::scanoutModifier(VkResult result) {
     return result;
 }
 

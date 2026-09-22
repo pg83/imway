@@ -7,6 +7,14 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 # a plane that scans out only a tiling no renderer here produces
+# the driver refuses to build the 10-bit image with the one modifier both
+# sides share: 8-bit is tried next
+kms_boot IMWAY_CHAOS=scanout-modifier=1 --
+boot_rc 0 "modifier refused"
+boot_has "scanout: no common modifier (vulkan x plane)"
+boot_has "10-bit scanout failed, retrying 8-bit"
+boot_has "scanout swapchain: 2 images"
+
 kms_boot IMWAY_FAKE_KMS_TILED_ONLY=1 --
 boot_rc 0 "tiled-only plane"
 boot_has "scanout: no common modifier (vulkan x plane)"

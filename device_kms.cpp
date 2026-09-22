@@ -364,7 +364,7 @@ namespace {
 
             iprops.pNext = &extProps;
 
-            if (vkGetPhysicalDeviceImageFormatProperties2(vk.phys, &ifi, &iprops) != VK_SUCCESS) {
+            if (chaos.scanoutModifier(vkGetPhysicalDeviceImageFormatProperties2(vk.phys, &ifi, &iprops)) != VK_SUCCESS) {
                 continue;
             }
 

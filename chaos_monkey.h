@@ -40,6 +40,9 @@ struct ChaosMonkey {
     // KMS backend
     // the result of a Vulkan call building or exporting a scanout buffer
     virtual VkResult scanout(VkResult result) = 0;
+    // the driver's answer on whether it can build a scanout image with a
+    // candidate modifier
+    virtual VkResult scanoutModifier(VkResult result) = 0;
 
     // wayland drm-lease: the fd the device's lease creation returned (or its
     // negative errno); a replacement failure closes the fd it was handed
