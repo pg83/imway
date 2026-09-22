@@ -3842,7 +3842,7 @@ namespace {
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
         auto* xs = (XdgSurface*)wl_resource_get_user_data(res);
 
-        if (xs && (xs->toplevel || xs->popup)) {
+        if (xs->toplevel || xs->popup) {
             wl_resource_post_error(res, XDG_SURFACE_ERROR_DEFUNCT_ROLE_OBJECT, "xdg_surface destroyed before its role object");
 
             return;
@@ -4202,7 +4202,9 @@ namespace {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
         Positioner* pos = positionerFrom(positioner);
 
-        if (!pos || pos->w <= 0 || pos->h <= 0 || pos->aw <= 0 || pos->ah <= 0) {
+        // set_size and set_anchor_rect store their pair only when both
+        // sides are positive: one side stands for both
+        if (pos->w <= 0 || pos->aw <= 0) {
             wl_resource_post_error(p->xdg->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER, "positioner needs size and anchor rectangle");
 
             return;
@@ -4242,13 +4244,15 @@ namespace {
 
         auto* parentXs = parentRes ? (XdgSurface*)wl_resource_get_user_data(parentRes) : nullptr;
 
-        if (parentRes && (!parentXs || (!parentXs->toplevel && !parentXs->popup) || !parentXs->surface)) {
+        if (parentRes && ((!parentXs->toplevel && !parentXs->popup) || !parentXs->surface)) {
             wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT, "popup parent has no constructed role");
 
             return;
         }
 
-        if (!pos || pos->w <= 0 || pos->h <= 0 || pos->aw <= 0 || pos->ah <= 0) {
+        // set_size and set_anchor_rect store their pair only when both
+        // sides are positive: one side stands for both
+        if (pos->w <= 0 || pos->aw <= 0) {
             wl_resource_post_error(xs->wmBaseRes, XDG_WM_BASE_ERROR_INVALID_POSITIONER, "positioner needs size and anchor rectangle");
 
             return;
