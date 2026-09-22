@@ -13,7 +13,7 @@ wifi_is() { [[ "$(dump_field '^wifi state' state)" == "$1" ]]; }
 
 await 150 grep -q "devices 1" "$NM_LOG" || { echo "the device list was never asked for"; cat "$NM_LOG"; exit 1; }
 touch "$XDG_RUNTIME_DIR/go-1"
-await 150 wifi_is 4 || { echo "the network did not connect"; dump_state; exit 1; }
+await 150 wifi_is 3 || { echo "the network did not connect"; dump_state; exit 1; }
 touch "$XDG_RUNTIME_DIR/go-2"
 await 150 grep -q "devices 4" "$NM_LOG" || { echo "the drop was never asked for"; cat "$NM_LOG"; exit 1; }
 await 150 wifi_is 0 || { echo "the network did not drop"; dump_state; exit 1; }

@@ -25,5 +25,5 @@ fail() {
 await 100 peer "stage tree" || fail "the fake did not come up to the tree stage"
 touch "$XDG_RUNTIME_DIR/go-tree"
 await 150 peer "ordered 3" || fail "the ordered list was not asked for"
-await 100 wifi_is 4 0 || fail "the lost ordered list still produced networks"
+await 100 wifi_is 3 0 || fail "the lost ordered list still produced networks"
 echo "OK: a lost ordered-list reply commits the state without networks"

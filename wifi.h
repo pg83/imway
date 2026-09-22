@@ -22,7 +22,6 @@ struct WifiNetwork {
 enum class WifiState {
     unavailable, // no station (no adapter, or rfkill)
     disconnected,
-    scanning,
     connecting,
     connected,
 };

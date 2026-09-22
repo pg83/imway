@@ -48,7 +48,7 @@ ctl "key 1 press"; ctl "key 1 release"
 # one change, and a second while its refresh is in flight: two walks
 touch "$XDG_RUNTIME_DIR/go-1"
 await 150 nm "devices 3" || fail "the change during the refresh was lost"
-await 100 wifi_is 4 1 || fail "the surviving access point did not connect"
+await 100 wifi_is 3 1 || fail "the surviving access point did not connect"
 line=$(dump_state | grep '^wifinet ')
 [[ "$line" == *"strength=70 "* && "$line" == *"connected=1 "* && "$line" == *"type=open "* && "$line" == *"name=edge-one" ]] || fail "the access point was misread: $line"
 await 50 history_is 1 || fail "connecting posted no toast"
@@ -64,7 +64,7 @@ await 50 history_is 2 || fail "losing the network posted no toast"
 # property dicts keyed by integers
 touch "$XDG_RUNTIME_DIR/go-3"
 await 150 nm "get-all 5 /org/freedesktop/NetworkManager/AccessPoint/9" || fail "the integer-keyed round never ran"
-await 100 wifi_is 4 0 || fail "integer keys were read as properties"
+await 100 wifi_is 3 0 || fail "integer keys were read as properties"
 expect_alive "compositor died on integer-keyed NetworkManager properties"
 
 # a read left unanswered, then shutdown

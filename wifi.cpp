@@ -36,7 +36,7 @@ void wifiNotifyTransition(Composer& c, WifiState& last, WifiState now, StringVie
         return;
     }
 
-    // only the stable edges are worth a toast — scanning/connecting churn
+    // only the stable edges are worth a toast — connecting churn
     // is not
     if (now != WifiState::connected && now != WifiState::disconnected && now != WifiState::unavailable) {
         return;

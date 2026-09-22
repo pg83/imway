@@ -1471,8 +1471,6 @@ static StringView wifiGlyph(WifiState s) {
             return "wifi"_sv;
         case WifiState::connecting:
             return "wifi..."_sv;
-        case WifiState::scanning:
-            return "wifi.."_sv;
         case WifiState::disconnected:
             return "wifi off"_sv;
         case WifiState::unavailable:

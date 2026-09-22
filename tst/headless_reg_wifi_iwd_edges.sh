@@ -43,7 +43,7 @@ await 100 wifi_is 0 0 || fail "a refused tree did not leave wifi unavailable"
 await 100 iw "stage tree" || fail "the fake did not reach the tree stage"
 go tree
 await 150 iw "ordered 3" || fail "the change during the refresh was lost"
-await 100 wifi_is 4 2 || fail "roaming did not count as connected with two networks"
+await 100 wifi_is 3 2 || fail "roaming did not count as connected with two networks"
 line=$(net /dev0/n1)
 [[ "$line" == *"strength=100 "* && "$line" == *"connected=1 "* && "$line" == *"known=1 "* && "$line" == *"name=iwd-one" ]] || fail "the known network was misread: $line"
 line=$(net /dev0/n2)

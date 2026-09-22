@@ -28,8 +28,6 @@ namespace {
                 return "no adapter";
             case WifiState::disconnected:
                 return "disconnected";
-            case WifiState::scanning:
-                return "scanning";
             case WifiState::connecting:
                 return "connecting";
             case WifiState::connected:
