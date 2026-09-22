@@ -252,8 +252,10 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -317,8 +319,10 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -382,8 +386,10 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -447,8 +453,10 @@ jobs:
           # dev/run_test.py, so a killed process takes only its own profile with it.
           export LLVM_PROFILE_FILE="$RUNNER_TEMP/profiles/%b-%p.profraw"
           {
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test &&
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test &&
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+              echo "coverage: failing scenarios above; the Tests slices gate them"
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
