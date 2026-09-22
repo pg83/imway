@@ -4930,6 +4930,10 @@ namespace {
 
     wl_resource* makeDcOffer(wl_resource* device, DataSource* src);
 
+    extern const struct zwp_primary_selection_device_v1_interface primaryDeviceImpl;
+
+    // the offer takes the device's protocol, not the source's: a
+    // data-control source fills the primary slot as well as the clipboard
     wl_resource* makeOffer(wl_resource* device, DataSource* src, bool dnd) {
         wl_client* client = wl_resource_get_client(device);
         u32 version = (u32)wl_resource_get_version(device);
@@ -4941,7 +4945,7 @@ namespace {
         offer->dnd = dnd;
         src->offers.pushFront(offer);
 
-        if (src->primary) {
+        if (wl_resource_instance_of(device, &zwp_primary_selection_device_v1_interface, &primaryDeviceImpl)) {
             resource = src->srv->composer->chaos->resource(wl_resource_create(client, &zwp_primary_selection_offer_v1_interface, (int)version, 0));
 
             if (!resource) {
