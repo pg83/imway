@@ -1366,6 +1366,49 @@ static int mode_state_repeats(void) {
     return 0;
 }
 
+// ---- stale-move / foreign-move: interactive moves the grab does not back ----
+// stale-move asks to move with its press serial after the button went up;
+// foreign-move asks, when the scenario says so, while another client holds
+// the button. Neither may start a move.
+static int mode_stale_move(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-stale-move", 200, 150, 0xFFFF0000);
+    printf("ready\n");
+    while (wlp_button_count < 1 && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    uint32_t press = wlp_button_serial;
+
+    while (wlp_button_count < 2 && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    xdg_toplevel_move(t.tl, wl_seat_g, press);
+    roundtrip("stale move");
+    printf("stale move sent\n");
+    idle();
+    return 0;
+}
+
+static int mode_foreign_move(void) {
+    struct wl_toplevel_ctx t;
+    char path[512];
+
+    wl_make_toplevel(&t, "misc-foreign-move", 200, 150, 0xFF0000FF);
+    snprintf(path, sizeof(path), "%s/go-foreign-move", getenv("XDG_RUNTIME_DIR"));
+    printf("ready\n");
+    while (access(path, F_OK) != 0) {
+        roundtrip("wait");
+        usleep(20000);
+    }
+    // the serial of this client's own last pointer enter, while the button
+    // is held on another client's window
+    xdg_toplevel_move(t.tl, wl_seat_g, wlp_enter_serial);
+    roundtrip("foreign move");
+    printf("foreign move sent\n");
+    idle();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1400,6 +1443,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "stale-move")) return mode_stale_move();
+    if (!strcmp(mode, "foreign-move")) return mode_foreign_move();
     if (!strcmp(mode, "state-repeats")) return mode_state_repeats();
     if (!strcmp(mode, "inert-subsurface")) return mode_inert_subsurface();
     if (!strcmp(mode, "timed-subsurface")) return mode_timed_subsurface();
