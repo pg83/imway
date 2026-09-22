@@ -1212,7 +1212,6 @@ namespace {
         WaylandImpl* srv = nullptr;
         wl_resource* res = nullptr;
         u32 lesseeId = 0;
-        bool finished = false;
     };
 
     // the node links it into WaylandImpl::cursorSessions
@@ -7369,27 +7368,13 @@ namespace {
         .destroy = leaseConnectorDestroy,
     };
 
-    void leaseResourceFinished(LeaseBox* lease) {
-        if (lease->finished) {
-            return;
-        }
-
-        lease->finished = true;
-
-        if (lease->lesseeId && lease->srv->composer->device) {
-            lease->srv->composer->device->revokeLease(lease->lesseeId);
-            lease->lesseeId = 0;
-        }
-
-        wp_drm_lease_v1_send_finished(lease->res);
-    }
-
     void leaseResourceDestroyed(wl_resource* res) {
         auto* lease = (LeaseBox*)wl_resource_get_user_data(res);
 
         // destroying the object drops the lease; the fd the client holds
-        // keeps the kernel lease alive until it closes it
-        if (lease->lesseeId && lease->srv->composer->device) {
+        // keeps the kernel lease alive until it closes it. A lease that was
+        // never granted has no lessee to revoke
+        if (lease->lesseeId) {
             lease->srv->composer->device->revokeLease(lease->lesseeId);
         }
 
@@ -7442,15 +7427,17 @@ namespace {
         // create the lease before destroying the request: wl_resource_destroy
         // runs leaseRequestResourceDestroyed, which frees req, so reading
         // req->connectors afterwards would be a use-after-free
+        // the global exists only with a device, which lives as long as the
+        // compositor
         u32 lesseeId = 0;
-        int leaseFd = srv->composer->device ? srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId) : -1;
+        int leaseFd = srv->composer->chaos->leaseFd(srv->composer->device->createLease(req->connectors.data(), (int)req->connectors.length(), lesseeId));
 
         // submit is a destructor request
         wl_resource_destroy(res);
 
         if (leaseFd < 0) {
             // a lease can always fail; the client re-requests
-            leaseResourceFinished(lease);
+            wp_drm_lease_v1_send_finished(r);
 
             return;
         }

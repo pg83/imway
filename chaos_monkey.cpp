@@ -10,7 +10,9 @@
         #include <security/pam_appl.h>
     #endif
 
+    #include <errno.h>
     #include <stdlib.h>
+    #include <unistd.h>
     #include <std/lib/vector.h>
     #include <wayland-server-core.h>
 #endif
@@ -33,6 +35,8 @@ using namespace stl;
 //                     word per interface, each spent on its own
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
+//   lease=N           wayland drm-lease: the next N lease creations fail
+//                     with EBUSY, as when another lessee holds the objects
 namespace {
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
@@ -45,6 +49,7 @@ namespace {
         Vector<StringView> resourceFaults;
         // KMS backend
         int scanoutSkip = -1;
+        int leaseFaults = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -60,6 +65,7 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
+        int leaseFd(int fd) override;
 
         void arm(StringView fault, StringView arg);
     };
@@ -111,6 +117,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "scanout"_sv) {
         // KMS backend
         scanoutSkip = (int)arg.stou();
+    } else if (fault == "lease"_sv) {
+        leaseFaults = (int)arg.stou();
     }
 }
 
@@ -209,6 +217,18 @@ VkResult TestChaosMonkey::scanout(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+int TestChaosMonkey::leaseFd(int fd) {
+    if (!spend(leaseFaults)) {
+        return fd;
+    }
+
+    if (fd >= 0) {
+        close(fd);
+    }
+
+    return -EBUSY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -227,6 +247,7 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
+        int leaseFd(int fd) override;
     };
 }
 
@@ -260,6 +281,10 @@ wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
 // KMS backend
 VkResult IdleChaosMonkey::scanout(VkResult result) {
     return result;
+}
+
+int IdleChaosMonkey::leaseFd(int fd) {
+    return fd;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

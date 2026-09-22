@@ -40,5 +40,9 @@ struct ChaosMonkey {
     // the result of a Vulkan call building or exporting a scanout buffer
     virtual VkResult scanout(VkResult result) = 0;
 
+    // wayland drm-lease: the fd the device's lease creation returned (or its
+    // negative errno); a replacement failure closes the fd it was handed
+    virtual int leaseFd(int fd) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
