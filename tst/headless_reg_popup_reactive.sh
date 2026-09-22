@@ -29,14 +29,21 @@ moved() {
 
 await 100 moved || { echo "the popup kept its placement ($before)"; dump_state; exit 1; }
 
-after=$(dump_field '^popup' y)
-imgy=$(dump_field '^popup' imgy)
-h=$(dump_field '^popup' h)
-echo "popup placed again: $before -> $after (screen y $imgy, height $h)"
-
 # and the new placement is inside the output, which is what the constraint
-# is for: the bounds are the parent's own offset to the far edge
-(( imgy >= 0 && imgy + h <= 800 )) || { echo "the popup left the screen (imgy=$imgy h=$h)"; dump_state; exit 1; }
+# is for: the bounds are the parent's own offset to the far edge. The
+# popup's offset and its parent's move can land in different dumps, so read
+# them together until they agree
+inside() {
+    local line
+    line=$(dump_state | grep '^popup')
+    after=$(sed -n 's/.* y=\([-0-9]*\) .*/\1/p' <<<"$line")
+    imgy=$(sed -n 's/.* imgy=\([-0-9]*\) .*/\1/p' <<<"$line")
+    h=$(sed -n 's/.* h=\([0-9]*\).*/\1/p' <<<"$line")
+    [[ -n "$imgy" && -n "$h" ]] && (( imgy >= 0 && imgy + h <= 800 ))
+}
+
+await 100 inside || { echo "the popup left the screen (imgy=$imgy h=$h)"; dump_state; exit 1; }
+echo "popup placed again: $before -> $after (screen y $imgy, height $h)"
 
 ctl "key 2 press"; ctl "key 2 release" # let the client finish
 expect_client_ok "the reactive popup client failed"
