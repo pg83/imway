@@ -29,27 +29,36 @@ minimized_count() {
     dump_state | grep -c '^toplevel .*minimized=1 .*app_id=shot-source' || true
 }
 
+# set a setting and wait until the compositor logged taking it: the key
+# alone is logged, so count its lines rather than look for one
+set_setting() { # <key> <value>
+    setting_key=$1
+    setting_seen=$(grep -c "control: set $1\$" "$IMWAY_LOG" || true)
+    ctl "set $1 $2"
+    await 20 setting_taken || { echo "settings are not reachable"; exit 1; }
+}
+setting_taken() {
+    [[ "$(grep -c "control: set $setting_key\$" "$IMWAY_LOG" || true)" -gt "$setting_seen" ]]
+}
+
 # one grouped slot: the cycle action alternates the two windows
-ctl "set desktop.active_click 2"
-sleep 0.2
+set_setting desktop.active_click 2
 before=$(focus_id)
+moved() { local id; id=$(focus_id); [[ "$id" != "$before" && "$id" != 0 ]]; }
+back() { [[ "$(focus_id)" == "$before" ]]; }
 click_at 29 29
-sleep 0.3
-after=$(focus_id)
-[[ "$after" != "$before" && "$after" != 0 ]] || { echo "cycle did not move the focus ($before -> $after)"; dump_state; exit 1; }
+await 50 moved || { echo "cycle did not move the focus ($before -> $(focus_id))"; dump_state; exit 1; }
 click_at 29 29
-sleep 0.3
-[[ "$(focus_id)" == "$before" ]] || { echo "cycle did not come back"; dump_state; exit 1; }
+await 50 back || { echo "cycle did not come back"; dump_state; exit 1; }
 
 # the minimize action hides the focused group, a second click restores it
-ctl "set desktop.active_click 1"
-sleep 0.2
+set_setting desktop.active_click 1
+some_minimized() { [[ "$(minimized_count)" -ge 1 ]]; }
+some_focused() { [[ "$(focus_id)" != 0 ]]; }
 click_at 29 29
-sleep 0.3
-[[ "$(minimized_count)" -ge 1 ]] || { echo "minimize click did not minimize"; dump_state; exit 1; }
+await 50 some_minimized || { echo "minimize click did not minimize"; dump_state; exit 1; }
 click_at 29 29
-sleep 0.3
-[[ "$(focus_id)" != 0 ]] || { echo "the slot did not restore a window"; dump_state; exit 1; }
+await 50 some_focused || { echo "the slot did not restore a window"; dump_state; exit 1; }
 ctl "set desktop.active_click 0"
 
 # a tooltip over the slot
@@ -60,12 +69,11 @@ screenshot "$XDG_RUNTIME_DIR/hover.ppm"
 
 # ungrouped: two slots 53px apart in focus order; the second one focuses
 # the other window
-ctl "set desktop.group_windows false"
-sleep 0.3
+set_setting desktop.group_windows false
 first=$(focus_id)
+other_focused() { [[ "$(focus_id)" != "$first" ]]; }
 click_at 29 82
-sleep 0.3
-[[ "$(focus_id)" != "$first" ]] || { echo "the second slot did not focus the other window"; dump_state; exit 1; }
+await 50 other_focused || { echo "the second slot did not focus the other window"; dump_state; exit 1; }
 
 # the right-click menu on a slot: its popup is an ImGui window; "close"
 # is the last item under a separator
