@@ -36,6 +36,7 @@ namespace {
         void closeCall(DBusMessage* msg);
         void capabilities(DBusMessage* msg);
         void serverInfo(DBusMessage* msg);
+        void refuse(DBusMessage* msg);
     };
 }
 
@@ -75,10 +76,21 @@ void NotificationsImpl::onListen(void* arg) {
     dbus_message_unref(sig);
 }
 
+// a call that does not parse gets an error back, never silence: the
+// caller would otherwise block until its own timeout
+void NotificationsImpl::refuse(DBusMessage* msg) {
+    DBusMessage* err = dbus_message_new_error(msg, DBUS_ERROR_INVALID_ARGS, "expected susssasa{sv}i");
+
+    dbus_connection_send(conn, err, nullptr);
+    dbus_message_unref(err);
+}
+
 void NotificationsImpl::notify(DBusMessage* msg) {
     DBusMessageIter it;
 
     if (!dbus_message_iter_init(msg, &it)) {
+        refuse(msg);
+
         return;
     }
 
@@ -90,8 +102,10 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     i32 expireMs = -1;
     bool critical = false;
 
-    // susssasa{sv}i, in order; bail on shape mismatch
+    // susssasa{sv}i, in order; a shape mismatch is refused
     if (dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_STRING) {
+        refuse(msg);
+
         return;
     }
 
@@ -99,6 +113,8 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     dbus_message_iter_next(&it);
 
     if (dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_UINT32) {
+        refuse(msg);
+
         return;
     }
 
@@ -106,6 +122,8 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     dbus_message_iter_next(&it);
 
     if (dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_STRING) {
+        refuse(msg);
+
         return;
     }
 
@@ -113,6 +131,8 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     dbus_message_iter_next(&it);
 
     if (dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_STRING) {
+        refuse(msg);
+
         return;
     }
 
@@ -120,6 +140,8 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     dbus_message_iter_next(&it);
 
     if (dbus_message_iter_get_arg_type(&it) != DBUS_TYPE_STRING) {
+        refuse(msg);
+
         return;
     }
 
@@ -142,9 +164,13 @@ void NotificationsImpl::notify(DBusMessage* msg) {
 
             dbus_message_iter_recurse(&dict, &kv);
 
+            // the caller picks the key type: read one only if it is a string
             const char* key = "";
 
-            dbus_message_iter_get_basic(&kv, &key);
+            if (dbus_message_iter_get_arg_type(&kv) == DBUS_TYPE_STRING) {
+                dbus_message_iter_get_basic(&kv, &key);
+            }
+
             dbus_message_iter_next(&kv);
 
             if (StringView(key) == "urgency"_sv && dbus_message_iter_get_arg_type(&kv) == DBUS_TYPE_VARIANT) {
