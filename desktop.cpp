@@ -1416,8 +1416,9 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
         resizing = true;
     }
 
-    // corner grips, in imgui's order: 0 bottom-right, 1 bottom-left, 2 top-left,
-    // 3 top-right
+    // corner grips, in imgui's order: 0 bottom-right, 1 bottom-left. A
+    // top-level window gets at most these two (UpdateWindowManualResize runs
+    // resize_grip_count = ConfigWindowsResizeFromEdges ? 2 : 1 of them)
     if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 0)) {
         resizing = true;
     }
@@ -1425,16 +1426,6 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
     if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 1)) {
         resizing = true;
         anchor |= kResizeLeft;
-    }
-
-    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 2)) {
-        resizing = true;
-        anchor |= kResizeLeft | kResizeTop;
-    }
-
-    if (g.ActiveId == ImGui::GetWindowResizeCornerID(w, 3)) {
-        resizing = true;
-        anchor |= kResizeTop;
     }
 
     if (!resizing) {
