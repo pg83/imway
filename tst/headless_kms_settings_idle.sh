@@ -37,7 +37,7 @@ slider_type() { # <dy> <value>
     ctl "key 29 release"
     await 100 page_typing || { echo "Ctrl+click did not open the slider at $1 for typing"; exit 1; }
     ctl "type $2"
-    sleep 0.5
+    await_input "$2" || { echo "the field did not take '$2'"; dump_state; exit 1; }
     ctl "key 28 press"; ctl "key 28 release"
     let_go() { ! page_typing; }
     await 100 let_go || { echo "Enter did not apply the typed value"; exit 1; }

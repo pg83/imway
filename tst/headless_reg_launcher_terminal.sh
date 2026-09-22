@@ -42,7 +42,7 @@ pick_entry() {
     ctl "key 125 release"
     await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
     ctl "type $1"
-    sleep 0.2
+    await_input "$1" || { echo "the field did not take '$1'"; dump_state; exit 1; }
     ctl "key 103 press"; ctl "key 103 release" # Up
     ctl "key 28 press"; ctl "key 28 release"   # Enter
 }

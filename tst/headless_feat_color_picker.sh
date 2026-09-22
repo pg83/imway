@@ -20,7 +20,7 @@ ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 rele
 # trickle queue take the text before the keys that act on it
 await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
 ctl "type color picker"
-sleep 0.3
+await_input "color picker" || { echo "the field did not take 'color picker'"; dump_state; exit 1; }
 ctl "key 103 press"; ctl "key 103 release" # Up: into the action row
 ctl "key 28 press"; ctl "key 28 release"   # Enter
 sleep 0.3

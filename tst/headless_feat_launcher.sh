@@ -77,7 +77,8 @@ await_imgui '##lock-overlay' || { echo "launcher did not show the lock dialog"; 
 }
 
 ctl "type xxx"
-sleep 0.4
+
+await_input "xxx" || { echo "the field did not take 'xxx'"; dump_state; exit 1; }
 ctl "key 28 press"; ctl "key 28 release"
 await 50 in_log "lockscreen closed" || { echo "launcher lockscreen did not unlock"; exit 1; }
 

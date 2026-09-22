@@ -15,7 +15,7 @@ open_settings() {
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
     await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
     ctl "type settings"
-    sleep 0.3
+    await_input "settings" || { echo "the field did not take 'settings'"; dump_state; exit 1; }
     ctl "key 103 press"; ctl "key 103 release" # Up: select the action
     ctl "key 28 press"; ctl "key 28 release"
     sleep 0.3
