@@ -8408,7 +8408,7 @@ namespace {
         zxdg_output_v1_send_logical_size(xres, srv->scene->outW, srv->scene->outH);
 
         if (version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION) {
-            Buffer name(srv->output ? srv->output->outputName() : "UNKNOWN-1"_sv);
+            Buffer name(srv->output->outputName());
 
             zxdg_output_v1_send_name(xres, name.cStr());
         }
@@ -9122,7 +9122,7 @@ namespace {
             return;
         }
 
-        if (!srv->dpmsOff && srv->output) {
+        if (!srv->dpmsOff) {
             if (srv->composer->settings->lockBeforeDpms() && srv->composer->desktop) {
                 srv->composer->desktop->lock();
             }
@@ -10930,7 +10930,7 @@ void WaylandImpl::activity() {
         ev_timer_again(loop, &n.timer);
     });
 
-    if (composer->settings->dpmsSeconds() > 0 && output) {
+    if (composer->settings->dpmsSeconds() > 0) {
         ev_timer_again(loop, &dpmsTimer);
 
         if (dpmsOff) {
@@ -12270,8 +12270,8 @@ void WaylandImpl::updateDpms() {
 
     ev_timer_stop(loop, &dpmsTimer);
 
-    if (!output || seconds <= 0.) {
-        if (dpmsOff && output) {
+    if (seconds <= 0.) {
+        if (dpmsOff) {
             dpmsOff = false;
             output->setPowerSave(true);
             scene->needsFrame = true;
@@ -12337,8 +12337,10 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 
     wlLoop = wl_display_get_event_loop(display);
 
+    // the one output the composer started before it made us; it outlives us
+    // and is never swapped, so nothing here checks it for null
     output = cfg.output;
-    cmDisplayColor = output ? output->colorState() : OutputColorState::sdr();
+    cmDisplayColor = output->colorState();
     cmDisplayIdentity = ++cimgIdentity;
     iconPool = comp.iconPool;
     comp.iconProviders.pushBack((IconProvider*)this);
@@ -12976,12 +12978,6 @@ void cmOutputDestroy(wl_client*, wl_resource* res) {
 void cmOutputGetImageDesc(wl_client* client, wl_resource* res, u32 id) {
     auto* obj = (CmOutput*)wl_resource_get_user_data(res);
 
-    if (!obj->srv->output) {
-        cmMakeFailedImageDesc(obj->srv, client, wl_resource_get_version(res), id, WP_IMAGE_DESCRIPTION_V1_CAUSE_NO_OUTPUT, "the wl_output is gone");
-
-        return;
-    }
-
     cmMakeImageDesc(obj->srv, client, wl_resource_get_version(res), id, cmDisplayDesc(obj->srv, wl_resource_get_version(res)));
 }
 
@@ -13558,7 +13554,7 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 }
 
 void WaylandImpl::syncColorState() {
-    OutputColorState color = output ? output->colorState() : OutputColorState::sdr();
+    OutputColorState color = output->colorState();
 
     if (color == cmDisplayColor) {
         return;
@@ -13568,9 +13564,7 @@ void WaylandImpl::syncColorState() {
     cmDisplayIdentity = ++cimgIdentity;
 
     for (CmOutput* obj : each<CmOutput>(cmOutputResources)) {
-        if (output) {
-            wp_color_management_output_v1_send_image_description_changed(obj->res);
-        }
+        wp_color_management_output_v1_send_image_description_changed(obj->res);
     }
 
     for (CmFeedback* obj : each<CmFeedback>(cmFeedbackResources)) {
@@ -13855,11 +13849,11 @@ void WaylandImpl::outputResized() {
     // Toplevel configures need no sweep here — the per-frame desired-size
     // pass reconfigures fullscreen and maximized windows from the next
     // frame's layout at the new size.
-    Buffer make(output ? output->make() : "imway"_sv);
-    Buffer model(output ? output->model() : "unknown"_sv);
+    Buffer make(output->make());
+    Buffer model(output->model());
 
     for (wl_resource* res : outputResources) {
-        wl_output_send_geometry(res, 0, 0, output ? output->physicalWidthMm() : 0, output ? output->physicalHeightMm() : 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_geometry(res, 0, 0, output->physicalWidthMm(), output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
         wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, scene->outW, scene->outH, (i32)(scene->hz * 1000));
     }
 
