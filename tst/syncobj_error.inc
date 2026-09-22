@@ -101,7 +101,47 @@ static struct wp_linux_drm_syncobj_timeline_v1* sync_test_timeline_keep(void) {
     return sync_test_timeline_impl(1);
 }
 
+/* a w x h ARGB dmabuf from a DRM dumb buffer on the first card that makes
+ * one: the fallback where /dev/udmabuf is missing or closed to us */
+__attribute__((unused))
+static struct wl_buffer* sync_dumb_dmabuf(int w, int h) {
+    if (!sync_dmabuf || !sync_linear_argb) return NULL;
+    for (int i = 0; i < 8; i++) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/dri/card%d", i);
+        int fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0) continue;
+        struct drm_mode_create_dumb create = {0};
+        create.width = (uint32_t)w;
+        create.height = (uint32_t)h;
+        create.bpp = 32;
+        int prime = -1;
+        if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0 ||
+            drmPrimeHandleToFD(fd, create.handle, DRM_CLOEXEC | DRM_RDWR, &prime) != 0 ||
+            prime < 0) {
+            close(fd);
+            continue;
+        }
+        /* the prime fd holds its own dma-buf reference */
+        close(fd);
+        struct zwp_linux_buffer_params_v1* params =
+            zwp_linux_dmabuf_v1_create_params(sync_dmabuf);
+        zwp_linux_buffer_params_v1_add(params, prime, 0, 0, create.pitch, 0, 0);
+        close(prime);
+        return zwp_linux_buffer_params_v1_create_immed(params, w, h, 0x34325241u, 0);
+    }
+    return NULL;
+}
+
+static struct wl_buffer* sync_test_udmabuf(void);
+
 static struct wl_buffer* sync_test_dmabuf(void) {
+    struct wl_buffer* buffer = sync_test_udmabuf();
+
+    return buffer ? buffer : sync_dumb_dmabuf(1, 1);
+}
+
+static struct wl_buffer* sync_test_udmabuf(void) {
     if (!sync_dmabuf || !sync_linear_argb) return NULL;
     int dev = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
     int mem = memfd_create("syncobj-dmabuf", MFD_ALLOW_SEALING);
