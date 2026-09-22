@@ -408,7 +408,7 @@ namespace {
     }
 
     // a comma-separated name list, as the boot knobs spell them
-    bool listed(StringView list, StringView name) {
+    static bool listed(StringView list, StringView name) {
         while (!list.empty()) {
             StringView item, rest;
 
@@ -427,7 +427,7 @@ namespace {
         return false;
     }
 
-    void* ddcThreadTrampoline(void* self) {
+    static void* ddcThreadTrampoline(void* self) {
         ((FakeKms*)self)->ddcLoop();
 
         return nullptr;
@@ -1392,28 +1392,28 @@ int FakeKms::openDdc(StringView bus) {
         return -ENOENT;
     }
 
-    int sv[2];
+    int ends[2];
 
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sv) != 0) {
+    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, ends) != 0) {
         return -errno;
     }
 
     // i2c-dev reads never block: an unanswered request is a short read
-    fcntl(sv[0], F_SETFL, O_NONBLOCK);
+    fcntl(ends[0], F_SETFL, O_NONBLOCK);
 
     struct stat st{};
 
-    syscall(SYS_fstat, sv[0], &st);
+    syscall(SYS_fstat, ends[0], &st);
     ddcIno = st.st_ino;
     ddcDev = st.st_dev;
-    ddcPeer = sv[1];
+    ddcPeer = ends[1];
     pthread_create(&ddcThread, nullptr, ddcThreadTrampoline, this);
     pthread_detach(ddcThread);
     pthread_mutex_lock(&mu);
     sysE << "fake-kms: ddc monitor on "_sv << bus << endL;
     pthread_mutex_unlock(&mu);
 
-    return sv[0];
+    return ends[0];
 }
 
 long FakeKms::fakeIoctl(unsigned long req, void* arg) {
