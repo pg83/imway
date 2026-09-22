@@ -74,9 +74,6 @@ namespace {
         LibinputSource(Composer& c);
         ~LibinputSource() noexcept;
 
-        void setPointerSpeed(double s) override;
-        double pointerSpeed() const override;
-
         bool pathAdd(int n);
 
         // the node vanished: yank the device now — libinput only notices a
@@ -344,14 +341,6 @@ void LibinputSource::pathDrop(int n) {
     }
 
     pathBits &= ~(1ull << n);
-}
-
-void LibinputSource::setPointerSpeed(double s) {
-    comp->settings->setPointerSpeed((float)(s < -1. ? -1. : s > 1. ? 1. : s));
-}
-
-double LibinputSource::pointerSpeed() const {
-    return comp->settings->pointerSpeed();
 }
 
 int LibinputSource::sysnameIndex(libinput_device* dev) {
