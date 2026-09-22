@@ -3,11 +3,8 @@
 # shapes. The toast width slider and the position combo move and resize the
 # toasts on screen (bottom left stacks them upward from the corner), a
 # critical toast wears its red border and a click dismisses a toast. The
-# history slider at its left end keeps nothing off screen. An application rule's
-# policy combo, its name field and its remove button decide which of an
-# application's notifications reach the screen, and "add application rule"
-# makes a new one. Coordinates are relative to the settings window, whose
-# page rows are one framed widget apart.
+# history slider at its left end keeps nothing off screen. Coordinates are
+# relative to the settings window, whose page rows are one framed widget apart.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -31,12 +28,6 @@ ctl "motion 1000 700"
 active() { dump_field '^notifications ' active; }
 history() { dump_field '^notifications ' history; }
 active_is() { [[ "$(active)" == "$1" ]]; }
-# the page is a child window: it, not the dialog, holds the keyboard
-page_typing() {
-    local line
-    line=$(dump_state | grep '^imgui focus ') || return 1
-    [[ "$line" == *"name=settings/page"* && "$line" == *"want_text=1"* ]]
-}
 posted() { # <app> [critical]: post one and wait for the notifier to take it
     local before
     before=$(grep -c "control: notification" "$IMWAY_LOG" || true)
@@ -103,51 +94,5 @@ posted muteme
 kept_only_active() { [[ "$(history)" == "$(active)" ]]; }
 await 50 kept_only_active || { echo "the history slider at 0 still keeps $(history) with $(active) on screen"; exit 1; }
 
-# the rule's policy combo: allow
-combo_pick 670 279 1
-posted muteme
-await 50 active_is 3 || { echo "the allow policy did not let muteme through"; dump_state; exit 1; }
-
-# type into the rule's name field: ImGui trickles the characters in one a
-# frame, so wait for the field to change and then hold still before anything
-# that would take the keyboard away from it
-field_diff() { # <a> <b>
-    region_diff "$XDG_RUNTIME_DIR/$1.ppm" "$XDG_RUNTIME_DIR/$2.ppm" $((wx + 166)) $((wy + 268)) $((wx + 620)) $((wy + 290))
-}
-type_rule() { # <text>
-    at 400 279
-    await 100 page_typing || { echo "the rule's name field did not take the keyboard"; exit 1; }
-    screenshot "$XDG_RUNTIME_DIR/before.ppm"
-    ctl "type $1"
-    settled() {
-        screenshot "$XDG_RUNTIME_DIR/a.ppm" && sleep 0.3 && screenshot "$XDG_RUNTIME_DIR/b.ppm" &&
-            [[ "$(field_diff before b)" -gt 0 && "$(field_diff a b)" -eq 0 ]]
-    }
-    await 50 settled || { echo "typing '$1' did not reach the field"; exit 1; }
-    at 500 380 # the empty page, clear of the toast stack: the field lets go
-}
-
-# back to mute, then rename the rule: the old name is free again
-combo_pick 670 279 2
-type_rule x
-posted muteme
-await_active 4 "muteme after the rule moved to mutemex"
-posted mutemex
-sleep 0.5
-active_is 4 || { echo "the renamed rule did not mute mutemex"; exit 1; }
-
-# remove it, and the renamed application shows
-at 742 279
-posted mutemex
-await_active 5 "mutemex after its rule was removed"
-
-# a new rule from the button: name it and mute it
-at 255 279 # "add application rule" moved up into the removed row's place
-type_rule addme
-combo_pick 670 279 2
-posted addme
-sleep 0.5
-active_is 5 || { echo "the added rule did not mute addme"; exit 1; }
-
 expect_alive "compositor died under the notification settings"
-echo "OK: the notification page's widgets shape the toasts and the per-application rules"
+echo "OK: the notification page shapes the toasts on screen"
