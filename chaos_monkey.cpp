@@ -56,6 +56,9 @@ using namespace stl;
 //                     after runs out of device memory
 //   descriptor-set=K  K texture descriptor set allocations pass, every
 //                     later one runs out of device memory
+//   sync-file=K       K sync-file exports pass, the one after fails
+//   sync-wait=K       K sync-file semaphore creations and imports pass, the
+//                     one after fails
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -103,6 +106,8 @@ namespace {
         int readbackFenceSkip = -1;
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
+        int syncFileSkip = -1;
+        int syncWaitSkip = -1;
         // buses
         BusRule busRules[8];
         int busSendBuffer = 0;
@@ -131,6 +136,8 @@ namespace {
         VkResult readbackFence(VkResult result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
+        int syncFile(int fd) override;
+        VkResult syncWait(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -207,6 +214,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         descriptorPoolSkip = (int)arg.stou();
     } else if (fault == "descriptor-set"_sv) {
         descriptorSetSkip = (int)arg.stou();
+    } else if (fault == "sync-file"_sv) {
+        syncFileSkip = (int)arg.stou();
+    } else if (fault == "sync-wait"_sv) {
+        syncWaitSkip = (int)arg.stou();
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -458,6 +469,24 @@ VkResult TestChaosMonkey::descriptorSet(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+int TestChaosMonkey::syncFile(int fd) {
+    if (syncFileSkip < 0 || syncFileSkip-- > 0) {
+        return fd;
+    }
+
+    close(fd);
+
+    return -1;
+}
+
+VkResult TestChaosMonkey::syncWait(VkResult result) {
+    if (syncWaitSkip < 0 || syncWaitSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+}
+
 // buses
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
     if (!busFires(BusFault::message, built)) {
@@ -516,6 +545,8 @@ namespace {
         VkResult readbackFence(VkResult result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
+        int syncFile(int fd) override;
+        VkResult syncWait(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -586,6 +617,14 @@ VkResult IdleChaosMonkey::descriptorPool(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::descriptorSet(VkResult result) {
+    return result;
+}
+
+int IdleChaosMonkey::syncFile(int fd) {
+    return fd;
+}
+
+VkResult IdleChaosMonkey::syncWait(VkResult result) {
     return result;
 }
 

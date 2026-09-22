@@ -3681,7 +3681,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
             VkSemaphoreCreateInfo sci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
             VkSemaphore sem = VK_NULL_HANDLE;
 
-            if (vkCreateSemaphore(device, &sci, nullptr, &sem) != VK_SUCCESS) {
+            if (comp->chaos->syncWait(vkCreateSemaphore(device, &sci, nullptr, &sem)) != VK_SUCCESS) {
                 close(syncFd);
 
                 return false;
@@ -3697,7 +3697,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         imp.handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
         imp.fd = syncFd;
 
-        if (importSemFd(device, &imp) != VK_SUCCESS) {
+        if (comp->chaos->syncWait(importSemFd(device, &imp)) != VK_SUCCESS) {
             close(syncFd);
 
             return false;
@@ -3730,6 +3730,11 @@ bool RendererImpl::renderFrame(int scanIdx) {
                     u32 binary = 0;
                     int syncFd = -1;
                     bool exported = ready && drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
+
+                    if (exported) {
+                        syncFd = comp->chaos->syncFile(syncFd);
+                        exported = syncFd >= 0;
+                    }
 
                     if (binary) {
                         drmSyncobjDestroy(drmFd, binary);
@@ -3765,6 +3770,12 @@ bool RendererImpl::renderFrame(int scanIdx) {
                 exp.fd = -1;
 
                 if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0 || exp.fd < 0) {
+                    continue;
+                }
+
+                exp.fd = comp->chaos->syncFile(exp.fd);
+
+                if (exp.fd < 0) {
                     continue;
                 }
 
