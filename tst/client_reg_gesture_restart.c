@@ -162,6 +162,7 @@ int main(void) {
     }
 
     printf("gesture restart done\n");
+    wl_display_disconnect(bystander);
 
     return 0;
 }

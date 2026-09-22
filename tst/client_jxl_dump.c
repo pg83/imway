@@ -87,6 +87,9 @@ int main(int argc, char** argv) {
     fwrite(pixels, 1, (size_t)basic.xsize * basic.ysize * 3, out);
     fclose(out);
     printf("%ux%u\n", basic.xsize, basic.ysize);
+    JxlDecoderDestroy(dec);
+    free(pixels);
+    free(data);
 
     return 0;
 }

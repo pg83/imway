@@ -141,6 +141,7 @@ int main(void) {
     }
 
     printf("pointer versions done\n");
+    wl_display_disconnect(bystander);
 
     return 0;
 }
