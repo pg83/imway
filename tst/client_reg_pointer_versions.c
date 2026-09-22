@@ -101,13 +101,17 @@ static int check(const char* what, const struct counts* c, int frames, int sourc
     return 0;
 }
 
+// the second client, which must hear nothing
+static struct wl_display* bystander;
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(40);
 
     if (wl_boot()) return 2;
 
-    struct wl_display* bystander = wl_display_connect(NULL);
+    // a global, as wl_dpy is: its proxies live to exit, reachable
+    bystander = wl_display_connect(NULL);
 
     if (!bystander) return 2;
 
@@ -141,7 +145,6 @@ int main(void) {
     }
 
     printf("pointer versions done\n");
-    wl_display_disconnect(bystander);
 
     return 0;
 }

@@ -110,6 +110,9 @@ static int restarted(const struct counts* c) {
     return c->begins == 2 && c->ends == 2 && c->cancelled == 1 && c->last_fingers == 4;
 }
 
+// the second client, which must hear nothing
+static struct wl_display* bystander;
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(40);
@@ -117,7 +120,8 @@ int main(void) {
     if (wl_boot() || !wl_ptr) return 2;
 
     // the bystander: its own connection, its own pointer and gestures
-    struct wl_display* bystander = wl_display_connect(NULL);
+    // a global, as wl_dpy is: its proxies live to exit, reachable
+    bystander = wl_display_connect(NULL);
 
     if (!bystander) return 2;
 
@@ -162,7 +166,6 @@ int main(void) {
     }
 
     printf("gesture restart done\n");
-    wl_display_disconnect(bystander);
 
     return 0;
 }
