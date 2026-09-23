@@ -9287,10 +9287,6 @@ namespace {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes);
 
-        if (!t) {
-            return;
-        }
-
         // the composer makes the icon pool before the Wayland server
         if (t->pendingOwnIcon) {
             srv->iconPool->release(t->pendingOwnIcon);
@@ -9488,7 +9484,7 @@ namespace {
     void activationActivate(wl_client*, wl_resource* res, const char* token, wl_resource* surfRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfRes);
-        Toplevel* tl = s ? s->rootToplevel() : nullptr;
+        Toplevel* tl = s->rootToplevel();
         bool authorized = false;
 
         for (size_t i = 0; i < srv->activationGrants.length(); i++) {
