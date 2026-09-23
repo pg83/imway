@@ -853,6 +853,13 @@ int main(void) {
     vt.message_function = message;
     dbus_connection_register_fallback(bus, "/", &vt, NULL);
 
+    /* the compositor hears of the name's new owner on the bus and of the
+     * menu address on the wayland socket, in no fixed order; an owner
+     * change after the menu attached would ask for one more layout than
+     * the stages count. A registrar roundtrip queues behind the bus's
+     * NameOwnerChanged, so once it is answered the compositor has seen it. */
+    listed(bus, 0);
+
     if (wl_boot()) {
         return 2;
     }
