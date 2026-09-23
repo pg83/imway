@@ -70,5 +70,31 @@ int main(int argc, char** argv) {
         return wl_expect_error(wp_color_representation_surface_v1_interface.name,
                                WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT);
     }
+    if (!strcmp(argv[1], "chroma-zero")) {
+        // below the first defined location
+        wp_color_representation_surface_v1_set_chroma_location(repr, 0);
+        return wl_expect_error(wp_color_representation_surface_v1_interface.name,
+                               WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_CHROMA_LOCATION);
+    }
+    if (!strcmp(argv[1], "stacked")) {
+        // several settings before one commit build on each other, over
+        // every YCbCr matrix and both ranges
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT601,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
+        wp_color_representation_surface_v1_set_chroma_location(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_2);
+        wp_color_representation_surface_v1_set_alpha_mode(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT);
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT2020,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+        wl_surface_commit(surface);
+        if (wl_display_roundtrip(wl_dpy) < 0) {
+            fprintf(stderr, "stacked representation settings were refused\n");
+            return 1;
+        }
+        return 0;
+    }
     return 2;
 }
