@@ -182,5 +182,14 @@ struct ChaosMonkey {
     // things by it read it: the bell, the OSD, the stats sample
     virtual u32 clockMs(u32 ms) = 0;
 
+    // vulkan: the device the session picks, and what the renderer builds
+    // on it outside the boot's setup
+    // the number of devices the instance enumerated; none stands for a
+    // system without a usable driver
+    virtual u32 vulkanDevices(u32 found) = 0;
+    // one queue family's capabilities as the device reports them: a device
+    // with no graphics family cannot draw the session
+    virtual VkQueueFlags queueFlags(VkQueueFlags flags) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

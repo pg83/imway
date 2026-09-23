@@ -170,6 +170,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     u32 n = 0;
 
     vkEnumeratePhysicalDevices(this->instance, &n, nullptr);
+    n = chaos.vulkanDevices(n);
     STD_VERIFY(n > 0);
 
     Vector<VkPhysicalDevice> devs;
@@ -274,7 +275,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     this->queueFamily = UINT32_MAX;
 
     for (u32 i = 0; i < qn; i++) {
-        if (qf[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        if (chaos.queueFlags(qf[i].queueFlags) & VK_QUEUE_GRAPHICS_BIT) {
             this->queueFamily = i;
 
             break;

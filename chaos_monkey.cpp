@@ -132,6 +132,11 @@ using namespace stl;
 //   clock-ms=V        the clock reads V at its first reading and runs on
 //                     from there: V just under 2^32 wraps it round to zero
 //                     early in the session
+// vulkan: the device, and the renderer's objects outside the boot's setup
+//   vk-devices=N      the instance enumerates at most N devices: 0 is a
+//                     system without a usable driver
+//   no-graphics=1     no queue family of the device offers graphics, as on
+//                     a compute-only device
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -216,6 +221,9 @@ namespace {
         u32 clockStart = 0;
         bool clockOffsetKnown = false;
         u32 clockOffset = 0;
+        // vulkan: the device and the renderer's objects outside setup
+        int vulkanDeviceCap = -1;
+        bool noGraphics = false;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -285,6 +293,9 @@ namespace {
         bool encoderAlloc(bool pending) override;
         // the millisecond clock
         u32 clockMs(u32 ms) override;
+        // vulkan: the device and the renderer's objects outside setup
+        u32 vulkanDevices(u32 found) override;
+        VkQueueFlags queueFlags(VkQueueFlags flags) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -436,6 +447,11 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         // the millisecond clock
         clockSet = true;
         clockStart = (u32)arg.stou();
+    } else if (fault == "vk-devices"_sv) {
+        // vulkan: the device and the renderer's objects outside setup
+        vulkanDeviceCap = (int)arg.stou();
+    } else if (fault == "no-graphics"_sv) {
+        noGraphics = arg.stou() != 0;
     }
 }
 
@@ -978,6 +994,19 @@ u32 TestChaosMonkey::clockMs(u32 ms) {
     return ms + clockOffset;
 }
 
+// vulkan: the device and the renderer's objects outside setup
+u32 TestChaosMonkey::vulkanDevices(u32 found) {
+    if (vulkanDeviceCap < 0 || found <= (u32)vulkanDeviceCap) {
+        return found;
+    }
+
+    return (u32)vulkanDeviceCap;
+}
+
+VkQueueFlags TestChaosMonkey::queueFlags(VkQueueFlags flags) {
+    return noGraphics ? flags & ~(VkQueueFlags)VK_QUEUE_GRAPHICS_BIT : flags;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1050,6 +1079,9 @@ namespace {
         bool encoderAlloc(bool pending) override;
         // the millisecond clock
         u32 clockMs(u32 ms) override;
+        // vulkan: the device and the renderer's objects outside setup
+        u32 vulkanDevices(u32 found) override;
+        VkQueueFlags queueFlags(VkQueueFlags flags) override;
     };
 }
 
@@ -1258,6 +1290,15 @@ bool IdleChaosMonkey::encoderAlloc(bool pending) {
 // the millisecond clock
 u32 IdleChaosMonkey::clockMs(u32 ms) {
     return ms;
+}
+
+// vulkan: the device and the renderer's objects outside setup
+u32 IdleChaosMonkey::vulkanDevices(u32 found) {
+    return found;
+}
+
+VkQueueFlags IdleChaosMonkey::queueFlags(VkQueueFlags flags) {
+    return flags;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
