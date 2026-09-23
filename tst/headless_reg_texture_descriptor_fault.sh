@@ -11,7 +11,9 @@ IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_render_fault"
 start_client
 wait_client "render fault ready"
 shm_pid=$CLIENT_PID
-wait_rect 'title=render-fault-victim'
+# untextured, the window is never laid out: it is in the scene, mapped
+victim_mapped() { [[ "$(dump_field 'title=render-fault-victim' mapped)" == 1 ]]; }
+await 100 victim_mapped || { echo "the wl_shm window did not map"; dump_state; exit 1; }
 
 red_drawn() {
     screenshot "$XDG_RUNTIME_DIR/frame.ppm" && centroid "$XDG_RUNTIME_DIR/frame.ppm" 255 0 0 >/dev/null 2>&1

@@ -12,7 +12,9 @@ await 100 grep -q "owner ready" "$log_o" || { echo "the owner did not map"; cat 
 start_client stranger
 wait_client "stranger ready"
 wait_rect 'app_id=cursor-owner'
+wait_placed 'app_id=cursor-owner' || { echo "the window never settled: app_id=cursor-owner"; exit 1; }
 wait_rect 'app_id=cursor-stranger'
+wait_placed 'app_id=cursor-stranger' || { echo "the window never settled: app_id=cursor-stranger"; exit 1; }
 
 rect() { # <pattern> -> x y w h
     dump_state | grep -m1 "$1" | awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } print v["imgx"], v["imgy"], v["client_w"], v["client_h"] }'

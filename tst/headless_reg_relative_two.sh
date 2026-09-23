@@ -13,7 +13,9 @@ await 100 grep -q ready "$log_a" || { echo "client a did not map"; cat "$log_a";
 pid_b=$!
 await 100 grep -q ready "$log_b" || { echo "client b did not map"; cat "$log_b"; exit 1; }
 wait_rect 'title=rel-a'
+wait_placed 'title=rel-a' || { echo "the window never settled: title=rel-a"; exit 1; }
 wait_rect 'title=rel-b'
+wait_placed 'title=rel-b' || { echo "the window never settled: title=rel-b"; exit 1; }
 
 rect() { # <pattern> -> x y w h
     dump_state | grep -m1 "$1" | awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } print v["imgx"], v["imgy"], v["client_w"], v["client_h"] }'

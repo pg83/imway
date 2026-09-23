@@ -196,12 +196,17 @@ dump_field() { # <pattern> <field>
         $0 ~ pat { for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == f) { print kv[2]; exit } }'
 }
 
-# true once the compositor has laid the client's window out
+# true once the compositor has laid the client's window out. The surface
+# fields (imgx, client_w) are in the dump from the commit that maps the
+# window, imgx still 0; the frame's own size (w) is 0 until the frame that
+# places the window, so that is what tells a laid-out window
 have_rect() { # <dump-pattern>
-    local w
-    [[ -n "$(dump_field "$1" imgx)" ]] || return 1
-    w=$(dump_field "$1" client_w)
-    [[ -n "$w" && "$w" -gt 0 ]]
+    local line w cw
+    line=$(dump_state | grep -m1 -E -- "$1") || return 1
+    [[ "$line" == *" imgx="* ]] || return 1
+    w=$(awk '{ for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == "w") { print kv[2]; exit } }' <<<"$line")
+    cw=$(awk '{ for (i = 1; i <= NF; i++) if (split($i, kv, "=") == 2 && kv[1] == "client_w") { print kv[2]; exit } }' <<<"$line")
+    [[ -n "$w" && "$w" -gt 0 && -n "$cw" && "$cw" -gt 0 ]]
 }
 
 # Wait for the frame that lays a client's window out before reading its rect

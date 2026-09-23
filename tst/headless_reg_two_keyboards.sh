@@ -17,7 +17,9 @@ await 100 grep -q ready "$log_a" || { echo "client a did not map"; cat "$log_a";
 pid_b=$!
 await 100 grep -q ready "$log_b" || { echo "client b did not map"; cat "$log_b"; exit 1; }
 wait_rect 'title=kbd-a'
+wait_placed 'title=kbd-a' || { echo "the window never settled: title=kbd-a"; exit 1; }
 wait_rect 'title=kbd-b'
+wait_placed 'title=kbd-b' || { echo "the window never settled: title=kbd-b"; exit 1; }
 
 rect() { # <pattern> -> x y w h of the surface
     dump_state | grep -m1 "$1" | awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } print v["imgx"], v["imgy"], v["client_w"], v["client_h"] }'

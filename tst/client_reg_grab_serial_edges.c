@@ -7,7 +7,7 @@
 //   button still down, a popup grab and a move on that press's serial are
 //   refused, the popup dismissed and the window left where it is.
 // Every step waits for the scenario's press or release and prints its
-// outcome.
+// outcome; the client exits on the go-exit file.
 
 #include "wl_util.h"
 
@@ -112,7 +112,15 @@ int main(void) {
     xdg_toplevel_move(top.tl, wl_seat_g, press);
     wl_display_roundtrip(wl_dpy);
     // the release that ends this press goes to no surface of ours: the
-    // pressed one is gone
+    // pressed one is gone. The window stays until the scenario has seen
+    // that the pointer does not carry it
     printf("origin gone dismissed\n");
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/go-exit", getenv("XDG_RUNTIME_DIR"));
+    while (access(path, F_OK) != 0) {
+        if (wl_display_roundtrip(wl_dpy) < 0) return 1;
+        usleep(20000);
+    }
     return 0;
 }

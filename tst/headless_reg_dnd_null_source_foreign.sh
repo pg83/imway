@@ -11,10 +11,12 @@ other_log="$XDG_RUNTIME_DIR/other.log"
 other_pid=$!
 await 100 grep -q "input-health ready" "$other_log" || { echo "the other client did not map"; cat "$other_log"; exit 1; }
 wait_rect 'title=input-health'
+wait_placed 'title=input-health' || { echo "the window never settled: title=input-health"; exit 1; }
 
 start_client
 wait_client "null-source ready"
 wait_rect 'title=dnd-null-source-foreign'
+wait_placed 'title=dnd-null-source-foreign' || { echo "the window never settled: title=dnd-null-source-foreign"; exit 1; }
 
 # a point on the other client's window outside the dragging client's
 rect() { # <pattern> -> x y w h of the surface

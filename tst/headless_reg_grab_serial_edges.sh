@@ -9,6 +9,7 @@ set -euo pipefail
 start_client
 wait_client "ready"
 wait_rect 'app_id=grab-serial-edges'
+wait_placed 'app_id=grab-serial-edges' || { echo "the window never settled: app_id=grab-serial-edges"; exit 1; }
 ix=$(dump_field 'app_id=grab-serial-edges' imgx); iy=$(dump_field 'app_id=grab-serial-edges' imgy)
 
 aim() { # <x> <y>: two frames of hover
@@ -27,12 +28,15 @@ wait_client "released dismissed"
 aim $((ix + 225)) $((iy + 100))
 ctl "button left press"
 wait_client "origin gone dismissed"
-x0=$(dump_field 'app_id=grab-serial-edges' x); y0=$(dump_field 'app_id=grab-serial-edges' y)
+pos() { dump_state | grep -m1 'app_id=grab-serial-edges' | grep -oE ' x=[-0-9]+ y=[-0-9]+ ' || true; }
+before=$(pos)
+[[ -n "$before" ]] || { echo "the window was gone before the move was tried"; dump_state; exit 1; }
 aim $((ix + 285)) $((iy + 140))
 aim $((ix + 285)) $((iy + 140))
-[[ "$(dump_field 'app_id=grab-serial-edges' x)" == "$x0" && "$(dump_field 'app_id=grab-serial-edges' y)" == "$y0" ]] || {
-    echo "a move on a press whose surface was gone moved the window"; dump_state; exit 1; }
+[[ "$(pos)" == "$before" ]] || {
+    echo "a move on a press whose surface was gone moved the window (was$before)"; dump_state; exit 1; }
 ctl "button left release"
+touch "$XDG_RUNTIME_DIR/go-exit"
 
 expect_client_ok "a grab on a dead implicit grab was kept"
 expect_alive "compositor died refusing grabs on dead serials"
