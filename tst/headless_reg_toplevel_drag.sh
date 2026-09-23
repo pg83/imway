@@ -19,8 +19,10 @@ px=$((ox + 30))
 py=$((oy + 270))
 
 # press inside the origin so the client gets a button serial for start_drag
-ctl "motion $px $py"
-sleep 0.1
+# the pointer focus follows a composed frame: put the pointer there and
+# let two frames carry it before the press, as click_at does
+ctl "motion $px $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
+ctl "motion $((px + 1)) $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
 ctl "button left press"
 sleep 0.2
 

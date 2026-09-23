@@ -43,11 +43,23 @@ setting_taken() {
 
 # one grouped slot: the cycle action alternates the two windows
 set_setting desktop.active_click 2
+# the second window's own map moves the focus too: let that settle before
+# a change of the focus is taken for the click's doing
+settled_seq=-1
+focus_settled() {
+    local now
+    now=$(focus_seq)
+    [[ "$now" == "$settled_seq" ]] && return 0
+    settled_seq=$now
+    sleep 0.3
+    return 1
+}
+focus_seq() { dump_state | sed -n 's/^toplevel .* focus_seq=\([0-9]*\) .*/\1/p' | sort -n | tail -n 1; }
+await 50 focus_settled || { echo "the focus never settled"; dump_state; exit 1; }
 before=$(focus_id)
 # every focus change raises the newest focus_seq, so a click that acted is
 # told from one that did not by that alone; a click is repeated only when
 # nothing at all changed, never because the change came late
-focus_seq() { dump_state | sed -n 's/^toplevel .* focus_seq=\([0-9]*\) .*/\1/p' | sort -n | tail -n 1; }
 cycle_once() { # click the slot until one focus change comes of it
     local seq0
     seq0=$(focus_seq)
