@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The eyedropper: armed from the launcher, the next left click samples the
 # pixel under the cursor, posts the hex as a notification and shows the
-# swatch; Escape closes it.
+# swatch; a right click leaves it armed; Escape closes the swatch.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -25,6 +25,13 @@ ctl "key 103 press"; ctl "key 103 release" # Up: into the action row
 ctl "key 28 press"; ctl "key 28 release"   # Enter
 await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
 sleep 0.3
+
+# only a left click samples: a right one leaves the picker armed. The
+# screenshot waits out a frame that would carry a sample
+ctl "motion 900 600"
+ctl "button right press"; ctl "button right release"
+screenshot "$XDG_RUNTIME_DIR/_right.ppm"
+! swatch_up || { echo "a right click sampled"; dump_state; exit 1; }
 
 # the click samples the desktop background
 click_at 900 600
