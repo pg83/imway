@@ -8,6 +8,12 @@
 #include <presentation-time-client-protocol.h>
 
 static struct wp_presentation* presentation;
+// the objects the disconnect leaves behind: libwayland frees neither the
+// surface proxy nor the pending feedbacks, and statics keep them reachable
+// for the leak checker
+static struct wl_registry* registry;
+static struct wl_surface* surface;
+static struct wp_presentation_feedback* feedbacks[8];
 
 static void extra_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
@@ -23,7 +29,7 @@ int main(void) {
 
     if (wl_boot()) return 2;
 
-    struct wl_registry* registry = wl_display_get_registry(wl_dpy);
+    registry = wl_display_get_registry(wl_dpy);
 
     wl_registry_add_listener(registry, &extra_listener, NULL);
     wl_display_roundtrip(wl_dpy);
@@ -31,7 +37,7 @@ int main(void) {
     if (!presentation) return 2;
 
     struct wl_region* early = wl_compositor_create_region(wl_comp);
-    struct wl_surface* surface = wl_compositor_create_surface(wl_comp);
+    surface = wl_compositor_create_surface(wl_comp);
 
     // the region's id comes free once the compositor confirms the delete
     wl_region_destroy(early);
@@ -44,6 +50,7 @@ int main(void) {
 
     for (int i = 0; i < 8; i++) {
         fb = wp_presentation_feedback(presentation, surface);
+        feedbacks[i] = fb;
 
         if (wl_proxy_get_id((struct wl_proxy*)fb) < wl_proxy_get_id((struct wl_proxy*)surface))
             break;
