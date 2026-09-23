@@ -7,6 +7,7 @@
 #include "intr_list.h"
 
 #include <ev.h>
+#include <poll.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -66,10 +67,19 @@ namespace {
     }
 
     void seatIoCb(struct ev_loop* loop, ev_io* w, int) {
-        // seatd death leaves the fd forever readable: without this check the
-        // level-triggered watcher busy-spins at 100% cpu making no progress
-        if (libseat_dispatch(((SeatSession*)w->data)->seat, 0) < 0 && errno != EAGAIN) {
-            *(((SeatSession*)w->data)->c->log) << "imway: seat connection lost, exiting"_sv << endL;
+        auto* session = (SeatSession*)w->data;
+
+        // seatd death leaves the fd forever readable, and a zero-timeout
+        // dispatch reads its end of file as "nothing yet": without the
+        // hangup check the level-triggered watcher busy-spins at 100% cpu
+        // making no progress. What the manager sent before it went is
+        // still dispatched.
+        pollfd pfd{w->fd, POLLIN, 0};
+
+        poll(&pfd, 1, 0);
+
+        if (libseat_dispatch(session->seat, 0) < 0 || (pfd.revents & POLLHUP)) {
+            *(session->c->log) << "imway: seat connection lost, exiting"_sv << endL;
             ev_io_stop(loop, w);
             ev_break(loop, EVBREAK_ALL);
         }
