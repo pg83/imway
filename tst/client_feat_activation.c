@@ -1,6 +1,7 @@
 // Feature: xdg-activation. With A focused and B in the background, B requests
 // an activation token (off a real input serial) and activates itself — the
-// keyboard focus must move to B.
+// keyboard focus must move to B. A token asked off the same serial with no
+// surface named is just as good: it brings A back afterwards.
 
 #include "wl_util.h"
 #include <xdg-activation-v1-client-protocol.h>
@@ -9,6 +10,8 @@ static struct xdg_activation_v1* activation;
 static struct wl_toplevel_ctx a, b;
 static char token[256];
 static int got_token;
+static char bare_token[256];
+static int got_bare_token;
 
 static void token_done(void* d, struct xdg_activation_token_v1* t, const char* tok) {
     (void)d; (void)t;
@@ -16,6 +19,12 @@ static void token_done(void* d, struct xdg_activation_token_v1* t, const char* t
     got_token = 1;
 }
 static const struct xdg_activation_token_v1_listener token_listener = {token_done};
+static void bare_token_done(void* d, struct xdg_activation_token_v1* t, const char* tok) {
+    (void)d; (void)t;
+    snprintf(bare_token, sizeof(bare_token), "%s", tok);
+    got_bare_token = 1;
+}
+static const struct xdg_activation_token_v1_listener bare_token_listener = {bare_token_done};
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
@@ -54,11 +63,17 @@ int main(void) {
     xdg_activation_token_v1_set_surface(tok, b.surface);
     xdg_activation_token_v1_commit(tok);
 
-    for (int i = 0; i < 400 && !got_token; i++) {
+    // and one off the same serial that names no surface, kept for later
+    struct xdg_activation_token_v1* bare = xdg_activation_v1_get_activation_token(activation);
+    xdg_activation_token_v1_add_listener(bare, &bare_token_listener, NULL);
+    xdg_activation_token_v1_set_serial(bare, wlk_key_serial, wl_seat_g);
+    xdg_activation_token_v1_commit(bare);
+
+    for (int i = 0; i < 400 && (!got_token || !got_bare_token); i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
-    if (!got_token) { fprintf(stderr, "no activation token\n"); return 1; }
+    if (!got_token || !got_bare_token) { fprintf(stderr, "no activation token\n"); return 1; }
     printf("client_feat_activation: token %s\n", token);
 
     xdg_activation_v1_activate(activation, token, b.surface);
@@ -70,6 +85,16 @@ int main(void) {
     if (wlk_focus != b.surface) { fprintf(stderr, "focus did not move to B\n"); return 1; }
 
     printf("client_feat_activation: focus moved to B\n");
+
+    xdg_activation_v1_activate(activation, bare_token, a.surface);
+
+    for (int i = 0; i < 400 && wlk_focus != a.surface; i++) {
+        if (wl_display_roundtrip(wl_dpy) < 0) break;
+        usleep(20000);
+    }
+    if (wlk_focus != a.surface) { fprintf(stderr, "the surfaceless token did not bring A back\n"); return 1; }
+
+    printf("client_feat_activation: focus moved back to A\n");
     printf("client_feat_activation: ok\n");
     return 0;
 }
