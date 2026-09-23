@@ -30,7 +30,7 @@ vw=$(dump_field 'title=imway screenshot' client_w); vh=$(dump_field 'title=imway
 # only the editor's own rect is compared: a whole-screen diff in Python
 # takes seconds a frame on a loaded host, and nothing outside it changes
 settled() { # <scratch> <baseline>: two fresh frames that agree
-    screenshot "$1" && screenshot "$2" &&
+    settle_pair "$1" "$2" &&
         [[ "$(region_diff "$1" "$2" "$vx" "$vy" $((vx + vw)) $((vy + vh)))" -lt 60 ]]
 }
 differs() { # <baseline> <shot>

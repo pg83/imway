@@ -28,7 +28,7 @@ diff_box() { # <ppm a> <ppm b> <x0> <y0> <x1> <y1>, window-relative
 }
 # two fresh shots that agree on the box: the frame carrying the change
 settled() { # <ppm> <x0> <y0> <x1> <y1>
-    screenshot "$XDG_RUNTIME_DIR/_a.ppm" && screenshot "$1" &&
+    settle_pair "$XDG_RUNTIME_DIR/_a.ppm" "$1" &&
         [[ "$(diff_box "$XDG_RUNTIME_DIR/_a.ppm" "$1" "$2" "$3" "$4" "$5")" -eq 0 ]]
 }
 shows() { # <name> <reference ppm> <same|differs>: the bpc box against a reference

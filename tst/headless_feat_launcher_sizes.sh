@@ -50,7 +50,7 @@ ctl "type touch nomatch.out"
 # the text trickles in a character a frame (the window keeps its shape):
 # wait until the grid has emptied and the field stopped changing
 settled_empty() {
-    screenshot "$XDG_RUNTIME_DIR/a.ppm" && sleep 0.3 && screenshot "$XDG_RUNTIME_DIR/b.ppm" &&
+    settle_pair "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/b.ppm" 0.3 &&
         (( $(region_diff "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/b.ppm" "$lx" "$ly" $((lx + lw)) $((ly + lh))) == 0 )) &&
         (( $(region_diff "$XDG_RUNTIME_DIR/full.ppm" "$XDG_RUNTIME_DIR/b.ppm" "$lx" "$ly" $((lx + lw)) $((ly + lh - 40))) > 200 ))
 }

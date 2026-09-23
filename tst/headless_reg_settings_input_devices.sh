@@ -24,7 +24,7 @@ wh=$(dump_field '^imgui name=settings ' h)
 click_at $((wx + 40)) $((wy + 118))
 
 pane_settled() {
-    screenshot "$XDG_RUNTIME_DIR/a.ppm" && screenshot "$XDG_RUNTIME_DIR/page.ppm" &&
+    settle_pair "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/page.ppm" &&
         [[ "$(region_diff "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/page.ppm" \
             $((wx + 160)) $((wy + 30)) $((wx + ww - 4)) $((wy + wh - 4)))" -lt 40 ]]
 }

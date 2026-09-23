@@ -11,7 +11,7 @@ viewer_up() {
 
 # a frame the editor has finished painting: two fresh ones that agree
 settled() { # <scratch> <baseline>
-    screenshot "$1" && screenshot "$2" &&
+    settle_pair "$1" "$2" &&
         [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -lt 60 ]]
 }
 differs() { # <baseline> <shot>

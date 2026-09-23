@@ -24,7 +24,7 @@ layout_box() { # <ppm a> <ppm b>
     region_diff "$1" "$2" 1090 0 1148 22
 }
 steady() { # <ppm>: two fresh shots that agree on the indicator's box
-    screenshot "$XDG_RUNTIME_DIR/_s.ppm" && screenshot "$1" &&
+    settle_pair "$XDG_RUNTIME_DIR/_s.ppm" "$1" &&
         [[ "$(layout_box "$XDG_RUNTIME_DIR/_s.ppm" "$1")" -eq 0 ]]
 }
 await 50 steady "$XDG_RUNTIME_DIR/with.ppm" || { echo "the bar never settled"; exit 1; }

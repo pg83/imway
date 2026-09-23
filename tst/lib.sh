@@ -339,6 +339,14 @@ wait_placed() { # <dump-pattern>
     return 1
 }
 
+# two screenshots for a check that they agree, a real moment apart: a
+# separate client (the screenshot editor, a spawned tool) redraws a frame or
+# more after the input that changed it, and two shots taken back to back
+# can both still show the old view and agree on it. The caller compares
+settle_pair() { # <first ppm> <second ppm> [gap seconds, 0.2]
+    screenshot "$1" && sleep "${3:-0.2}" && screenshot "$2"
+}
+
 # screenshot until <check> passes on it: a buffer committed before the
 # call can still be a frame away from the output, so one shot after a
 # sleep is a coin toss on a loaded runner. The last try runs the check

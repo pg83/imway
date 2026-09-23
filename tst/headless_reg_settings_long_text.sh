@@ -33,7 +33,7 @@ ctl "type $long"
 # the whole text lands: the field keeps changing until the last character,
 # which pushes its start out of view
 typed() {
-    screenshot "$XDG_RUNTIME_DIR/a.ppm" && sleep 0.3 && screenshot "$XDG_RUNTIME_DIR/b.ppm" &&
+    settle_pair "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/b.ppm" 0.3 &&
         [[ "$(region_diff "$XDG_RUNTIME_DIR/before.ppm" "$XDG_RUNTIME_DIR/b.ppm" $((wx + 366)) $((wy + 110)) $((wx + 750)) $((wy + 132)))" -gt 100 &&
            "$(region_diff "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/b.ppm" $((wx + 366)) $((wy + 110)) $((wx + 750)) $((wy + 132)))" -eq 0 ]]
 }

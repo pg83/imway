@@ -28,7 +28,7 @@ diff_px() { # <ppm1> <ppm2>
     region_diff "$1" "$2" "$vx" "$vy" $((vx + vw)) $((vy + vh))
 }
 settled() { # <scratch> <baseline>: two fresh frames that agree
-    screenshot "$1" && screenshot "$2" && [[ "$(diff_px "$1" "$2")" -lt 60 ]]
+    settle_pair "$1" "$2" && [[ "$(diff_px "$1" "$2")" -lt 60 ]]
 }
 differs() { # <baseline> <shot>
     screenshot "$2" && [[ "$(diff_px "$1" "$2")" -gt 500 ]]

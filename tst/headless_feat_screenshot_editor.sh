@@ -28,7 +28,7 @@ tap() { # <keycode>
 # key that changes the view, wait for the change (differs) before this, or
 # two frames taken before the editor redrew agree on the old view
 settled() { # <scratch> <baseline>
-    screenshot "$1" && sleep 0.2 && screenshot "$2" &&
+    settle_pair "$1" "$2" &&
         [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -lt 60 ]]
 }
 
