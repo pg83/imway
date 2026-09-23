@@ -7036,7 +7036,7 @@ namespace {
 
     static int securityListenReadable(int fd, u32, void* data) {
         auto* ctx = (SecurityContext*)data;
-        int conn = accept4(fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+        int conn = ctx->srv->composer->chaos->securityAccept(accept4(fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK));
 
         if (conn < 0) {
             return 0;

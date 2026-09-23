@@ -45,6 +45,8 @@ using namespace stl;
 //                     that cannot judge; 22 EINVAL: a buffer it refuses)
 //   entropy=N         wayland: the next N getrandom reads for activation
 //                     tokens find no entropy yet (EAGAIN, as early at boot)
+//   security-accept=N wayland: the next N sandboxed connections a security
+//                     context accepts are aborted (ECONNABORTED)
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
 //   scanout-modifier=N the next N scanout modifier queries come back
@@ -112,6 +114,7 @@ namespace {
         int shmMapSkip = -1;
         int primeImportErrno = 0;
         int entropyFaults = 0;
+        int securityAcceptFaults = 0;
         // KMS backend
         int scanoutSkip = -1;
         int modifierFaults = 0;
@@ -151,6 +154,7 @@ namespace {
         void* shmMap(void* mapped, size_t size) override;
         int primeImport(int result) override;
         long entropy(long got) override;
+        int securityAccept(int fd) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -275,6 +279,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         primeImportErrno = (int)arg.stou();
     } else if (fault == "entropy"_sv) {
         entropyFaults = (int)arg.stou();
+    } else if (fault == "security-accept"_sv) {
+        securityAcceptFaults = (int)arg.stou();
     }
 }
 
@@ -310,6 +316,17 @@ long TestChaosMonkey::entropy(long got) {
     }
 
     errno = EAGAIN;
+
+    return -1;
+}
+
+int TestChaosMonkey::securityAccept(int fd) {
+    if (fd < 0 || !spend(securityAcceptFaults)) {
+        return fd;
+    }
+
+    close(fd);
+    errno = ECONNABORTED;
 
     return -1;
 }
@@ -655,6 +672,7 @@ namespace {
         void* shmMap(void* mapped, size_t size) override;
         int primeImport(int result) override;
         long entropy(long got) override;
+        int securityAccept(int fd) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -718,6 +736,10 @@ int IdleChaosMonkey::primeImport(int result) {
 
 long IdleChaosMonkey::entropy(long got) {
     return got;
+}
+
+int IdleChaosMonkey::securityAccept(int fd) {
+    return fd;
 }
 
 // KMS backend
