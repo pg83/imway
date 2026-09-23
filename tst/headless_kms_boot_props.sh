@@ -38,12 +38,32 @@ boot_rc 0 "empty format list"
 boot_has "imway: 10-bit scanout"
 boot_has "scanout swapchain: 2 images"
 
+# an SDR modeset scrubs the legacy color luts a previous session may have
+# left; a crtc without them has nothing to scrub, and adding the absent
+# properties would fail the modeset
+kms_boot IMWAY_FAKE_KMS_DROP_PROPS="GAMMA_LUT,DEGAMMA_LUT,CTM" --
+boot_rc 0 "sdr without color luts"
+boot_has "kms output: 1280x800@60" "sdr without color luts"
+boot_lacks "kms atomic commit failed" "sdr without color luts"
+boot_has "clean exit after" "sdr without color luts"
+
+# an SDR link without depth feedback is nothing to warn about, and a
+# link depth the driver reads back as 0 (not yet known) is no degraded
+# HDR link
+kms_boot IMWAY_FAKE_KMS_DROP_PROPS="link bpc" --
+boot_rc 0 "sdr without link bpc"
+boot_lacks "link bpc feedback unavailable" "sdr without link bpc"
+boot_has "clean exit after" "sdr without link bpc"
+
+kms_boot IMWAY_FAKE_KMS_LINK_BPC=0 -- --hdr 300
+boot_rc 0 "hdr with link bpc 0"
+boot_has "HDR output: BT.2020 + PQ" "hdr with link bpc 0"
+boot_lacks "HDR link degraded" "hdr with link bpc 0"
+boot_has "clean exit after" "hdr with link bpc 0"
+
 kms_boot IMWAY_FAKE_KMS_DROP_PROPS="Broadcast RGB" -- --rgb-range full
 boot_rc 1 "explicit range without the property"
 boot_has "connector cannot select requested RGB range"
-
-expect_alive "the scenario's own compositor died"
-echo "OK: every missing property costs only its own feature"
 
 expect_alive "the scenario's own compositor died"
 echo "OK: every missing property costs only its own feature"

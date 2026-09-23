@@ -32,5 +32,14 @@ sleep 0.5
 ctl "sdr-white 400"
 await 100 in_log "fake-kms: hdr metadata max_cll 400" || { echo "the second change did not ride a flip"; cat "$IMWAY_LOG"; exit 1; }
 
+# the infoframe carries light levels in 16 bits: a display said to peak
+# past that, with SDR white up there too, gets the most the field holds,
+# not a wrapped-around level
+kms_boot -- --hdr 70000 --hdr-peak 100000
+boot_rc 0 "light levels past 16 bits"
+boot_has "fake-kms: hdr metadata max_cll 65535$" "light levels past 16 bits"
+boot_lacks "fake-kms: hdr metadata max_cll [0-9]\{1,4\}$" "light levels past 16 bits"
+boot_has "clean exit after" "light levels past 16 bits"
+
 expect_alive "compositor died updating HDR metadata"
 echo "OK: HDR metadata follows SDR white on the next flip, no-ops send nothing"
