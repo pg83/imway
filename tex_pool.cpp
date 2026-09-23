@@ -159,9 +159,7 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
 }
 
 void VkTexturePoolImpl::free(VkDescriptorSet set, VkDescriptorPool pool) {
-    if (set && pool) {
-        vkFreeDescriptorSets(device, pool, 1, &set);
-    }
+    vkFreeDescriptorSets(device, pool, 1, &set);
 }
 
 VkTexturePool* VkTexturePool::create(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos) {
