@@ -129,8 +129,9 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
     ai.pSetLayouts = &layout;
 
     // walk the chain; a full or fragmented pool is skipped, a fresh one is
-    // grown only when none had room
-    for (size_t i = 0; i <= chunks->length(); i++) {
+    // grown only when none had room. The walk ends only by a break or the
+    // return: at the chain's end it either grows the chain or breaks
+    for (size_t i = 0;; i++) {
         VkDescriptorPool p = i < chunks->length() ? (*chunks)[i] : grow();
 
         if (!p) {
@@ -139,7 +140,7 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
 
         ai.descriptorPool = p;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        VkResult r = chaos->descriptorSet(vkAllocateDescriptorSets(device, &ai, &set));
+        VkResult r = chaos->descriptorRoom(chaos->descriptorSet(vkAllocateDescriptorSets(device, &ai, &set)), i);
 
         if (r == VK_SUCCESS) {
             write(set, view, chromaView, imageLayout);

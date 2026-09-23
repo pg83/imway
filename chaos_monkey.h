@@ -160,5 +160,11 @@ struct ChaosMonkey {
     // (or its -1); a replacement failure closes the fd it was handed
     virtual int devNull(int fd) = 0;
 
+    // renderer: texture descriptor pools
+    // a set allocation's result from the chain's pool number `pool`, after
+    // descriptorSet: a pool reported full or fragmented is passed over for
+    // the next one in the chain
+    virtual VkResult descriptorRoom(VkResult result, size_t pool) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

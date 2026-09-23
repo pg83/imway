@@ -117,6 +117,11 @@ using namespace stl;
 // spawn:
 //   dev-null=N        the next N opens of /dev/null fail with ENOENT, as
 //                     in a chroot or container without one
+// renderer: texture descriptor pools
+//   descriptor-full=N the chain's first N pools are full: every set
+//                     allocation from them runs out of pool memory
+//   descriptor-fragmented=N  the first N pools not full are fragmented:
+//                     every set allocation from them fails as fragmented
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -189,6 +194,9 @@ namespace {
         long busReceiveLimit = -1;
         // spawn
         int devNullFaults = 0;
+        // renderer: texture descriptor pools
+        size_t fullPools = 0;
+        size_t fragmentedPools = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -250,6 +258,8 @@ namespace {
         void dbusConnection(DBusConnection* conn) override;
         // spawn
         int devNull(int fd) override;
+        // renderer: texture descriptor pools
+        VkResult descriptorRoom(VkResult result, size_t pool) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -386,6 +396,11 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         entropyFaults = (int)arg.stou();
     } else if (fault == "security-accept"_sv) {
         securityAcceptFaults = (int)arg.stou();
+    } else if (fault == "descriptor-full"_sv) {
+        // renderer: texture descriptor pools
+        fullPools = arg.stou();
+    } else if (fault == "descriptor-fragmented"_sv) {
+        fragmentedPools = arg.stou();
     }
 }
 
@@ -877,6 +892,20 @@ int TestChaosMonkey::devNull(int fd) {
     return -1;
 }
 
+// renderer: texture descriptor pools
+VkResult TestChaosMonkey::descriptorRoom(VkResult result, size_t pool) {
+    // a set the pool did hand out stays in it until the pool goes
+    if (pool < fullPools) {
+        return VK_ERROR_OUT_OF_POOL_MEMORY;
+    }
+
+    if (pool < fullPools + fragmentedPools) {
+        return VK_ERROR_FRAGMENTED_POOL;
+    }
+
+    return result;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -941,6 +970,8 @@ namespace {
         void dbusConnection(DBusConnection* conn) override;
         // spawn
         int devNull(int fd) override;
+        // renderer: texture descriptor pools
+        VkResult descriptorRoom(VkResult result, size_t pool) override;
     };
 }
 
@@ -1129,6 +1160,11 @@ void IdleChaosMonkey::dbusConnection(DBusConnection*) {
 // spawn
 int IdleChaosMonkey::devNull(int fd) {
     return fd;
+}
+
+// renderer: texture descriptor pools
+VkResult IdleChaosMonkey::descriptorRoom(VkResult result, size_t) {
+    return result;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
