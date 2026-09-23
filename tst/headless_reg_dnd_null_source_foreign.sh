@@ -22,8 +22,8 @@ rect() { # <pattern> -> x y w h of the surface
     line=$(dump_state | grep -m1 "$1")
     awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } print v["imgx"], v["imgy"], v["client_w"], v["client_h"] }' <<<"$line"
 }
-read -r rx ry rw rh < <(rect 'title=dnd-null-source-foreign')
-read -r gx gy gw gh < <(rect 'title=input-health')
+read -r rx ry rw rh <<<"$(rect 'title=dnd-null-source-foreign')"
+read -r gx gy gw gh <<<"$(rect 'title=input-health')"
 foreign=""
 for p in "$((gx + 8)) $((gy + 8))" "$((gx + gw - 8)) $((gy + 8))" "$((gx + 8)) $((gy + gh - 8))" "$((gx + gw - 8)) $((gy + gh - 8))"; do
     read -r px py <<<"$p"

@@ -22,8 +22,8 @@ wait_rect 'title=kbd-b'
 rect() { # <pattern> -> x y w h of the surface
     dump_state | grep -m1 "$1" | awk '{ for (i = 1; i <= NF; i++) { split($i, kv, "="); v[kv[1]] = kv[2] } print v["imgx"], v["imgy"], v["client_w"], v["client_h"] }'
 }
-read -r ax ay aw ah < <(rect 'title=kbd-a')
-read -r bx by bw bh < <(rect 'title=kbd-b')
+read -r ax ay aw ah <<<"$(rect 'title=kbd-a')"
+read -r bx by bw bh <<<"$(rect 'title=kbd-b')"
 # a corner of one window outside the other: either may be raised
 uncovered() { # <x y w h of the window> <x y w h of the other>
     local p px py
