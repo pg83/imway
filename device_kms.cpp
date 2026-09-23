@@ -1732,10 +1732,9 @@ KmsOutput::~KmsOutput() noexcept {
     }
 
     freeDumb(cursorBuf);
-
-    if (modeBlob) {
-        drmModeDestroyPropertyBlob(fd, modeBlob);
-    }
+    // a constructed output always holds a mode blob: the constructor
+    // creates it or throws, and switchMode replaces it or throws
+    drmModeDestroyPropertyBlob(fd, modeBlob);
 
     if (hdrMetaBlob) {
         drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
@@ -2226,10 +2225,7 @@ bool KmsOutput::switchMode(const drmModeModeInfo& next) {
         return false;
     }
 
-    if (modeBlob) {
-        drmModeDestroyPropertyBlob(fd, modeBlob);
-    }
-
+    drmModeDestroyPropertyBlob(fd, modeBlob);
     STD_VERIFY(drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob) == 0);
 
     // client framebuffers imported for direct scanout are sized for the old
