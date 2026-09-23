@@ -92,6 +92,12 @@ wait_client "stage forged"
 peer_is attention_w 2 || fail "the forged departure took the item away"
 go forged
 
+wait_client "stage unreadable"
+unreadable() { dump_state | grep -q '^tray id= status= '; }
+await 100 unreadable || fail "an item whose properties cannot be read was not listed bare"
+tray_count_is 4 || fail "the unreadable item replaced another"
+go unreadable
+
 wait_client "status notifier peer done"
 expect_alive "compositor died under the hostile tray peer"
 

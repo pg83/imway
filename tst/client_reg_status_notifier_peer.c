@@ -178,7 +178,7 @@ static void full_properties(DBusMessageIter* dict) {
     image(&images, 2000, 1, 0, 0);
     image(&images, 1, 2000, 0, 0);
     image(&images, 16, 16, 40, 0xffff00ff);
-    image(&images, 16, 16, 1024, 0xffff00ff);
+    image(&images, 16, 16, 1100, 0xffff00ff); /* more bytes than 16x16 needs */
     image(&images, 8, 8, 256, 0xff0000ff);
     close_pixmap(dict, &entry, &var, &images);
 
@@ -220,7 +220,12 @@ static DBusHandlerResult message(DBusConnection* c, DBusMessage* msg, void* data
         getalls++;
         printf("getall %s %d\n", dbus_message_get_path(msg), getalls);
 
-        if (mode != MODE_SILENT) {
+        if (!strcmp(dbus_message_get_path(msg), "/Unreadable")) {
+            DBusMessage* err = dbus_message_new_error(msg, DBUS_ERROR_ACCESS_DENIED, "not telling");
+
+            dbus_connection_send(c, err, NULL);
+            dbus_message_unref(err);
+        } else if (mode != MODE_SILENT) {
             reply_getall(c, msg);
         }
     } else if (dbus_message_is_method_call(msg, kItem, "ContextMenu")) {
@@ -333,6 +338,17 @@ static void malformed_changes(void) {
     const char* key = "Title";
     const char* value = "Not a variant";
     const char* other = "org.example.Other";
+
+    /* no arguments at all, then an invalidated list that is text */
+    emit(bus, changed());
+
+    sig = changed();
+    dbus_message_iter_init_append(sig, &it);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &kItem);
+    dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &dict);
+    dbus_message_iter_close_container(&it, &dict);
+    dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &value);
+    emit(bus, sig);
 
     sig = changed();
     dbus_message_append_args(sig, DBUS_TYPE_INT32, &number, DBUS_TYPE_INVALID);
@@ -593,6 +609,11 @@ int main(void) {
 
     puts("impostor ignored");
     stage("forged");
+
+    /* an item of the same connection at another path, whose properties
+     * cannot be read */
+    register_item(bus, "/Unreadable");
+    stage("unreadable");
 
     puts("status notifier peer done");
 
