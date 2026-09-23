@@ -4,7 +4,6 @@
 #include "mixer.h"
 #include "dialog.h"
 #include "output.h"
-#include "wayland.h"
 #include "composer.h"
 #include "imgui_wm.h"
 #include "keyboard.h"
@@ -214,7 +213,7 @@ namespace {
             copyText(name, layout);
 
             if (ImGui::RadioButton(name, c.kb->activeLayout() == i)) {
-                c.wayland->setLayout(i);
+                c.kb->setGroup(i);
             }
         }
     }

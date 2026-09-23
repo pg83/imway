@@ -139,14 +139,15 @@ void SndioMixer::setVolume(float v) {
     // and the soft mute only parks at zero and restores a stashed level
     unsigned raw = (unsigned)lroundf(v * (float)levelMax);
 
-    if (raw == level) {
-        return;
+    if (raw != level) {
+        level = raw;
+        levelWrites.sent(raw);
+        sioctl_setval(hdl, (unsigned)levelAddr, raw);
+        rearm();
     }
 
-    level = raw;
-    levelWrites.sent(raw);
-    sioctl_setval(hdl, (unsigned)levelAddr, raw);
-    rearm();
+    // a request that lands on the current level is announced too, as pulse
+    // does: a volume key at the rail still shows where the level sits
     notify();
 }
 

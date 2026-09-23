@@ -721,6 +721,8 @@ namespace {
         bool hasBrightness() const override;
         float brightness() const override;
         void setBrightness(float v) override;
+        bool writeBrightness(float v);
+        void announceBrightness();
         void setupVt();
         void restoreVt() noexcept;
 
@@ -1665,8 +1667,9 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     initBacklight();
     if (color.hdr() && hasBrightness()) {
         // absolute PQ luminance assumes the panel sits at its calibration
-        // point; actually put it there instead of hoping
-        setBrightness(1.f);
+        // point; actually put it there instead of hoping. Not a level
+        // anyone asked for, so nothing is announced
+        writeBrightness(1.f);
         *(c.log) << "imway: HDR pins hardware brightness to full; brightness keys adjust SDR white"_sv << endL;
     }
     *(c.log) << "imway: kms output: "_sv << mode.hdisplay << "x"_sv << mode.vdisplay << "@"_sv << mode.vrefresh << ", connector "_sv << connectorId << ", crtc "_sv << crtcId << ", plane "_sv << planeId << endL;
@@ -2017,6 +2020,7 @@ void KmsOutput::setSdrWhite(double nits) {
 
     color.setSdrWhite(nits);
     c->scene->needsFrame = true;
+    announceBrightness();
 }
 
 const HdrOutputMetadata& KmsOutput::hdrMetadata() const {
@@ -2844,6 +2848,19 @@ float KmsOutput::brightness() const {
 }
 
 void KmsOutput::setBrightness(float v) {
+    if (writeBrightness(v)) {
+        announceBrightness();
+    }
+}
+
+void KmsOutput::announceBrightness() {
+    forEach<Listener>(c->brightnessListeners, [](Listener& listener) {
+        listener.onListen();
+    });
+}
+
+// false when the backlight level could not be written: nothing changed
+bool KmsOutput::writeBrightness(float v) {
     v = v < 0.f ? 0.f : v > 1.f ? 1.f : v;
 
     if (ddcFd >= 0) {
@@ -2858,7 +2875,7 @@ void KmsOutput::setBrightness(float v) {
             ev_timer_start(c->loop, ddcTimer);
         }
 
-        return;
+        return true;
     }
 
     // floor at one raw step: zero on an edp panel means a black screen and
@@ -2874,13 +2891,15 @@ void KmsOutput::setBrightness(float v) {
     ScopedFD f(open(p.cStr(), O_WRONLY | O_TRUNC | O_CLOEXEC));
 
     if (f.get() < 0) {
-        return;
+        return false;
     }
 
     auto& val = sb();
 
     val << raw;
     FDRegular(f).write(val.data(), val.used());
+
+    return true;
 }
 
 void KmsOutput::setPowerSave(bool on) {

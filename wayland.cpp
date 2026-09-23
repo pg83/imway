@@ -8,7 +8,6 @@
 #include "scene.h"
 #include "device.h"
 #include "output.h"
-#include "desktop.h"
 #include "session.h"
 #include "composer.h"
 #include "chaos_monkey.h"
@@ -1705,8 +1704,7 @@ namespace {
         void closeDisplay() noexcept;
 
         void run() override;
-        void inputActivity() override;
-        void setLayout(u32 group) override;
+        void layoutSwitched();
         void drainClients() override;
 
         Icon* findIcon(u64 sym, u32 desired, StringView id) override;
@@ -9081,9 +9079,9 @@ namespace {
         }
 
         if (!srv->dpmsOff) {
-            if (srv->composer->settings->lockBeforeDpms() && srv->composer->desktop) {
-                srv->composer->desktop->lock();
-            }
+            forEach<Listener>(srv->composer->displayIdleListeners, [](Listener& listener) {
+                listener.onListen();
+            });
 
             srv->dpmsOff = true;
             srv->composer->output->setPowerSave(false);
@@ -12002,20 +12000,16 @@ void SeatState::focusToplevel(Toplevel* t) {
         kbSendLeave(resOf(kbFocus->surface.get()));
     }
 
-    kbFocus = t;
+    // the group follows focus while no window holds the keyboard: the
+    // switch's modifier broadcast reaches no toplevel, the enter below
+    // carries the new group
+    kbFocus = nullptr;
 
     if (t && perWindowLayout) {
         srv->composer->kb->setGroup(t->xkbGroup);
-
-        // refresh the cache silently so kbSendEnter carries fresh modifiers
-        KeyMods m = srv->composer->kb->mods();
-
-        modsDepressed = m.depressed;
-        modsLatched = m.latched;
-        modsLocked = m.locked;
-        modsGroup = m.group;
-        layoutIndicator();
     }
+
+    kbFocus = t;
 
     if (t && t->surface && !kbOverride) {
         kbSendEnter(resOf(t->surface.get()));
@@ -12391,10 +12385,12 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     pingTimer->data = this;
     updateAnrTimer();
 
+    comp.inputActivityListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::activity));
     comp.settings->addDpmsSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
     comp.settings->addRepeatRateListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
     comp.settings->addRepeatDelayListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
     comp.keyboardListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.layoutSwitchedListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::layoutSwitched));
     comp.settings->addDecorationsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
     comp.settings->addAnrSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
@@ -13790,8 +13786,8 @@ void WaylandImpl::drainClients() {
     wl_display_flush_clients(display);
 }
 
-void WaylandImpl::setLayout(u32 group) {
-    composer->kb->setGroup(group);
+// the focused client learns the new group as modifiers, the bar its name
+void WaylandImpl::layoutSwitched() {
     seat.updateModifiers();
 }
 
@@ -13848,10 +13844,6 @@ void WaylandImpl::syncKeyboardCapture() {
 
     seat.uiCaptured = cap;
     seat.updateModifiers();
-}
-
-void WaylandImpl::inputActivity() {
-    activity();
 }
 
 bool WaylandImpl::pointerMotion(PointerMotionEvent& ev) {

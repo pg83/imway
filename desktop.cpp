@@ -660,6 +660,8 @@ namespace {
         void themeSettingChanged();
         void updateAutoLock();
         void inputActivity();
+        void displayIdle();
+        void brightnessChanged();
         void applyNightLight();
         void markTreeUnhovered(Surface& s);
         void clampPos();
@@ -789,7 +791,6 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
     }
 
     if (ev.moved) {
-        inputActivity();
         posX = ev.x;
         posY = ev.y;
         clampPos();
@@ -805,7 +806,6 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
 }
 
 bool DesktopImpl::button(u32 btn, bool pressed) {
-    inputActivity();
     comp->scene->needsFrame = true;
 
     if (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) {
@@ -844,7 +844,6 @@ bool DesktopImpl::button(u32 btn, bool pressed) {
 }
 
 bool DesktopImpl::scroll(const ScrollEvent& ev) {
-    inputActivity();
     comp->scene->needsFrame = true;
     ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
@@ -852,7 +851,6 @@ bool DesktopImpl::scroll(const ScrollEvent& ev) {
 }
 
 bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
-    inputActivity();
     // the pen drives the shared cursor, so hover picking follows it exactly
     // like the mouse — one frame behind. ImGui has no stylus model beyond
     // that: the events stay unconsumed and reach the client under the pen
@@ -868,7 +866,6 @@ bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
 }
 
 bool DesktopImpl::swipeBegin(u32) {
-    inputActivity();
     swipeDx = swipeDy = 0;
     swipeOwned = lockState || comp->settings->swipeLeft() != GestureAction::none || comp->settings->swipeRight() != GestureAction::none || comp->settings->swipeUp() != GestureAction::none || comp->settings->swipeDown() != GestureAction::none;
 
@@ -902,7 +899,6 @@ bool DesktopImpl::swipeEnd(bool cancelled) {
 }
 
 bool DesktopImpl::pinchBegin(u32) {
-    inputActivity();
     pinchScale = 1.;
     pinchOwned = lockState || comp->settings->pinchIn() != GestureAction::none || comp->settings->pinchOut() != GestureAction::none;
 
@@ -932,7 +928,6 @@ bool DesktopImpl::pinchEnd(bool cancelled) {
 }
 
 bool DesktopImpl::holdBegin(u32) {
-    inputActivity();
     return lockState != nullptr;
 }
 
@@ -941,7 +936,6 @@ bool DesktopImpl::holdEnd(bool) {
 }
 
 bool DesktopImpl::key(u32 code, bool pressed) {
-    inputActivity();
     comp->scene->needsFrame = true;
 
     comp->kb->updateKey(code, pressed);
@@ -984,14 +978,10 @@ bool DesktopImpl::key(u32 code, bool pressed) {
 
         if (comp->output->colorState().hdr()) {
             comp->output->setSdrWhite(comp->output->colorState().sdrWhiteNits + (up ? comp->settings->hdrStepNits() : -comp->settings->hdrStepNits()));
-            osdKind = 3;
         } else {
             comp->output->setBrightness(comp->output->brightness() + (up ? comp->settings->brightnessStep() : -comp->settings->brightnessStep()));
-            osdKind = 2;
         }
 
-        showOsd();
-        comp->scene->needsFrame = true;
         consumed = true;
     }
 
@@ -1003,13 +993,11 @@ bool DesktopImpl::key(u32 code, bool pressed) {
             float volume = mixer->volume() + delta;
 
             mixer->setVolume(volume < 0.f ? 0.f : volume > 1.f ? 1.f : volume);
-            volumeChanged();
             consumed = true;
         }
 
         if (!consumed && code == KEY_MUTE) {
             mixer->setMuted(!mixer->muted());
-            volumeChanged();
             consumed = true;
         }
     }
@@ -1093,13 +1081,23 @@ void DesktopImpl::showOsd() {
     osdForMs = (u32)(comp->settings->osdSeconds() * 1000.f);
 }
 
-// the volume OSD comes up only here, and this runs only with a mixer:
-// from the volume keys (which require comp->mixer) and from the mixer's
-// own listeners; comp->mixer is set once at startup and never cleared
+// the volume OSD comes up only here, from the mixer's listeners: whoever
+// changed the volume, the keys or the settings slider, the mixer announces it
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
         showOsd();
         osdKind = 1;
+    }
+
+    comp->scene->needsFrame = true;
+}
+
+// the brightness keys, the settings slider and the SDR white setting all
+// land here through the output's announcement
+void DesktopImpl::brightnessChanged() {
+    if (!settingsState) {
+        showOsd();
+        osdKind = comp->output->colorState().hdr() ? 3 : 2;
     }
 
     comp->scene->needsFrame = true;
@@ -1173,6 +1171,12 @@ void DesktopImpl::updateAutoLock() {
 
 void DesktopImpl::inputActivity() {
     updateAutoLock();
+}
+
+void DesktopImpl::displayIdle() {
+    if (comp->settings->lockBeforeDpms()) {
+        lock();
+    }
 }
 
 void DesktopImpl::lock() {
@@ -2355,6 +2359,9 @@ DesktopImpl::DesktopImpl(Composer& c)
     c.mixerListeners.pushBack(c.pool->make<CallDesktopVolume>(this));
     c.wifiListeners.pushBack(c.pool->make<CallDesktopWifi>(this));
     c.outputResizedListeners.pushBack((Listener*)this);
+    c.inputActivityListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::inputActivity));
+    c.brightnessListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::brightnessChanged));
+    c.displayIdleListeners.pushBack(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::displayIdle));
 
     c.settings->addUiScaleListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::redrawSetting));
     c.settings->addSdrNitsListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::sdrSettingChanged));

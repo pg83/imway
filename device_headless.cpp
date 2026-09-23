@@ -296,6 +296,10 @@ void HeadlessOutput::setSdrWhite(double nits) {
     if (color.hdr() && nits > 0 && nits != color.sdrWhiteNits) {
         color.setSdrWhite(nits);
         c->scene->needsFrame = true;
+
+        forEach<Listener>(c->brightnessListeners, [](Listener& listener) {
+            listener.onListen();
+        });
     }
 }
 

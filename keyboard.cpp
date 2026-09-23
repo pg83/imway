@@ -5,6 +5,8 @@
 #include "log_extern.h"
 #include "pooled.h"
 #include "composer.h"
+#include "listener.h"
+#include "intr_list.h"
 #include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
@@ -33,6 +35,7 @@ namespace {
 
         void updateKey(u32 evdevCode, bool pressed) override;
         void setGroup(u32 group) override;
+        void layoutMaybeSwitched(u32 changed);
         KeyMods mods() const override;
         u32 modMask() const override;
         u32 keysymBase(u32 evdevCode) const override;
@@ -145,7 +148,7 @@ KeyboardImpl::KeyboardImpl(ObjPool& pool, Composer& comp, StringView layout, Str
 }
 
 void KeyboardImpl::updateKey(u32 evdevCode, bool pressed) {
-    xkb_state_update_key(state, evdevCode + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP);
+    layoutMaybeSwitched(xkb_state_update_key(state, evdevCode + 8, pressed ? XKB_KEY_DOWN : XKB_KEY_UP));
 }
 
 void KeyboardImpl::setGroup(u32 group) {
@@ -153,7 +156,16 @@ void KeyboardImpl::setGroup(u32 group) {
     u32 lat = xkb_state_serialize_mods(state, XKB_STATE_MODS_LATCHED);
     u32 lock = xkb_state_serialize_mods(state, XKB_STATE_MODS_LOCKED);
 
-    xkb_state_update_mask(state, dep, lat, lock, 0, 0, group);
+    layoutMaybeSwitched(xkb_state_update_mask(state, dep, lat, lock, 0, 0, group));
+}
+
+// a layout switch hotkey and an explicit switch announce themselves alike
+void KeyboardImpl::layoutMaybeSwitched(u32 changed) {
+    if (changed & XKB_STATE_LAYOUT_EFFECTIVE) {
+        forEach<Listener>(c->layoutSwitchedListeners, [](Listener& listener) {
+            listener.onListen();
+        });
+    }
 }
 
 KeyMods KeyboardImpl::mods() const {

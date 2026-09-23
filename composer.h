@@ -133,6 +133,16 @@ struct Composer {
     // kb was replaced by one built for other layouts or options: the old
     // keyboard is already gone, kb and its keymap are the new ones
     stl::IntrusiveList keyboardListeners;
+    // the active layout group of kb changed: a switch hotkey, the settings
+    // page or a focus change under the per-window policy
+    stl::IntrusiveList layoutSwitchedListeners;
+    // the output's brightness was set: its backlight or DDC/CI level (also
+    // at a rail), or the SDR white of an HDR output, whoever asked for it
+    stl::IntrusiveList brightnessListeners;
+    // the idle timeout is about to switch the display off: it is still on
+    stl::IntrusiveList displayIdleListeners;
+    // raw input arrived, before any input sink sees it
+    stl::IntrusiveList inputActivityListeners;
     // input producers call entry; it walks this list in order and stops at
     // the first sink which returns true
     stl::IntrusiveList inputSinks;

@@ -1,7 +1,7 @@
 #include "input_router.h"
 
-#include "wayland.h"
 #include "composer.h"
+#include "listener.h"
 #include "intr_list.h"
 #include "input_sink.h"
 
@@ -57,11 +57,13 @@ InputRouter::InputRouter(Composer& c)
 {
 }
 
-// The wayland seat is made before any input source and outlives them all
-// (the pool unwinds in reverse), sits last in the sink list and claims every
-// event: a walk always ends at a claiming sink, and the router claims too.
+// Raw input activity is announced before any sink sees the event, so a sink
+// which consumes it (notably the lock screen) cannot hide it from DPMS wake
+// or the idle lock.
 void InputRouter::activity() {
-    comp->wayland->inputActivity();
+    forEach<Listener>(comp->inputActivityListeners, [](Listener& listener) {
+        listener.onListen();
+    });
 }
 
 bool InputRouter::pointerMotion(PointerMotionEvent& ev) {

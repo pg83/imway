@@ -36,15 +36,6 @@ struct WaylandConfig {
 struct Wayland {
     virtual void run() = 0;
 
-    // Raw input activity is reported before UI routing, so an overlay which
-    // consumes the event (notably the lock screen) cannot prevent DPMS wake.
-    virtual void inputActivity() = 0;
-
-    // switch the active xkb group and broadcast the modifier change to the
-    // focused client, exactly as a layout hotkey would; group is one of the
-    // keyboard's layouts
-    virtual void setLayout(u32 group) = 0;
-
     // Process whatever the clients have already sent. The control harness
     // calls this before every command: a scenario acts the moment a client
     // says it committed, and the loop is free to answer the command first,
