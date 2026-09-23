@@ -3423,11 +3423,13 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
 // client's wl_shm pool under the pool's SIGBUS guard (a pool that shrank
 // under us faults its client). Anything else, or anything larger than the
 // plane, leaves the cursor to composition. XRGB gets its opaque alpha here,
-// the plane blends every byte it is given
+// the plane blends every byte it is given. frameNow calls this only for a
+// surface with content, which has a positive size, and the size is that of
+// its wl_shm content whenever it has one: wayland sets the two together
 void RendererImpl::copyCursorPixels(Surface& cs) {
     hwScratchFrom.reset();
 
-    if (cs.width <= 0 || cs.height <= 0 || cs.width > hwCapW || cs.height > hwCapH) {
+    if (cs.width > hwCapW || cs.height > hwCapH) {
         return;
     }
 
@@ -3449,7 +3451,7 @@ void RendererImpl::copyCursorPixels(Surface& cs) {
 
     ShmContent& content = *cs.shm->mutPtr();
 
-    if (content.width != cs.width || content.height != cs.height || !content.beginAccess(&content)) {
+    if (!content.beginAccess(&content)) {
         return;
     }
 
