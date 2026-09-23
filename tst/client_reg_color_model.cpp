@@ -55,6 +55,206 @@ int main() {
         return 1;
     }
 
+    // equality compares every field: one field changed is a different value
+    {
+        int differs = 0, fields = 0;
+        auto check = [&](bool equal) {
+            fields++;
+            differs += !equal;
+        };
+        Chromaticities base = Chromaticities::bt2020();
+        i32 Chromaticities::*chroma[] = {&Chromaticities::rx, &Chromaticities::ry, &Chromaticities::gx, &Chromaticities::gy, &Chromaticities::bx, &Chromaticities::by, &Chromaticities::wx, &Chromaticities::wy};
+
+        for (auto field : chroma) {
+            Chromaticities c = base;
+
+            c.*field += 1;
+            check(c == base);
+        }
+
+        ColorDescription d = ColorDescription::bt2100Pq();
+        auto desc = [&](auto change) {
+            ColorDescription c = d;
+
+            change(c);
+            check(c == d);
+        };
+
+        desc([](ColorDescription& c) { c.transfer = ColorTransfer::hlg; });
+        desc([](ColorDescription& c) { c.primaries = ColorPrimaries::custom; });
+        desc([](ColorDescription& c) { c.primary.rx++; });
+        desc([](ColorDescription& c) { c.minNits = 1; });
+        desc([](ColorDescription& c) { c.maxNits = 1; });
+        desc([](ColorDescription& c) { c.referenceNits = 1; });
+        desc([](ColorDescription& c) { c.linearOneNits = 1; });
+        desc([](ColorDescription& c) { c.target.wy++; });
+        desc([](ColorDescription& c) { c.targetMinNits = 1; });
+        desc([](ColorDescription& c) { c.targetMaxNits = 1; });
+        desc([](ColorDescription& c) { c.maxCll = 1; });
+        desc([](ColorDescription& c) { c.maxFall = 1; });
+        desc([](ColorDescription& c) { c.maxCllSet = true; });
+        desc([](ColorDescription& c) { c.maxFallSet = true; });
+        desc([](ColorDescription& c) { c.directToBt2020 = true; });
+        desc([](ColorDescription& c) { c.toBt2020[4] = 2; });
+        desc([](ColorDescription& c) { c.gamma[1] = 2.2; });
+
+        OutputColorState o = OutputColorState::hdr10(203.0);
+        auto out = [&](auto change) {
+            OutputColorState c = o;
+
+            change(c);
+            check(c == o);
+        };
+
+        out([](OutputColorState& c) { c.encoding.maxCll = 5; });
+        out([](OutputColorState& c) { c.sdrWhiteNits = 1; });
+        out([](OutputColorState& c) { c.displayMinNits = 1; });
+        out([](OutputColorState& c) { c.displayPeakNits = 1; });
+        out([](OutputColorState& c) { c.displayMaxFallNits = 1; });
+        out([](OutputColorState& c) { c.bpc = 12; });
+        out([](OutputColorState& c) { c.range = OutputRange::limited; });
+
+        HdrOutputMetadata m;
+        auto meta = [&](auto change) {
+            HdrOutputMetadata c = m;
+
+            change(c);
+            check(c == m);
+        };
+
+        meta([](HdrOutputMetadata& c) { c.primaries.gx++; });
+        meta([](HdrOutputMetadata& c) { c.minNits = 1; });
+        meta([](HdrOutputMetadata& c) { c.maxNits = 1; });
+        meta([](HdrOutputMetadata& c) { c.maxCll = 1; });
+        meta([](HdrOutputMetadata& c) { c.maxFall = 1; });
+        meta([](HdrOutputMetadata& c) { c.hdr = true; });
+
+        if (differs != fields) {
+            fprintf(stderr, "%d of %d single-field changes compared equal\n", fields - differs, fields);
+
+            return 1;
+        }
+    }
+
+    // an sRGB transfer is still managed with other primaries or the direct
+    // BT.2020 path
+    {
+        ColorDescription p3 = ColorDescription::sRgb();
+        ColorDescription direct = ColorDescription::sRgb();
+
+        p3.primaries = ColorPrimaries::displayP3;
+        direct.directToBt2020 = true;
+
+        if (!p3.managed() || !direct.managed()) {
+            fputs("an sRGB transfer with other primaries or the direct path reads as unmanaged\n", stderr);
+
+            return 1;
+        }
+    }
+
+    // the SDR white setter ignores a non-positive value, and a zero SDR
+    // white has no headroom to speak of
+    {
+        OutputColorState h = OutputColorState::hdr10(203.0);
+
+        h.setSdrWhite(0);
+        h.setSdrWhite(-5);
+
+        if (h.sdrWhiteNits != 203.0) {
+            fputs("a non-positive SDR white was taken\n", stderr);
+
+            return 1;
+        }
+
+        h.sdrWhiteNits = 0;
+
+        if (h.hdrHeadroom() != 1.0) {
+            fputs("a zero SDR white gave headroom\n", stderr);
+
+            return 1;
+        }
+    }
+
+    // a configured maxFALL above the peak is capped to the peak
+    {
+        OutputConfiguration config;
+        DisplayColorCapabilities caps;
+
+        config.hdrSdrWhiteNits = 203.0;
+        config.displayPeakNits = 600.0;
+        config.displayMaxFallNits = 900.0;
+
+        OutputColorState s = outputColorState(config, caps);
+
+        if (s.displayMaxFallNits != 600.0) {
+            fprintf(stderr, "maxFALL %f was not capped to the 600-nit peak\n", s.displayMaxFallNits);
+
+            return 1;
+        }
+    }
+
+    // an HDR state without a peak falls back to 1000 nits, and a mapping
+    // that knows no brighter output clamps at its peak
+    {
+        OutputColorState h = OutputColorState::hdr10(203.0);
+
+        h.displayPeakNits = 0;
+
+        OutputMapping mapping = outputMapping(h);
+
+        if (mapping.peakNits != 1000.0) {
+            fprintf(stderr, "an HDR state without a peak mapped to %f nits\n", mapping.peakNits);
+
+            return 1;
+        }
+    }
+
+    // night light: no temperature is no adaptation, a temperature below
+    // 2222 K takes the low-temperature locus and warms even more
+    {
+        OutputMapping off = outputMapping(OutputColorState::sdr(), 0);
+        OutputMapping candle = outputMapping(OutputColorState::sdr(), 2000.0);
+        OutputMapping warm = outputMapping(OutputColorState::sdr(), 3400.0);
+        ColorRgb offWhite = off.toTarget.apply({1, 1, 1});
+        ColorRgb candleWhite = candle.toTarget.apply({1, 1, 1});
+        ColorRgb warmWhite = warm.toTarget.apply({1, 1, 1});
+
+        if (offWhite.r < .999 || offWhite.r > 1.001 || offWhite.b < .999 || offWhite.b > 1.001 || candleWhite.b >= warmWhite.b) {
+            fputs("bad night-light temperatures\n", stderr);
+
+            return 1;
+        }
+    }
+
+    // a BT.2020 green outside the sRGB gamut maps to a colour with no
+    // negative channel: the chroma scales back toward the luminance
+    {
+        OutputMapping sdrMapping = outputMapping(OutputColorState::sdr());
+        ColorRgb mapped = mapOutputNits(sdrMapping, {0, 100, 0});
+        ColorRgb inTarget = sdrMapping.toTarget.apply(mapped);
+
+        if (inTarget.r < -1e-6 || inTarget.g < -1e-6 || inTarget.b < -1e-6) {
+            fprintf(stderr, "an out-of-gamut green kept a negative channel: %f %f %f\n", inTarget.r, inTarget.g, inTarget.b);
+
+            return 1;
+        }
+    }
+
+    // the brightest value per transfer
+    {
+        ColorDescription icc = ColorDescription::gamma22();
+        ColorDescription noReference = ColorDescription::gamma22();
+
+        icc.transfer = ColorTransfer::iccGamma;
+        noReference.referenceNits = 0;
+
+        if (surfaceMaxNits(ColorDescription::sRgb(), 203) != 203 || surfaceMaxNits(ColorDescription::bt2100Pq(), 203) != 10000 || surfaceMaxNits(ColorDescription::bt2100Hlg(), 203) != 1000 || surfaceMaxNits(ColorDescription::extendedLinear(), 203) < 1e8 || surfaceMaxNits(ColorDescription::bt1886(), 203) != 100 || surfaceMaxNits(icc, 203) != 80 || surfaceMaxNits(noReference, 203) != 203) {
+            fputs("bad per-transfer brightest value\n", stderr);
+
+            return 1;
+        }
+    }
+
     puts("color-model: standard descriptions and output states ok");
 
     return 0;
