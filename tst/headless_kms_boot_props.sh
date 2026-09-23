@@ -7,6 +7,15 @@
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
+# no link depth to request or read back, no RGB range, no legacy color
+# luts to scrub
+kms_boot IMWAY_FAKE_KMS_DROP_PROPS="max bpc,link bpc,Broadcast RGB,GAMMA_LUT,DEGAMMA_LUT,CTM" -- --hdr 300
+boot_rc 0 "hdr without depth control"
+boot_has "connector has no max bpc property; HDR link depth cannot be requested"
+boot_has "link bpc feedback unavailable; actual HDR link depth is unverified"
+boot_has "HDR output: BT.2020 + PQ"
+boot_lacks "fake-kms: max bpc"
+
 kms_boot IMWAY_FAKE_KMS_DROP_PROPS=Colorspace -- --hdr 300
 boot_rc 0 "hdr without colorspace"
 boot_has "hdr: connector has no Colorspace/BT2020_RGB"
