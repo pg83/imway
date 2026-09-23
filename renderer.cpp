@@ -558,10 +558,9 @@ namespace {
         void faultSurfaceOwner(Surface& s);
         void destroyTexture(SurfaceTexture* tex);
         SurfaceTexture* cacheFind(DmabufBuffer* b);
-        bool cacheContainsTex(const SurfaceTexture* tex) const;
         void releaseSurfaceTexture(Surface& s);
         Surface* scanoutCandidate();
-        bool surfaceVisible(Surface* s) const;
+        bool surfaceVisible(Surface& s) const;
         bool finishGpuFrame(bool wait);
 
         bool wantFrame() const;
@@ -968,12 +967,12 @@ bool RendererImpl::wantFrame() const {
     return !shmCopyActive && (scene->needsFrame || settleFrames > 0);
 }
 
-bool RendererImpl::surfaceVisible(Surface* s) const {
-    if (!s || !s->contentMappedThroughAncestors()) {
+bool RendererImpl::surfaceVisible(Surface& s) const {
+    if (!s.contentMappedThroughAncestors()) {
         return false;
     }
 
-    Surface* root = s->rootSurface();
+    Surface* root = s.rootSurface();
 
     if (root->toplevel && root->toplevel->mapped && !root->toplevel->minimized) {
         return true;
@@ -2483,27 +2482,17 @@ SurfaceTexture* RendererImpl::cacheFind(DmabufBuffer* b) {
     return nullptr;
 }
 
-bool RendererImpl::cacheContainsTex(const SurfaceTexture* tex) const {
-    for (const auto& e : dmabufCache) {
-        if (e.tex == tex) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
+// every caller holds a texture on the surface. An external one is a
+// dma-buf's, in the dma-buf cache for as long as a surface can hold it:
+// only destroyTexture takes it out, and that nulls every surface's
+// pointer to it
 void RendererImpl::releaseSurfaceTexture(Surface& s) {
     SurfaceTexture* tex = s.texture.get();
     FrameResourceRef* frame = s.frame;
 
     s.texture.reset();
 
-    if (!tex) {
-        return;
-    }
-
-    if (tex->external && cacheContainsTex(tex)) {
+    if (tex->external) {
         return;
     }
 
@@ -3699,7 +3688,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& value) {
             Surface* s = &value;
 
-            if (!surfaceVisible(s) || !s->dmabuf || !s->texture || !s->texture->external) {
+            if (!surfaceVisible(*s) || !s->dmabuf || !s->texture || !s->texture->external) {
                 return;
             }
 
@@ -4007,7 +3996,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     }
 
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
-        if (!surfaceVisible(&surface) || !surface.shm) {
+        if (!surfaceVisible(surface) || !surface.shm) {
             return;
         }
 
@@ -4087,7 +4076,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
         FrameResource* frame = s.frame ? s.frame->mutPtr() : nullptr;
 
-        if (surfaceVisible(&s) && frame && !frameHeld(frame)) {
+        if (surfaceVisible(s) && frame && !frameHeld(frame)) {
             inFlightFrames.pushBack(alloc->make<FrameResourceRef>(frame));
         }
     });
@@ -4592,7 +4581,7 @@ void RendererImpl::frameNow() {
 
     sceneMaxNits = white;
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& s) {
-        if (s.hasContent && surfaceVisible(&s)) {
+        if (s.hasContent && surfaceVisible(s)) {
             contentMetadata.add(s.color, outputColor.sdrWhiteNits);
 
             double nits = surfaceMaxNits(s.color, white);
