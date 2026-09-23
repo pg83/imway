@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# xdg-shell and subsurface requests on objects in the wrong state: sizes that
+# conflict only across commits, a resize with no edge, an ack of a configure
+# that a later ack dropped, roles asked of surfaces that have one or are
+# gone, popups on dead parents, a grab on a mapped popup. Each gets its
+# protocol error; an unauthorized grab on a parentless popup is dismissed.
+set -euo pipefail
+. "$(dirname "$0")/lib.sh"
+
+for mode in max-under-min resize-edge-none ack-skipped-serial parent-size-flat \
+            xdg-on-subsurface xdg-on-shown-surface subsurface-twice toplevel-on-popup \
+            popup-twice toplevel-dead-surface popup-dead-surface popup-parent-dead-surface \
+            xdg-before-popup reposition-no-anchor grab-mapped-popup grab-no-parent; do
+    "$IMWAY_CLIENT" "$mode" || { echo "wrong/no outcome for $mode"; exit 1; }
+    expect_alive "compositor died on $mode"
+done
+
+echo "OK: xdg-shell requests in the wrong state got their protocol errors"
