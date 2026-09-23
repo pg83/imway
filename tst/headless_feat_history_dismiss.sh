@@ -12,6 +12,7 @@ await_typing '##launcher' || { echo "launcher did not open"; exit 1; }
 ctl "type notifications"
 ctl "key 103 press"; ctl "key 103 release" # Up: select the action
 ctl "key 28 press"; ctl "key 28 release"   # Enter
+await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
 await_imgui '##history' || { echo "the launcher did not open the history"; dump_state; exit 1; }
 [[ "$(dump_field '^notifications ' history)" == 1 ]] || { echo "the history does not hold the posted notification"; exit 1; }
 

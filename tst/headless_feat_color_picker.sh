@@ -23,6 +23,7 @@ ctl "type color picker"
 await_input "color picker" || { echo "the field did not take 'color picker'"; dump_state; exit 1; }
 ctl "key 103 press"; ctl "key 103 release" # Up: into the action row
 ctl "key 28 press"; ctl "key 28 release"   # Enter
+await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
 sleep 0.3
 
 # the click samples the desktop background

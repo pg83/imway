@@ -14,6 +14,7 @@ await_typing '##launcher' || { echo "the launcher did not open"; dump_state; exi
 ctl "type settings"
 ctl "key 103 press"; ctl "key 103 release"
 ctl "key 28 press"; ctl "key 28 release"
+await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
 await_imgui settings || { echo "settings did not open"; dump_state; exit 1; }
 
 wx=$(dump_field '^imgui name=settings ' x)

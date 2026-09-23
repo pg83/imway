@@ -18,6 +18,7 @@ open_settings() {
     await_input "settings" || { echo "the field did not take 'settings'"; dump_state; exit 1; }
     ctl "key 103 press"; ctl "key 103 release" # Up: select the action
     ctl "key 28 press"; ctl "key 28 release"
+    await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
     sleep 0.3
 }
 
