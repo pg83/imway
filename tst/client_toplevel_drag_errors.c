@@ -3,6 +3,8 @@
 //             toplevel attached): ONGOING_DRAG
 //   attached  a second toplevel is attached while the first, mapped, still
 //             is: TOPLEVEL_ATTACHED
+//   used      a drag object is asked for a source already dragging:
+//             INVALID_SOURCE
 // The drag starts from the scenario's button press on the red window.
 //   usage: client_toplevel_drag_errors MODE
 
@@ -36,6 +38,20 @@ int main(int argc, char** argv) {
     wl_make_toplevel(&origin, "drag-origin", 240, 160, 0xffff0000);
 
     struct wl_data_device* dev = wl_data_device_manager_get_data_device(wl_ddm, wl_seat_g);
+
+    if (!strcmp(argv[1], "used")) {
+        struct wl_data_source* plain = wl_data_device_manager_create_data_source(wl_ddm);
+
+        wl_data_source_offer(plain, "text/plain");
+        printf("ready\n");
+        while (!wlp_button_count && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        wl_data_device_start_drag(dev, plain, origin.surface, NULL, wlp_button_serial);
+        printf("dragging\n");
+        xdg_toplevel_drag_manager_v1_get_xdg_toplevel_drag(drag_mgr, plain);
+        return wl_expect_error(xdg_toplevel_drag_manager_v1_interface.name, XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE) ? 1 : 0;
+    }
+
     struct wl_data_source* src = wl_data_device_manager_create_data_source(wl_ddm);
     struct xdg_toplevel_drag_v1* drag = xdg_toplevel_drag_manager_v1_get_xdg_toplevel_drag(drag_mgr, src);
 

@@ -5130,8 +5130,9 @@ namespace {
         DataSource* src = sourceFrom(sourceRes);
 
         // the source must be fresh: already used for a drag/selection, or
-        // already carrying a drag object, is invalid
-        if (!src || src->usedForDrag || src->usedForSelection || src->toplevelDrag) {
+        // already carrying a drag object, is invalid (the protocol's source
+        // argument is not nullable, so there always is one)
+        if (src->usedForDrag || src->usedForSelection || src->toplevelDrag) {
             wl_resource_post_error(res, XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE, "the data source is already in use");
 
             return;
