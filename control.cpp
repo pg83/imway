@@ -22,6 +22,7 @@
 #include "chaos_monkey.h"
 #include "kms_intercept.h"
 #include "status_notifier.h"
+#include "ev_watch.h"
 
 #include <std/sys/fd.h>
 #include <std/ios/sys.h>
@@ -244,7 +245,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     *fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     STD_VERIFY(*fd >= 0);
 
-    ev_io_init(io, controlIoCb, *fd, EV_READ);
+    evIoInit(io, controlIoCb, *fd, EV_READ);
     io->data = this;
     ev_io_start(loop, io);
     *(comp->log) << "imway: control FIFO: "_sv << sv(path) << endL;
@@ -841,7 +842,7 @@ void ControlImpl::reopen() {
         return;
     }
 
-    ev_io_set(io, *fd, EV_READ);
+    evIoSet(io, *fd, EV_READ);
     ev_io_start(loop, io);
 }
 

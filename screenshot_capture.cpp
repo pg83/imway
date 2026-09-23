@@ -12,6 +12,7 @@
 #include "offload_job.h"
 #include "chaos_monkey.h"
 #include "spawn.h"
+#include "ev_watch.h"
 
 #include <std/ios/sys.h>
 #include <std/str/view.h>
@@ -187,7 +188,7 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
     pooledGuard(*c.pool, [heldLoop, heldTimer] {
         ev_timer_stop(heldLoop, heldTimer);
     });
-    ev_timer_init(retireTimer, retireTimerCb, 0.001, 0.001);
+    evTimerInit(retireTimer, retireTimerCb, 0.001, 0.001);
     retireTimer->data = this;
 }
 

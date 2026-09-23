@@ -4,6 +4,7 @@
 #include "chaos_monkey.h"
 #include "util.h"
 #include "composer.h"
+#include "ev_watch.h"
 
 #include <std/ios/manip.h>
 #include <std/lib/buffer.h>
@@ -210,7 +211,7 @@ SpawnerImpl::SpawnerImpl(Composer& c)
     }
 #endif
 
-    ev_child_init(&children, childCb, 0, 0);
+    evChildInit(&children, childCb, 0, 0);
     children.data = this;
     ev_child_start(comp->loop, &children);
     // reaping must not keep the loop alive by itself

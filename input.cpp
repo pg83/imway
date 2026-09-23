@@ -9,6 +9,7 @@
 #include "listener.h"
 #include "input_sink.h"
 #include "log_extern.h"
+#include "ev_watch.h"
 
 #include <std/sys/fs.h>
 #include <std/ios/sys.h>
@@ -283,7 +284,7 @@ LibinputSource::LibinputSource(Composer& c)
                 ev_io_stop(heldLoop, inotifyIo);
             }
         });
-        ev_io_init(inotifyIo, inotifyCb, inoFd, EV_READ);
+        evIoInit(inotifyIo, inotifyCb, inoFd, EV_READ);
         inotifyIo->data = this;
         ev_io_start(loop, inotifyIo);
     }
@@ -313,7 +314,7 @@ LibinputSource::LibinputSource(Composer& c)
             ev_io_stop(heldLoop, inputIo);
         }
     });
-    ev_io_init(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
+    evIoInit(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
     inputIo->data = this;
     ev_io_start(loop, inputIo);
     dispatch();

@@ -37,6 +37,7 @@
 #include "icon_provider.h"
 #include "desktop_chrome.h"
 #include "spawn.h"
+#include "ev_watch.h"
 
 #include <std/sys/fs.h>
 #include <std/ios/sys.h>
@@ -1144,7 +1145,7 @@ void DesktopImpl::nightSettingChanged() {
     applyNightLight();
 
     if (comp->settings->nightScheduled()) {
-        ev_timer_set(&nightTimer, 30., 30.);
+        evTimerSet(&nightTimer, 30., 30.);
         ev_timer_start(comp->loop, &nightTimer);
     }
 
@@ -1170,7 +1171,7 @@ void DesktopImpl::updateAutoLock() {
     double seconds = comp->settings->lockSeconds();
 
     if (!lockState && seconds > 0.) {
-        ev_timer_set(&autoLockTimer, seconds, 0.);
+        evTimerSet(&autoLockTimer, seconds, 0.);
         ev_timer_start(comp->loop, &autoLockTimer);
     }
 }
@@ -2377,9 +2378,9 @@ DesktopImpl::DesktopImpl(Composer& c)
     c.settings->addThemeVariantListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::themeSettingChanged));
     c.settings->addLockSecondsListener(c.pool->make<CallDesktopSetting>(this, &DesktopImpl::updateAutoLock));
 
-    ev_timer_init(&autoLockTimer, autoLockTimerCb, 0., 0.);
+    evTimerInit(&autoLockTimer, autoLockTimerCb, 0., 0.);
     autoLockTimer.data = this;
-    ev_timer_init(&nightTimer, nightTimerCb, 0., 0.);
+    evTimerInit(&nightTimer, nightTimerCb, 0., 0.);
     nightTimer.data = this;
     updateAutoLock();
     nightSettingChanged();

@@ -4,6 +4,7 @@
 #include "util.h"
 #include "pooled.h"
 #include "chaos_monkey.h"
+#include "ev_watch.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
@@ -76,7 +77,7 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* 
     pooledGuard(*pool, [heldLoop, prepare] {
         ev_prepare_stop(heldLoop, prepare);
     });
-    ev_prepare_init(prepare, prepareCb);
+    evPrepareInit(prepare, prepareCb);
     prepare->data = this;
     ev_prepare_start(loop, prepare);
 }
@@ -160,7 +161,7 @@ namespace {
 
         box->conn = impl;
         box->watch = w;
-        ev_io_init(&box->io, watchCb, dbus_watch_get_unix_fd(w), watchEvents(w));
+        evIoInit(&box->io, watchCb, dbus_watch_get_unix_fd(w), watchEvents(w));
         box->io.data = box;
         dbus_watch_set_data(w, box, nullptr);
 
@@ -187,7 +188,7 @@ namespace {
         auto* box = (WatchBox*)dbus_watch_get_data(w);
 
         ev_io_stop(impl->loop, &box->io);
-        ev_io_set(&box->io, dbus_watch_get_unix_fd(w), watchEvents(w));
+        evIoSet(&box->io, dbus_watch_get_unix_fd(w), watchEvents(w));
 
         if (dbus_watch_get_enabled(w)) {
             ev_io_start(impl->loop, &box->io);
@@ -201,7 +202,7 @@ namespace {
 
         box->conn = impl;
         box->timeout = t;
-        ev_timer_init(&box->timer, timeoutCb, sec, sec);
+        evTimerInit(&box->timer, timeoutCb, sec, sec);
         box->timer.data = box;
         dbus_timeout_set_data(t, box, nullptr);
         ev_timer_start(impl->loop, &box->timer);

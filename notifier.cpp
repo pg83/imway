@@ -5,6 +5,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
+#include "ev_watch.h"
 
 #include <std/ios/sys.h>
 #include <std/mem/obj_pool.h>
@@ -71,7 +72,7 @@ NotifierImpl::NotifierImpl(Composer& comp)
     comp.settings->addDndEndMinuteListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
     comp.settings->addNotificationHistoryListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::trim));
 
-    ev_timer_init(&scheduleTimer, scheduleCb, 30., 30.);
+    evTimerInit(&scheduleTimer, scheduleCb, 30., 30.);
     scheduleTimer.data = this;
     ev_timer_start(loop, &scheduleTimer);
 }
@@ -106,7 +107,7 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
 
     double sec = expireMs > 0 ? expireMs / 1000.0 : c->settings->notificationSeconds();
 
-    ev_timer_init(&t.timer, expiryCb, sec, 0.);
+    evTimerInit(&t.timer, expiryCb, sec, 0.);
     t.timer.data = &t;
     ev_timer_start(loop, &t.timer);
 }

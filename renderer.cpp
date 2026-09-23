@@ -42,6 +42,7 @@
 #include "desktop_chrome.h"
 #include "frame_listener.h"
 #include "screenshot_capture.h"
+#include "ev_watch.h"
 
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
@@ -824,7 +825,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     comp.settings->addCursorScaleListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::updateUiScale));
     comp.settings->addFontPathListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
     comp.settings->addFontSizeListener(comp.pool->make<CallRendererSetting>(this, &RendererImpl::scheduleFontReload));
-    ev_idle_init(&fontReloadIdle, fontReloadIdleCb);
+    evIdleInit(&fontReloadIdle, fontReloadIdleCb);
     fontReloadIdle.data = this;
     setup();
     // sized by the first mode announcement, like everything else here
@@ -837,7 +838,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
         pooledGuard(*pool, [heldLoop, prepare] {
             ev_prepare_stop(heldLoop, prepare);
         });
-        ev_prepare_init(prepare, prepareCb);
+        evPrepareInit(prepare, prepareCb);
         prepare->data = this;
         ev_prepare_start(loop, prepare);
     } else {
@@ -847,7 +848,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
         pooledGuard(*pool, [heldLoop, frameTimer] {
             ev_timer_stop(heldLoop, frameTimer);
         });
-        ev_timer_init(frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
+        evTimerInit(frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
         frameTimer->data = this;
         ev_timer_start(loop, frameTimer);
     }
@@ -858,7 +859,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     pooledGuard(*pool, [heldLoop, clockTimer] {
         ev_timer_stop(heldLoop, clockTimer);
     });
-    ev_timer_init(clockTimer, clockTimerCb, 1., 1.);
+    evTimerInit(clockTimer, clockTimerCb, 1., 1.);
     clockTimer->data = this;
     ev_timer_start(loop, clockTimer);
 }

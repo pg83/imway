@@ -6,6 +6,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
+#include "ev_watch.h"
 
 #if __has_include(<sndio.h>)
 
@@ -192,7 +193,7 @@ void SndioMixer::rearm() {
         ev_io_stop(c->loop, io);
     }
 
-    ev_io_init(io, ioCb, pfd.fd, ev);
+    evIoInit(io, ioCb, pfd.fd, ev);
     io->data = this;
     ev_io_start(c->loop, io);
 }

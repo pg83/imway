@@ -23,6 +23,7 @@
 #include "frame_capture.h"
 #include "icon_provider.h"
 #include "frame_listener.h"
+#include "ev_watch.h"
 
 #include <std/ios/sys.h>
 #include <std/str/view.h>
@@ -8902,7 +8903,7 @@ namespace {
 
         double t = timeoutMs > 0 ? timeoutMs / 1000.0 : 0.001;
 
-        ev_timer_init(&n->timer, idleNotifCb, t, t);
+        evTimerInit(&n->timer, idleNotifCb, t, t);
         n->timer.data = n;
         ev_timer_again(srv->loop, &n->timer);
 
@@ -12236,7 +12237,7 @@ void WaylandImpl::updateDpms() {
         return;
     }
 
-    ev_timer_set(&dpmsTimer, seconds, seconds);
+    evTimerSet(&dpmsTimer, seconds, seconds);
     ev_timer_again(loop, &dpmsTimer);
 }
 
@@ -12255,7 +12256,7 @@ void WaylandImpl::updateAnrTimer() {
     }
 
     ev_timer_stop(loop, &pingTimer);
-    ev_timer_set(&pingTimer, seconds, seconds);
+    evTimerSet(&pingTimer, seconds, seconds);
     ev_timer_start(loop, &pingTimer);
 }
 
@@ -12309,7 +12310,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     explicitSyncSupported = cfg.explicitSync;
     maxImageDim = cfg.maxImageDim;
 
-    ev_timer_init(&dpmsTimer, dpmsTimerCb, 0., 0.);
+    evTimerInit(&dpmsTimer, dpmsTimerCb, 0., 0.);
     dpmsTimer.data = this;
     updateDpms();
 
@@ -12320,20 +12321,20 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     STD_VERIFY(initWaylandShm(display, &shmGlobal));
     createGlobals();
 
-    ev_io_init(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
+    evIoInit(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
     wlIo.data = this;
     ev_io_start(loop, &wlIo);
 
-    ev_prepare_init(&flushPrepare, flushCb);
+    evPrepareInit(&flushPrepare, flushCb);
     flushPrepare.data = this;
     ev_prepare_start(loop, &flushPrepare);
 
-    ev_signal_init(&sigInt, signalCb, SIGINT);
+    evSignalInit(&sigInt, signalCb, SIGINT);
     ev_signal_start(loop, &sigInt);
-    ev_signal_init(&sigTerm, signalCb, SIGTERM);
+    evSignalInit(&sigTerm, signalCb, SIGTERM);
     ev_signal_start(loop, &sigTerm);
 
-    ev_timer_init(&pingTimer, pingTimerCb, 0., 0.);
+    evTimerInit(&pingTimer, pingTimerCb, 0., 0.);
     pingTimer.data = this;
     updateAnrTimer();
 
@@ -12354,7 +12355,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     }
 
     if (syncEvFd >= 0) {
-        ev_io_init(&syncEvIo, syncEvCb, syncEvFd, EV_READ);
+        evIoInit(&syncEvIo, syncEvCb, syncEvFd, EV_READ);
         syncEvIo.data = this;
         ev_io_start(loop, &syncEvIo);
     }

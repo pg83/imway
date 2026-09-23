@@ -10,6 +10,7 @@
 #include "icon_pool.h"
 #include "xdg_utils.h"
 #include "icon_provider.h"
+#include "ev_watch.h"
 
 #include <std/sys/fs.h>
 #include <std/ios/sys.h>
@@ -188,7 +189,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
             ev_io_stop(heldLoop, ino);
         }
     });
-    ev_io_init(ino, inoCb, inoFd, EV_READ);
+    evIoInit(ino, inoCb, inoFd, EV_READ);
     ino->data = this;
     ev_io_start(loop, ino);
 
@@ -200,7 +201,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
             ev_timer_stop(heldLoop, heldTimer);
         }
     });
-    ev_timer_init(reloadTimer, reloadCb, 0.5, 0.5);
+    evTimerInit(reloadTimer, reloadCb, 0.5, 0.5);
     reloadTimer->data = this;
 }
 

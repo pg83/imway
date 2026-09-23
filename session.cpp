@@ -5,6 +5,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
+#include "ev_watch.h"
 
 #include <ev.h>
 #include <poll.h>
@@ -123,7 +124,7 @@ SeatSession::SeatSession(Composer& comp)
         Errno().raise(StringBuilder() << "libseat: seat did not become active"_sv);
     }
 
-    ev_io_init(&io, seatIoCb, libseat_get_fd(seat), EV_READ);
+    evIoInit(&io, seatIoCb, libseat_get_fd(seat), EV_READ);
     io.data = this;
     ev_io_start(loop, &io);
     *(c->log) << "imway: libseat session on "_sv << StringView(libseat_seat_name(seat)) << endL;

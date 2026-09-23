@@ -6,6 +6,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
+#include "ev_watch.h"
 
 #include <std/mem/small_obj_allocator.h>
 
@@ -113,7 +114,7 @@ namespace {
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
-        ev_io_init(&e->io, ioEvCb, fd, toEv(f));
+        evIoInit(&e->io, ioEvCb, fd, toEv(f));
         e->io.data = e;
         ev_io_start(e->loop, &e->io);
 
@@ -122,7 +123,7 @@ namespace {
 
     void ioEnable(pa_io_event* e, pa_io_event_flags_t f) {
         ev_io_stop(e->loop, &e->io);
-        ev_io_set(&e->io, e->io.fd, toEv(f));
+        evIoSet(&e->io, e->io.fd, toEv(f));
         ev_io_start(e->loop, &e->io);
     }
 
@@ -172,7 +173,7 @@ namespace {
             return;
         }
 
-        ev_timer_set(&e->timer, delayUntil(*tv), 0.);
+        evTimerSet(&e->timer, delayUntil(*tv), 0.);
         ev_timer_start(e->loop, &e->timer);
     }
 
@@ -183,7 +184,7 @@ namespace {
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
-        ev_timer_init(&e->timer, timeEvCb, 0., 0.);
+        evTimerInit(&e->timer, timeEvCb, 0., 0.);
         e->timer.data = e;
         timeRestart(e, tv);
 
@@ -217,7 +218,7 @@ namespace {
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
-        ev_prepare_init(&e->prep, deferPrepCb);
+        evPrepareInit(&e->prep, deferPrepCb);
         e->prep.data = e;
         ev_prepare_start(e->loop, &e->prep);
         e->started = true;

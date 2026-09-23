@@ -17,6 +17,7 @@
 #include "offload_job.h"
 #include "kms_intercept.h"
 #include "frame_listener.h"
+#include "ev_watch.h"
 
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
@@ -980,7 +981,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     pooledGuard(*pool, [heldLoop, drmIo] {
         ev_io_stop(heldLoop, drmIo);
     });
-    ev_io_init(drmIo, drmIoCb, fd, EV_READ);
+    evIoInit(drmIo, drmIoCb, fd, EV_READ);
     drmIo->data = (void*)(intptr_t)fd;
     ev_io_start(loop, drmIo);
 
@@ -1010,7 +1011,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         pooledGuard(*pool, [heldLoop, udevIo] {
             ev_io_stop(heldLoop, udevIo);
         });
-        ev_io_init(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
+        evIoInit(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
         udevIo->data = this;
         ev_io_start(loop, udevIo);
     }
@@ -2846,7 +2847,7 @@ void KmsOutput::setBrightness(float v) {
 
         if (!ddcTimerOn) {
             ddcTimerOn = true;
-            ev_timer_init(ddcTimer, ddcTimerCb, 0.06, 0.);
+            evTimerInit(ddcTimer, ddcTimerCb, 0.06, 0.);
             ddcTimer->data = this;
             ev_timer_start(loop, ddcTimer);
         }

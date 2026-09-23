@@ -3,6 +3,7 @@
 #include "pooled.h"
 #include "listener.h"
 #include "chaos_monkey.h"
+#include "ev_watch.h"
 
 #include <std/mem/obj_pool.h>
 
@@ -47,7 +48,7 @@ FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, 
     pooledGuard(pool, [heldLoop, heldTimer] {
         ev_timer_stop(heldLoop, heldTimer);
     });
-    ev_timer_init(timer, fencePollCb, 0.001, 0.001);
+    evTimerInit(timer, fencePollCb, 0.001, 0.001);
     timer->data = this;
 }
 
