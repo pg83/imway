@@ -6,7 +6,8 @@
 // A selection replaced by the next one cancels the source it displaces, on
 // every kind of source and slot: a wl_data_source clipboard, a primary
 // selection source, and data-control sources in both the clipboard and the
-// primary slot.
+// primary slot. A selection under a bogus serial takes no slot, and a
+// drag started with no button held is cancelled at once.
 
 static struct zwp_primary_selection_device_manager_v1* primary_mgr;
 static struct ext_data_control_manager_v1* dc_mgr;
@@ -137,9 +138,25 @@ int main(void) {
         zwp_primary_selection_device_manager_v1_get_device(primary_mgr, wl_seat_g);
     struct ext_data_control_device_v1* dcd = ext_data_control_manager_v1_get_data_device(dc_mgr, wl_seat_g);
 
+    // a selection under a serial the client never had takes no slot: the
+    // valid one after it displaces nothing
+    wl_data_device_set_selection(dd, wl_source(), serial + 1000);
     wl_data_device_set_selection(dd, wl_source(), serial);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    if (cancelled) {
+        fprintf(stderr, "a selection under a bogus serial took the slot\n");
+        return 1;
+    }
+    printf("bogus serial: ok\n");
+
     wl_data_device_set_selection(dd, wl_source(), serial);
     if (expect_one_cancel("clipboard"))
+        return 1;
+
+    // a drag with no button held is refused, the source cancelled
+    wl_data_device_start_drag(dd, wl_source(), ctx.surface, NULL, serial);
+    if (expect_one_cancel("drag without a grab"))
         return 1;
 
     zwp_primary_selection_device_v1_set_selection(pd, primary_source(), serial);
