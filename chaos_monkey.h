@@ -116,13 +116,16 @@ struct ChaosMonkey {
     // pipelines and pools, the texture chain's layout, the capture's pool
     virtual VkResult setup(VkResult result) = 0;
 
-    // renderer: wl_shm host imports and the screenshot capture
+    // renderer: wl_shm imports and the screenshot capture
     // the device's memory types as a wl_shm pool's host-pointer import
     // picks its heap from them
     virtual void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) = 0;
     // the outcome the screenshot capture's copy submit is about to have,
     // under the same rule as the other submits
     virtual VkResult shotSubmit(VkResult pending) = 0;
+    // whether a wl_shm pool's udmabuf took the CPU-access bracket that lets
+    // the GPU read it (DMA_BUF_IOCTL_SYNC); a refusal sets errno
+    virtual bool udmabufRead(bool started) = 0;
 
     // screenshot viewer (imway screenshot, its own process and monkey)
     // the result of acquiring a swapchain image or presenting one
