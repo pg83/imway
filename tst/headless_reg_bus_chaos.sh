@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # private-session-bus
-# imway-env: IMWAY_CHAOS="dbus-send=GetLayout dbus-notify=GetLayout dbus-message=GetLayout@2 dbus-message=WindowRegistered dbus-message=GetNameOwner dbus-message=GetAll dbus-send=GetAll dbus-notify=GetAll"
+# imway-env: IMWAY_CHAOS="dbus-send=GetLayout dbus-notify=GetLayout dbus-message=GetLayout@2 dbus-message=WindowRegistered dbus-message=GetNameOwner dbus-message=GetAll dbus-send=GetAll dbus-notify=GetAll bare-word no-such-fault=1 dbus-message=WindowUnregistered"
 # The session-bus services when libdbus runs out of memory or finds its
 # connection gone: a menu's layout call that is not sent, loses its reply
 # notify or is not even built is retried by the next LayoutUpdated;
 # a registration whose signal cannot be built still registers; a menu
 # whose owner lookup cannot be built ignores the owner until the name
 # changes hands; and a tray item's property read failing the same three
-# ways is retried by the next NewIcon.
+# ways is retried by the next NewIcon. The monkey itself skips a word
+# without a value and a fault it does not know, and holds eight bus
+# faults: the ninth, which would drop the WindowUnregistered signal the
+# client waits for, is not armed.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
