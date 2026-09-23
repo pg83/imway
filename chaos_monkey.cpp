@@ -141,6 +141,10 @@ using namespace stl;
 //                     device memory
 //   shot-readback=K   K calls building the screenshot's readback buffer
 //                     pass, the one after runs out of device memory
+
+// the resources a subsystem checks for before it goes on:
+//   control-open=N    the next N opens of the control FIFO fail with
+//                     EMFILE, as for a process out of descriptors
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -230,6 +234,9 @@ namespace {
         bool noGraphics = false;
         int iconTextureSkip = -1;
         int shotReadbackSkip = -1;
+
+        // the resources a subsystem checks for
+        int controlOpenFaults = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -304,6 +311,9 @@ namespace {
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
         VkResult iconTexture(VkResult result) override;
         VkResult shotReadback(VkResult result) override;
+
+        // the resources a subsystem checks for
+        int controlOpen(int fd) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -464,6 +474,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         iconTextureSkip = (int)arg.stou();
     } else if (fault == "shot-readback"_sv) {
         shotReadbackSkip = (int)arg.stou();
+
+    } else if (fault == "control-open"_sv) {
+        // the resources a subsystem checks for
+        controlOpenFaults = (int)arg.stou();
     }
 }
 
@@ -1035,6 +1049,19 @@ VkResult TestChaosMonkey::shotReadback(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+// the resources a subsystem checks for
+int TestChaosMonkey::controlOpen(int fd) {
+    if (!spend(controlOpenFaults)) {
+        return fd;
+    }
+
+    // a real failure already left -1, which close shrugs off
+    close(fd);
+    errno = EMFILE;
+
+    return -1;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1112,6 +1139,9 @@ namespace {
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
         VkResult iconTexture(VkResult result) override;
         VkResult shotReadback(VkResult result) override;
+
+        // the resources a subsystem checks for
+        int controlOpen(int fd) override;
     };
 }
 
@@ -1337,6 +1367,11 @@ VkResult IdleChaosMonkey::iconTexture(VkResult result) {
 
 VkResult IdleChaosMonkey::shotReadback(VkResult result) {
     return result;
+}
+
+// the resources a subsystem checks for
+int IdleChaosMonkey::controlOpen(int fd) {
+    return fd;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

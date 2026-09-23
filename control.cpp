@@ -242,7 +242,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
         }
     });
 
-    *fd = open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    *fd = c.chaos->controlOpen(open(path.cStr(), O_RDONLY | O_NONBLOCK | O_CLOEXEC));
     STD_VERIFY(*fd >= 0);
 
     evIoInit(io, controlIoCb, *fd, EV_READ);

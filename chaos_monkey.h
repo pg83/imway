@@ -198,5 +198,10 @@ struct ChaosMonkey {
     // readback buffer, sized by the output at the capture
     virtual VkResult shotReadback(VkResult result) = 0;
 
+    // the resources a subsystem checks for before it goes on
+    // control FIFO (test build): its read end fresh from open (or its -1);
+    // a replacement failure closes the fd and returns -1 with errno set
+    virtual int controlOpen(int fd) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
