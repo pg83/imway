@@ -46,6 +46,14 @@ wait_client "button 330 1"
 ctl "tablet motion $((cx + 20)) $((cy + 10)) button=330,release"
 wait_client "button 330 0"
 
+# the named pressure axis, and pair axes given one value: those are not
+# axes at all and send nothing; a later tilt shows the frame went through
+ctl "tablet motion $((cx + 20)) $((cy + 10)) pressure=0.25 tilt=7 wheel=9 button=331"
+wait_client "pressure 16383"
+ctl "tablet motion $((cx + 20)) $((cy + 10)) tilt=3,4"
+wait_client "tilt 3 4"
+! grep -q "tilt 7\|wheel 9\|button 331" "$CLIENT_LOG" || { echo "a one-value pair axis reached the client"; cat "$CLIENT_LOG"; exit 1; }
+
 ctl "tablet up $((cx + 20)) $((cy + 10))"
 wait_client "tablet: up"
 
