@@ -11,8 +11,9 @@
 // of the surface: a second one for the same surface is no protocol error
 // (content type, alpha modifier, fractional scale, shortcuts inhibitor).
 // The other ends: an xdg_output destroyed on request, a locked pointer
-// given a cursor hint and a null region, and a constraint whose surface is
-// gone taking a region and its own destroy without complaint.
+// given a cursor hint and a null region, and a constraint and a content type
+// whose surface is gone taking a region, a type and their own destroy
+// without complaint.
 
 static struct wp_content_type_manager_v1* content_type;
 static struct wp_alpha_modifier_v1* alpha;
@@ -126,6 +127,17 @@ int main(void) {
     zwp_confined_pointer_v1_set_region(confine, NULL);
     zwp_confined_pointer_v1_destroy(confine);
     step("orphan constraint destroyed");
+
+    // a content type outliving its surface takes a type without complaint
+    struct wl_surface* short_lived = wl_compositor_create_surface(wl_comp);
+    struct wp_content_type_v1* orphan_ct =
+        wp_content_type_manager_v1_get_surface_content_type(content_type, short_lived);
+
+    wl_surface_destroy(short_lived);
+    step("content type surface gone");
+    wp_content_type_v1_set_content_type(orphan_ct, WP_CONTENT_TYPE_V1_TYPE_VIDEO);
+    wp_content_type_v1_destroy(orphan_ct);
+    step("orphan content type set");
 
     printf("surface extensions done\n");
 
