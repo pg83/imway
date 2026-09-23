@@ -121,6 +121,10 @@ static const struct Case cases[] = {
     /* partly past the far edges: the resize keeps the part on screen */
     {"resize-bottom", 200, 150, -2, 750, 20, 20, XDG_POSITIONER_ANCHOR_BOTTOM,      XDG_POSITIONER_GRAVITY_BOTTOM,       RESIZE},
     {"resize-right", 200, 150, 1200, -2, 20, 20, XDG_POSITIONER_ANCHOR_RIGHT,       XDG_POSITIONER_GRAVITY_RIGHT,        RESIZE},
+    /* centred on the constrained axis: the flip has no side to mirror and
+     * lands where it started, so the slide places it */
+    {"flip-centred-x", 200, 150,  0, -2, 20, 20, XDG_POSITIONER_ANCHOR_TOP,         XDG_POSITIONER_GRAVITY_TOP,          FLIP | SLIDE},
+    {"flip-centred-y", 200, 150, -2,  0, 20, 20, XDG_POSITIONER_ANCHOR_LEFT,        XDG_POSITIONER_GRAVITY_LEFT,         FLIP | SLIDE},
 };
 
 static int anchor_coord(int value, int extent, int rect) {

@@ -34,6 +34,8 @@ check() { # <case name>
         resize-above) want="$px 0 200 800" ;;
         resize-bottom) want="$px 770 200 30" ;;
         resize-right) want="1220 $py 60 150" ;;
+        flip-centred-x) want="0 $py 200 150" ;;
+        flip-centred-y) want="$px 0 200 150" ;;
     esac
     [[ -z "$want" || "$px $py $pw $ph" == "$want" ]] || {
         echo "$1: placed at $px $py ${pw}x${ph}, want $want"
@@ -51,7 +53,8 @@ check() { # <case name>
 
 for name in top bottom left right top-left bottom-left top-right bottom-right \
             none flip-then-slide-x flip-then-slide-y resize slide-left too-wide \
-            too-tall resize-top resize-left resize-above resize-bottom resize-right; do
+            too-tall resize-top resize-left resize-above resize-bottom resize-right \
+            flip-centred-x flip-centred-y; do
     check "$name"
 done
 
