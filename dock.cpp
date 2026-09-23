@@ -50,12 +50,11 @@ namespace {
             t.minimized = false;
         }
 
-        // the compositor's focus, not xdg activated: a click on the dock
-        // itself takes the former and leaves the keyboard, and with it the
-        // activated flag, on the window
-        if (c.scene->focusedToplevel.get() != &t) {
-            t.raiseRequested = true;
-        }
+        // always, even for the window that has the focus: the press on the
+        // slot is itself a click on the dock, which takes ImGui's focus
+        // (and with it the compositor's, at the end of this frame) away
+        // from that window, so the raise is what hands it back
+        t.raiseRequested = true;
 
         c.scene->needsFrame = true;
     }
