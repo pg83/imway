@@ -19,7 +19,8 @@
 # tearing hint on a control whose surface is gone, and the offers a
 # data-control source keeps (64 types, none too long, none after use), a
 # device seeded with the selection in place and a cleared selection, and an
-# xdg_dialog outliving its toplevel.
+# xdg_dialog outliving its toplevel, and an idle notification without a
+# timeout, idle at once and only once.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -29,7 +30,7 @@ next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next st
 for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab im-popup text-input \
             foreign-gone foreign-bad-parent shm release rescale vp-transforms \
             nested timed-subsurface inert-subsurface state-repeats \
-            tearing-dead-surface dc-offer-limits dialog-inert; do
+            tearing-dead-surface dc-offer-limits dialog-inert idle-zero; do
     "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
     expect_alive "the compositor died in $mode"
 done

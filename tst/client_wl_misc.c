@@ -23,6 +23,7 @@
 #include <xdg-foreign-unstable-v2-client-protocol.h>
 #include <xdg-toplevel-icon-v1-client-protocol.h>
 #include <commit-timing-v1-client-protocol.h>
+#include <ext-idle-notify-v1-client-protocol.h>
 #include <time.h>
 
 static struct wp_viewporter* viewporter;
@@ -42,6 +43,7 @@ static struct zxdg_exporter_v2* exporter;
 static struct zxdg_importer_v2* importer;
 static struct wl_shm* shm2;
 static struct wp_commit_timing_manager_v1* timing;
+static struct ext_idle_notifier_v1* idle_notifier;
 static struct xdg_toplevel_icon_manager_v1* icons;
 static int icon_size;
 
@@ -86,6 +88,8 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
     else if (!strcmp(iface, xdg_toplevel_icon_manager_v1_interface.name)) {
         icons = wl_registry_bind(registry, name, &xdg_toplevel_icon_manager_v1_interface, 1);
         xdg_toplevel_icon_manager_v1_add_listener(icons, &icons_listener, NULL);
+    } else if (!strcmp(iface, ext_idle_notifier_v1_interface.name)) {
+        idle_notifier = wl_registry_bind(registry, name, &ext_idle_notifier_v1_interface, 1);
     } else if (!strcmp(iface, wp_commit_timing_manager_v1_interface.name)) {
         timing = wl_registry_bind(registry, name, &wp_commit_timing_manager_v1_interface, 1);
     } else if (!strcmp(iface, wl_shm_interface.name) && version >= 2)
@@ -1814,6 +1818,36 @@ static int mode_unusable_cached(void) {
     return 0;
 }
 
+// ---- idle-zero: a notification with no timeout idles at once ---------------
+static int idled, resumed;
+
+static void idle_idled(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; idled++; }
+static void idle_resumed(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; resumed++; }
+static const struct ext_idle_notification_v1_listener idle_listener = {idle_idled, idle_resumed};
+
+static int mode_idle_zero(void) {
+    need(idle_notifier, "ext_idle_notifier_v1");
+
+    struct ext_idle_notification_v1* n = ext_idle_notifier_v1_get_idle_notification(idle_notifier, 0, wl_seat_g);
+
+    ext_idle_notification_v1_add_listener(n, &idle_listener, NULL);
+    for (int i = 0; i < 1000 && !idled; i++) {
+        roundtrip("idle");
+        usleep(10000);
+    }
+    // the timer keeps running while idle: it must not say idled twice
+    for (int i = 0; i < 20; i++) {
+        roundtrip("still idle");
+        usleep(10000);
+    }
+    if (idled != 1 || resumed) {
+        fprintf(stderr, "a zero timeout idled %d times, resumed %d\n", idled, resumed);
+        return 1;
+    }
+    printf("idle zero ok\n");
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1848,6 +1882,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "idle-zero")) return mode_idle_zero();
     if (!strcmp(mode, "unusable-cached")) return mode_unusable_cached();
     if (!strcmp(mode, "dialog-inert")) return mode_dialog_inert();
     if (!strcmp(mode, "plain-window")) return mode_plain_window();
