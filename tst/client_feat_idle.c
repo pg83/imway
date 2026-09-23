@@ -1,15 +1,20 @@
 // Feature: ext-idle-notify. A notification with a short timeout must fire
-// idled after that much quiet, and resumed once input arrives again.
+// idled after that much quiet, and resumed once input arrives again; one
+// with no timeout at all idles at once and resumes the same way.
 
 #include "wl_util.h"
 #include <ext-idle-notify-v1-client-protocol.h>
 
 static struct ext_idle_notifier_v1* notifier;
 static int idled, resumed;
+static int zero_idled, zero_resumed;
 
 static void on_idled(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; idled = 1; }
 static void on_resumed(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; resumed = 1; }
 static const struct ext_idle_notification_v1_listener notif_listener = {on_idled, on_resumed};
+static void on_zero_idled(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; zero_idled = 1; }
+static void on_zero_resumed(void* d, struct ext_idle_notification_v1* n) { (void)d; (void)n; zero_resumed = 1; }
+static const struct ext_idle_notification_v1_listener zero_listener = {on_zero_idled, on_zero_resumed};
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
@@ -33,20 +38,24 @@ int main(void) {
         ext_idle_notifier_v1_get_idle_notification(notifier, 200, wl_seat_g);
     ext_idle_notification_v1_add_listener(n, &notif_listener, NULL);
 
+    struct ext_idle_notification_v1* zero =
+        ext_idle_notifier_v1_get_idle_notification(notifier, 0, wl_seat_g);
+    ext_idle_notification_v1_add_listener(zero, &zero_listener, NULL);
+
     // no input → idled fires after the timeout
-    for (int i = 0; i < 200 && !idled; i++) {
+    for (int i = 0; i < 200 && (!idled || !zero_idled); i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
-    if (!idled) { fprintf(stderr, "never went idle\n"); return 1; }
+    if (!idled || !zero_idled) { fprintf(stderr, "never went idle: %d, without a timeout %d\n", idled, zero_idled); return 1; }
     printf("client_feat_idle: idled\n");
 
     // the scenario now injects input → resumed
-    for (int i = 0; i < 200 && !resumed; i++) {
+    for (int i = 0; i < 200 && (!resumed || !zero_resumed); i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;
         usleep(20000);
     }
-    if (!resumed) { fprintf(stderr, "never resumed\n"); return 1; }
+    if (!resumed || !zero_resumed) { fprintf(stderr, "never resumed: %d, without a timeout %d\n", resumed, zero_resumed); return 1; }
     printf("client_feat_idle: resumed\n");
     printf("client_feat_idle: ok\n");
     return 0;
