@@ -253,7 +253,9 @@ int HeadlessOutput::cursorCapH() const {
 
 void HeadlessOutput::setCursorImage(const u32* argb) {
 #ifdef IMWAY_FOR_TESTS
-    if (getenv("IMWAY_DEBUG_CURSOR") && curCap) {
+    // only reached with a cursor plane: every renderer call site checks
+    // cursorCapW() > 0 first
+    if (getenv("IMWAY_DEBUG_CURSOR")) {
         size_t visible = 0;
         u32 rgbOr = 0;
         u32 alphaOr = 0;
