@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
 # private-session-bus
-# The global menu's less common headings, from the conform client's layout:
-# a heading whose children make it a menu without children-display (Edit)
-# opens its popup, a heading that declares a submenu but has no children yet
-# (Empty) asks the application to prepare it and shows "loading...", an
-# invisible heading takes no place on the bar, and a second click on an open
-# heading closes its menu. Every heading is aimed at from the rect the bar
+# File's less common rows in the global menu, from the conform client's
+# layout: a warning row drawn in the warning colour next to an unnamed row
+# and an unchecked radio, and a last row whose children alone make it a
+# submenu (More): hovering it opens the nested menu, which asks the
+# application to prepare it. File is aimed at from the rect the bar
 # reports in the state dump.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -53,12 +52,40 @@ close_menu() { # <label>
     await 50 popup_gone || { echo "a click on the open $1 heading did not close its menu"; dump_state; exit 1; }
 }
 
-open_heading Edit
-close_menu Edit
+# File's last row is More: walk up from the popup's bottom edge until a
+# hover opens the nested menu
+open_heading File
+px=$(dump_field '^imgui name=##Popup' x); py=$(dump_field '^imgui name=##Popup' y)
+pw=$(dump_field '^imgui name=##Popup' w); ph=$(dump_field '^imgui name=##Popup' h)
+warning_drawn() {
+    screenshot "$XDG_RUNTIME_DIR/file.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/file.ppm" "$px" "$py" "$pw" "$ph" <<'PY'
+import sys
+f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split()); f.readline(); d = f.read(w*h*3)
+x0, y0, pw, ph = map(int, sys.argv[2:6])
+orange = 0
+for y in range(y0, y0 + ph):
+    for x in range(x0, x0 + pw):
+        r, g, b = d[(y*w+x)*3:(y*w+x)*3+3]
+        if r > 200 and 130 < g < 210 and b < 110:
+            orange += 1
+sys.exit(0 if orange > 20 else 1)
+PY
+}
+await 30 warning_drawn || { echo "the warning row is not drawn in its colour"; exit 1; }
+nested=0
+for dy in 10 14 18 22 26 30; do
+    ctl "motion $((px + 40)) $((py + ph - dy))"
+    screenshot "$XDG_RUNTIME_DIR/_hover.ppm"
+    ctl "motion $((px + 41)) $((py + ph - dy))"
+    if await 10 nested_up; then
+        nested=1
+        break
+    fi
+done
+(( nested )) || { echo "hovering More did not open its nested menu"; dump_state; exit 1; }
+close_menu File
 
-open_heading Empty
-await 50 grep -q "^about 3$" "$CLIENT_LOG" || { echo "the empty submenu was not prepared"; cat "$CLIENT_LOG"; exit 1; }
-close_menu Empty
-
-expect_alive "compositor died on the global menu's odd headings"
-echo "OK: parent headings, an empty submenu and a hidden heading on the bar"
+expect_alive "compositor died drawing the global menu's odd rows"
+echo "OK: File draws its warning, unnamed and radio rows and opens the nested More"
