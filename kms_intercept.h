@@ -17,8 +17,10 @@ struct KmsIntercept {
     // moment (an MST port going away under the probe)
     virtual void setConnected(int state) = 0;
     // the connector's mode list: 0 default, 1 tv (1080p only), 2 small
-    // (800p only), 3 a 1366x768 panel whose dumb buffers need padded rows
-    // — a swapped display without touching the link
+    // (800p only), 3 a 1366x768 panel whose dumb buffers need padded rows,
+    // 4 none at all (a display whose EDID did not read), 5 forty modes
+    // with none preferred, 1080p60 first, 800p only at 50 Hz — a swapped
+    // display without touching the link
     virtual void setModes(int set) = 0;
     // the next atomic commits fail with err until count runs out; testToo
     // extends that to TEST_ONLY commits — the shape of losing drm master

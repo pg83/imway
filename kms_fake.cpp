@@ -52,6 +52,8 @@ namespace {
     // the second crtc's own primary plane, listed first: the desktop pipe
     // walks past it, a lease picks it up
     constexpr u32 kLeasePlaneId = 304;
+    // the longest mode list a connector offers
+    constexpr u32 kMaxModes = 40;
 
     // property ids, one flat namespace across objects
     enum : u32 {
@@ -190,7 +192,7 @@ namespace {
         pthread_t flipThread{};
 
         int connected = 1; // 0 unplugged, 1 plugged, 2 connector gone
-        int modeSet = 0; // 0 default, 1 tv, 2 small, 3 1366x768 panel
+        int modeSet = 0; // 0 default, 1 tv, 2 small, 3 1366x768 panel, 4 none, 5 forty unpreferred
         bool noPrime = false;
         bool asyncFlipLogged = false;
         bool cursorOnLogged = false;
@@ -693,8 +695,8 @@ int FakeKms::emuGetResources(drm_mode_card_res* r) {
     return 0;
 }
 
-// the connector's current mode list; the tv and small sets model
-// replugging displays that only do one size
+// the connector's current mode list, at most kMaxModes; the tv and small
+// sets model replugging displays that only do one size
 u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
     if (modeSet == 1) {
         fillMode(modes[0], 1920, 1080, 60, true);
@@ -712,6 +714,23 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
         fillMode(modes[0], 1366, 768, 60, true);
 
         return 1;
+    }
+
+    if (modeSet == 4) {
+        return 0;
+    }
+
+    if (modeSet == 5) {
+        // longer than a probe keeps: the tail past 32 is never looked at
+        fillMode(modes[0], 1920, 1080, 60, false);
+        fillMode(modes[1], 1280, 800, 50, false);
+        fillMode(modes[2], 1280, 720, 60, false);
+
+        for (u32 i = 3; i < kMaxModes; i++) {
+            fillMode(modes[i], 640, 480, 60 + i, false);
+        }
+
+        return kMaxModes;
     }
 
     fillMode(modes[0], 1280, 800, 60, true);
@@ -771,7 +790,7 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
         return -ENOENT;
     }
 
-    drm_mode_modeinfo modes[2];
+    drm_mode_modeinfo modes[kMaxModes];
     u32 nModes = connected ? currentModes(modes) : 0;
 
     if (c->modes_ptr && c->count_modes >= nModes) {
