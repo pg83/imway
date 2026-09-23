@@ -1759,6 +1759,8 @@ void DesktopImpl::buildUi(Scene& scene) {
         } else if (!t->maximized && t->maximizedApplied) {
             t->maximizedApplied = false;
             t->restoreRequested = t->restoreW > 0 && t->restoreH > 0;
+            t->restoreFromW = root->geomW();
+            t->restoreFromH = root->geomH();
         }
 
         if (t->restoreRequested) {
@@ -1923,7 +1925,13 @@ void DesktopImpl::buildUi(Scene& scene) {
                 t->desiredW = t->restoreW;
                 t->desiredH = t->restoreH;
 
-                if (root->geomW() == t->restoreW && root->geomH() == t->restoreH) {
+                // done once the client leaves the maximized size, for the
+                // restore size or one it picked itself: held any longer, the
+                // pinned position and size would take the window from the user
+                bool restored = root->geomW() == t->restoreW && root->geomH() == t->restoreH;
+                bool answered = root->geomW() != t->restoreFromW || root->geomH() != t->restoreFromH;
+
+                if (restored || answered) {
                     t->restoreRequested = false;
                 }
             } else if (t->dragW > 0.f) {

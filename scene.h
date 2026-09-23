@@ -330,6 +330,10 @@ struct Toplevel: stl::IntrusiveNode {
     bool restoreRequested = false;
     float restoreX = 0, restoreY = 0;
     int restoreW = 0, restoreH = 0;
+    // the client geometry when the restore began (the maximized size): any
+    // commit that leaves it answers the restore, even with a size of the
+    // client's own choosing
+    int restoreFromW = 0, restoreFromH = 0;
     bool activated = false;
     bool raiseRequested = false;
 
