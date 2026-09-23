@@ -97,11 +97,8 @@ namespace {
         ChaosMonkey* chaos = nullptr;
     };
 
+    // only ever handed the array pamConversation has just checked it got
     void freePamResponses(pam_response* responses, int count) noexcept {
-        if (!responses) {
-            return;
-        }
-
         for (int i = 0; i < count; i++) {
             if (responses[i].resp) {
                 wipe(responses[i].resp, strlen(responses[i].resp));
