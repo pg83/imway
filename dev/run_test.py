@@ -142,6 +142,28 @@ def collect(rt: str, shell_out: str) -> dict[str, str]:
     return arts
 
 
+def symbolize(log: str, binary: str) -> None:
+    """A compositor's crash report carries raw frames (binary(+0xOFF));
+    append their functions and lines while the binary is still at hand, or
+    a crash seen once on a runner names no code at all."""
+    addr2line = shutil.which("addr2line") or shutil.which("llvm-addr2line")
+    try:
+        with open(log, errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return
+    if addr2line is None or "stack follows" not in text:
+        return
+    name = re.escape(os.path.basename(binary))
+    offsets = re.findall(rf"{name}\(\+(0x[0-9a-f]+)\)", text)
+    if not offsets:
+        return
+    cp = subprocess.run([addr2line, "-f", "-C", "-i", "-e", binary] + offsets,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    with open(log, "a") as f:
+        f.write("[runner] crash frames, symbolized:\n" + cp.stdout)
+
+
 def run(imway: str, scenario: str, client: str, meta: dict,
         timeout: float) -> dict:
     name = os.path.basename(scenario)[:-3]
@@ -390,6 +412,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     # ignore it. Nothing from a completed scenario may retain the group.
     signal_group(proc.pid, signal.SIGKILL)
     logf.close()
+    symbolize(log, imway)
 
     def finish(status: str, detail: str = "") -> dict:
         stop_bus()
