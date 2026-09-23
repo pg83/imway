@@ -29,7 +29,12 @@ double parseFloat(stl::StringView s);
 // lowercase hex digits (token halves)
 void hex16(stl::StringBuilder& out, u64 v);
 
+// CLOCK_MONOTONIC in milliseconds, wrapping round zero every 49.7 days:
+// age a stamp by the unsigned difference (u32)(now - then), never by
+// comparing the two
 u32 nowMsec();
+// the same clock in microseconds, 64 bits wide: it never wraps
+u64 nowUsec();
 
 // i32 addition that clamps instead of overflowing: hostile clients feed
 // INT32_MIN/MAX into accumulating protocol values (attach offsets)

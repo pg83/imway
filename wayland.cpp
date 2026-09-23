@@ -8254,6 +8254,7 @@ namespace {
         // a visible bell: the renderer flashes the screen briefly. The
         // surface argument only scopes which window rang; we flash globally
         srv->scene->bellMs = srv->composer->chaos->clockMs(nowMsec());
+        srv->scene->bellLit = true;
         srv->scene->bellCount++;
         srv->scene->needsFrame = true;
     }
@@ -10667,7 +10668,9 @@ void SeatState::handleRelMotion(double dx, double dy, double dxRaw, double dyRaw
         return;
     }
 
-    u64 ut = (u64)srv->composer->chaos->clockMs(nowMsec()) * 1000;
+    // utime is 64 bits of microseconds: the 32-bit millisecond clock
+    // scaled up would run backwards at its wrap
+    u64 ut = nowUsec();
     bool sent = false;
 
     for (wl_resource* r : relPointers) {

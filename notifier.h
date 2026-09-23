@@ -22,7 +22,6 @@ struct Toast: stl::IntrusiveNode {
     bool critical = false; // urgency 2: never expires, accented
     bool onScreen = false;
     bool fromBus = false; // dbus origin -> NotificationClosed is emitted
-    u64 postedMs = 0;
 };
 
 // what a producer hands to post(); replacesId 0 = new

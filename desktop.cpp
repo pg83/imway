@@ -575,7 +575,9 @@ namespace {
         bool settingsToggle = false;
         int shortcutCapture = -1;
         // bar battery widget, /sys-fed; sampled at most once per ~2s
-        u64 statMs = 0;
+        // the millisecond clock at the last stats sample, while statSampled
+        bool statSampled = false;
+        u32 statMs = 0;
         long batPct = -1; // -1 no battery
         bool batDischarging = false;
         Buffer batPath;
@@ -584,7 +586,11 @@ namespace {
         bool calendarToggle = false;
 
         // osd: armed by mixer/backlight changes, fades at the tail
-        u64 osdMs = 0;
+        // the millisecond clock the OSD came up at and how long it stays,
+        // while osdShown
+        bool osdShown = false;
+        u32 osdStartMs = 0;
+        u32 osdForMs = 0;
         int osdKind = 0; // 1 volume, 2 brightness, 3 hdr sdr white
 
         DialogState* wifiState = nullptr;
@@ -649,6 +655,7 @@ namespace {
         void buildUi(Scene& scene);
         void cursorUi(Scene& scene, bool overClient);
         void sampleStats();
+        void showOsd();
         void volumeChanged();
         void wifiChanged();
         void redrawSetting();
@@ -988,7 +995,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
             osdKind = 2;
         }
 
-        osdMs = comp->chaos->clockMs(nowMsec()) + (u64)(comp->settings->osdSeconds() * 1000.f);
+        showOsd();
         scene->needsFrame = true;
         consumed = true;
     }
@@ -1082,12 +1089,21 @@ void DesktopImpl::wifiChanged() {
     scene->needsFrame = true;
 }
 
+// the OSD stays for osd_seconds from now, aged by the unsigned difference
+// from its start: a deadline added onto the 32-bit clock would sit past
+// its wrap and keep the OSD up for 49 days
+void DesktopImpl::showOsd() {
+    osdShown = true;
+    osdStartMs = comp->chaos->clockMs(nowMsec());
+    osdForMs = (u32)(comp->settings->osdSeconds() * 1000.f);
+}
+
 // the volume OSD comes up only here, and this runs only with a mixer:
 // from the volume keys (which require comp->mixer) and from the mixer's
 // own listeners; comp->mixer is set once at startup and never cleared
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
-        osdMs = comp->chaos->clockMs(nowMsec()) + (u64)(comp->settings->osdSeconds() * 1000.f);
+        showOsd();
         osdKind = 1;
     }
 
@@ -1292,12 +1308,14 @@ void DesktopImpl::altTabCommit() {
 }
 
 void DesktopImpl::sampleStats() {
-    u64 now = comp->chaos->clockMs(nowMsec());
+    u32 now = comp->chaos->clockMs(nowMsec());
 
-    if (statMs && now - statMs < 1900) {
+    // ages are unsigned differences: the 32-bit clock wraps round zero
+    if (statSampled && (u32)(now - statMs) < 1900) {
         return;
     }
 
+    statSampled = true;
     statMs = now;
 
     Buffer content;
@@ -1597,13 +1615,13 @@ void DesktopImpl::buildUi(Scene& scene) {
     anrToggle = false;
     settingsToggle = false;
 
-    if (osdMs) {
-        u64 now = comp->chaos->clockMs(nowMsec());
+    if (osdShown) {
+        u32 age = (u32)(comp->chaos->clockMs(nowMsec()) - osdStartMs);
 
-        if (now >= osdMs) {
-            osdMs = 0;
+        if (age >= osdForMs) {
+            osdShown = false;
         } else {
-            float rem = (float)(osdMs - now) / 1000.f;
+            float rem = (float)(osdForMs - age) / 1000.f;
             float fade = settings.osdFadeSeconds();
             float alpha = rem > fade ? 1.f : rem / fade;
 
@@ -2245,9 +2263,8 @@ void DesktopImpl::buildUi(Scene& scene) {
     }
 
     // xdg-system-bell: a brief screen flash on ring, fading over ~150ms
-    if (scene.bellMs && settings.visualBell()) {
-        u64 now = comp->chaos->clockMs(nowMsec());
-        u64 age = now >= scene.bellMs ? now - scene.bellMs : 0;
+    if (scene.bellLit && settings.visualBell()) {
+        u32 age = (u32)(comp->chaos->clockMs(nowMsec()) - scene.bellMs);
         u64 duration = (u64)(settings.visualBellSeconds() * 1000.f);
 
         if (duration && age < duration) {
@@ -2256,7 +2273,7 @@ void DesktopImpl::buildUi(Scene& scene) {
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0.f, 0.f), ImVec2((float)scene.outW, (float)scene.outH), IM_COL32(255, 255, 255, (int)(a * 255.f)));
             scene.needsFrame = true;
         } else {
-            scene.bellMs = 0;
+            scene.bellLit = false;
         }
     }
 
@@ -2308,7 +2325,7 @@ bool DesktopImpl::overlayActive() {
     bool open = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState;
     bool asked = launcherToggle || calendarToggle || wifiToggle || inspectorToggle || historyToggle || logToggle || anrToggle || settingsToggle;
 
-    return open || asked || altTabActive || imguiPopup || osdMs != 0 || pickArmed || pickShow || scene->bellMs != 0 || toastsActive();
+    return open || asked || altTabActive || imguiPopup || osdShown || pickArmed || pickShow || scene->bellLit || toastsActive();
 }
 
 bool DesktopImpl::toastsActive() const {

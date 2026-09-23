@@ -155,7 +155,6 @@ u32 NotifierImpl::post(const Post& p) {
     t->icon.append(p.icon.data(), p.icon.length());
     t->critical = p.critical && c->settings->allowCriticalNotifications();
     t->fromBus = p.fromBus;
-    t->postedMs = nowMsec();
     NotificationPolicy policy = NotificationPolicy::defaultPolicy;
     size_t rules = c->settings->notificationRuleCount();
 

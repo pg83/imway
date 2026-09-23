@@ -58,3 +58,11 @@ u32 nowMsec() {
 
     return (u32)(ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
 }
+
+u64 nowUsec() {
+    timespec ts{};
+
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+
+    return (u64)ts.tv_sec * 1000000 + (u64)ts.tv_nsec / 1000;
+}
