@@ -4780,6 +4780,17 @@ namespace {
         }
     }
 
+    // hands a transfer to the source whatever protocol made it
+    void sourceSend(DataSource* src, const char* mime, i32 fd) {
+        if (src->dc) {
+            ext_data_control_source_v1_send_send(src->res, mime, fd);
+        } else if (src->primary) {
+            zwp_primary_selection_source_v1_send_send(src->res, mime, fd);
+        } else {
+            wl_data_source_send_send(src->res, mime, fd);
+        }
+    }
+
     void offerReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
         Offer* offer = offerFrom(res);
         DataSource* src = offer ? offer->source.get() : nullptr;
@@ -4792,13 +4803,7 @@ namespace {
         }
 
         if (src) {
-            if (src->dc) {
-                ext_data_control_source_v1_send_send(src->res, mime, fd);
-            } else if (src->primary) {
-                zwp_primary_selection_source_v1_send_send(src->res, mime, fd);
-            } else {
-                wl_data_source_send_send(src->res, mime, fd);
-            }
+            sourceSend(src, mime, fd);
         }
 
         close(fd);
@@ -6337,11 +6342,12 @@ namespace {
     // a privileged clipboard manager: no focus, no serials. Sources, offers
     // and the loopback share the DataSource/Offer machinery via the dc flag
     void dcOfferReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
-        Offer* offer = (Offer*)wl_resource_get_user_data(res);
-        DataSource* src = offer ? offer->source.get() : nullptr;
+        auto* offer = (Offer*)wl_resource_get_user_data(res);
 
-        if (src && src->dc) {
-            ext_data_control_source_v1_send_send(src->res, mime, fd);
+        // the clipboard and primary selection of any client, not only a
+        // data-control source, are what a clipboard manager reads
+        if (DataSource* src = offer->source.get()) {
+            sourceSend(src, mime, fd);
         }
 
         close(fd);
