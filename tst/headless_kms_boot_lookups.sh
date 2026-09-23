@@ -30,5 +30,14 @@ boot_has "10-bit scanout failed, retrying 8-bit" "plane modifiers unreadable"
 boot_has "scanout swapchain: 2 images" "plane modifiers unreadable"
 boot_has "clean exit after" "plane modifiers unreadable"
 
+# the cursor plane's property list unreadable right after its type was
+# looked up: a plane of unknown type is not taken for the cursor, and the
+# output runs on the primary plane alone
+kms_boot IMWAY_FAKE_KMS_FAIL_LOOKUPS=props:105:1:1 --
+boot_rc 0 "cursor plane properties unreadable"
+boot_has "kms output: 1280x800@60, connector 101, crtc 103, plane 104" "cursor plane properties unreadable"
+boot_lacks "cursor plane 105" "cursor plane properties unreadable"
+boot_has "clean exit after" "cursor plane properties unreadable"
+
 expect_alive "the scenario's own compositor died"
 echo "OK: failed lookups with a fallback fall back"

@@ -1707,6 +1707,13 @@ int FakeKms::openDevice() {
     const char* commits = getenv("IMWAY_FAKE_KMS_FAIL_COMMITS");
     const char* lookups = getenv("IMWAY_FAKE_KMS_FAIL_LOOKUPS");
 
+    // the connector's link and mode list from boot on, as the kms-connector
+    // and kms-modes verbs set them later
+    const char* link = getenv("IMWAY_FAKE_KMS_CONNECTED");
+    const char* modes = getenv("IMWAY_FAKE_KMS_MODES");
+
+    connected = link ? (int)StringView(link).stou() : 1;
+    modeSet = modes ? (int)StringView(modes).stou() : 0;
     noAsync = getenv("IMWAY_FAKE_KMS_NO_ASYNC") != nullptr;
     parseLookupFaults(lookups ? StringView(lookups) : StringView());
 
