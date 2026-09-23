@@ -1,6 +1,7 @@
 #include "spawn.h"
 
 #include "log.h"
+#include "chaos_monkey.h"
 #include "util.h"
 #include "composer.h"
 
@@ -191,7 +192,7 @@ namespace {
 SpawnerImpl::SpawnerImpl(Composer& c)
     : comp(&c)
 {
-    nullFd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    nullFd = comp->chaos->devNull(open("/dev/null", O_RDWR | O_CLOEXEC));
 
     if (nullFd < 0) {
         *comp->log << "imway: spawn: /dev/null unavailable: "_sv << StringView(strerror(errno)) << endL;

@@ -99,6 +99,9 @@ using namespace stl;
 //                     go out in parts
 //   dbus-recv-limit=N every bus connection holds at most N bytes of
 //                     undispatched messages before it stops reading
+// spawn:
+//   dev-null=N        the next N opens of /dev/null fail with ENOENT, as
+//                     in a chroot or container without one
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -161,6 +164,8 @@ namespace {
         BusRule busRules[8];
         int busSendBuffer = 0;
         long busReceiveLimit = -1;
+        // spawn
+        int devNullFaults = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -212,6 +217,8 @@ namespace {
         DBusMessage* dbusSend(DBusMessage* call) override;
         bool dbusNotify(DBusMessage* sent, bool installed) override;
         void dbusConnection(DBusConnection* conn) override;
+        // spawn
+        int devNull(int fd) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -324,6 +331,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         busSendBuffer = (int)arg.stou();
     } else if (fault == "dbus-recv-limit"_sv) {
         busReceiveLimit = (long)arg.stou();
+    } else if (fault == "dev-null"_sv) {
+        // spawn
+        devNullFaults = (int)arg.stou();
     } else if (fault == "shm-map"_sv) {
         shmMapSkip = (int)arg.stou();
     } else if (fault == "prime-import"_sv) {
@@ -762,6 +772,19 @@ void TestChaosMonkey::dbusConnection(DBusConnection* conn) {
     }
 }
 
+// spawn
+int TestChaosMonkey::devNull(int fd) {
+    if (!spend(devNullFaults)) {
+        return fd;
+    }
+
+    // a real failure already left -1, which close shrugs off
+    close(fd);
+    errno = ENOENT;
+
+    return -1;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -816,6 +839,8 @@ namespace {
         DBusMessage* dbusSend(DBusMessage* call) override;
         bool dbusNotify(DBusMessage* sent, bool installed) override;
         void dbusConnection(DBusConnection* conn) override;
+        // spawn
+        int devNull(int fd) override;
     };
 }
 
@@ -974,6 +999,11 @@ bool IdleChaosMonkey::dbusNotify(DBusMessage*, bool installed) {
 }
 
 void IdleChaosMonkey::dbusConnection(DBusConnection*) {
+}
+
+// spawn
+int IdleChaosMonkey::devNull(int fd) {
+    return fd;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

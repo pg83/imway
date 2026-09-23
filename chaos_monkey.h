@@ -133,5 +133,9 @@ struct ChaosMonkey {
     // incoming queue, so libdbus has to toggle them under backpressure
     virtual void dbusConnection(DBusConnection* conn) = 0;
 
+    // spawn: the /dev/null the spawner opens once for every child's stdio
+    // (or its -1); a replacement failure closes the fd it was handed
+    virtual int devNull(int fd) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
