@@ -365,6 +365,17 @@ static int mode_popups(void) {
         return 1;
     }
 
+    // a popup without a parent (another protocol would give it one) is
+    // accepted and can be torn down again
+    struct wl_surface* orphan = wl_compositor_create_surface(wl_comp);
+    struct xdg_surface* orphan_xs = xdg_wm_base_get_xdg_surface(wl_wm, orphan);
+    struct xdg_popup* orphan_popup = xdg_surface_get_popup(orphan_xs, NULL, positioner(0));
+
+    roundtrip("parentless popup");
+    xdg_popup_destroy(orphan_popup);
+    xdg_surface_destroy(orphan_xs);
+    wl_surface_destroy(orphan);
+    roundtrip("parentless popup destroy");
     // a second wm_base, without surfaces of its own, may go while the first
     // still has them
     struct xdg_wm_base* second_wm = wl_registry_bind(extra, wm_base_name, &xdg_wm_base_interface, 1);
@@ -1682,6 +1693,8 @@ static int mode_dc_offer_limits(void) {
         fprintf(stderr, "a device created with a selection in place got no offer\n");
         return 1;
     }
+    struct ext_data_control_offer_v1* stale = dc_offer;
+
     // a null source clears the selection for every device
     ext_data_control_device_v1_set_selection(dev, NULL);
     roundtrip("clear");
@@ -1689,6 +1702,24 @@ static int mode_dc_offer_limits(void) {
         fprintf(stderr, "a cleared selection still has an offer\n");
         return 1;
     }
+    // an offer whose source is gone delivers nothing: the pipe just closes
+    ext_data_control_source_v1_destroy(src);
+    roundtrip("source destroy");
+
+    int fds[2];
+
+    if (pipe(fds) < 0) return 2;
+    ext_data_control_offer_v1_receive(stale, "text/x-limit-0", fds[1]);
+    close(fds[1]);
+    roundtrip("receive from a dead source");
+
+    char byte;
+
+    if (read(fds[0], &byte, 1) != 0) {
+        fprintf(stderr, "an offer without a source delivered data\n");
+        return 1;
+    }
+    close(fds[0]);
     printf("dc offer limits ok\n");
     return 0;
 }
