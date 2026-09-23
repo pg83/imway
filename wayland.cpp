@@ -8837,11 +8837,10 @@ namespace {
             return;
         }
 
-        if (!n->idled) {
-            n->idled = true;
-            ext_idle_notification_v1_send_idled(n->res);
-        }
-
+        // the timer stops here and only activity(), which clears idled
+        // first, runs it again: a notification fires idle once per quiet
+        n->idled = true;
+        ext_idle_notification_v1_send_idled(n->res);
         ev_timer_stop(l, w);
     }
 
