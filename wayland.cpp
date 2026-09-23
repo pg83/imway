@@ -1510,6 +1510,12 @@ namespace {
         IntrusiveList grabStack; // GrabNode links
         Surface* ptrFocus = nullptr;
         int buttonsDown = 0;
+        // frame edges left to look for the surface under a resting pointer
+        // whose window went away (minimize, unmap). ImGui judges hover off
+        // the previous frame's windows: for one frame the hidden window's
+        // place reads as the ui owning the pointer and the window uncovered
+        // is not hovered yet, so the second edge is the one that finds it
+        int ptrRepickFrames = 0;
 
         double curX = 0, curY = 0;
         Vector<u32> pressedKeys;
@@ -1522,6 +1528,7 @@ namespace {
         Surface* pickInTree(Surface& s);
         Surface* pickPointerTarget();
         void pointerSetFocus(Surface* s, double sx, double sy);
+        void pointerRepick();
 
         void handleMotion(double x, double y);
         void handleButton(u32 button, bool pressed);
@@ -10406,7 +10413,9 @@ Surface* SeatState::pickPointerTarget() {
     }
 
     for (Toplevel* t : each<Toplevel>(srv->scene->toplevels)) {
-        if (!t->mapped || !t->surface) {
+        // a minimized tree stays hovered until a composed frame unhovers it,
+        // and a direct-scanout frame composes nothing
+        if (!t->mapped || t->minimized || !t->surface) {
             continue;
         }
 
@@ -10473,6 +10482,41 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     }
 
     constraintActivate();
+}
+
+// Motion and buttons pick the pointer focus; a window going away under a
+// resting pointer produces neither. At frame edges the pointer leaves a
+// window that minimized under it, and after that or an unmap looks for the
+// surface now beneath it.
+// A held button keeps its implicit grab on the hidden surface, as it would
+// on motion.
+void SeatState::pointerRepick() {
+    if (buttonsDown > 0 || dragClient) {
+        return;
+    }
+
+    Toplevel* t = ptrFocus ? ptrFocus->rootToplevel() : nullptr;
+
+    if (t && t->minimized) {
+        pointerSetFocus(nullptr, 0, 0);
+        ptrRepickFrames = 2;
+    }
+
+    if (ptrRepickFrames == 0) {
+        return;
+    }
+
+    ptrRepickFrames--;
+
+    // while the ui under the pointer owns it there is nothing to pick
+    Surface* target = srv->scene->ptrCaptured ? nullptr : pickPointerTarget();
+
+    if (target) {
+        pointerSetFocus(target, curX - target->imgX, curY - target->imgY);
+        ptrRepickFrames = 0;
+    } else if (ptrRepickFrames > 0) {
+        srv->scene->needsFrame = true;
+    }
 }
 
 void SeatState::constraintActivate() {
@@ -11959,6 +12003,8 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
     if (ptrFocus && ptrFocus->rootToplevel() == t) {
         pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
+        // the frame edges find what the pointer rests on now
+        ptrRepickFrames = 2;
     }
 
     if (kbFocus == t) {
@@ -13464,6 +13510,8 @@ void WaylandImpl::onListen(void* arg) {
     } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized && scene->focusedToplevel->mapped && scene->focusedToplevel.get() != seat.kbFocus) {
         seat.focusToplevel(scene->focusedToplevel.get());
     }
+
+    seat.pointerRepick();
 
     forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
         syncSurfaceOutputs((SurfaceImpl&)surface);

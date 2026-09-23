@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A window with subsurfaces above and below it minimizes with the pointer on
-# a grandchild subsurface: the whole tree stops being hovered, so the next
-# motion in place leaves it; the dock slot brings the window back and the
+# a grandchild subsurface: the pointer leaves the tree without any motion;
+# the dock slot brings the window back and the
 # pointer can enter its subsurfaces again.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
@@ -33,15 +33,9 @@ kill -USR1 "$CLIENT_PID"
 wait_client "minimize requested"
 field_is() { [[ "$(dump_field 'app_id=subsurf-min' "$1")" == "$2" ]]; }
 await 100 field_is minimized 1 || { echo "the window did not minimize"; dump_state; exit 1; }
-# pointer focus is re-picked on motion: a nudge in place, on what is now
-# the desktop, must find no surface of the minimized tree
-left() {
-    ctl "motion $((x + 45)) $((y + 46))"
-    ctl "motion $((x + 46)) $((y + 46))"
-    last_is nothing
-}
-x=$(dump_field 'app_id=subsurf-min' imgx); y=$(dump_field 'app_id=subsurf-min' imgy)
-await 100 left || { echo "the pointer stayed on a subsurface of the minimized window"; cat "$CLIENT_LOG"; exit 1; }
+# the pointer leaves the minimized tree without moving: what is under it
+# now is the desktop
+await 100 last_is nothing || { echo "the pointer stayed on a subsurface of the minimized window"; cat "$CLIENT_LOG"; exit 1; }
 
 # the dock's first slot restores it
 click_at 29 29
