@@ -1686,14 +1686,12 @@ void RendererImpl::shmCopyWork() {
     task.ok = content.endAccess(&content);
 }
 
+// the completion of the pass startShmCopy issued for shmCopyActive: the job
+// only ever runs from an idle state, so each pass has its task
 void RendererImpl::shmCopyDone() {
     ShmCopyTask* task = shmCopyActive;
 
     shmCopyActive = nullptr;
-
-    if (!task) {
-        return;
-    }
 
     ShmState* state = task->state;
     ShmContent* content = task->content.mutPtr();
