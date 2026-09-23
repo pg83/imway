@@ -3,6 +3,7 @@
 #endif
 
 #include <errno.h>
+#include <fcntl.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -456,6 +457,27 @@ int main(int argc, char** argv) {
 
         return expect_error(display, xdg_toplevel_drag_manager_v1_interface.name,
                             XDG_TOPLEVEL_DRAG_MANAGER_V1_ERROR_INVALID_SOURCE);
+    }
+
+    // an ICC profile fd the compositor cannot read from: opened write-only
+    if (!strcmp(argv[1], "colour-icc-write-only")) {
+        char path[512];
+
+        snprintf(path, sizeof(path), "%s/icc-write-only", getenv("XDG_RUNTIME_DIR"));
+
+        int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+
+        if (fd < 0 || write(fd, "icc", 3) != 3) {
+            return 2;
+        }
+
+        struct wp_image_description_creator_icc_v1* icc = wp_color_manager_v1_create_icc_creator(colour);
+
+        wp_image_description_creator_icc_v1_set_icc_file(icc, fd, 0, 3);
+        close(fd);
+
+        return expect_error(display, wp_image_description_creator_icc_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD);
     }
 
     if (!strcmp(argv[1], "colour-primaries-twice")) {

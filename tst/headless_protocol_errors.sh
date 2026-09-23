@@ -30,7 +30,7 @@ for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg i
             colour-primaries-twice colour-bad-luminance colour-surface-dead \
             colour-info-failed colour-create-no-primaries colour-create-lum-before-tf \
             colour-create-cll-over-max colour-create-fall-over-max colour-create-fall-over-cll \
-            colour-set-failed \
+            colour-set-failed colour-icc-write-only \
             screencopy-twice screencopy-not-shm screencopy-narrow screencopy-short \
             screencopy-thin-stride drag-source-reused; do
     "$IMWAY_CLIENT" "$mode" || { echo "the compositor let $mode through"; exit 1; }

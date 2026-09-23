@@ -6,16 +6,10 @@
 
 #define BIG 17000
 
-int main(void) {
-    setvbuf(stdout, NULL, _IOLBF, 0);
-    alarm(20);
-    if (wl_boot()) return 1;
-
-    struct wl_toplevel_ctx top;
-    wl_make_toplevel(&top, "shm-oversize", 200, 150, 0xff20c040);
-
+/* one oversized buffer committed, then the window remapped at its size */
+static int oversize(struct wl_toplevel_ctx* top, int w, int h) {
     /* a sparse memfd: the pool is huge on paper, no pages behind it */
-    size_t stride = (size_t)BIG * 4, size = stride * BIG;
+    size_t stride = (size_t)w * 4, size = stride * h;
     int fd = memfd_create("oversize-shm", 0);
     if (fd < 0 || ftruncate(fd, size) < 0) {
         perror("oversize memfd");
@@ -24,13 +18,13 @@ int main(void) {
 
     struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, size);
     struct wl_buffer* buf =
-        wl_shm_pool_create_buffer(pool, 0, BIG, BIG, stride, WL_SHM_FORMAT_XRGB8888);
+        wl_shm_pool_create_buffer(pool, 0, w, h, stride, WL_SHM_FORMAT_XRGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
 
-    wl_surface_attach(top.surface, buf, 0, 0);
-    wl_surface_damage(top.surface, 0, 0, BIG, BIG);
-    wl_surface_commit(top.surface);
+    wl_surface_attach(top->surface, buf, 0, 0);
+    wl_surface_damage(top->surface, 0, 0, w, h);
+    wl_surface_commit(top->surface);
 
     if (wl_display_roundtrip(wl_dpy) < 0) {
         fprintf(stderr, "connection died on an oversized shm commit\n");
@@ -39,15 +33,31 @@ int main(void) {
 
     /* Rejected content unmaps the xdg_surface.  Commit its new initial state,
      * then wait for and acknowledge the fresh configure before remapping. */
-    wl_surface_commit(top.surface);
+    wl_surface_commit(top->surface);
     if (wl_display_roundtrip(wl_dpy) < 0) return 1;
 
     /* a normal remap afterwards must still work */
-    wl_surface_attach(top.surface, wl_solid(200, 150, 0xff20c040), 0, 0);
-    wl_surface_damage(top.surface, 0, 0, 200, 150);
-    wl_surface_commit(top.surface);
+    wl_surface_attach(top->surface, wl_solid(200, 150, 0xff20c040), 0, 0);
+    wl_surface_damage(top->surface, 0, 0, 200, 150);
+    wl_surface_commit(top->surface);
     if (wl_display_roundtrip(wl_dpy) < 0) return 1;
 
+    return 0;
+}
+
+int main(void) {
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    alarm(20);
+    if (wl_boot()) return 1;
+
+    struct wl_toplevel_ctx top;
+    wl_make_toplevel(&top, "shm-oversize", 200, 150, 0xff20c040);
+
+    if (oversize(&top, BIG, BIG)) return 1;
     printf("oversize survived\n");
+
+    /* within the limit across, beyond it down */
+    if (oversize(&top, 4, BIG)) return 1;
+    printf("tall survived\n");
     return 0;
 }
