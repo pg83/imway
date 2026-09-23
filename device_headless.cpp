@@ -128,8 +128,6 @@ namespace {
 
     struct HeadlessDevice: public Device {
         Composer* c = nullptr;
-        ObjPool* pool = nullptr;
-        struct ev_loop* loop = nullptr;
         DeviceVk* vk = nullptr;
         Vector<DmabufFormat> formats;
         int syncFd = -1;
@@ -402,10 +400,8 @@ void HeadlessOutput::present(const void*) {
 
 HeadlessDevice::HeadlessDevice(Composer& comp)
     : c(&comp)
-    , pool(comp.pool)
-    , loop(comp.loop)
 {
-    vk = pool->make<DeviceVk>(*c->log, *c->chaos, -1);
+    vk = c->pool->make<DeviceVk>(*c->log, *c->chaos, -1);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) {
@@ -469,7 +465,7 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
 
             int fd = primeFd;
 
-            pooledGuard(*pool, [fd] {
+            pooledGuard(*c->pool, [fd] {
                 close(fd);
             });
         }
@@ -519,7 +515,7 @@ void HeadlessDevice::dmabufFormatsImpl(VisitorFace&& vis) {
         STD_VERIFY(m.parse(modeStr));
     }
 
-    return pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, config);
+    return c->pool->make<HeadlessOutput>(*c, m.w, m.h, m.hz > 0 ? m.hz : 60.0, config);
 }
 
 Renderer* HeadlessDevice::createRenderer(Composer& c, int framesLimit) {

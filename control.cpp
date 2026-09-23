@@ -148,9 +148,6 @@ namespace {
     // pool die first — watcher stop, fd close, fifo unlink, then the impl
     struct ControlImpl: public Control {
         Composer* comp = nullptr;
-        struct ev_loop* loop = nullptr;
-        Renderer* renderer = nullptr;
-        Scene* scene = nullptr;
         int* fd = nullptr;
         ev_io* io = nullptr;
         Buffer path;
@@ -206,9 +203,6 @@ namespace {
 
 ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     : comp(&c)
-    , loop(c.loop)
-    , renderer(c.renderer)
-    , scene(c.scene)
 {
     path.append(fifoPath.data(), fifoPath.length());
     unlink(path.cStr());
@@ -233,7 +227,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     });
 
     io = pool.make<ev_io>();
-    struct ev_loop* heldLoop = loop;
+    struct ev_loop* heldLoop = comp->loop;
     ev_io* heldIo = io;
 
     pooledGuard(pool, [heldLoop, heldIo] {
@@ -247,7 +241,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
 
     evIoInit(io, controlIoCb, *fd, EV_READ);
     io->data = this;
-    ev_io_start(loop, io);
+    ev_io_start(comp->loop, io);
     *(comp->log) << "imway: control FIFO: "_sv << sv(path) << endL;
 }
 
@@ -478,9 +472,9 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "frame"_sv) {
         // a composed frame of everything sent before, without a readback:
         // the barrier a scenario needs before input that must meet it
-        renderer->composeNow();
+        comp->renderer->composeNow();
     } else if (verb == "screenshot"_sv) {
-        renderer->screenshot(args);
+        comp->renderer->screenshot(args);
         *(comp->log) << "imway: screenshot by command: "_sv << args << endL;
     } else if (verb == "sdr-white"_sv) {
         comp->output->setSdrWhite(parseFloat(args));
@@ -552,8 +546,8 @@ void ControlImpl::handleLine(StringView cmd) {
     } else if (verb == "render-fault"_sv) {
         // injects a renderer-attributed client fault: the real producers
         // (device OOM on a client-sized texture) cannot fire in a scenario
-        scene->renderFaults.pushBack(args.stou());
-        scene->needsFrame = true;
+        comp->scene->renderFaults.pushBack(args.stou());
+        comp->scene->needsFrame = true;
     } else if (verb == "gpu-fatal"_sv) {
         // exercises the death policy end to end: the log line, the prompt
         // exit, no hang
@@ -625,7 +619,7 @@ void ControlImpl::handleLine(StringView cmd) {
 
         comp->scene->needsFrame = true;
     } else if (verb == "quit"_sv) {
-        ev_break(loop, EVBREAK_ALL);
+        ev_break(comp->loop, EVBREAK_ALL);
     } else {
         *(comp->log) << "imway: unknown command: "_sv << cmd << endL;
     }
@@ -644,11 +638,11 @@ void ControlImpl::dumpState(StringView outPath) {
     Buffer output;
     StringBuilder out((Buffer&&)output);
 
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+    forEach<Toplevel>(comp->scene->toplevels, [&](Toplevel& t) {
         Surface* s = t.surface.get();
         Icon* icon = t.icon(*comp, dumpIconSize);
 
-        out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(scene->focusedToplevel.get() == &t) << " unresponsive="_sv << (int)t.unresponsive << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
+        out << "toplevel id="_sv << t.id << " mapped="_sv << (int)t.mapped << " csd="_sv << (int)t.csd << " fullscreen="_sv << (int)t.fullscreen << " minimized="_sv << (int)t.minimized << " maximized="_sv << (int)t.maximized << " activated="_sv << (int)t.activated << " docked="_sv << (int)t.docked << " modal="_sv << (int)t.modal << " focused="_sv << (int)(comp->scene->focusedToplevel.get() == &t) << " unresponsive="_sv << (int)t.unresponsive << " focus_seq="_sv << t.focusedAt << " x="_sv << (int)t.curX << " y="_sv << (int)t.curY << " w="_sv << (int)t.applyW << " h="_sv << (int)t.applyH;
 
         if (s) {
             out << " imgx="_sv << (int)s->imgX << " imgy="_sv << (int)s->imgY << " client_w="_sv << s->geomW() << " client_h="_sv << s->geomH() << " content_type="_sv << s->contentType << " tearing="_sv << (int)s->tearingAsync;
@@ -657,7 +651,7 @@ void ControlImpl::dumpState(StringView outPath) {
         out << " parent="_sv << (t.parent ? t.parent->id : 0) << " icon_gen="_sv << (icon ? icon->gen : 0) << " icon_w="_sv << (icon ? icon->width : 0) << " tag="_sv << sv(t.tag) << " app_id="_sv << sv(t.appId) << " title="_sv << sv(t.title) << "\n"_sv;
     });
 
-    forEach<Popup>(scene->popups, [&](Popup& p) {
+    forEach<Popup>(comp->scene->popups, [&](Popup& p) {
         Surface* s = p.surface.get();
 
         out << "popup mapped="_sv << (int)p.mapped << " grab="_sv << (int)p.grab << " x="_sv << p.x << " y="_sv << p.y;
@@ -705,7 +699,7 @@ void ControlImpl::dumpState(StringView outPath) {
 
     // the session-bus peers' models: each window's global menu, each tray
     // item (its pixmap as the dock resolves it) and its menu
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+    forEach<Toplevel>(comp->scene->toplevels, [&](Toplevel& t) {
         Surface* s = t.surface.get();
 
         if (s && s->appMenu) {
@@ -741,37 +735,37 @@ void ControlImpl::dumpState(StringView outPath) {
             out << "wifinet strength="_sv << n.strength << " connected="_sv << (int)n.connected << " known="_sv << (int)n.known << " type="_sv << sv(n.type) << " path="_sv << sv(n.path) << " name="_sv << sv(n.name) << "\n"_sv;
         });
     }
-    out << "bar app_id="_sv << StringView(scene->barAppId[0] ? scene->barAppId : "-") << "\n"_sv;
-    out << "battery pct="_sv << (i64)scene->batteryPct << " discharging="_sv << (int)scene->batteryDischarging << "\n"_sv;
+    out << "bar app_id="_sv << StringView(comp->scene->barAppId[0] ? comp->scene->barAppId : "-") << "\n"_sv;
+    out << "battery pct="_sv << (i64)comp->scene->batteryPct << " discharging="_sv << (int)comp->scene->batteryDischarging << "\n"_sv;
     // the level the volume keys step from, in whole percent
     if (comp->mixer) {
         out << "mixer volume="_sv << (i64)(comp->mixer->volume() * 100.f + .5f) << " muted="_sv << (int)comp->mixer->muted() << "\n"_sv;
     }
-    out << "wifi glyph x0="_sv << (int)scene->wifiGlyph[0] << " y0="_sv << (int)scene->wifiGlyph[1] << " x1="_sv << (int)scene->wifiGlyph[2] << " y1="_sv << (int)scene->wifiGlyph[3] << "\n"_sv;
-    out << "focus id="_sv << (scene->focusedToplevel ? scene->focusedToplevel->id : 0) << "\n"_sv;
+    out << "wifi glyph x0="_sv << (int)comp->scene->wifiGlyph[0] << " y0="_sv << (int)comp->scene->wifiGlyph[1] << " x1="_sv << (int)comp->scene->wifiGlyph[2] << " y1="_sv << (int)comp->scene->wifiGlyph[3] << "\n"_sv;
+    out << "focus id="_sv << (comp->scene->focusedToplevel ? comp->scene->focusedToplevel->id : 0) << "\n"_sv;
     // the cached indicator and the live xkb group: they are refreshed on
     // different events, so a scenario can tell a stale indicator from a
     // group that really did not move
-    out << "layout "_sv << StringView(scene->layout) << " group="_sv << (int)comp->kb->activeLayout() << " count="_sv << (int)comp->kb->layoutCount() << "\n"_sv;
-    out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
-    out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
-    out << "bell count="_sv << scene->bellCount << "\n"_sv;
+    out << "layout "_sv << StringView(comp->scene->layout) << " group="_sv << (int)comp->kb->activeLayout() << " count="_sv << (int)comp->kb->layoutCount() << "\n"_sv;
+    out << "captured kb="_sv << (int)comp->scene->kbCaptured << " ptr="_sv << (int)comp->scene->ptrCaptured << "\n"_sv;
+    out << "scanout candidate="_sv << comp->scene->scanoutCandidateId << "\n"_sv;
+    out << "bell count="_sv << comp->scene->bellCount << "\n"_sv;
     // the millisecond clock as the bell and the OSD read it
     out << "clock ms="_sv << comp->chaos->clockMs(nowMsec()) << "\n"_sv;
-    out << "frames done="_sv << scene->framesDone << "\n"_sv;
+    out << "frames done="_sv << comp->scene->framesDone << "\n"_sv;
 
     if (comp->kmsIntercept) {
         // delivered page-flip events: the fake device's ground truth for
         // frames that actually reached the screen
         out << "kms flips="_sv << comp->kmsIntercept->flips() << " fbs="_sv << comp->kmsIntercept->liveFbs() << " gems="_sv << comp->kmsIntercept->liveGems() << "\n"_sv;
     }
-    out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << " drawn="_sv << (int)scene->cursorDrawn << "\n"_sv;
-    out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;
+    out << "cursor shape="_sv << (int)comp->scene->cursorShape << " surface="_sv << (int)(comp->scene->cursorSurface != nullptr) << " drawn="_sv << (int)comp->scene->cursorDrawn << "\n"_sv;
+    out << "ime popup="_sv << (int)(comp->scene->imePopup.get() != nullptr) << " x="_sv << (int)comp->scene->imePopupX << " y="_sv << (int)comp->scene->imePopupY << "\n"_sv;
 
     const HdrOutputMetadata& metadata = comp->output->hdrMetadata();
 
     out << "hdr metadata="_sv << (int)metadata.hdr << " min="_sv << metadata.minNits << " max="_sv << metadata.maxNits << " max_cll="_sv << metadata.maxCll << " max_fall="_sv << metadata.maxFall << "\n"_sv;
-    out << "color_intermediate_bytes="_sv << renderer->colorIntermediateBytes() << "\n"_sv;
+    out << "color_intermediate_bytes="_sv << comp->renderer->colorIntermediateBytes() << "\n"_sv;
 
     out.xchg(output);
     Buffer tmpPath;
@@ -832,7 +826,7 @@ void ControlImpl::handleInput() {
 }
 
 void ControlImpl::reopen() {
-    ev_io_stop(loop, io);
+    ev_io_stop(comp->loop, io);
 
     if (*fd >= 0) {
         close(*fd);
@@ -845,7 +839,7 @@ void ControlImpl::reopen() {
     }
 
     evIoSet(io, *fd, EV_READ);
-    ev_io_start(loop, io);
+    ev_io_start(comp->loop, io);
 }
 
 Control* Control::create(Composer& c, StringView fifoPath) {

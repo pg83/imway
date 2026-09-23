@@ -601,8 +601,6 @@ namespace {
         // ddc/ci brightness for external monitors (VCP 0x10 over the
         // connector's i2c bus); writes coalesce through ddcTimer because the
         // link needs ~50ms between transactions and a slider drags faster
-        ObjPool* pool = nullptr;
-        struct ev_loop* loop = nullptr;
         int ddcFd = -1;
 
         // imported drm framebuffers for direct-scanout client dmabufs,
@@ -847,9 +845,6 @@ namespace {
 
     struct KmsDevice: public Device {
         Composer* c = nullptr;
-        ObjPool* pool = nullptr;
-        struct ev_loop* loop = nullptr;
-        Session* session = nullptr;
         int fd = -1;
         Buffer path;
         DeviceVk* vk = nullptr;
@@ -943,15 +938,12 @@ namespace {
 
 KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     : c(&comp)
-    , pool(comp.pool)
-    , loop(comp.loop)
-    , session(comp.session)
 {
-    fd = openKmsNode(*session, devPath, path, comp.kmsIntercept);
-    Session* heldSession = session;
+    fd = openKmsNode(*c->session, devPath, path, comp.kmsIntercept);
+    Session* heldSession = c->session;
     int heldFd = fd;
 
-    pooledGuard(*pool, [heldSession, heldFd] {
+    pooledGuard(*c->pool, [heldSession, heldFd] {
         heldSession->closeDevice(heldFd);
     });
 
@@ -964,7 +956,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
-    vk = pool->make<DeviceVk>(*comp.log, *comp.chaos, fd);
+    vk = c->pool->make<DeviceVk>(*comp.log, *comp.chaos, fd);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) {
@@ -972,25 +964,25 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         });
     }
 
-    ev_io* drmIo = pool->make<ev_io>();
+    ev_io* drmIo = c->pool->make<ev_io>();
 
-    struct ev_loop* heldLoop = loop;
+    struct ev_loop* heldLoop = c->loop;
 
     // libev's stop functions return early on an inactive watcher, which a
     // zeroed pool object is until started
-    pooledGuard(*pool, [heldLoop, drmIo] {
+    pooledGuard(*c->pool, [heldLoop, drmIo] {
         ev_io_stop(heldLoop, drmIo);
     });
     evIoInit(drmIo, drmIoCb, fd, EV_READ);
     drmIo->data = (void*)(intptr_t)fd;
-    ev_io_start(loop, drmIo);
+    ev_io_start(c->loop, drmIo);
 
     ud = udev_new();
 
     if (ud) {
         udev* held = ud;
 
-        pooledGuard(*pool, [held] {
+        pooledGuard(*c->pool, [held] {
             udev_unref(held);
         });
 
@@ -1001,19 +993,19 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     if (mon) {
         udev_monitor* held = mon;
 
-        pooledGuard(*pool, [held] {
+        pooledGuard(*c->pool, [held] {
             udev_monitor_unref(held);
         });
         udev_monitor_filter_add_match_subsystem_devtype(mon, "drm", nullptr);
         udev_monitor_enable_receiving(mon);
-        ev_io* udevIo = pool->make<ev_io>();
+        ev_io* udevIo = c->pool->make<ev_io>();
 
-        pooledGuard(*pool, [heldLoop, udevIo] {
+        pooledGuard(*c->pool, [heldLoop, udevIo] {
             ev_io_stop(heldLoop, udevIo);
         });
         evIoInit(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
         udevIo->data = this;
-        ev_io_start(loop, udevIo);
+        ev_io_start(c->loop, udevIo);
     }
 
     *(c->log) << "imway: device "_sv << sv(path) << endL;
@@ -1235,7 +1227,7 @@ void KmsDevice::revokeLease(u32 lesseeId) {
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, const OutputConfiguration& config) {
-    output = pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, config);
+    output = c->pool->make<KmsOutput>(*c, fd, vk, connector, modeStr, config);
     outputConnectorId = output->connectorId;
 
     return output;
@@ -1394,8 +1386,6 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     : c(&c)
     , fd(drmFd)
     , vk(v)
-    , pool(c.pool)
-    , loop(c.loop)
     , gemHandles(c.pool)
     , config(outputConfig)
 {
@@ -2752,16 +2742,16 @@ void KmsOutput::initDdc(StringView connName) {
     ddcCur = cur;
     int heldFd = ddcFd;
 
-    pooledGuard(*pool, [heldFd] {
+    pooledGuard(*c->pool, [heldFd] {
         close(heldFd);
     });
 
-    ddcTimer = pool->make<ev_timer>();
-    struct ev_loop* heldLoop = loop;
+    ddcTimer = c->pool->make<ev_timer>();
+    struct ev_loop* heldLoop = c->loop;
     ev_timer* heldTimer = ddcTimer;
 
     // stopping an inactive timer is a no-op in libev
-    pooledGuard(*pool, [heldLoop, heldTimer] {
+    pooledGuard(*c->pool, [heldLoop, heldTimer] {
         ev_timer_stop(heldLoop, heldTimer);
     });
     *(c->log) << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
@@ -2865,7 +2855,7 @@ void KmsOutput::setBrightness(float v) {
             ddcTimerOn = true;
             evTimerInit(ddcTimer, ddcTimerCb, 0.06, 0.);
             ddcTimer->data = this;
-            ev_timer_start(loop, ddcTimer);
+            ev_timer_start(c->loop, ddcTimer);
         }
 
         return;

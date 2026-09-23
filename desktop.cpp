@@ -561,10 +561,6 @@ namespace {
 namespace {
     struct DesktopImpl: Desktop, InputSink, Listener {
         Composer* comp = nullptr;
-        Scene* scene = nullptr;
-        ::Output* output = nullptr;
-        Renderer* renderer = nullptr;
-        Notifier* notifier = nullptr;
 
         float appliedUiScale = 1.f;
         u64 themeRevision = 0;
@@ -745,17 +741,17 @@ void DesktopImpl::drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale
 }
 
 void DesktopImpl::clampPos() {
-    posX = posX < 0 ? 0 : posX >= scene->outW ? scene->outW - 1 : posX;
-    posY = posY < 0 ? 0 : posY >= scene->outH ? scene->outH - 1 : posY;
+    posX = posX < 0 ? 0 : posX >= comp->scene->outW ? comp->scene->outW - 1 : posX;
+    posY = posY < 0 ? 0 : posY >= comp->scene->outH ? comp->scene->outH - 1 : posY;
 
-    if (!scene->pointerConfined || scene->confineRegion.empty()) {
+    if (!comp->scene->pointerConfined || comp->scene->confineRegion.empty()) {
         return;
     }
 
     double bestX = posX, bestY = posY;
     double bestDist = -1;
 
-    for (const RectI& r : scene->confineRegion) {
+    for (const RectI& r : comp->scene->confineRegion) {
         double x0 = r.x, y0 = r.y;
         double x1 = (double)r.x + r.w - 1;
         double y1 = (double)r.y + r.h - 1;
@@ -777,15 +773,15 @@ void DesktopImpl::clampPos() {
 
 bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
     if (ev.kind == PointerMotionKind::relative) {
-        if (!scene->pointerLocked) {
+        if (!comp->scene->pointerLocked) {
             ev.x = posX + ev.dx;
             ev.y = posY + ev.dy;
             ev.moved = true;
         }
     } else if (ev.kind == PointerMotionKind::absolute) {
-        if (!scene->pointerLocked) {
-            ev.x *= scene->outW;
-            ev.y *= scene->outH;
+        if (!comp->scene->pointerLocked) {
+            ev.x *= comp->scene->outW;
+            ev.y *= comp->scene->outH;
             ev.moved = true;
         }
     } else {
@@ -799,10 +795,10 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
         clampPos();
         ev.x = posX;
         ev.y = posY;
-        scene->needsFrame = true;
+        comp->scene->needsFrame = true;
         ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
-        renderer->cursorPlaneMove(posX, posY);
+        comp->renderer->cursorPlaneMove(posX, posY);
     }
 
     return lockState != nullptr;
@@ -810,7 +806,7 @@ bool DesktopImpl::pointerMotion(PointerMotionEvent& ev) {
 
 bool DesktopImpl::button(u32 btn, bool pressed) {
     inputActivity();
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 
     if (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) {
         ImGui::GetIO().AddMouseButtonEvent(btn == BTN_LEFT ? 0 : btn == BTN_RIGHT ? 1 : 2, pressed);
@@ -825,7 +821,7 @@ bool DesktopImpl::button(u32 btn, bool pressed) {
 
         // the picker being armed kept composition on, so the last frame is
         // readable; one synchronous readback on a click is fine
-        if (renderer->readPixel((int)posX, (int)posY, pickR, pickG, pickB)) {
+        if (comp->renderer->readPixel((int)posX, (int)posY, pickR, pickG, pickB)) {
             pickShow = true;
 
             static const char hx[] = "0123456789abcdef";
@@ -836,23 +832,23 @@ bool DesktopImpl::button(u32 btn, bool pressed) {
             p.app = "color picker"_sv;
             p.summary = "color picked"_sv;
             p.body = StringView(h); // copied by post() before h dies
-            notifier->post(p);
+            comp->notifier->post(p);
         }
 
-        scene->needsFrame = true;
+        comp->scene->needsFrame = true;
 
         return true;
     }
 
-    return (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) && pressed && scene->ptrCaptured;
+    return (btn == BTN_LEFT || btn == BTN_RIGHT || btn == BTN_MIDDLE) && pressed && comp->scene->ptrCaptured;
 }
 
 bool DesktopImpl::scroll(const ScrollEvent& ev) {
     inputActivity();
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
     ImGui::GetIO().AddMouseWheelEvent((float)-ev.dx, (float)-ev.dy);
 
-    return lockState || scene->ptrCaptured;
+    return lockState || comp->scene->ptrCaptured;
 }
 
 bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
@@ -863,10 +859,10 @@ bool DesktopImpl::tabletTool(const TabletToolEvent& ev) {
     posX = ev.x;
     posY = ev.y;
     clampPos();
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
     ImGui::GetIO().AddMousePosEvent((float)posX, (float)posY);
 
-    renderer->cursorPlaneMove(posX, posY);
+    comp->renderer->cursorPlaneMove(posX, posY);
 
     return lockState != nullptr;
 }
@@ -946,7 +942,7 @@ bool DesktopImpl::holdEnd(bool) {
 
 bool DesktopImpl::key(u32 code, bool pressed) {
     inputActivity();
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 
     comp->kb->updateKey(code, pressed);
 
@@ -983,19 +979,19 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         }
     }
 
-    if (!locked && pressed && (output->hasBrightness() || output->colorState().hdr()) && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
+    if (!locked && pressed && (comp->output->hasBrightness() || comp->output->colorState().hdr()) && (code == KEY_BRIGHTNESSUP || code == KEY_BRIGHTNESSDOWN)) {
         bool up = code == KEY_BRIGHTNESSUP;
 
-        if (output->colorState().hdr()) {
-            output->setSdrWhite(output->colorState().sdrWhiteNits + (up ? comp->settings->hdrStepNits() : -comp->settings->hdrStepNits()));
+        if (comp->output->colorState().hdr()) {
+            comp->output->setSdrWhite(comp->output->colorState().sdrWhiteNits + (up ? comp->settings->hdrStepNits() : -comp->settings->hdrStepNits()));
             osdKind = 3;
         } else {
-            output->setBrightness(output->brightness() + (up ? comp->settings->brightnessStep() : -comp->settings->brightnessStep()));
+            comp->output->setBrightness(comp->output->brightness() + (up ? comp->settings->brightnessStep() : -comp->settings->brightnessStep()));
             osdKind = 2;
         }
 
         showOsd();
-        scene->needsFrame = true;
+        comp->scene->needsFrame = true;
         consumed = true;
     }
 
@@ -1021,14 +1017,14 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     if (!locked && altTabActive && !pressed && (code == KEY_LEFTALT || code == KEY_RIGHTALT)) {
         altTabActive = false;
         altTabSel.reset();
-        scene->needsFrame = true;
+        comp->scene->needsFrame = true;
     }
 
-    if (!locked && !consumed && !scene->shortcutsInhibited && code < 256) {
+    if (!locked && !consumed && !comp->scene->shortcutsInhibited && code < 256) {
         if (altTabActive && pressed && comp->kb->keysymBase(code) == XKB_KEY_Escape) {
             altTabActive = false;
             altTabSel.reset();
-            scene->needsFrame = true;
+            comp->scene->needsFrame = true;
             chordDown[code] = true;
             consumed = true;
         }
@@ -1052,7 +1048,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     ImGuiIO& io = ImGui::GetIO();
     bool capture = launcherState || altTabActive || io.WantTextInput;
 
-    scene->kbCaptured = locked || capture;
+    comp->scene->kbCaptured = locked || capture;
 
     // Super+L creates the lock while this key is being handled. Do not feed
     // the activating L into the password field.
@@ -1085,7 +1081,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
 }
 
 void DesktopImpl::wifiChanged() {
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 // the OSD stays for osd_seconds from now, aged by the unsigned difference
@@ -1106,7 +1102,7 @@ void DesktopImpl::volumeChanged() {
         osdKind = 1;
     }
 
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::applyNightLight() {
@@ -1127,16 +1123,16 @@ void DesktopImpl::applyNightLight() {
         enabled = enabled || scheduled;
     }
 
-    output->setColorTemp(enabled ? settings.nightK() : 0);
+    comp->output->setColorTemp(enabled ? settings.nightK() : 0);
 }
 
 void DesktopImpl::redrawSetting() {
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::sdrSettingChanged() {
-    output->setSdrWhite(comp->settings->sdrNits());
-    scene->needsFrame = true;
+    comp->output->setSdrWhite(comp->settings->sdrNits());
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::nightSettingChanged() {
@@ -1148,7 +1144,7 @@ void DesktopImpl::nightSettingChanged() {
         ev_timer_start(comp->loop, &nightTimer);
     }
 
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::themeSettingChanged() {
@@ -1161,7 +1157,7 @@ void DesktopImpl::themeSettingChanged() {
     }
 
     comp->theme.setSeeds(neutral, comp->settings->selection());
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::updateAutoLock() {
@@ -1185,7 +1181,7 @@ void DesktopImpl::lock() {
     }
 
     ev_timer_stop(comp->loop, &autoLockTimer);
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::gestureAction(GestureAction action) {
@@ -1216,7 +1212,7 @@ void DesktopImpl::gestureAction(GestureAction action) {
             break;
     }
 
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 bool DesktopImpl::chordAction(u32 mask, u32 sym) {
@@ -1229,7 +1225,7 @@ bool DesktopImpl::chordAction(u32 mask, u32 sym) {
 
         switch (binding.action) {
             case ShortcutAction::screenshot:
-                renderer->captureScreenshot();
+                comp->renderer->captureScreenshot();
                 break;
             case ShortcutAction::lock:
                 lock();
@@ -1237,11 +1233,11 @@ bool DesktopImpl::chordAction(u32 mask, u32 sym) {
             case ShortcutAction::launcher:
                 launcherX = launcherY = -1.f;
                 launcherToggle = true;
-                scene->needsFrame = true;
+                comp->scene->needsFrame = true;
                 break;
             case ShortcutAction::inspector:
                 inspectorToggle = true;
-                scene->needsFrame = true;
+                comp->scene->needsFrame = true;
                 break;
             case ShortcutAction::altTabNext:
                 altTabStep(1);
@@ -1258,13 +1254,13 @@ bool DesktopImpl::chordAction(u32 mask, u32 sym) {
 }
 
 void DesktopImpl::altTabStep(long dir) {
-    IntrusiveList& tls = scene->toplevels;
+    IntrusiveList& tls = comp->scene->toplevels;
 
     if (tls.empty()) {
         return;
     }
 
-    Toplevel* base = altTabActive && altTabSel.get() ? altTabSel.get() : scene->focusedToplevel.get();
+    Toplevel* base = altTabActive && altTabSel.get() ? altTabSel.get() : comp->scene->focusedToplevel.get();
     // a circular walk over the ring; the base (or the head sentinel when
     // there is no base) both starts and bounds it, and gets re-tested last
     // so a lone mapped window still selects itself
@@ -1291,7 +1287,7 @@ void DesktopImpl::altTabStep(long dir) {
         if (t->mapped) {
             altTabActive = true;
             altTabSel.bind(t->weak);
-            scene->needsFrame = true;
+            comp->scene->needsFrame = true;
 
             return;
         }
@@ -1303,7 +1299,7 @@ void DesktopImpl::altTabCommit() {
         altTabSel->raiseRequested = true;
     }
 
-    scene->needsFrame = true;
+    comp->scene->needsFrame = true;
 }
 
 void DesktopImpl::sampleStats() {
@@ -1607,7 +1603,7 @@ void DesktopImpl::buildUi(Scene& scene) {
         wifiToggle = false;
     }
 
-    drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
+    drawToasts(*comp, *comp->notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
 
     drawSettings(*comp, settings, settingsToggle, shortcutCapture, &settingsState);
     drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
@@ -1627,10 +1623,10 @@ void DesktopImpl::buildUi(Scene& scene) {
             if (osdKind == 1) {
                 drawOsd(scene.outW, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
             } else if (osdKind == 2) {
-                drawOsd(scene.outW, uiScale, "brightness"_sv, output->brightness(), false, alpha);
-            } else if (output->colorState().hdr()) {
+                drawOsd(scene.outW, uiScale, "brightness"_sv, comp->output->brightness(), false, alpha);
+            } else if (comp->output->colorState().hdr()) {
                 // kind 3, the hdr sdr-white step: gone if hdr went off under it
-                drawOsd(scene.outW, uiScale, "hdr"_sv, (float)(output->colorState().sdrWhiteNits / output->colorState().displayPeakNits), false, alpha);
+                drawOsd(scene.outW, uiScale, "hdr"_sv, (float)(comp->output->colorState().sdrWhiteNits / comp->output->colorState().displayPeakNits), false, alpha);
             }
 
             scene.needsFrame = true;
@@ -1640,7 +1636,7 @@ void DesktopImpl::buildUi(Scene& scene) {
     {
         InspectorInfo info;
 
-        renderer->inspectorInfo(info);
+        comp->renderer->inspectorInfo(info);
         drawInspector(*comp, info, inspectorToggle, &inspectorState);
         inspectorToggle = false;
     }
@@ -2000,7 +1996,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
             ImVec2 origin = ImGui::GetCursorScreenPos();
 
-            renderer->drawSurfaceTree(*root, origin.x, origin.y);
+            comp->renderer->drawSurfaceTree(*root, origin.x, origin.y);
 
         } else {
             t->tabHidden = true;
@@ -2077,18 +2073,18 @@ void DesktopImpl::buildUi(Scene& scene) {
                 markTreeUnhovered(*ps);
             }
         } else {
-            renderer->drawSurfaceTreeOverlay(*ps, p.parent->imgX + (float)p.parent->geomX() + (float)p.x, p.parent->imgY + (float)p.parent->geomY() + (float)p.y);
+            comp->renderer->drawSurfaceTreeOverlay(*ps, p.parent->imgX + (float)p.parent->geomX() + (float)p.x, p.parent->imgY + (float)p.parent->geomY() + (float)p.y);
         }
     });
 
     if (scene.dragIcon && scene.dragIcon->texture) {
         ImVec2 mp = ImGui::GetMousePos();
 
-        renderer->drawSurfaceTreeOverlay(*scene.dragIcon.get(), mp.x + 4, mp.y + 4);
+        comp->renderer->drawSurfaceTreeOverlay(*scene.dragIcon.get(), mp.x + 4, mp.y + 4);
     }
 
     if (scene.imePopup && scene.imePopup->texture) {
-        renderer->drawSurfaceTreeOverlay(*scene.imePopup.get(), scene.imePopupX, scene.imePopupY);
+        comp->renderer->drawSurfaceTreeOverlay(*scene.imePopup.get(), scene.imePopupX, scene.imePopupY);
     }
 
     bool overClient = false;
@@ -2221,7 +2217,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
                 float y = y0 + pad;
 
-                renderer->drawSurfaceRect(*t->surface, dl, x, y, x + tw, y + th);
+                comp->renderer->drawSurfaceRect(*t->surface, dl, x, y, x + tw, y + th);
 
                 if (t == altTabSel.get()) {
                     dl->AddRect(ImVec2(x - 2.f, y - 2.f), ImVec2(x + tw + 2.f, y + th + 2.f), themeColorU32(comp->theme.accent), 0.f, 0, 3.f);
@@ -2297,7 +2293,7 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
 
     ImVec2 mp = ImGui::GetMousePos();
 
-    if (renderer->cursorPlane((int)kind, cs, mp.x, mp.y, scene.cursorHotX, scene.cursorHotY)) {
+    if (comp->renderer->cursorPlane((int)kind, cs, mp.x, mp.y, scene.cursorHotX, scene.cursorHotY)) {
         return;
     }
 
@@ -2308,14 +2304,14 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
 #endif
 
     if (cs) {
-        renderer->drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
+        comp->renderer->drawSurfaceTreeOverlay(*cs, mp.x - scene.cursorHotX, mp.y - scene.cursorHotY);
     } else if (kind != CursorKind::hidden) {
         drawCursorShape(ImGui::GetForegroundDrawList(), mp, uiScale * comp->settings->cursorScale(), (int)kind);
     }
 }
 
 void DesktopImpl::build() {
-    buildUi(*scene);
+    buildUi(*comp->scene);
 }
 
 // A pending toggle counts: the dialog it asks for exists only once a frame
@@ -2324,13 +2320,13 @@ bool DesktopImpl::overlayActive() {
     bool open = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState;
     bool asked = launcherToggle || calendarToggle || wifiToggle || inspectorToggle || historyToggle || logToggle || anrToggle || settingsToggle;
 
-    return open || asked || altTabActive || imguiPopup || osdShown || pickArmed || pickShow || scene->bellLit || toastsActive();
+    return open || asked || altTabActive || imguiPopup || osdShown || pickArmed || pickShow || comp->scene->bellLit || toastsActive();
 }
 
 bool DesktopImpl::toastsActive() const {
     bool any = false;
 
-    notifier->active([&](Toast&) {
+    comp->notifier->active([&](Toast&) {
         any = true;
     });
 
@@ -2341,8 +2337,8 @@ void DesktopImpl::onListen(void*) {
     if (!placed) {
         // before any input arrives the cursor sits at the screen center
         placed = true;
-        posX = scene->outW / 2.0;
-        posY = scene->outH / 2.0;
+        posX = comp->scene->outW / 2.0;
+        posY = comp->scene->outH / 2.0;
     } else {
         clampPos();
     }
@@ -2352,13 +2348,9 @@ void DesktopImpl::onListen(void*) {
 
 DesktopImpl::DesktopImpl(Composer& c)
     : comp(&c)
-    , scene(c.scene)
-    , output(c.output)
-    , renderer(c.renderer)
-    , notifier(c.notifier)
     , appliedUiScale(c.settings->uiScale())
 {
-    scene->uiScale = c.settings->uiScale();
+    comp->scene->uiScale = c.settings->uiScale();
     c.inputSinks.pushFront((InputSink*)this);
     c.mixerListeners.pushBack(c.pool->make<CallDesktopVolume>(this));
     c.wifiListeners.pushBack(c.pool->make<CallDesktopWifi>(this));

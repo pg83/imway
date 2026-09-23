@@ -508,7 +508,6 @@ int mainComposer(int argc, char** argv) {
         wcfg.scanoutFormatCount = scanoutFormats.length();
         wcfg.mainDevice = device->renderDevice();
         wcfg.maxImageDim = device->maxImageSize();
-        wcfg.output = output;
         wcfg.drmFd = device->drmFd();
         wcfg.explicitSync = device->explicitSyncSupported();
 

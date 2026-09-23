@@ -32,7 +32,6 @@ namespace {
 
     struct NotifierImpl: public Notifier {
         Composer* c = nullptr;
-        struct ev_loop* loop = nullptr;
         IntrusiveList toasts; // newest last
         u32 lastId = 0;
         ev_timer scheduleTimer{};
@@ -64,7 +63,6 @@ namespace {
 
 NotifierImpl::NotifierImpl(Composer& comp)
     : c(&comp)
-    , loop(comp.loop)
 {
     comp.settings->addDndListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
     comp.settings->addDndScheduledListener(comp.pool->make<CallNotifierSetting>(this, &NotifierImpl::applyDnd));
@@ -74,16 +72,16 @@ NotifierImpl::NotifierImpl(Composer& comp)
 
     evTimerInit(&scheduleTimer, scheduleCb, 30., 30.);
     scheduleTimer.data = this;
-    ev_timer_start(loop, &scheduleTimer);
+    ev_timer_start(c->loop, &scheduleTimer);
 }
 
 NotifierImpl::~NotifierImpl() noexcept {
-    ev_timer_stop(loop, &scheduleTimer);
+    ev_timer_stop(c->loop, &scheduleTimer);
 
     while (!toasts.empty()) {
         auto* t = (ToastImpl*)(Toast*)toasts.popFront();
 
-        ev_timer_stop(loop, &t->timer);
+        ev_timer_stop(c->loop, &t->timer);
         c->alloc->release(t);
     }
 }
@@ -99,7 +97,7 @@ ToastImpl* NotifierImpl::byId(u32 id) {
 }
 
 void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
-    ev_timer_stop(loop, &t.timer);
+    ev_timer_stop(c->loop, &t.timer);
 
     if (t.critical || expireMs == 0) {
         return; // sticky
@@ -109,7 +107,7 @@ void NotifierImpl::armTimer(ToastImpl& t, i32 expireMs) {
 
     evTimerInit(&t.timer, expiryCb, sec, 0.);
     t.timer.data = &t;
-    ev_timer_start(loop, &t.timer);
+    ev_timer_start(c->loop, &t.timer);
 }
 
 // keep history bounded: drop the oldest off-screen toasts past the cap
@@ -173,7 +171,7 @@ u32 NotifierImpl::post(const Post& p) {
     if (t->onScreen) {
         armTimer(*t, p.expireMs);
     } else {
-        ev_timer_stop(loop, &t->timer);
+        ev_timer_stop(c->loop, &t->timer);
     }
 
     trim();
@@ -189,7 +187,7 @@ void NotifierImpl::close(u32 id, u32 reason) {
         return;
     }
 
-    ev_timer_stop(loop, &t->timer);
+    ev_timer_stop(c->loop, &t->timer);
     t->onScreen = false;
 
     if (t->fromBus) {
@@ -263,7 +261,7 @@ void NotifierImpl::applyDnd() {
         // pull everything off screen, keep it in history
         forEach<Toast>(toasts, [&](Toast& t) {
             if (t.onScreen) {
-                ev_timer_stop(loop, &((ToastImpl&)t).timer);
+                ev_timer_stop(c->loop, &((ToastImpl&)t).timer);
                 t.onScreen = false;
             }
         });

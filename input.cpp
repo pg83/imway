@@ -62,8 +62,6 @@ namespace {
 
     struct LibinputSource: public InputSource {
         Composer* comp = nullptr;
-        struct ev_loop* loop = nullptr;
-        Session* session = nullptr;
         libinput* li = nullptr;
 
         // the directory the evdev nodes live in; /dev/input outside a test
@@ -124,11 +122,11 @@ namespace {
     }
 
     int openRestricted(const char* path, int, void* data) {
-        return ((LibinputSource*)data)->session->openDevice(path);
+        return ((LibinputSource*)data)->comp->session->openDevice(path);
     }
 
     void closeRestricted(int fd, void* data) {
-        ((LibinputSource*)data)->session->closeDevice(fd);
+        ((LibinputSource*)data)->comp->session->closeDevice(fd);
     }
 
     void inputIoCb(struct ev_loop*, ev_io* w, int) {
@@ -242,8 +240,6 @@ namespace {
 
 LibinputSource::LibinputSource(Composer& c)
     : comp(&c)
-    , loop(c.loop)
-    , session(c.session)
 {
     dir = inputDir();
     li = c.chaos->libinputContext(libinput_path_create_context(&liIface, this));
@@ -278,7 +274,7 @@ LibinputSource::LibinputSource(Composer& c)
 
     if (inoFd >= 0 && inotify_add_watch(inoFd, dir, IN_CREATE | IN_ATTRIB | IN_DELETE) >= 0) {
         ev_io* inotifyIo = c.pool->make<ev_io>();
-        struct ev_loop* heldLoop = loop;
+        struct ev_loop* heldLoop = comp->loop;
 
         pooledGuard(*c.pool, [heldLoop, inotifyIo] {
             if (ev_is_active(inotifyIo)) {
@@ -287,7 +283,7 @@ LibinputSource::LibinputSource(Composer& c)
         });
         evIoInit(inotifyIo, inotifyCb, inoFd, EV_READ);
         inotifyIo->data = this;
-        ev_io_start(loop, inotifyIo);
+        ev_io_start(comp->loop, inotifyIo);
     }
 
     c.sessionEnabledListeners.pushBack(c.pool->make<CallInputSessionEnabled>(this));
@@ -308,7 +304,7 @@ LibinputSource::LibinputSource(Composer& c)
     }
 
     ev_io* inputIo = c.pool->make<ev_io>();
-    struct ev_loop* heldLoop = loop;
+    struct ev_loop* heldLoop = comp->loop;
 
     pooledGuard(*c.pool, [heldLoop, inputIo] {
         if (ev_is_active(inputIo)) {
@@ -317,7 +313,7 @@ LibinputSource::LibinputSource(Composer& c)
     });
     evIoInit(inputIo, inputIoCb, libinput_get_fd(li), EV_READ);
     inputIo->data = this;
-    ev_io_start(loop, inputIo);
+    ev_io_start(comp->loop, inputIo);
     dispatch();
     *(comp->log) << "imway: libinput ready, "_sv << devices << " devices"_sv << endL;
 }

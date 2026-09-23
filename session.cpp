@@ -43,7 +43,6 @@ namespace {
 
     struct SeatSession: public Session {
         Composer* c = nullptr;
-        struct ev_loop* loop = nullptr;
         libseat* seat = nullptr;
         bool active = false;
         ev_io io{};
@@ -104,7 +103,6 @@ void DirectSession::closeDevice(int fd) {
 
 SeatSession::SeatSession(Composer& comp)
     : c(&comp)
-    , loop(comp.loop)
 {
     seat = libseat_open_seat(&kSeatListener, this);
 
@@ -126,12 +124,12 @@ SeatSession::SeatSession(Composer& comp)
 
     evIoInit(&io, seatIoCb, libseat_get_fd(seat), EV_READ);
     io.data = this;
-    ev_io_start(loop, &io);
+    ev_io_start(c->loop, &io);
     *(c->log) << "imway: libseat session on "_sv << StringView(libseat_seat_name(seat)) << endL;
 }
 
 SeatSession::~SeatSession() noexcept {
-    ev_io_stop(loop, &io);
+    ev_io_stop(c->loop, &io);
     libseat_close_seat(seat);
     seat = nullptr;
 }

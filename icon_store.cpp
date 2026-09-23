@@ -100,8 +100,6 @@ namespace {
 
     struct IconStoreImpl: public IconProvider {
         Composer* c = nullptr;
-        struct ev_loop* loop = nullptr;
-        IconPool* icons = nullptr;
 
         // the store generation: both indexes, the lookup cache and the icon
         // leases of everything resolved since the last reload; a reload
@@ -157,8 +155,6 @@ namespace {
 
 IconStoreImpl::IconStoreImpl(Composer& comp)
     : c(&comp)
-    , loop(comp.loop)
-    , icons(comp.iconPool)
 {
     gen = ObjPool::fromMemoryRaw();
     desktop = gen->make<IntMap<Buffer*>>(gen);
@@ -182,7 +178,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     });
 
     ev_io* ino = c->pool->make<ev_io>();
-    struct ev_loop* heldLoop = loop;
+    struct ev_loop* heldLoop = c->loop;
 
     pooledGuard(*c->pool, [heldLoop, ino] {
         if (ev_is_active(ino)) {
@@ -191,7 +187,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     });
     evIoInit(ino, inoCb, inoFd, EV_READ);
     ino->data = this;
-    ev_io_start(loop, ino);
+    ev_io_start(c->loop, ino);
 
     reloadTimer = c->pool->make<ev_timer>();
     ev_timer* heldTimer = reloadTimer;
@@ -452,12 +448,12 @@ void IconStoreImpl::drainInotify() {
     }
 
     // installs come in bursts: reload once things settle
-    ev_timer_again(loop, reloadTimer);
+    ev_timer_again(c->loop, reloadTimer);
 }
 
 void IconStoreImpl::reload() {
     if (reloadTimer) {
-        ev_timer_stop(loop, reloadTimer);
+        ev_timer_stop(c->loop, reloadTimer);
     }
 
     // nobody holds an Icon* across the loop iteration, so the old generation
@@ -495,7 +491,7 @@ Icon* IconStoreImpl::loadSvgFile(StringView path, u32 bucket) {
     }
 
     // lunasvg bitmaps are premultiplied ARGB32, same as Icon wants
-    Icon* ic = icons->acquire(*gen);
+    Icon* ic = c->iconPool->acquire(*gen);
 
     ic->width = (int)bucket;
     ic->height = (int)bucket;
@@ -547,7 +543,7 @@ Icon* IconStoreImpl::loadPngFile(StringView path) {
         p[2] = (u8)(p[2] * a / 255);
     }
 
-    Icon* ic = icons->acquire(*gen);
+    Icon* ic = c->iconPool->acquire(*gen);
 
     ic->width = (int)w;
     ic->height = (int)h;

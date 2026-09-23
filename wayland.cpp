@@ -1607,11 +1607,7 @@ namespace {
 
     struct WaylandImpl: public Wayland, public InputSink, public Listener, public IconProvider {
         Composer* composer = nullptr;
-        ObjPool* pool = nullptr;
-        SmallObjAllocator* alloc = nullptr;
         ShmGlobal shmGlobal;
-        struct ev_loop* loop = nullptr;
-        Scene* scene = nullptr;
         wl_display* display = nullptr;
         // the display as the pool guard that destroys it sees it: closeDisplay
         // empties it once it has taken the display down itself
@@ -1652,7 +1648,6 @@ namespace {
 
         IntrusiveList activationTokenRequests;
         Vector<ActivationGrant> activationGrants;
-        IconPool* iconPool = nullptr;
         // client-pixel window icons, keyed by Toplevel::iconSym; the values
         // are pool icons owned here, released on replace and window death
         IntMap<Icon*> windowIcons;
@@ -1696,7 +1691,6 @@ namespace {
         IntrusiveList foreignLists;
         IntrusiveList foreignTLHandles;
         IntrusiveList screencopyFrames;
-        ::Output* output = nullptr;
         bool dpmsOff = false;
         ev_timer* dpmsTimer = nullptr;
 
@@ -1830,7 +1824,7 @@ namespace {
         }
 
         // the parked commit is admitted by the next frame's fifo drain
-        srv->scene->needsFrame = true;
+        srv->composer->scene->needsFrame = true;
     }
 
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h);
@@ -1849,12 +1843,12 @@ namespace {
     void anrMark(WaylandImpl* srv, wl_resource* wmBase, bool unresponsive) {
         wl_client* client = wl_resource_get_client(wmBase);
 
-        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+        forEach<Toplevel>(srv->composer->scene->toplevels, [&](Toplevel& t) {
             auto& ti = (ToplevelImpl&)t;
 
             if (ti.res && wl_resource_get_client(ti.res) == client && t.unresponsive != unresponsive) {
                 t.unresponsive = unresponsive;
-                srv->scene->needsFrame = true;
+                srv->composer->scene->needsFrame = true;
             }
         });
     }
@@ -1874,7 +1868,7 @@ namespace {
     void wmBaseResourceDestroyed(wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+        forEach<Surface, SceneNode>(srv->composer->scene->surfaces, [&](Surface& surface) {
             auto& impl = (SurfaceImpl&)surface;
 
             if (impl.xdg && impl.xdg->wmBaseRes == res) {
@@ -1885,7 +1879,7 @@ namespace {
         forEach<WaylandImpl::WmBasePing>(srv->wmBases, [&](WaylandImpl::WmBasePing& ping) {
             if (ping.res == res) {
                 ping.unlink();
-                srv->alloc->release(&ping);
+                srv->composer->alloc->release(&ping);
             }
         });
     }
@@ -1934,7 +1928,7 @@ namespace {
             u32 seq = 0;
             u32 flags;
 
-            if (s.srv->output->lastFlip(flipNs, seq)) {
+            if (s.srv->composer->output->lastFlip(flipNs, seq)) {
                 flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
             } else {
                 timespec ts{};
@@ -1948,7 +1942,7 @@ namespace {
 
             u64 sec = flipNs / 1000000000ull;
             u32 nsec = (u32)(flipNs % 1000000000ull);
-            u32 refreshNs = s.srv->scene->hz > 0 ? (u32)(1e9 / s.srv->scene->hz) : 0;
+            u32 refreshNs = s.srv->composer->scene->hz > 0 ? (u32)(1e9 / s.srv->composer->scene->hz) : 0;
             Vector<wl_resource*> fbs;
 
             fbs.xchg(s.presentFeedbacks);
@@ -2069,8 +2063,8 @@ namespace {
             drmSyncobjTimelineSignal(srv->drmFd, &rel->handle, &cache.releasePoint, 1);
         }
 
-        releaseTimeline(srv->alloc, cache.acq);
-        releaseTimeline(srv->alloc, cache.rel);
+        releaseTimeline(srv->composer->alloc, cache.acq);
+        releaseTimeline(srv->composer->alloc, cache.rel);
 
         if (cache.dmabufRes) {
             wl_buffer_send_release(cache.dmabufRes);
@@ -2084,7 +2078,7 @@ namespace {
             wl_list_remove(&cache.dmabufDestroy.listener.link);
         }
 
-        srv->alloc->release(cache.dmabuf);
+        srv->composer->alloc->release(cache.dmabuf);
         cache.dmabuf = nullptr;
         cache.dmabufRes = nullptr;
         cache.dmabufDestroyArmed = false;
@@ -2119,7 +2113,7 @@ namespace {
         s.dmabufUse = nullptr;
         s.syncAcquireWait = false;
         s.explicitSync = false;
-        s.srv->alloc->release(frame);
+        s.srv->composer->alloc->release(frame);
     }
 
     void releaseHeldShm(SurfaceImpl& s) {
@@ -2127,7 +2121,7 @@ namespace {
             return;
         }
 
-        s.srv->alloc->release(s.shm);
+        s.srv->composer->alloc->release(s.shm);
         s.shm = nullptr;
     }
 
@@ -2137,7 +2131,7 @@ namespace {
 
             s.texture.reset();
             s.frame = nullptr;
-            s.srv->alloc->release(frame);
+            s.srv->composer->alloc->release(frame);
         }
 
         releaseHeldDmabuf(s);
@@ -2149,7 +2143,7 @@ namespace {
             wl_resource_add_destroy_listener(buffer, &use->destroy.listener);
         }
 
-        s.frame = s.srv->alloc->make<FrameResourceRef>(frame);
+        s.frame = s.srv->composer->alloc->make<FrameResourceRef>(frame);
         s.dmabuf = use->buffer.mutPtr();
         s.dmabufUse = use;
 
@@ -2410,7 +2404,7 @@ namespace {
                 s.pixels.clear();
                 s.dirty = true;
 
-                s.srv->alloc->release(cache.dmabuf);
+                s.srv->composer->alloc->release(cache.dmabuf);
                 cache.dmabuf = nullptr;
                 cache.dmabufRes = nullptr;
                 cache.acq = cache.rel = nullptr;
@@ -2552,8 +2546,8 @@ namespace {
                 s.fifo->barrier = true;
             }
 
-            s.srv->alloc->release(e);
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->alloc->release(e);
+            s.srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -2617,7 +2611,7 @@ namespace {
     void surfaceCommit(wl_client*, wl_resource* res) {
         SurfaceImpl& s = *surfaceFrom(res);
 
-        s.srv->scene->needsFrame = true;
+        s.srv->composer->scene->needsFrame = true;
 
         if (s.xdg && !s.xdg->toplevel && !s.xdg->popup) {
             wl_resource_post_error(s.xdg->res, XDG_SURFACE_ERROR_NOT_CONSTRUCTED, "xdg_surface committed before constructing a role object");
@@ -2660,10 +2654,10 @@ namespace {
 
         if (!cache && (acquireWait || (s.fifo && (!s.fifo->queue.empty() || (fifoWait && s.fifo->barrier) || (timeSet && timeNs > nowNs()))))) {
             if (!s.fifo) {
-                s.fifo = s.srv->alloc->make<FifoState>();
+                s.fifo = s.srv->composer->alloc->make<FifoState>();
             }
 
-            FifoEntry* entry = s.srv->alloc->make<FifoEntry>();
+            FifoEntry* entry = s.srv->composer->alloc->make<FifoEntry>();
 
             entry->setBarrier = fifoSet;
             entry->waitBarrier = fifoWait;
@@ -2730,7 +2724,7 @@ namespace {
 
             if (cache) {
                 releaseCachedDmabuf(s.srv, *cache);
-                releaseCachedShm(s.srv->alloc, *cache);
+                releaseCachedShm(s.srv->composer->alloc, *cache);
             }
 
             if (!s.pending.buffer) {
@@ -2760,7 +2754,7 @@ namespace {
                     ShmContentRef content = ShmUse::create(shm, s.pending.releaseCb);
 
                     s.pending.releaseCb = nullptr;
-                    use = s.srv->alloc->make<ShmContentRef>(content);
+                    use = s.srv->composer->alloc->make<ShmContentRef>(content);
                 }
 
                 if (use) {
@@ -2839,7 +2833,7 @@ namespace {
                     dropReleaseCb(cache->releaseCb);
                     cache->releaseCb = s.pending.releaseCb;
                     s.pending.releaseCb = nullptr;
-                    cache->dmabuf = s.srv->alloc->make<DmabufRef>(*dmabuf);
+                    cache->dmabuf = s.srv->composer->alloc->make<DmabufRef>(*dmabuf);
                     cache->dmabufRes = s.pending.buffer;
                     cache->dmabufDestroy.listener.notify = cachedDmabufDestroyed;
                     cache->dmabufDestroy.cache = cache;
@@ -3159,9 +3153,9 @@ namespace {
         // back-pointer, cm feedbacks, constraints
         s->weak.invalidate();
 
-        if (srv->scene->cursorSurface == s) {
-            srv->scene->cursorSurface = nullptr;
-            srv->scene->cursorShape = CursorKind::unset;
+        if (srv->composer->scene->cursorSurface == s) {
+            srv->composer->scene->cursorSurface = nullptr;
+            srv->composer->scene->cursorShape = CursorKind::unset;
         }
 
         detachPendingBuffer(*s);
@@ -3202,7 +3196,7 @@ namespace {
         s->stackBelow.clear();
         s->stackAbove.clear();
 
-        forEach<Popup>(srv->scene->popups, [&](Popup& p) {
+        forEach<Popup>(srv->composer->scene->popups, [&](Popup& p) {
             if (p.parent == s) {
                 p.parent = nullptr;
 
@@ -3241,16 +3235,16 @@ namespace {
 
             s->texture.reset();
             s->frame = nullptr;
-            srv->alloc->release(frame);
+            srv->composer->alloc->release(frame);
         }
 
         if (s->pendColor) {
-            srv->alloc->release(s->pendColor);
+            srv->composer->alloc->release(s->pendColor);
         }
 
-        srv->scene->needsFrame = true;
+        srv->composer->scene->needsFrame = true;
         ((SceneNode*)s)->unlink();
-        srv->alloc->release(s);
+        srv->composer->alloc->release(s);
     }
 
     void regionDestroy(wl_client*, wl_resource* res) {
@@ -3331,7 +3325,7 @@ namespace {
     void regionResourceDestroyed(wl_resource* res) {
         auto* box = (RegionBox*)wl_resource_get_user_data(res);
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     void compositorCreateSurface(wl_client* client, wl_resource* res, u32 id) {
@@ -3344,12 +3338,12 @@ namespace {
             return;
         }
 
-        auto* s = srv->alloc->make<SurfaceImpl>();
+        auto* s = srv->composer->alloc->make<SurfaceImpl>();
 
         s->srv = srv;
         s->res = sres;
         s->weak.anchor(s);
-        srv->scene->surfaces.pushBack((SceneNode*)s);
+        srv->composer->scene->surfaces.pushBack((SceneNode*)s);
         wl_resource_set_implementation(sres, &surfaceImpl, s, surfaceResourceDestroyed);
 
         // v6: we present every buffer at scale 1, untransformed; tell the
@@ -3370,7 +3364,7 @@ namespace {
             return;
         }
 
-        auto* box = srv->alloc->make<RegionBox>();
+        auto* box = srv->composer->alloc->make<RegionBox>();
 
         box->srv = srv;
         wl_resource_set_implementation(rres, &regionImpl, box, regionResourceDestroyed);
@@ -3488,7 +3482,7 @@ namespace {
 
         if (!sub->effectiveSync()) {
             applySubsurfaceCache(*sub);
-            sub->srv->scene->needsFrame = true;
+            sub->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -3511,11 +3505,11 @@ namespace {
         }
 
         releaseCachedDmabuf(sub->srv, sub->cache);
-        releaseCachedShm(sub->srv->alloc, sub->cache);
+        releaseCachedShm(sub->srv->composer->alloc, sub->cache);
 
         // the ring nulls the surface's sub back-pointer
         sub->weak.invalidate();
-        sub->srv->alloc->release(sub);
+        sub->srv->composer->alloc->release(sub);
     }
 
     void subcompositorDestroy(wl_client*, wl_resource* res) {
@@ -3553,7 +3547,7 @@ namespace {
             return;
         }
 
-        auto* sub = srv->alloc->make<SubsurfaceImpl>();
+        auto* sub = srv->composer->alloc->make<SubsurfaceImpl>();
 
         sub->srv = srv;
         sub->weak.anchor(sub);
@@ -3611,7 +3605,7 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
 
         assignText(t->title, StringView(title));
-        t->srv->scene->needsFrame = true;
+        t->srv->composer->scene->needsFrame = true;
 
         if (t->mapped) {
             foreignListToplevelUpdated(t->srv, t);
@@ -3626,7 +3620,7 @@ namespace {
         Buffer low;
 
         t->appIdSym = sv(t->appId).lower(low).hash64();
-        t->srv->scene->needsFrame = true;
+        t->srv->composer->scene->needsFrame = true;
 
         // a foreign-toplevel-list client tracks app_id changes like titles
         if (t->mapped) {
@@ -3651,7 +3645,7 @@ namespace {
 
         if (validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->moveRequested = true;
-            ti->srv->scene->needsFrame = true;
+            ti->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -3666,7 +3660,7 @@ namespace {
 
         if (validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->resizeEdges = edges;
-            ti->srv->scene->needsFrame = true;
+            ti->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -3705,7 +3699,7 @@ namespace {
             ti->maximized = true;
             ti->minimized = false;
             ti->restoreRequested = false;
-            ti->srv->scene->needsFrame = true;
+            ti->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -3715,7 +3709,7 @@ namespace {
         if (ti->maximized) {
             ti->maximized = false;
             ti->restoreRequested = ti->restoreW > 0 && ti->restoreH > 0;
-            ti->srv->scene->needsFrame = true;
+            ti->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -3732,8 +3726,8 @@ namespace {
         // restore configure leaves the client at the fullscreen size
         ti->prevW = ti->cfgW ? ti->cfgW : (ti->surface ? ti->surface->geomW() : 0);
         ti->prevH = ti->cfgH ? ti->cfgH : (ti->surface ? ti->surface->geomH() : 0);
-        xdgToplevelConfigureSize(*ti, ti->srv->scene->outW, ti->srv->scene->outH);
-        ti->srv->scene->needsFrame = true;
+        xdgToplevelConfigureSize(*ti, ti->srv->composer->scene->outW, ti->srv->composer->scene->outH);
+        ti->srv->composer->scene->needsFrame = true;
     }
 
     void toplevelUnsetFullscreen(wl_client*, wl_resource* res) {
@@ -3745,7 +3739,7 @@ namespace {
 
         ti->fullscreen = false;
         xdgToplevelConfigureSize(*ti, ti->prevW, ti->prevH);
-        ti->srv->scene->needsFrame = true;
+        ti->srv->composer->scene->needsFrame = true;
     }
 
     void toplevelSetMinimized(wl_client*, wl_resource* res) {
@@ -3753,11 +3747,11 @@ namespace {
 
         ti->minimized = true;
 
-        if (ti->srv->scene->focusedToplevel.get() == ti) {
-            ti->srv->scene->focusedToplevel.reset();
+        if (ti->srv->composer->scene->focusedToplevel.get() == ti) {
+            ti->srv->composer->scene->focusedToplevel.reset();
         }
 
-        ti->srv->scene->needsFrame = true;
+        ti->srv->composer->scene->needsFrame = true;
     }
 
     const struct xdg_toplevel_interface toplevelImpl = {
@@ -3801,12 +3795,12 @@ namespace {
         }
 
         if (Icon** own = srv->windowIcons.find(t->iconSym)) {
-            srv->iconPool->release(*own);
+            srv->composer->iconPool->release(*own);
             srv->windowIcons.erase(t->iconSym);
         }
 
         if (t->pendingOwnIcon) {
-            srv->iconPool->release(t->pendingOwnIcon);
+            srv->composer->iconPool->release(t->pendingOwnIcon);
             t->pendingOwnIcon = nullptr;
         }
 
@@ -3814,8 +3808,8 @@ namespace {
         foreignListToplevelGone(srv, t);
         t->unlink();
         *(srv->composer->log) << "imway: toplevel "_sv << sv(t->title) << " destroyed"_sv << endL;
-        srv->scene->needsFrame = true;
-        srv->alloc->release(t);
+        srv->composer->scene->needsFrame = true;
+        srv->composer->alloc->release(t);
     }
 
     void xdgSurfaceDestroy(wl_client*, wl_resource* res) {
@@ -3834,7 +3828,7 @@ namespace {
         // the work area the client should fit into (v4); sent before the
         // configure so a fresh toplevel can pick its initial size
         if (wl_resource_get_version(t.res) >= XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION) {
-            xdg_toplevel_send_configure_bounds(t.res, t.srv->scene->workW, t.srv->scene->workH);
+            xdg_toplevel_send_configure_bounds(t.res, t.srv->composer->scene->workW, t.srv->composer->scene->workH);
         }
     }
 
@@ -3876,7 +3870,7 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* t = srv->alloc->make<ToplevelImpl>();
+        auto* t = srv->composer->alloc->make<ToplevelImpl>();
 
         t->srv = srv;
         t->res = tres;
@@ -3890,7 +3884,7 @@ namespace {
         xs->toplevel.bind(t->weak);
         xs->surf()->role = SurfaceRole::xdgToplevel;
         xs->surface->toplevel.bind(t->weak);
-        srv->scene->toplevels.pushBack(t);
+        srv->composer->scene->toplevels.pushBack(t);
         wl_resource_set_implementation(tres, &toplevelImpl, t, toplevelResourceDestroyed);
 
         // static window-management capabilities (v5): advertise what the ui
@@ -3982,7 +3976,7 @@ namespace {
 
         // the ring nulls the surface's and the roles' xdg back-pointers
         xs->weak.invalidate();
-        xs->srv->alloc->release(xs);
+        xs->srv->composer->alloc->release(xs);
     }
 
     Positioner* positionerFrom(wl_resource* res) {
@@ -4095,7 +4089,7 @@ namespace {
     void positionerResourceDestroyed(wl_resource* res) {
         Positioner* p = positionerFrom(res);
 
-        p->srv->alloc->release(p);
+        p->srv->composer->alloc->release(p);
     }
 
     int clampPosition(i64 v) {
@@ -4107,7 +4101,7 @@ namespace {
 
     void placePopup(const PopupImpl& popup, const Positioner& positioner, int& x, int& y, int& w, int& h) {
         int minX = 0, minY = 0;
-        int maxX = popup.srv->scene->outW, maxY = popup.srv->scene->outH;
+        int maxX = popup.srv->composer->scene->outW, maxY = popup.srv->composer->scene->outH;
 
         if (popup.parent) {
             i64 parentX = (i64)popup.parent->imgX + popup.parent->geomX();
@@ -4115,8 +4109,8 @@ namespace {
 
             minX = clampPosition(-parentX);
             minY = clampPosition(-parentY);
-            maxX = clampPosition((i64)popup.srv->scene->outW - parentX);
-            maxY = clampPosition((i64)popup.srv->scene->outH - parentY);
+            maxX = clampPosition((i64)popup.srv->composer->scene->outW - parentX);
+            maxY = clampPosition((i64)popup.srv->composer->scene->outH - parentY);
         }
 
         positioner.place(x, y, w, h, minX, minY, maxX, maxY);
@@ -4142,7 +4136,7 @@ namespace {
         // a popup whose wl_surface is gone parents nothing: its children
         // were detached when the surface died, and a null surface would
         // match every orphan (itself included) by its null parent
-        for (Popup* child : each<Popup>(popup->srv->scene->popups)) {
+        for (Popup* child : each<Popup>(popup->srv->composer->scene->popups)) {
             if (surface && child->parent == surface) {
                 wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP, "popup has a live child popup");
 
@@ -4221,8 +4215,8 @@ namespace {
         // the ring nulls the xdg surface's popup back-pointer
         p->weak.invalidate();
         p->unlink();
-        srv->scene->needsFrame = true;
-        srv->alloc->release(p);
+        srv->composer->scene->needsFrame = true;
+        srv->composer->alloc->release(p);
     }
 
     void xdgSurfaceGetPopup(wl_client* client, wl_resource* res, u32 id, wl_resource* parentRes, wl_resource* positionerRes) {
@@ -4260,7 +4254,7 @@ namespace {
         }
 
         WaylandImpl* srv = xs->srv;
-        auto* p = srv->alloc->make<PopupImpl>();
+        auto* p = srv->composer->alloc->make<PopupImpl>();
 
         p->srv = srv;
         p->res = pres;
@@ -4273,14 +4267,14 @@ namespace {
         placePopup(*p, *pos, p->x, p->y, p->w, p->h);
         xs->popup.bind(p->weak);
         xs->surf()->role = SurfaceRole::xdgPopup;
-        srv->scene->popups.pushBack(p);
+        srv->composer->scene->popups.pushBack(p);
         wl_resource_set_implementation(pres, &popupImpl, p, popupResourceDestroyed);
     }
 
     void wmBaseDestroy(wl_client*, wl_resource* res) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        for (Surface* surface : each<Surface, SceneNode>(srv->scene->surfaces)) {
+        for (Surface* surface : each<Surface, SceneNode>(srv->composer->scene->surfaces)) {
             auto* impl = (SurfaceImpl*)surface;
 
             if (impl->xdg && impl->xdg->wmBaseRes == res) {
@@ -4303,7 +4297,7 @@ namespace {
             return;
         }
 
-        Positioner* p = srv->alloc->make<Positioner>();
+        Positioner* p = srv->composer->alloc->make<Positioner>();
 
         p->srv = srv;
         wl_resource_set_implementation(pres, &positionerImpl, p, positionerResourceDestroyed);
@@ -4332,7 +4326,7 @@ namespace {
             return;
         }
 
-        auto* xs = srv->alloc->make<XdgSurface>();
+        auto* xs = srv->composer->alloc->make<XdgSurface>();
 
         xs->srv = srv;
         xs->res = xres;
@@ -4364,7 +4358,7 @@ namespace {
 
         wl_resource_set_implementation(res, &wmBaseImpl, data, wmBaseResourceDestroyed);
 
-        auto* ping = srv->alloc->make<WaylandImpl::WmBasePing>();
+        auto* ping = srv->composer->alloc->make<WaylandImpl::WmBasePing>();
 
         ping->res = res;
         srv->wmBases.pushBack(ping);
@@ -4441,7 +4435,7 @@ namespace {
 
             // retire the previous client-pixel icon, then latch the staged one
             if (Icon** own = tsrv->windowIcons.find(toplevel.iconSym)) {
-                tsrv->iconPool->release(*own);
+                tsrv->composer->iconPool->release(*own);
                 tsrv->windowIcons.erase(toplevel.iconSym);
             }
 
@@ -4453,7 +4447,7 @@ namespace {
             toplevel.pendingOwnIcon = nullptr;
             toplevel.pendingIconNameSym = 0;
             toplevel.pendingIconSet = false;
-            tsrv->scene->needsFrame = true;
+            tsrv->composer->scene->needsFrame = true;
         }
 
         // a dismissed popup's parent may well be gone: it maps nowhere
@@ -4476,7 +4470,7 @@ namespace {
             popup.w = popup.pendingW;
             popup.h = popup.pendingH;
             popup.positionPending = false;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
         }
 
         if (xs->toplevel && (xs->tl()->pendingMinSet || xs->tl()->pendingMaxSet)) {
@@ -4504,7 +4498,7 @@ namespace {
             s.geom = xs->pendGeom;
             s.hasGeom = true;
             xs->pendGeomSet = false;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
         }
 
         if (!xs->initialConfigureSent) {
@@ -4515,7 +4509,7 @@ namespace {
 
         if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
             xs->toplevel->mapped = true;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
             foreignListToplevelMapped(s.srv, xs->tl());
 
@@ -4524,10 +4518,10 @@ namespace {
 
         if (xs->toplevel && xs->toplevel->mapped && !s.hasContent) {
             xs->toplevel->mapped = false;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: toplevel "_sv << sv(xs->toplevel->title) << " unmapped"_sv << endL;
 
-            forEach<Popup>(s.srv->scene->popups, [&](Popup& popup) {
+            forEach<Popup>(s.srv->composer->scene->popups, [&](Popup& popup) {
                 if (popup.parent == &s && popup.mapped) {
                     dismissPopupTree((PopupImpl&)popup);
                 }
@@ -4545,7 +4539,7 @@ namespace {
 
         if (xs->popup && !xs->popup->mapped && !xs->pop()->dismissed && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
 
             if (xs->popup->grab) {
@@ -4555,9 +4549,9 @@ namespace {
 
         if (xs->popup && xs->popup->mapped && !s.hasContent) {
             xs->popup->mapped = false;
-            s.srv->scene->needsFrame = true;
+            s.srv->composer->scene->needsFrame = true;
 
-            forEach<Popup>(s.srv->scene->popups, [&](Popup& popup) {
+            forEach<Popup>(s.srv->composer->scene->popups, [&](Popup& popup) {
                 if (popup.parent == &s && popup.mapped) {
                     dismissPopupTree((PopupImpl&)popup);
                 }
@@ -4576,7 +4570,7 @@ namespace {
 
         if (p.mapped) {
             p.mapped = false;
-            p.srv->scene->needsFrame = true;
+            p.srv->composer->scene->needsFrame = true;
             p.srv->seat.popupGone(&p);
         }
 
@@ -4584,7 +4578,7 @@ namespace {
     }
 
     void dismissPopupTree(PopupImpl& popup) {
-        forEachRev<Popup>(popup.srv->scene->popups, [&](Popup& child) {
+        forEachRev<Popup>(popup.srv->composer->scene->popups, [&](Popup& child) {
             if (&child != &popup && child.parent == popup.surface.get()) {
                 dismissPopupTree((PopupImpl&)child);
             }
@@ -4604,7 +4598,7 @@ namespace {
 
         removeOne(srv->outputResources, res);
 
-        forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+        forEach<Surface, SceneNode>(srv->composer->scene->surfaces, [&](Surface& surface) {
             removeOne(((SurfaceImpl&)surface).enteredOutputs, res);
         });
     }
@@ -4624,7 +4618,7 @@ namespace {
             return true;
         }
 
-        return surface.srv->scene->cursorSurface == root || surface.srv->scene->dragIcon.get() == root;
+        return surface.srv->composer->scene->cursorSurface == root || surface.srv->composer->scene->dragIcon.get() == root;
     }
 
     void syncSurfaceOutputs(SurfaceImpl& surface) {
@@ -4662,14 +4656,14 @@ namespace {
 
         wl_resource_set_implementation(res, &outputImpl, srv, outputResourceDestroyed);
         srv->outputResources.pushBack(res);
-        srv->scene->needsFrame = true;
+        srv->composer->scene->needsFrame = true;
 
-        Buffer make(srv->output->make());
-        Buffer model(srv->output->model());
-        Buffer name(srv->output->outputName());
+        Buffer make(srv->composer->output->make());
+        Buffer model(srv->composer->output->model());
+        Buffer name(srv->composer->output->outputName());
 
-        wl_output_send_geometry(res, 0, 0, srv->output->physicalWidthMm(), srv->output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
-        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->scene->outW, srv->scene->outH, (i32)(srv->scene->hz * 1000));
+        wl_output_send_geometry(res, 0, 0, srv->composer->output->physicalWidthMm(), srv->composer->output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, srv->composer->scene->outW, srv->composer->scene->outH, (i32)(srv->composer->scene->hz * 1000));
 
         if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) {
             wl_output_send_scale(res, 1);
@@ -4750,7 +4744,7 @@ namespace {
         // the orphaned offers keep a valid list among themselves for their unlinks
         src->offers.clear();
         src->srv->seat.sourceGone(src);
-        src->srv->alloc->release(src);
+        src->srv->composer->alloc->release(src);
     }
 
     u32 chooseDndAction(u32 offered) {
@@ -4886,7 +4880,7 @@ namespace {
         Offer* offer = offerFrom(res);
 
         offer->unlink();
-        offer->srv->alloc->release(offer);
+        offer->srv->composer->alloc->release(offer);
     }
 
     const struct zwp_primary_selection_offer_v1_interface primaryOfferImpl = {
@@ -4904,7 +4898,7 @@ namespace {
         wl_client* client = wl_resource_get_client(device);
         u32 version = (u32)wl_resource_get_version(device);
         wl_resource* resource;
-        Offer* offer = src->srv->alloc->make<Offer>();
+        Offer* offer = src->srv->composer->alloc->make<Offer>();
 
         offer->srv = src->srv;
         offer->source.bind(src->weak);
@@ -4916,7 +4910,7 @@ namespace {
 
             if (!resource) {
                 offer->unlink();
-                src->srv->alloc->release(offer);
+                src->srv->composer->alloc->release(offer);
 
                 return nullptr;
             }
@@ -4936,7 +4930,7 @@ namespace {
 
         if (!resource) {
             offer->unlink();
-            src->srv->alloc->release(offer);
+            src->srv->composer->alloc->release(offer);
 
             return nullptr;
         }
@@ -5043,7 +5037,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->alloc->make<DataSource>();
+        DataSource* src = srv->composer->alloc->make<DataSource>();
 
         src->srv = srv;
         src->weak.anchor(src);
@@ -5147,11 +5141,11 @@ namespace {
         // the weak ring nulls the source's back-pointer to us
         box->weak.invalidate();
 
-        if (box->attached.get() && box->srv->scene->dragToplevel.get() == box->attached.get()) {
-            box->srv->scene->dragToplevel.reset();
+        if (box->attached.get() && box->srv->composer->scene->dragToplevel.get() == box->attached.get()) {
+            box->srv->composer->scene->dragToplevel.reset();
         }
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     void toplevelDragManagerGetDrag(wl_client* client, wl_resource* res, u32 id, wl_resource* sourceRes) {
@@ -5175,7 +5169,7 @@ namespace {
             return;
         }
 
-        ToplevelDragBox* box = srv->alloc->make<ToplevelDragBox>();
+        ToplevelDragBox* box = srv->composer->alloc->make<ToplevelDragBox>();
 
         box->srv = srv;
         box->res = r;
@@ -5235,7 +5229,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->alloc->make<DataSource>();
+        DataSource* src = srv->composer->alloc->make<DataSource>();
 
         src->srv = srv;
         src->weak.anchor(src);
@@ -5311,7 +5305,7 @@ namespace {
 
         t.csd = mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE;
         zxdg_toplevel_decoration_v1_send_configure(t.decoRes, mode);
-        t.srv->scene->needsFrame = true;
+        t.srv->composer->scene->needsFrame = true;
     }
 
     void decoSetMode(wl_client*, wl_resource* res, u32 mode) {
@@ -5345,7 +5339,7 @@ namespace {
 
             t->requestedDecoration = 0;
             t->csd = true;
-            t->srv->scene->needsFrame = true;
+            t->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -5417,7 +5411,7 @@ namespace {
             box->surface->appMenu = box->menu;
         }
 
-        box->srv->scene->needsFrame = true;
+        box->srv->composer->scene->needsFrame = true;
     }
 
     void appMenuResourceDestroyed(wl_resource* res) {
@@ -5425,11 +5419,11 @@ namespace {
 
         if (box->surface && box->surface->appMenu == box->menu) {
             box->surface->appMenu = nullptr;
-            box->srv->scene->needsFrame = true;
+            box->srv->composer->scene->needsFrame = true;
         }
 
         box->srv->composer->dbusMenus->disconnect(box->menu);
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     const struct org_kde_kwin_appmenu_interface appMenuImpl = {
@@ -5448,7 +5442,7 @@ namespace {
         }
 
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
-        AppMenuBox* box = srv->alloc->make<AppMenuBox>();
+        AppMenuBox* box = srv->composer->alloc->make<AppMenuBox>();
 
         box->srv = srv;
         box->surface.bind(surface->weak);
@@ -5634,7 +5628,7 @@ namespace {
     void xdgDialogSetModal(wl_client*, wl_resource* res, bool modal) {
         if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
             t->modal = modal;
-            t->srv->scene->needsFrame = true;
+            t->srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -5731,7 +5725,7 @@ namespace {
 
         // the relationship ends with the export: detach every child that
         // was parented through this handle
-        forEach<Toplevel>(ex->srv->scene->toplevels, [&](Toplevel& t) {
+        forEach<Toplevel>(ex->srv->composer->scene->toplevels, [&](Toplevel& t) {
             if (t.parent.get() == ex->toplevel) {
                 t.parent.reset();
             }
@@ -5743,7 +5737,7 @@ namespace {
 
         foreignDetachImports(ex);
         ex->unlink();
-        ex->srv->alloc->release(ex);
+        ex->srv->composer->alloc->release(ex);
     }
 
     // the exported toplevel died: same cascade, the export resource stays
@@ -5782,7 +5776,7 @@ namespace {
             return;
         }
 
-        ForeignExport* ex = srv->alloc->make<ForeignExport>();
+        ForeignExport* ex = srv->composer->alloc->make<ForeignExport>();
 
         ex->srv = srv;
         ex->res = r;
@@ -5831,7 +5825,7 @@ namespace {
 
         // the parent relationship survives the handle object per the spec
         im->unlink();
-        im->srv->alloc->release(im);
+        im->srv->composer->alloc->release(im);
     }
 
     void foreignImportedSetParentOf(wl_client*, wl_resource* res, wl_resource* surfaceRes) {
@@ -5867,7 +5861,7 @@ namespace {
             return;
         }
 
-        ForeignImport* im = srv->alloc->make<ForeignImport>();
+        ForeignImport* im = srv->composer->alloc->make<ForeignImport>();
 
         im->srv = srv;
         im->res = r;
@@ -5912,7 +5906,7 @@ namespace {
         auto* h = (ForeignTLHandle*)wl_resource_get_user_data(res);
 
         h->unlink();
-        h->srv->alloc->release(h);
+        h->srv->composer->alloc->release(h);
     }
 
     const struct ext_foreign_toplevel_handle_v1_interface foreignTLHandleImpl = {
@@ -5940,7 +5934,7 @@ namespace {
             return;
         }
 
-        ForeignTLHandle* h = list->srv->alloc->make<ForeignTLHandle>();
+        ForeignTLHandle* h = list->srv->composer->alloc->make<ForeignTLHandle>();
 
         h->srv = list->srv;
         h->res = r;
@@ -5987,7 +5981,7 @@ namespace {
         auto* list = (ForeignList*)wl_resource_get_user_data(res);
 
         list->unlink();
-        list->srv->alloc->release(list);
+        list->srv->composer->alloc->release(list);
     }
 
     void foreignListStop(wl_client*, wl_resource* res) {
@@ -6012,14 +6006,14 @@ namespace {
             return;
         }
 
-        ForeignList* list = srv->alloc->make<ForeignList>();
+        ForeignList* list = srv->composer->alloc->make<ForeignList>();
 
         list->srv = srv;
         list->res = res;
         srv->foreignLists.pushBack(list);
         wl_resource_set_implementation(res, &foreignListImpl, list, foreignListResourceDestroyed);
 
-        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+        forEach<Toplevel>(srv->composer->scene->toplevels, [&](Toplevel& t) {
             if (t.mapped) {
                 foreignListAnnounce(list, (ToplevelImpl*)&t);
             }
@@ -6193,7 +6187,7 @@ namespace {
         }
 
         if (!s->fifo) {
-            s->fifo = s->srv->alloc->make<FifoState>();
+            s->fifo = s->srv->composer->alloc->make<FifoState>();
         }
 
         s->fifo->fifoRes = r;
@@ -6242,11 +6236,11 @@ namespace {
             }
 
             releaseCachedDmabuf(s.srv, e->cache);
-            releaseCachedShm(s.srv->alloc, e->cache);
-            s.srv->alloc->release(e);
+            releaseCachedShm(s.srv->composer->alloc, e->cache);
+            s.srv->composer->alloc->release(e);
         }
 
-        s.srv->alloc->release(s.fifo);
+        s.srv->composer->alloc->release(s.fifo);
         s.fifo = nullptr;
     }
 
@@ -6309,7 +6303,7 @@ namespace {
         }
 
         if (!s->fifo) {
-            s->fifo = s->srv->alloc->make<FifoState>();
+            s->fifo = s->srv->composer->alloc->make<FifoState>();
         }
 
         s->fifo->commitTimerRes = r;
@@ -6363,7 +6357,7 @@ namespace {
             return nullptr;
         }
 
-        Offer* offer = src->srv->alloc->make<Offer>();
+        Offer* offer = src->srv->composer->alloc->make<Offer>();
 
         offer->srv = src->srv;
         offer->source.bind(src->weak);
@@ -6409,7 +6403,7 @@ namespace {
         src->weak.invalidate();
         src->offers.clear();
         src->srv->seat.sourceGone(src);
-        src->srv->alloc->release(src);
+        src->srv->composer->alloc->release(src);
     }
 
     void dcManagerCreateSource(wl_client* client, wl_resource* res, u32 id) {
@@ -6422,7 +6416,7 @@ namespace {
             return;
         }
 
-        DataSource* src = srv->alloc->make<DataSource>();
+        DataSource* src = srv->composer->alloc->make<DataSource>();
 
         src->srv = srv;
         src->weak.anchor(src);
@@ -6523,7 +6517,7 @@ namespace {
             ti->srv->seat.imUpdateActivation();
         }
 
-        ti->srv->alloc->release(ti);
+        ti->srv->composer->alloc->release(ti);
     }
 
     void textInputEnable(wl_client*, wl_resource* res) {
@@ -6627,7 +6621,7 @@ namespace {
             return;
         }
 
-        TextInput* ti = srv->alloc->make<TextInput>();
+        TextInput* ti = srv->composer->alloc->make<TextInput>();
 
         ti->srv = srv;
         ti->res = r;
@@ -6685,8 +6679,8 @@ namespace {
             return;
         }
 
-        if (im->popupSurface.get() && im->srv->scene->imePopup.get() == im->popupSurface.get()) {
-            im->srv->scene->imePopup.reset();
+        if (im->popupSurface.get() && im->srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+            im->srv->composer->scene->imePopup.reset();
         }
 
         im->popupSurface.reset();
@@ -6783,8 +6777,8 @@ namespace {
         if (im->popupRes) {
             // the popup destroy handler would otherwise clear the scene
             // placement; do it here since we sever its link to us
-            if (im->popupSurface.get() && srv->scene->imePopup.get() == im->popupSurface.get()) {
-                srv->scene->imePopup.reset();
+            if (im->popupSurface.get() && srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+                srv->composer->scene->imePopup.reset();
             }
 
             wl_resource_set_user_data(im->popupRes, nullptr);
@@ -6792,7 +6786,7 @@ namespace {
 
         // the ring nulls the seat's back-pointer
         im->weak.invalidate();
-        srv->alloc->release(im);
+        srv->composer->alloc->release(im);
     }
 
     const struct zwp_input_method_v2_interface inputMethodImpl = {
@@ -6817,7 +6811,7 @@ namespace {
 
         if (srv->seat.inputMethod) {
             // one input method per seat: the second is inert
-            InputMethod* tmp = srv->alloc->make<InputMethod>();
+            InputMethod* tmp = srv->composer->alloc->make<InputMethod>();
 
             tmp->srv = srv;
             tmp->weak.anchor(tmp);
@@ -6828,7 +6822,7 @@ namespace {
             return;
         }
 
-        InputMethod* im = srv->alloc->make<InputMethod>();
+        InputMethod* im = srv->composer->alloc->make<InputMethod>();
 
         im->srv = srv;
         im->weak.anchor(im);
@@ -6965,7 +6959,7 @@ namespace {
         }
 
         dev->unlink();
-        dev->srv->alloc->release(dev);
+        dev->srv->composer->alloc->release(dev);
     }
 
     const struct zwp_tablet_seat_v2_interface tabletSeatImpl = {
@@ -6983,7 +6977,7 @@ namespace {
             return;
         }
 
-        TabletDev* dev = srv->alloc->make<TabletDev>();
+        TabletDev* dev = srv->composer->alloc->make<TabletDev>();
 
         dev->srv = srv;
         dev->seat = seat;
@@ -7065,7 +7059,7 @@ namespace {
         auto* tag = ((SandboxDestroyListener*)l)->tag;
 
         tag->unlink();
-        tag->srv->alloc->release(tag);
+        tag->srv->composer->alloc->release(tag);
     }
 
     static int securityListenReadable(int fd, u32, void* data) {
@@ -7084,7 +7078,7 @@ namespace {
             return 0;
         }
 
-        SandboxTag* tag = ctx->srv->alloc->make<SandboxTag>();
+        SandboxTag* tag = ctx->srv->composer->alloc->make<SandboxTag>();
 
         tag->srv = ctx->srv;
         tag->client = client;
@@ -7127,7 +7121,7 @@ namespace {
             ctx->unlink();
         }
 
-        ctx->srv->alloc->release(ctx);
+        ctx->srv->composer->alloc->release(ctx);
     }
 
     static int securityCloseReadable(int, u32, void* data) {
@@ -7252,7 +7246,7 @@ namespace {
             return;
         }
 
-        SecurityContext* ctx = srv->alloc->make<SecurityContext>();
+        SecurityContext* ctx = srv->composer->alloc->make<SecurityContext>();
 
         ctx->srv = srv;
         ctx->res = r;
@@ -7286,7 +7280,7 @@ namespace {
     void captureSourceResourceDestroyed(wl_resource* res) {
         auto* box = (CaptureSourceBox*)wl_resource_get_user_data(res);
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     wl_resource* makeCaptureSource(WaylandImpl* srv, wl_client* client, u32 id, u64 toplevelId) {
@@ -7298,7 +7292,7 @@ namespace {
             return nullptr;
         }
 
-        CaptureSourceBox* box = srv->alloc->make<CaptureSourceBox>();
+        CaptureSourceBox* box = srv->composer->alloc->make<CaptureSourceBox>();
 
         box->srv = srv;
         box->toplevelId = toplevelId;
@@ -7374,7 +7368,7 @@ namespace {
             lease->srv->composer->device->revokeLease(lease->lesseeId);
         }
 
-        lease->srv->alloc->release(lease);
+        lease->srv->composer->alloc->release(lease);
     }
 
     const struct wp_drm_lease_v1_interface leaseImpl = {
@@ -7414,7 +7408,7 @@ namespace {
             return;
         }
 
-        LeaseBox* lease = srv->alloc->make<LeaseBox>();
+        LeaseBox* lease = srv->composer->alloc->make<LeaseBox>();
 
         lease->srv = srv;
         lease->res = r;
@@ -7446,7 +7440,7 @@ namespace {
     void leaseRequestResourceDestroyed(wl_resource* res) {
         auto* req = (LeaseRequestBox*)wl_resource_get_user_data(res);
 
-        req->srv->alloc->release(req);
+        req->srv->composer->alloc->release(req);
     }
 
     const struct wp_drm_lease_request_v1_interface leaseRequestImpl = {
@@ -7464,7 +7458,7 @@ namespace {
             return;
         }
 
-        LeaseRequestBox* req = srv->alloc->make<LeaseRequestBox>();
+        LeaseRequestBox* req = srv->composer->alloc->make<LeaseRequestBox>();
 
         req->srv = srv;
         wl_resource_set_implementation(r, &leaseRequestImpl, req, leaseRequestResourceDestroyed);
@@ -7516,7 +7510,7 @@ namespace {
     ToplevelImpl* captureToplevel(WaylandImpl* srv, u64 id) {
         ToplevelImpl* found = nullptr;
 
-        forEach<Toplevel>(srv->scene->toplevels, [&](Toplevel& t) {
+        forEach<Toplevel>(srv->composer->scene->toplevels, [&](Toplevel& t) {
             if (t.id == id && t.mapped && t.surface) {
                 found = (ToplevelImpl*)&t;
             }
@@ -7526,10 +7520,10 @@ namespace {
     }
 
     void sendCaptureConstraints(WaylandImpl* srv, CaptureSession& cs) {
-        int w = srv->scene->outW, h = srv->scene->outH;
+        int w = srv->composer->scene->outW, h = srv->composer->scene->outH;
 
         if (cs.cursor) {
-            Surface* cur = srv->scene->cursorSurface;
+            Surface* cur = srv->composer->scene->cursorSurface;
 
             w = cur && cur->viewW() > 0 ? cur->viewW() : 1;
             h = cur && cur->viewH() > 0 ? cur->viewH() : 1;
@@ -7573,7 +7567,7 @@ namespace {
         // the weak ring nulls the session's frame pointer
         f->weak.invalidate();
         captureFrameDrop(f);
-        f->srv->alloc->release(f);
+        f->srv->composer->alloc->release(f);
     }
 
     void captureBufferDestroyed(wl_listener* l, void*) {
@@ -7637,7 +7631,7 @@ namespace {
         f->captured = true;
         f->armed = true;
         f->attempts = 0;
-        f->srv->scene->needsFrame = true;
+        f->srv->composer->scene->needsFrame = true;
     }
 
     const struct ext_image_copy_capture_frame_v1_interface captureFrameImpl = {
@@ -7657,7 +7651,7 @@ namespace {
         // the weak ring nulls the frame's session pointer
         cs->weak.invalidate();
         cs->unlink();
-        cs->srv->alloc->release(cs);
+        cs->srv->composer->alloc->release(cs);
     }
 
     void captureSessionCreateFrame(wl_client* client, wl_resource* res, u32 id) {
@@ -7677,7 +7671,7 @@ namespace {
             return;
         }
 
-        CaptureFrame* f = cs->srv->alloc->make<CaptureFrame>();
+        CaptureFrame* f = cs->srv->composer->alloc->make<CaptureFrame>();
 
         f->srv = cs->srv;
         f->weak.anchor(f);
@@ -7701,7 +7695,7 @@ namespace {
             return nullptr;
         }
 
-        CaptureSession* cs = srv->alloc->make<CaptureSession>();
+        CaptureSession* cs = srv->composer->alloc->make<CaptureSession>();
 
         cs->srv = srv;
         cs->weak.anchor(cs);
@@ -7733,7 +7727,7 @@ namespace {
         auto* cc = (CaptureCursorSession*)wl_resource_get_user_data(res);
 
         cc->unlink();
-        cc->srv->alloc->release(cc);
+        cc->srv->composer->alloc->release(cc);
     }
 
     void captureCursorGetSession(wl_client* client, wl_resource* res, u32 id) {
@@ -7766,7 +7760,7 @@ namespace {
 
         (void)res;
 
-        CaptureCursorSession* cc = srv->alloc->make<CaptureCursorSession>();
+        CaptureCursorSession* cc = srv->composer->alloc->make<CaptureCursorSession>();
 
         cc->srv = srv;
         cc->res = r;
@@ -7823,9 +7817,9 @@ namespace {
         }
 
         ShmBuffer* shm = shmBufferFromResource(f.buffer);
-        u32 wantW = cs.cursor ? 0 : (u32)srv->scene->outW;
-        u32 wantH = cs.cursor ? 0 : (u32)srv->scene->outH;
-        Surface* cur = srv->scene->cursorSurface;
+        u32 wantW = cs.cursor ? 0 : (u32)srv->composer->scene->outW;
+        u32 wantH = cs.cursor ? 0 : (u32)srv->composer->scene->outH;
+        Surface* cur = srv->composer->scene->cursorSurface;
         int regionX = 0, regionY = 0;
 
         if (cs.cursor) {
@@ -7861,7 +7855,7 @@ namespace {
             regionX = (int)t->surface->imgX + t->surface->geomX();
             regionY = (int)t->surface->imgY + t->surface->geomY();
 
-            if (regionX < 0 || regionY < 0 || regionX + (int)wantW > srv->scene->outW || regionY + (int)wantH > srv->scene->outH) {
+            if (regionX < 0 || regionY < 0 || regionX + (int)wantW > srv->composer->scene->outW || regionY + (int)wantH > srv->composer->scene->outH) {
                 // partially offscreen: nothing sane to deliver
                 captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
 
@@ -7927,7 +7921,7 @@ namespace {
             // composition; three misses means it is not coming
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
         } else {
-            srv->scene->needsFrame = true;
+            srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -7998,7 +7992,7 @@ namespace {
 
         wlrCopyDrop(f);
         f->unlink();
-        f->srv->alloc->release(f);
+        f->srv->composer->alloc->release(f);
     }
 
     void wlrCopyStart(WlrCopyFrame* f, wl_resource* res, wl_resource* bufferRes, bool withDamage) {
@@ -8025,7 +8019,7 @@ namespace {
         f->bufferDestroyArmed = true;
         f->armed = true;
         f->attempts = 0;
-        f->srv->scene->needsFrame = true;
+        f->srv->composer->scene->needsFrame = true;
     }
 
     void wlrCopyCopy(wl_client*, wl_resource* res, wl_resource* buffer) {
@@ -8055,13 +8049,13 @@ namespace {
         // 1x1 frame rather than a protocol wedge
         RectI rect{x, y, w, h};
 
-        clipRect(rect, srv->scene->outW, srv->scene->outH);
+        clipRect(rect, srv->composer->scene->outW, srv->composer->scene->outH);
 
         if (rect.empty()) {
             rect = {0, 0, 1, 1};
         }
 
-        WlrCopyFrame* f = srv->alloc->make<WlrCopyFrame>();
+        WlrCopyFrame* f = srv->composer->alloc->make<WlrCopyFrame>();
 
         f->srv = srv;
         f->res = r;
@@ -8082,7 +8076,7 @@ namespace {
     void wlrCopyCaptureOutput(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
 
-        wlrCopyCapture(srv, client, res, id, 0, 0, srv->scene->outW, srv->scene->outH);
+        wlrCopyCapture(srv, client, res, id, 0, 0, srv->composer->scene->outW, srv->composer->scene->outH);
     }
 
     void wlrCopyCaptureOutputRegion(wl_client* client, wl_resource* res, u32 id, i32, wl_resource*, i32 x, i32 y, i32 w, i32 h) {
@@ -8134,7 +8128,7 @@ namespace {
             f.armed = false;
             zwlr_screencopy_frame_v1_send_failed(f.res);
         } else {
-            srv->scene->needsFrame = true;
+            srv->composer->scene->needsFrame = true;
         }
     }
 
@@ -8265,10 +8259,10 @@ namespace {
 
         // a visible bell: the renderer flashes the screen briefly. The
         // surface argument only scopes which window rang; we flash globally
-        srv->scene->bellMs = srv->composer->chaos->clockMs(nowMsec());
-        srv->scene->bellLit = true;
-        srv->scene->bellCount++;
-        srv->scene->needsFrame = true;
+        srv->composer->scene->bellMs = srv->composer->chaos->clockMs(nowMsec());
+        srv->composer->scene->bellLit = true;
+        srv->composer->scene->bellCount++;
+        srv->composer->scene->needsFrame = true;
     }
 
     const struct xdg_system_bell_v1_interface systemBellImpl = {
@@ -8388,10 +8382,10 @@ namespace {
         srv->xdgOutputResources.pushBack(xres);
 
         zxdg_output_v1_send_logical_position(xres, 0, 0);
-        zxdg_output_v1_send_logical_size(xres, srv->scene->outW, srv->scene->outH);
+        zxdg_output_v1_send_logical_size(xres, srv->composer->scene->outW, srv->composer->scene->outH);
 
         if (version >= ZXDG_OUTPUT_V1_NAME_SINCE_VERSION) {
-            Buffer name(srv->output->outputName());
+            Buffer name(srv->composer->output->outputName());
 
             zxdg_output_v1_send_name(xres, name.cStr());
         }
@@ -8611,14 +8605,14 @@ namespace {
         SeatState& seat = c->srv->seat;
 
         if (seat.activeConstraint.get() == c) {
-            c->srv->scene->pointerLocked = false;
-            c->srv->scene->pointerConfined = false;
-            c->srv->scene->confineRegion.clear();
+            c->srv->composer->scene->pointerLocked = false;
+            c->srv->composer->scene->pointerConfined = false;
+            c->srv->composer->scene->confineRegion.clear();
         }
 
         // the ring nulls the surface's and the seat's back-pointers
         c->weak.invalidate();
-        c->srv->alloc->release(c);
+        c->srv->composer->alloc->release(c);
     }
 
     void constraintSetRegion(wl_client*, wl_resource* res, wl_resource* regionRes) {
@@ -8668,7 +8662,7 @@ namespace {
             return;
         }
 
-        ConstraintBox* c = srv->alloc->make<ConstraintBox>();
+        ConstraintBox* c = srv->composer->alloc->make<ConstraintBox>();
 
         c->srv = srv;
         c->weak.anchor(c);
@@ -8729,9 +8723,9 @@ namespace {
 
             if (seat.activeConstraint.get() == c) {
                 seat.activeConstraint.reset();
-                c->srv->scene->pointerLocked = false;
-                c->srv->scene->pointerConfined = false;
-                c->srv->scene->confineRegion.clear();
+                c->srv->composer->scene->pointerLocked = false;
+                c->srv->composer->scene->pointerConfined = false;
+                c->srv->composer->scene->confineRegion.clear();
             }
 
             s.constraint.reset();
@@ -8828,7 +8822,7 @@ namespace {
         auto* inhibitor = (IdleInhibitor*)wl_resource_get_user_data(res);
 
         inhibitor->unlink();
-        inhibitor->srv->alloc->release(inhibitor);
+        inhibitor->srv->composer->alloc->release(inhibitor);
     }
 
     const struct zwp_idle_inhibitor_v1_interface idleInhibitorImpl = {.destroy = relPointerDestroy};
@@ -8843,7 +8837,7 @@ namespace {
             return;
         }
 
-        auto* inhibitor = srv->alloc->make<IdleInhibitor>();
+        auto* inhibitor = srv->composer->alloc->make<IdleInhibitor>();
 
         inhibitor->srv = srv;
         inhibitor->surface.bind(surfaceFrom(surfaceRes)->weak);
@@ -8889,9 +8883,9 @@ namespace {
     void idleNotificationResourceDestroyed(wl_resource* res) {
         auto* n = (WaylandImpl::IdleNotif*)wl_resource_get_user_data(res);
 
-        ev_timer_stop(n->srv->loop, &n->timer);
+        ev_timer_stop(n->srv->composer->loop, &n->timer);
         n->unlink();
-        n->srv->alloc->release(n);
+        n->srv->composer->alloc->release(n);
     }
 
     const struct ext_idle_notification_v1_interface idleNotificationImpl = {.destroy = relPointerDestroy};
@@ -8906,7 +8900,7 @@ namespace {
             return;
         }
 
-        WaylandImpl::IdleNotif* n = srv->alloc->make<WaylandImpl::IdleNotif>();
+        WaylandImpl::IdleNotif* n = srv->composer->alloc->make<WaylandImpl::IdleNotif>();
 
         n->srv = srv;
         n->res = r;
@@ -8916,7 +8910,7 @@ namespace {
 
         evTimerInit(&n->timer, idleNotifCb, t, t);
         n->timer.data = n;
-        ev_timer_again(srv->loop, &n->timer);
+        ev_timer_again(srv->composer->loop, &n->timer);
 
         srv->idleNotifs.pushBack(n);
         wl_resource_set_implementation(r, &idleNotificationImpl, n, idleNotificationResourceDestroyed);
@@ -8966,8 +8960,8 @@ namespace {
         }
 
         s->syncRes = nullptr;
-        releaseTimeline(s->srv->alloc, s->pendAcqTl);
-        releaseTimeline(s->srv->alloc, s->pendRelTl);
+        releaseTimeline(s->srv->composer->alloc, s->pendAcqTl);
+        releaseTimeline(s->srv->composer->alloc, s->pendRelTl);
     }
 
     void syncSurfaceSetAcquirePoint(wl_client*, wl_resource* res, wl_resource* tlRes, u32 hi, u32 lo) {
@@ -8981,8 +8975,8 @@ namespace {
 
         auto* timeline = (TimelineRef*)wl_resource_get_user_data(tlRes);
 
-        releaseTimeline(s->srv->alloc, s->pendAcqTl);
-        s->pendAcqTl = s->srv->alloc->make<TimelineRef>(*timeline);
+        releaseTimeline(s->srv->composer->alloc, s->pendAcqTl);
+        s->pendAcqTl = s->srv->composer->alloc->make<TimelineRef>(*timeline);
         s->pendAcqPt = ((u64)hi << 32) | lo;
     }
 
@@ -8997,8 +8991,8 @@ namespace {
 
         auto* timeline = (TimelineRef*)wl_resource_get_user_data(tlRes);
 
-        releaseTimeline(s->srv->alloc, s->pendRelTl);
-        s->pendRelTl = s->srv->alloc->make<TimelineRef>(*timeline);
+        releaseTimeline(s->srv->composer->alloc, s->pendRelTl);
+        s->pendRelTl = s->srv->composer->alloc->make<TimelineRef>(*timeline);
         s->pendRelPt = ((u64)hi << 32) | lo;
     }
 
@@ -9051,8 +9045,8 @@ namespace {
             return;
         }
 
-        TimelineRef timeline = srv->alloc->make<TimelineBox>(srv->alloc, srv, handle);
-        auto* holder = srv->alloc->make<TimelineRef>(timeline);
+        TimelineRef timeline = srv->composer->alloc->make<TimelineBox>(srv->composer->alloc, srv, handle);
+        auto* holder = srv->composer->alloc->make<TimelineRef>(timeline);
 
         wl_resource_set_implementation(r, &syncTimelineImpl, holder, syncTimelineResourceDestroyed);
     }
@@ -9080,8 +9074,8 @@ namespace {
             wl_resource_set_user_data(s.syncRes, nullptr);
         }
 
-        releaseTimeline(s.srv->alloc, s.pendAcqTl);
-        releaseTimeline(s.srv->alloc, s.pendRelTl);
+        releaseTimeline(s.srv->composer->alloc, s.pendAcqTl);
+        releaseTimeline(s.srv->composer->alloc, s.pendRelTl);
     }
 
     void dpmsTimerCb(struct ev_loop* l, ev_timer* w, int) {
@@ -9099,7 +9093,7 @@ namespace {
             }
 
             srv->dpmsOff = true;
-            srv->output->setPowerSave(false);
+            srv->composer->output->setPowerSave(false);
         }
 
         ev_timer_stop(l, w);
@@ -9119,7 +9113,7 @@ namespace {
     void spbBufferResourceDestroyed(wl_resource* res) {
         SpbBox* box = (SpbBox*)wl_resource_get_user_data(res);
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     void spbCreateBuffer(wl_client* client, wl_resource* res, u32 id, u32 r, u32 g, u32 b, u32 a) {
@@ -9132,7 +9126,7 @@ namespace {
             return;
         }
 
-        SpbBox* box = srv->alloc->make<SpbBox>();
+        SpbBox* box = srv->composer->alloc->make<SpbBox>();
 
         box->srv = srv;
         box->argb = ((a >> 24) << 24) | ((r >> 24) << 16) | ((g >> 24) << 8) | (b >> 24);
@@ -9161,7 +9155,7 @@ namespace {
         wl_list_remove(&destroy->listener.link);
         watch->unlink();
         wl_resource_post_error(box->res, XDG_TOPLEVEL_ICON_V1_ERROR_NO_BUFFER, "icon buffer was destroyed before the icon object");
-        box->srv->alloc->release(watch);
+        box->srv->composer->alloc->release(watch);
     }
 
     void iconResourceDestroyed(wl_resource* res) {
@@ -9171,10 +9165,10 @@ namespace {
             auto* watch = (IconBufferWatch*)box->bufferWatches.popFront();
 
             wl_list_remove(&watch->destroy.listener.link);
-            box->srv->alloc->release(watch);
+            box->srv->composer->alloc->release(watch);
         }
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     void iconSetName(wl_client*, wl_resource* res, const char* name) {
@@ -9233,7 +9227,7 @@ namespace {
 
         box->bufferWatchCount++;
 
-        IconBufferWatch* watch = box->srv->alloc->make<IconBufferWatch>();
+        IconBufferWatch* watch = box->srv->composer->alloc->make<IconBufferWatch>();
 
         watch->icon = box;
         watch->destroy.watch = watch;
@@ -9296,7 +9290,7 @@ namespace {
             return;
         }
 
-        IconBox* box = srv->alloc->make<IconBox>();
+        IconBox* box = srv->composer->alloc->make<IconBox>();
 
         box->srv = srv;
         box->res = r;
@@ -9309,7 +9303,7 @@ namespace {
 
         // the composer makes the icon pool before the Wayland server
         if (t->pendingOwnIcon) {
-            srv->iconPool->release(t->pendingOwnIcon);
+            srv->composer->iconPool->release(t->pendingOwnIcon);
         }
 
         t->pendingOwnIcon = nullptr;
@@ -9322,7 +9316,7 @@ namespace {
             box->immutable = true;
 
             if (box->pixels.length()) {
-                Icon* ic = srv->iconPool->acquire();
+                Icon* ic = srv->composer->iconPool->acquire();
 
                 ic->width = box->w;
                 ic->height = box->h;
@@ -9480,7 +9474,7 @@ namespace {
         auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
         request->unlink();
-        request->srv->alloc->release(request);
+        request->srv->composer->alloc->release(request);
     }
 
     void activationGetToken(wl_client* client, wl_resource* res, u32 id) {
@@ -9493,7 +9487,7 @@ namespace {
         }
 
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-        auto* request = srv->alloc->make<ActivationTokenRequest>();
+        auto* request = srv->composer->alloc->make<ActivationTokenRequest>();
 
         request->srv = srv;
         request->client = client;
@@ -9524,7 +9518,7 @@ namespace {
         *(srv->composer->log) << "imway: activation ("_sv << token << ") -> "_sv << sv(tl->title) << endL;
         srv->seat.focusToplevel(tl);
         tl->raiseRequested = true;
-        srv->scene->needsFrame = true;
+        srv->composer->scene->needsFrame = true;
     }
 
     const struct xdg_activation_v1_interface activationImpl = {
@@ -9574,7 +9568,7 @@ namespace {
     void dmabufBufferResourceDestroyed(wl_resource* res) {
         auto* box = (BufferBox*)wl_resource_get_user_data(res);
 
-        box->srv->alloc->release(box);
+        box->srv->composer->alloc->release(box);
     }
 
     Params* paramsFrom(wl_resource* res) {
@@ -9585,7 +9579,7 @@ namespace {
         BufferBox* box = p.pending;
 
         p.pending = nullptr;
-        p.srv->alloc->release(box);
+        p.srv->composer->alloc->release(box);
     }
 
     bool dmabufFdsImportable(WaylandImpl& srv, const DmabufBuffer& b) {
@@ -9636,10 +9630,10 @@ namespace {
         Params* p = paramsFrom(res);
 
         if (p->pending) {
-            p->srv->alloc->release(p->pending);
+            p->srv->composer->alloc->release(p->pending);
         }
 
-        p->srv->alloc->release(p);
+        p->srv->composer->alloc->release(p);
     }
 
     void paramsAdd(wl_client*, wl_resource* res, i32 fd, u32 planeIdx, u32 offset, u32 stride, u32 modifierHi, u32 modifierLo) {
@@ -9838,16 +9832,16 @@ namespace {
             return;
         }
 
-        auto* p = srv->alloc->make<Params>();
+        auto* p = srv->composer->alloc->make<Params>();
 
         p->srv = srv;
-        p->pending = srv->alloc->make<BufferBox>();
+        p->pending = srv->composer->alloc->make<BufferBox>();
         p->pending->srv = srv;
         FrameResourceRef lifetime = ObjPool::fromMemory();
         DmabufBuffer* buffer = lifetime->make<DmabufBuffer>();
 
         buffer->lifetime = lifetime.mutPtr();
-        p->pending->buffer = srv->alloc->make<DmabufRef>(buffer);
+        p->pending->buffer = srv->composer->alloc->make<DmabufRef>(buffer);
         wl_resource_set_implementation(pres, &paramsImpl, p, paramsDestroyResource);
     }
 
@@ -9977,7 +9971,7 @@ namespace {
             return;
         }
 
-        Scene* scn = seat->srv->scene;
+        Scene* scn = seat->srv->composer->scene;
 
         scn->cursorSurface = nullptr;
         scn->cursorShape = cursorKindFromShape(shape);
@@ -10067,7 +10061,7 @@ namespace {
             cursor->role = SurfaceRole::cursor;
         }
 
-        Scene* scn = seat->srv->scene;
+        Scene* scn = seat->srv->composer->scene;
 
         scn->cursorSurface = cursor;
         scn->cursorShape = surfRes ? CursorKind::unset : CursorKind::hidden;
@@ -10408,8 +10402,8 @@ SeatState::SeatState(WaylandImpl& impl)
 }
 
 void SeatState::layoutIndicator() {
-    srv->composer->kb->layoutShort(srv->scene->layout);
-    srv->scene->needsFrame = true;
+    srv->composer->kb->layoutShort(srv->composer->scene->layout);
+    srv->composer->scene->needsFrame = true;
 }
 
 SeatState::~SeatState() noexcept {
@@ -10446,7 +10440,7 @@ Surface* SeatState::pickInTree(Surface& s) {
 }
 
 Surface* SeatState::pickPointerTarget() {
-    for (Popup* p : eachRev<Popup>(srv->scene->popups)) {
+    for (Popup* p : eachRev<Popup>(srv->composer->scene->popups)) {
         if (!p->mapped || !p->surface) {
             continue;
         }
@@ -10456,7 +10450,7 @@ Surface* SeatState::pickPointerTarget() {
         }
     }
 
-    for (Toplevel* t : each<Toplevel>(srv->scene->toplevels)) {
+    for (Toplevel* t : each<Toplevel>(srv->composer->scene->toplevels)) {
         // a minimized tree stays hovered until a composed frame unhovers it,
         // and a direct-scanout frame composes nothing
         if (!t->mapped || t->minimized || !t->surface) {
@@ -10465,7 +10459,7 @@ Surface* SeatState::pickPointerTarget() {
 
         // the window being dragged follows the cursor; it must not be its
         // own drop target (xdg_toplevel_drag: "does not participate")
-        if (t == srv->scene->dragToplevel.get()) {
+        if (t == srv->composer->scene->dragToplevel.get()) {
             continue;
         }
 
@@ -10500,8 +10494,8 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
 
     ptrFocus = s;
     pointerEnters.clear();
-    srv->scene->cursorShape = CursorKind::unset;
-    srv->scene->cursorSurface = nullptr;
+    srv->composer->scene->cursorShape = CursorKind::unset;
+    srv->composer->scene->cursorSurface = nullptr;
 
     if (s) {
         u32 serial = wl_display_next_serial(srv->display);
@@ -10553,13 +10547,13 @@ void SeatState::pointerRepick() {
     ptrRepickFrames--;
 
     // while the ui under the pointer owns it there is nothing to pick
-    Surface* target = srv->scene->ptrCaptured ? nullptr : pickPointerTarget();
+    Surface* target = srv->composer->scene->ptrCaptured ? nullptr : pickPointerTarget();
 
     if (target) {
         pointerSetFocus(target, curX - target->imgX, curY - target->imgY);
         ptrRepickFrames = 0;
     } else if (ptrRepickFrames > 0) {
-        srv->scene->needsFrame = true;
+        srv->composer->scene->needsFrame = true;
     }
 }
 
@@ -10579,13 +10573,13 @@ void SeatState::constraintActivate() {
     activeConstraint.bind(c->weak);
 
     if (c->isLock) {
-        srv->scene->pointerLocked = true;
+        srv->composer->scene->pointerLocked = true;
         zwp_locked_pointer_v1_send_locked(c->res);
     } else {
-        srv->scene->pointerConfined = true;
+        srv->composer->scene->pointerConfined = true;
         if (!updateConfineRegion()) {
             activeConstraint.reset();
-            srv->scene->pointerConfined = false;
+            srv->composer->scene->pointerConfined = false;
 
             return;
         }
@@ -10602,9 +10596,9 @@ void SeatState::constraintDeactivate() {
     }
 
     activeConstraint.reset();
-    srv->scene->pointerLocked = false;
-    srv->scene->pointerConfined = false;
-    srv->scene->confineRegion.clear();
+    srv->composer->scene->pointerLocked = false;
+    srv->composer->scene->pointerConfined = false;
+    srv->composer->scene->confineRegion.clear();
 
     if (c->isLock) {
         zwp_locked_pointer_v1_send_unlocked(c->res);
@@ -10624,7 +10618,7 @@ void SeatState::constraintDeactivate() {
 bool SeatState::updateConfineRegion() {
     ConstraintBox* c = activeConstraint.get();
 
-    Scene* scn = srv->scene;
+    Scene* scn = srv->composer->scene;
     Vector<RectI> regions;
 
     regions.pushBack({ptrFocus->geomX(), ptrFocus->geomY(), ptrFocus->geomW(), ptrFocus->geomH()});
@@ -10702,7 +10696,7 @@ void SeatState::handleRelMotion(double dx, double dy, double dxRaw, double dyRaw
 }
 
 void SeatState::handleTablet(const TabletToolEvent& ev) {
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 
     // the tool addresses the surface under the pointer, like a pen on a
     // display tablet; move the pointer position to the tool too so picking
@@ -10915,16 +10909,16 @@ void WaylandImpl::activity() {
             ext_idle_notification_v1_send_resumed(n.res);
         }
 
-        ev_timer_again(loop, &n.timer);
+        ev_timer_again(composer->loop, &n.timer);
     });
 
     if (composer->settings->dpmsSeconds() > 0) {
-        ev_timer_again(loop, dpmsTimer);
+        ev_timer_again(composer->loop, dpmsTimer);
 
         if (dpmsOff) {
             dpmsOff = false;
-            output->setPowerSave(true);
-            scene->needsFrame = true;
+            composer->output->setPowerSave(true);
+            composer->scene->needsFrame = true;
         }
     }
 }
@@ -10960,8 +10954,8 @@ DmabufUse::~DmabufUse() noexcept {
         drmSyncobjTimelineSignal(srv->drmFd, &release->handle, &relPoint, 1);
     }
 
-    releaseTimeline(srv->alloc, acq);
-    releaseTimeline(srv->alloc, rel);
+    releaseTimeline(srv->composer->alloc, acq);
+    releaseTimeline(srv->composer->alloc, rel);
 
     if (res) {
         wl_buffer_send_release(res);
@@ -10978,7 +10972,7 @@ DmabufUse::~DmabufUse() noexcept {
 
 BufferBox::~BufferBox() noexcept {
     if (buffer) {
-        srv->alloc->release(buffer);
+        srv->composer->alloc->release(buffer);
     }
 }
 
@@ -10996,7 +10990,7 @@ bool WaylandImpl::idleBlocked() {
             return true;
         }
 
-        for (Popup* popup : each<Popup>(scene->popups)) {
+        for (Popup* popup : each<Popup>(composer->scene->popups)) {
             if (popup->surface.get() == root && popup->mapped) {
                 return true;
             }
@@ -11009,7 +11003,7 @@ bool WaylandImpl::idleBlocked() {
 void SeatState::handleMotion(double x, double y) {
     curX = x;
     curY = y;
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 
     if (dragClient) {
         dragMotion();
@@ -11022,7 +11016,7 @@ void SeatState::handleMotion(double x, double y) {
     // for the whole press-drag it saw start, so a drag leaving the window
     // would read as "captured" and break the implicit grab: the client must
     // keep its motion stream and the matching release
-    if (srv->scene->ptrCaptured && buttonsDown == 0) {
+    if (srv->composer->scene->ptrCaptured && buttonsDown == 0) {
         pointerSetFocus(nullptr, 0, 0);
 
         return;
@@ -11037,7 +11031,7 @@ void SeatState::handleMotion(double x, double y) {
 
         if (target && srv->composer->settings->focusPolicy() == FocusPolicy::followsPointer) {
             if (Toplevel* t = target->rootToplevel()) {
-                srv->scene->focusedToplevel.bind(t->weak);
+                srv->composer->scene->focusedToplevel.bind(t->weak);
 
                 if (srv->composer->settings->raiseOnFocus()) {
                     t->raiseRequested = true;
@@ -11074,7 +11068,7 @@ void SeatState::handleMotion(double x, double y) {
 }
 
 void SeatState::handleButton(u32 button, bool pressed) {
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 
     if (!pressed && !contains(pressedButtons, button)) {
         return;
@@ -11109,7 +11103,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
     }
 
     if (pressed) {
-        for (Popup* p : eachRev<Popup>(srv->scene->popups)) {
+        for (Popup* p : eachRev<Popup>(srv->composer->scene->popups)) {
             if (!p->mapped || !p->grab) {
                 continue;
             }
@@ -11173,7 +11167,7 @@ void SeatState::handleButton(u32 button, bool pressed) {
 }
 
 void SeatState::handleScroll(const ScrollEvent& ev) {
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 
     if (!ptrFocus) {
         return;
@@ -11400,7 +11394,7 @@ void SeatState::releaseAllKeys() {
 }
 
 void SeatState::handleKey(u32 code, bool pressed) {
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 
     // an input method grab intercepts physical keys: they go to the IME's
     // keyboard-grab object, not the focused application
@@ -11454,7 +11448,7 @@ void SeatState::updateShortcutInhibit() {
     Surface* root = target ? target->rootSurface() : nullptr;
     bool inhibited = false;
 
-    forEach<Surface, SceneNode>(srv->scene->surfaces, [&](Surface& surface) {
+    forEach<Surface, SceneNode>(srv->composer->scene->surfaces, [&](Surface& surface) {
         auto& s = (SurfaceImpl&)surface;
 
         if (s.kbInhibitRes) {
@@ -11474,7 +11468,7 @@ void SeatState::updateShortcutInhibit() {
         }
     });
 
-    srv->scene->shortcutsInhibited = inhibited;
+    srv->composer->scene->shortcutsInhibited = inhibited;
 }
 
 void SeatState::rememberSerial(u32 serial, wl_client* client, Surface* surface) {
@@ -11651,8 +11645,8 @@ void SeatState::sourceGone(DataSource* src) {
         dragSource = nullptr;
         dragClient = nullptr;
         dragTarget.reset();
-        srv->scene->dragIcon.reset();
-        srv->scene->needsFrame = true;
+        srv->composer->scene->dragIcon.reset();
+        srv->composer->scene->needsFrame = true;
     }
 
     if (resend) {
@@ -11668,14 +11662,14 @@ void SeatState::syncToplevelDrag() {
     ToplevelDragBox* box = dragSource ? dragSource->toplevelDrag.get() : nullptr;
 
     if (box && box->attached && box->attached->mapped) {
-        srv->scene->dragToplevel.bind(box->attached);
-        srv->scene->dragToplevelOffX = box->offX;
-        srv->scene->dragToplevelOffY = box->offY;
+        srv->composer->scene->dragToplevel.bind(box->attached);
+        srv->composer->scene->dragToplevelOffX = box->offX;
+        srv->composer->scene->dragToplevelOffY = box->offY;
     } else {
-        srv->scene->dragToplevel.reset();
+        srv->composer->scene->dragToplevel.reset();
     }
 
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
 }
 
 // deviceStartDrag, the only caller, has checked the implicit grab
@@ -11685,12 +11679,12 @@ void SeatState::startDrag(wl_client* client, DataSource* src, Surface* icon) {
     dragTarget.reset();
 
     if (icon) {
-        srv->scene->dragIcon.bind(icon->weak);
+        srv->composer->scene->dragIcon.bind(icon->weak);
     } else {
-        srv->scene->dragIcon.reset();
+        srv->composer->scene->dragIcon.reset();
     }
 
-    srv->scene->needsFrame = true;
+    srv->composer->scene->needsFrame = true;
     pointerSetFocus(nullptr, 0, 0);
     syncToplevelDrag();
     dragMotion();
@@ -11751,11 +11745,11 @@ void SeatState::dragMotion() {
 void SeatState::endDrag() {
     DataSource* src = dragSource;
 
-    srv->scene->dragToplevel.reset();
+    srv->composer->scene->dragToplevel.reset();
     dragSource = nullptr;
     dragClient = nullptr;
-    srv->scene->dragIcon.reset();
-    srv->scene->needsFrame = true;
+    srv->composer->scene->dragIcon.reset();
+    srv->composer->scene->needsFrame = true;
 
     // a drop only lands on a target that accepted a mime type; otherwise
     // the spec calls for cancelling the operation (the target still gets
@@ -11942,8 +11936,8 @@ void SeatState::imUpdatePopup() {
     TextInput* ti = activeTextInput();
 
     if (!ti || !im->active) {
-        if (im->popupSurface.get() && srv->scene->imePopup.get() == im->popupSurface.get()) {
-            srv->scene->imePopup.reset();
+        if (im->popupSurface.get() && srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+            srv->composer->scene->imePopup.reset();
         }
 
         return;
@@ -11965,9 +11959,9 @@ void SeatState::imUpdatePopup() {
         Surface* anchor = kbFocusSurface();
 
         if (anchor) {
-            srv->scene->imePopup.bind(im->popupSurface);
-            srv->scene->imePopupX = anchor->imgX + (float)anchor->geomX() + (float)r.x;
-            srv->scene->imePopupY = anchor->imgY + (float)anchor->geomY() + (float)r.y + (float)r.h;
+            srv->composer->scene->imePopup.bind(im->popupSurface);
+            srv->composer->scene->imePopupX = anchor->imgX + (float)anchor->geomX() + (float)r.x;
+            srv->composer->scene->imePopupY = anchor->imgY + (float)anchor->geomY() + (float)r.y + (float)r.h;
         }
     }
 }
@@ -12058,7 +12052,7 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
 
         // a minimized window is not on screen to take the keyboard: the
         // frame edge would only take it back after its client saw an enter
-        for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
+        for (Toplevel* other : eachRev<Toplevel>(srv->composer->scene->toplevels)) {
             if (other != t && other->mapped && !other->minimized) {
                 next = other;
 
@@ -12176,7 +12170,7 @@ void SeatState::toplevelGone(Toplevel* t) {
         kbFocus = nullptr;
         focusGeneration++;
 
-        for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
+        for (Toplevel* other : eachRev<Toplevel>(srv->composer->scene->toplevels)) {
             if (other != t && other->mapped && !other->minimized) {
                 focusToplevel(other);
 
@@ -12225,11 +12219,11 @@ void WaylandImpl::updateKeymap() {
     seat.modsLocked = ~0u;
     seat.modsGroup = ~0u;
     seat.updateModifiers();
-    scene->needsFrame = true;
+    composer->scene->needsFrame = true;
 }
 
 void WaylandImpl::updateDecorations() {
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& toplevel) {
+    forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& toplevel) {
         applyDecoration((ToplevelImpl&)toplevel);
     });
 }
@@ -12237,20 +12231,20 @@ void WaylandImpl::updateDecorations() {
 void WaylandImpl::updateDpms() {
     double seconds = composer->settings->dpmsSeconds();
 
-    ev_timer_stop(loop, dpmsTimer);
+    ev_timer_stop(composer->loop, dpmsTimer);
 
     if (seconds <= 0.) {
         if (dpmsOff) {
             dpmsOff = false;
-            output->setPowerSave(true);
-            scene->needsFrame = true;
+            composer->output->setPowerSave(true);
+            composer->scene->needsFrame = true;
         }
 
         return;
     }
 
     evTimerSet(dpmsTimer, seconds, seconds);
-    ev_timer_again(loop, dpmsTimer);
+    ev_timer_again(composer->loop, dpmsTimer);
 }
 
 void WaylandImpl::updateAnrTimer() {
@@ -12267,9 +12261,9 @@ void WaylandImpl::updateAnrTimer() {
         seconds = .05;
     }
 
-    ev_timer_stop(loop, pingTimer);
+    ev_timer_stop(composer->loop, pingTimer);
     evTimerSet(pingTimer, seconds, seconds);
-    ev_timer_start(loop, pingTimer);
+    ev_timer_start(composer->loop, pingTimer);
 }
 
 namespace {
@@ -12318,11 +12312,7 @@ namespace {
 
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     : composer(&comp)
-    , pool(comp.pool)
-    , alloc(comp.alloc)
     , shmGlobal{comp.alloc, comp.chaos}
-    , loop(comp.loop)
-    , scene(comp.scene)
     , socketName(cfg.socketName)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
@@ -12361,12 +12351,10 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 
     wlLoop = wl_display_get_event_loop(display);
 
-    // the one output the composer started before it made us; it outlives us
+    // the composer's output was started before we were made; it outlives us
     // and is never swapped, so nothing here checks it for null
-    output = cfg.output;
-    cmDisplayColor = output->colorState();
+    cmDisplayColor = composer->output->colorState();
     cmDisplayIdentity = ++cimgIdentity;
-    iconPool = comp.iconPool;
     comp.iconProviders.pushBack((IconProvider*)this);
     comp.sessionEnabledListeners.pushBack(comp.pool->make<CallWaylandSessionEnabled>(this));
     comp.sessionDisabledListeners.pushBack(comp.pool->make<CallWaylandSessionDisabled>(this));
@@ -12377,7 +12365,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     explicitSyncSupported = cfg.explicitSync;
     maxImageDim = cfg.maxImageDim;
 
-    dpmsTimer = pooledTimer(*comp.pool, loop);
+    dpmsTimer = pooledTimer(*comp.pool, composer->loop);
     evTimerInit(dpmsTimer, dpmsTimerCb, 0., 0.);
     dpmsTimer->data = this;
     updateDpms();
@@ -12389,24 +12377,24 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     STD_VERIFY(initWaylandShm(display, &shmGlobal));
     createGlobals();
 
-    wlIo = pooledIo(*comp.pool, loop);
+    wlIo = pooledIo(*comp.pool, composer->loop);
     evIoInit(wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
     wlIo->data = this;
-    ev_io_start(loop, wlIo);
+    ev_io_start(composer->loop, wlIo);
 
-    flushPrepare = pooledPrepare(*comp.pool, loop);
+    flushPrepare = pooledPrepare(*comp.pool, composer->loop);
     evPrepareInit(flushPrepare, flushCb);
     flushPrepare->data = this;
-    ev_prepare_start(loop, flushPrepare);
+    ev_prepare_start(composer->loop, flushPrepare);
 
-    sigInt = pooledSignal(*comp.pool, loop);
+    sigInt = pooledSignal(*comp.pool, composer->loop);
     evSignalInit(sigInt, signalCb, SIGINT);
-    ev_signal_start(loop, sigInt);
-    sigTerm = pooledSignal(*comp.pool, loop);
+    ev_signal_start(composer->loop, sigInt);
+    sigTerm = pooledSignal(*comp.pool, composer->loop);
     evSignalInit(sigTerm, signalCb, SIGTERM);
-    ev_signal_start(loop, sigTerm);
+    ev_signal_start(composer->loop, sigTerm);
 
-    pingTimer = pooledTimer(*comp.pool, loop);
+    pingTimer = pooledTimer(*comp.pool, composer->loop);
     evTimerInit(pingTimer, pingTimerCb, 0., 0.);
     pingTimer->data = this;
     updateAnrTimer();
@@ -12435,13 +12423,13 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     }
 
     if (syncEvFd >= 0) {
-        syncEvIo = pooledIo(*comp.pool, loop);
+        syncEvIo = pooledIo(*comp.pool, composer->loop);
         evIoInit(syncEvIo, syncEvCb, syncEvFd, EV_READ);
         syncEvIo->data = this;
-        ev_io_start(loop, syncEvIo);
+        ev_io_start(composer->loop, syncEvIo);
     }
 
-    *(composer->log) << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
+    *(composer->log) << "imway: socket "_sv << socketName << ", output "_sv << composer->scene->outW << "x"_sv << composer->scene->outH << "@"_sv << (i64)composer->scene->hz << endL;
 }
 
 void WaylandImpl::stopSecurityContexts() noexcept {
@@ -12534,7 +12522,7 @@ void cmImageDescResourceDestroyed(wl_resource* res) {
     auto* d = (CImgDesc*)wl_resource_get_user_data(res);
 
     // both makers set the record and its server before anything else
-    d->srv->alloc->release(d);
+    d->srv->composer->alloc->release(d);
 }
 
 // build an image description resource carrying `d`, sent ready
@@ -12547,7 +12535,7 @@ wl_resource* cmMakeImageDesc(WaylandImpl* srv, wl_client* client, u32 version, u
         return nullptr;
     }
 
-    CImgDesc* obj = srv->alloc->make<CImgDesc>();
+    CImgDesc* obj = srv->composer->alloc->make<CImgDesc>();
 
     *obj = d;
     obj->srv = srv;
@@ -12576,7 +12564,7 @@ wl_resource* cmMakeFailedImageDesc(WaylandImpl* srv, wl_client* client, u32 vers
         return nullptr;
     }
 
-    CImgDesc* obj = srv->alloc->make<CImgDesc>();
+    CImgDesc* obj = srv->composer->alloc->make<CImgDesc>();
 
     *obj = {};
     obj->srv = srv;
@@ -12864,7 +12852,7 @@ const struct wp_image_description_creator_params_v1_interface cmParamsImpl = {
 void cmParamsResourceDestroyed(wl_resource* res) {
     auto* p = (CParams*)wl_resource_get_user_data(res);
 
-    p->srv->alloc->release(p);
+    p->srv->composer->alloc->release(p);
 }
 
 // surface color object: user_data = the SurfaceImpl
@@ -12873,7 +12861,7 @@ void cmSurfaceDestroy(wl_client*, wl_resource* res) {
         s->pendColorChanged = true;
 
         if (!s->pendColor) {
-            s->pendColor = s->srv->alloc->make<ColorDescription>();
+            s->pendColor = s->srv->composer->alloc->make<ColorDescription>();
         }
 
         *s->pendColor = ColorDescription::sRgb();
@@ -12909,7 +12897,7 @@ void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u
     s->pendColorChanged = true;
 
     if (!s->pendColor) {
-        s->pendColor = s->srv->alloc->make<ColorDescription>();
+        s->pendColor = s->srv->composer->alloc->make<ColorDescription>();
     }
 
     *s->pendColor = d->color;
@@ -12927,7 +12915,7 @@ void cmSurfaceUnsetImageDesc(wl_client*, wl_resource* res) {
     s->pendColorChanged = true;
 
     if (!s->pendColor) {
-        s->pendColor = s->srv->alloc->make<ColorDescription>();
+        s->pendColor = s->srv->composer->alloc->make<ColorDescription>();
     }
 
     *s->pendColor = ColorDescription::sRgb();
@@ -12977,7 +12965,7 @@ void cmOutputResourceDestroyed(wl_resource* res) {
     auto* obj = (CmOutput*)wl_resource_get_user_data(res);
 
     obj->unlink();
-    obj->srv->alloc->release(obj);
+    obj->srv->composer->alloc->release(obj);
 }
 
 void cmFeedbackDestroy(wl_client*, wl_resource* res) {
@@ -13006,7 +12994,7 @@ void cmFeedbackResourceDestroyed(wl_resource* res) {
     auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
 
     obj->unlink();
-    obj->srv->alloc->release(obj);
+    obj->srv->composer->alloc->release(obj);
 }
 
 // manager
@@ -13024,7 +13012,7 @@ void cmManagerGetOutput(wl_client* client, wl_resource* res, u32 id, wl_resource
     }
 
     auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-    CmOutput* obj = srv->alloc->make<CmOutput>();
+    CmOutput* obj = srv->composer->alloc->make<CmOutput>();
 
     obj->srv = srv;
     obj->res = out;
@@ -13063,7 +13051,7 @@ void cmManagerGetSurfaceFeedback(wl_client* client, wl_resource* res, u32 id, wl
     }
 
     auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-    CmFeedback* obj = srv->alloc->make<CmFeedback>();
+    CmFeedback* obj = srv->composer->alloc->make<CmFeedback>();
 
     obj->srv = srv;
     obj->res = fb;
@@ -13082,7 +13070,7 @@ void cmManagerCreateParamsCreator(wl_client* client, wl_resource* res, u32 id) {
         return;
     }
 
-    CParams* p = srv->alloc->make<CParams>();
+    CParams* p = srv->composer->alloc->make<CParams>();
 
     *p = {};
     p->srv = srv;
@@ -13176,7 +13164,7 @@ const struct wp_image_description_creator_icc_v1_interface cmIccImpl = {
 void cmIccResourceDestroyed(wl_resource* res) {
     auto* icc = (CIcc*)wl_resource_get_user_data(res);
 
-    icc->srv->alloc->release(icc);
+    icc->srv->composer->alloc->release(icc);
 }
 
 void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
@@ -13189,7 +13177,7 @@ void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
     }
 
     auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
-    CIcc* icc = srv->alloc->make<CIcc>();
+    CIcc* icc = srv->composer->alloc->make<CIcc>();
 
     icc->srv = srv;
     wl_resource_set_implementation(creator, &cmIccImpl, icc, cmIccResourceDestroyed);
@@ -13539,7 +13527,7 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 }
 
 void WaylandImpl::syncColorState() {
-    OutputColorState color = output->colorState();
+    OutputColorState color = composer->output->colorState();
 
     if (color == cmDisplayColor) {
         return;
@@ -13580,7 +13568,7 @@ void WaylandImpl::onListen(void* arg) {
 
     // the Terminate choice of the ANR dialog: the client cannot answer a
     // close event, so the pid from its socket credentials gets SIGKILL
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+    forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& t) {
         if (!t.terminateRequested) {
             return;
         }
@@ -13602,17 +13590,17 @@ void WaylandImpl::onListen(void* arg) {
 
     if (seat.kbFocus && (seat.kbFocus->minimized || !seat.kbFocus->mapped)) {
         seat.focusToplevel(nullptr);
-    } else if (scene->focusedToplevel && !scene->focusedToplevel->minimized && scene->focusedToplevel->mapped && scene->focusedToplevel.get() != seat.kbFocus) {
-        seat.focusToplevel(scene->focusedToplevel.get());
+    } else if (composer->scene->focusedToplevel && !composer->scene->focusedToplevel->minimized && composer->scene->focusedToplevel->mapped && composer->scene->focusedToplevel.get() != seat.kbFocus) {
+        seat.focusToplevel(composer->scene->focusedToplevel.get());
     }
 
     seat.pointerRepick();
 
-    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+    forEach<Surface, SceneNode>(composer->scene->surfaces, [&](Surface& surface) {
         syncSurfaceOutputs((SurfaceImpl&)surface);
     });
 
-    forEach<Toplevel>(scene->toplevels, [](Toplevel& tl) {
+    forEach<Toplevel>(composer->scene->toplevels, [](Toplevel& tl) {
         auto& ti = (ToplevelImpl&)tl;
 
         if (ti.closeRequested) {
@@ -13621,7 +13609,7 @@ void WaylandImpl::onListen(void* arg) {
         }
     });
 
-    forEach<Popup>(scene->popups, [&](Popup& value) {
+    forEach<Popup>(composer->scene->popups, [&](Popup& value) {
         auto* popup = (PopupImpl*)&value;
 
         if (!popup->mapped || !popup->parent || !popup->xdg || !popup->positioner.reactive) {
@@ -13641,29 +13629,29 @@ void WaylandImpl::onListen(void* arg) {
         }
     });
 
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& tl) {
+    forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& tl) {
         if (tl.mapped && !tl.minimized && !tl.tabHidden && tl.surface) {
             fireFrameCallbacks(*(SurfaceImpl*)tl.surface.get(), msec);
         }
     });
 
-    forEach<Popup>(scene->popups, [&](Popup& p) {
+    forEach<Popup>(composer->scene->popups, [&](Popup& p) {
         if (p.mapped && p.surface) {
             fireFrameCallbacks(*(SurfaceImpl*)p.surface.get(), msec);
         }
     });
 
-    if (scene->dragIcon) {
-        fireFrameCallbacks(*(SurfaceImpl*)scene->dragIcon.get(), msec);
+    if (composer->scene->dragIcon) {
+        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->dragIcon.get(), msec);
     }
 
-    if (scene->cursorSurface) {
-        fireFrameCallbacks(*(SurfaceImpl*)scene->cursorSurface, msec);
+    if (composer->scene->cursorSurface) {
+        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->cursorSurface, msec);
     }
 
     // wp-fifo: a presented surface clears its barrier and admits queued
     // updates; an invisible one cannot hold a barrier at all
-    forEach<Surface, SceneNode>(scene->surfaces, [&](Surface& surface) {
+    forEach<Surface, SceneNode>(composer->scene->surfaces, [&](Surface& surface) {
         auto& s = (SurfaceImpl&)surface;
 
         if (!s.fifo || (s.fifo->queue.empty() && !s.fifo->barrier)) {
@@ -13671,7 +13659,7 @@ void WaylandImpl::onListen(void* arg) {
         }
 
         Surface* root = surface.rootSurface();
-        bool shown = root == scene->dragIcon.get() || root == scene->cursorSurface;
+        bool shown = root == composer->scene->dragIcon.get() || root == composer->scene->cursorSurface;
 
         if (!shown && root->toplevel) {
             shown = root->toplevel->mapped && !root->toplevel->minimized && !root->toplevel->tabHidden;
@@ -13688,15 +13676,15 @@ void WaylandImpl::onListen(void* arg) {
         if (!s.fifo->queue.empty() && !fifoHeldOnAcquire(s)) {
             // a barrier- or time-held entry needs future presentations to
             // expire against; an acquire-held one is woken by its eventfd
-            scene->needsFrame = true;
+            composer->scene->needsFrame = true;
         }
     });
 
     // render faults: the renderer could not build a texture for this
     // client's content — the owner is disconnected with no_memory,
     // weston-style, instead of failing again every frame
-    for (u64 faultId : scene->renderFaults) {
-        forEach<Toplevel>(scene->toplevels, [&](Toplevel& t) {
+    for (u64 faultId : composer->scene->renderFaults) {
+        forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& t) {
             if (t.id != faultId || !t.surface) {
                 return;
             }
@@ -13708,7 +13696,7 @@ void WaylandImpl::onListen(void* arg) {
         });
     }
 
-    scene->renderFaults.clear();
+    composer->scene->renderFaults.clear();
 
     seat.imUpdatePopup();
 
@@ -13738,14 +13726,14 @@ void WaylandImpl::onListen(void* arg) {
             ext_image_copy_capture_cursor_session_v1_send_position(cc->res, x, y);
         }
 
-        if (scene->cursorHotX != cc->lastHotX || scene->cursorHotY != cc->lastHotY) {
-            cc->lastHotX = scene->cursorHotX;
-            cc->lastHotY = scene->cursorHotY;
+        if (composer->scene->cursorHotX != cc->lastHotX || composer->scene->cursorHotY != cc->lastHotY) {
+            cc->lastHotX = composer->scene->cursorHotX;
+            cc->lastHotY = composer->scene->cursorHotY;
             ext_image_copy_capture_cursor_session_v1_send_hotspot(cc->res, cc->lastHotX, cc->lastHotY);
         }
     }
 
-    forEach<Toplevel>(scene->toplevels, [&](Toplevel& value) {
+    forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& value) {
         auto* ti = (ToplevelImpl*)&value;
 
         if (!ti->mapped || !ti->surface || ti->desiredW <= 0) {
@@ -13787,7 +13775,7 @@ void WaylandImpl::run() {
     // and everything else their destroy hooks reach are alive; the pools
     // unwinding after the throw would free those first
     try {
-        ev_run(loop, 0);
+        ev_run(composer->loop, 0);
     } catch (...) {
         closeDisplay();
 
@@ -13835,16 +13823,16 @@ void WaylandImpl::outputResized() {
     // Toplevel configures need no sweep here — the per-frame desired-size
     // pass reconfigures fullscreen and maximized windows from the next
     // frame's layout at the new size.
-    Buffer make(output->make());
-    Buffer model(output->model());
+    Buffer make(composer->output->make());
+    Buffer model(composer->output->model());
 
     for (wl_resource* res : outputResources) {
-        wl_output_send_geometry(res, 0, 0, output->physicalWidthMm(), output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
-        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, scene->outW, scene->outH, (i32)(scene->hz * 1000));
+        wl_output_send_geometry(res, 0, 0, composer->output->physicalWidthMm(), composer->output->physicalHeightMm(), WL_OUTPUT_SUBPIXEL_UNKNOWN, make.cStr(), model.cStr(), WL_OUTPUT_TRANSFORM_NORMAL);
+        wl_output_send_mode(res, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, composer->scene->outW, composer->scene->outH, (i32)(composer->scene->hz * 1000));
     }
 
     for (wl_resource* res : xdgOutputResources) {
-        zxdg_output_v1_send_logical_size(res, scene->outW, scene->outH);
+        zxdg_output_v1_send_logical_size(res, composer->scene->outW, composer->scene->outH);
 
         // since v3 xdg_output.done is deprecated in favor of wl_output.done
         if (wl_resource_get_version(res) < 3) {
@@ -13860,7 +13848,7 @@ void WaylandImpl::outputResized() {
 }
 
 void WaylandImpl::syncKeyboardCapture() {
-    bool cap = scene->kbCaptured;
+    bool cap = composer->scene->kbCaptured;
 
     if (cap && !seat.uiCaptured) {
         seat.releaseAllKeys();

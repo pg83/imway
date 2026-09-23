@@ -37,7 +37,6 @@ using namespace stl;
 namespace {
     struct ScreenshotCaptureImpl: ScreenshotCapture, Listener {
         Composer* comp = nullptr;
-        ::Output* output = nullptr;
         Listener* renderReady = nullptr;
         VkPhysicalDevice phys = VK_NULL_HANDLE;
         VkDevice device = VK_NULL_HANDLE;
@@ -151,7 +150,6 @@ namespace {
 
 ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, int w, int h, VkFormat fmt, Listener& ready)
     : comp(&c)
-    , output(c.output)
     , renderReady(&ready)
     , phys(vk.phys)
     , device(vk.device)
@@ -235,7 +233,7 @@ bool ScreenshotCaptureImpl::busy() const {
 // the renderer asks only when no capture is busy (captureScreenshot)
 void ScreenshotCaptureImpl::request() {
     busy_ = true;
-    handoff = output->prepareScreenshot(*this);
+    handoff = comp->output->prepareScreenshot(*this);
 
     if (!handoff) {
         renderReady->onListen(this);
@@ -319,7 +317,7 @@ bool ScreenshotCaptureImpl::ensureReadback() {
 // the request is in flight before one does: busy, no fence armed, no file
 // being built, no scanout waiting to retire
 bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayout layout) {
-    if (handoff && !output->takeScreenshot(scanoutIndex, shared)) {
+    if (handoff && !comp->output->takeScreenshot(scanoutIndex, shared)) {
         handoff = false;
     }
 
@@ -395,7 +393,7 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
 }
 
 void ScreenshotCaptureImpl::pollRetire() {
-    if (output->screenshotPending()) {
+    if (comp->output->screenshotPending()) {
         return;
     }
 
@@ -429,7 +427,7 @@ void ScreenshotCaptureImpl::fenceDone(VkResult status) {
 
         shared.fd = -1;
         spawn(fd, &shared);
-        waitingRetire = output->screenshotPending();
+        waitingRetire = comp->output->screenshotPending();
 
         if (waitingRetire) {
             ev_timer_again(comp->loop, retireTimer);
@@ -585,7 +583,7 @@ void ScreenshotCaptureImpl::spawn(int fd, const SharedScanout* image) {
     Buffer name;
     Buffer lossless;
     Buffer quality;
-    const OutputColorState& shotColor = image ? image->color : output->colorState();
+    const OutputColorState& shotColor = image ? image->color : comp->output->colorState();
     bool hdr = shotColor.hdr();
     double sdrWhite = hdr ? shotColor.sdrWhiteNits : 0;
 

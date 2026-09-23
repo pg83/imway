@@ -12,7 +12,6 @@ namespace stl {
 struct ev_loop;
 
 struct Scene;
-struct Output;
 struct Keyboard;
 struct DmabufFormat;
 struct IconPool;
@@ -30,7 +29,6 @@ struct WaylandConfig {
     unsigned long long mainDevice = 0;
     // the render device's 2d image ceiling for client buffers
     u32 maxImageDim = 0;
-    Output* output = nullptr;
     int drmFd = -1;
     bool explicitSync = false;
 };
