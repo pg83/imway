@@ -2399,13 +2399,10 @@ SurfaceTexture* RendererImpl::uploadTexture(Surface& s, bool xrgb, bool staging)
     return tex;
 }
 
+// frameNow calls this for a surface holding wl_shm content, whose size is
+// that buffer's: wl_shm refused any buffer without a positive size
 bool RendererImpl::uploadShm(Surface& s) {
-    ShmContent* content = s.shm ? s.shm->mutPtr() : nullptr;
-
-    if (!content || s.width <= 0 || s.height <= 0) {
-        return true;
-    }
-
+    ShmContent* content = s.shm->mutPtr();
     ShmState* state = &shmState(*content);
 
     if (state->failed) {
@@ -2425,10 +2422,7 @@ bool RendererImpl::uploadShm(Surface& s) {
         return state->failed;
     }
 
-    if (!state->copyReady) {
-        return false;
-    }
-
+    // every zero-copy backend is ready the moment prepareShm picks it
     if (state->backend == ShmBackend::UdmabufImage) {
         if (!importDmabuf(s, state->dmabuf)) {
             state->failed = true;
