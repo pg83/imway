@@ -40,7 +40,6 @@ namespace {
     void watchToggle(DBusWatch* w, void* data);
     dbus_bool_t timeoutAdd(DBusTimeout* t, void* data);
     void timeoutRemove(DBusTimeout* t, void* data);
-    void timeoutToggle(DBusTimeout* t, void* data);
 
     struct DBusConnImpl: public DBusConn {
         struct ev_loop* loop = nullptr;
@@ -65,7 +64,10 @@ DBusConnImpl::DBusConnImpl(ObjPool* pool, SmallObjAllocator* a, struct ev_loop* 
 {
     dbus_connection_set_exit_on_disconnect(conn, FALSE);
     dbus_connection_set_watch_functions(conn, watchAdd, watchRemove, watchToggle, this, nullptr);
-    dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, timeoutToggle, this, nullptr);
+    // a client connection's timeouts are born enabled and libdbus never
+    // disables or toggles them (only the bus daemon and DBusServer do), so
+    // there is no toggle to follow and every added timeout runs
+    dbus_connection_set_timeout_functions(conn, timeoutAdd, timeoutRemove, nullptr, this, nullptr);
 
     ev_prepare* prepare = pool->make<ev_prepare>();
     struct ev_loop* heldLoop = loop;
@@ -202,10 +204,7 @@ namespace {
         ev_timer_init(&box->timer, timeoutCb, sec, sec);
         box->timer.data = box;
         dbus_timeout_set_data(t, box, nullptr);
-
-        if (dbus_timeout_get_enabled(t)) {
-            ev_timer_start(impl->loop, &box->timer);
-        }
+        ev_timer_start(impl->loop, &box->timer);
 
         return TRUE;
     }
@@ -218,20 +217,6 @@ namespace {
         ev_timer_stop(impl->loop, &box->timer);
         dbus_timeout_set_data(t, nullptr, nullptr);
         impl->alloc->release(box);
-    }
-
-    void timeoutToggle(DBusTimeout* t, void* data) {
-        auto* impl = (DBusConnImpl*)data;
-        auto* box = (TimeoutBox*)dbus_timeout_get_data(t);
-
-        ev_timer_stop(impl->loop, &box->timer);
-
-        if (dbus_timeout_get_enabled(t)) {
-            double sec = dbus_timeout_get_interval(t) / 1000.0;
-
-            ev_timer_set(&box->timer, sec, sec);
-            ev_timer_start(impl->loop, &box->timer);
-        }
     }
 }
 
