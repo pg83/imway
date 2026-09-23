@@ -64,6 +64,9 @@ using namespace stl;
 //   frame-hang=K      the same, reporting the wait timing out instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
+//   shot-file=K       K steps building the screenshot's file (its memfd,
+//                     then each write) pass, the one after fails: the
+//                     memfd with EMFILE, a write with ENOSPC
 //   descriptor-pool=K K texture descriptor pool creations pass, the one
 //                     after runs out of device memory
 //   descriptor-set=K  K texture descriptor set allocations pass, every
@@ -142,6 +145,8 @@ namespace {
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
         int readbackFenceSkip = -1;
+        // the screenshot's file
+        int shotFileSkip = -1;
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
@@ -185,6 +190,9 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // the screenshot's file
+        int shotFile(int fd) override;
+        ssize_t shotWrite(ssize_t written) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -277,6 +285,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
     } else if (fault == "readback-fence"_sv) {
         readbackFenceSkip = (int)arg.stou();
+    } else if (fault == "shot-file"_sv) {
+        shotFileSkip = (int)arg.stou();
     } else if (fault == "descriptor-pool"_sv) {
         descriptorPoolSkip = (int)arg.stou();
     } else if (fault == "descriptor-set"_sv) {
@@ -599,6 +609,31 @@ VkResult TestChaosMonkey::readbackFence(VkResult result) {
     return VK_ERROR_DEVICE_LOST;
 }
 
+// the screenshot's file
+int TestChaosMonkey::shotFile(int fd) {
+    if (shotFileSkip < 0 || shotFileSkip-- > 0) {
+        return fd;
+    }
+
+    if (fd >= 0) {
+        close(fd);
+    }
+
+    errno = EMFILE;
+
+    return -1;
+}
+
+ssize_t TestChaosMonkey::shotWrite(ssize_t written) {
+    if (shotFileSkip < 0 || shotFileSkip-- > 0) {
+        return written;
+    }
+
+    errno = ENOSPC;
+
+    return -1;
+}
+
 VkResult TestChaosMonkey::descriptorPool(VkResult result) {
     if (descriptorPoolSkip < 0) {
         return result;
@@ -759,6 +794,9 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // the screenshot's file
+        int shotFile(int fd) override;
+        ssize_t shotWrite(ssize_t written) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -861,6 +899,15 @@ VkResult IdleChaosMonkey::frameFence(VkResult result) {
 
 VkResult IdleChaosMonkey::readbackFence(VkResult result) {
     return result;
+}
+
+// the screenshot's file
+int IdleChaosMonkey::shotFile(int fd) {
+    return fd;
+}
+
+ssize_t IdleChaosMonkey::shotWrite(ssize_t written) {
+    return written;
 }
 
 VkResult IdleChaosMonkey::descriptorPool(VkResult result) {

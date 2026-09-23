@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <stddef.h>
+#include <sys/types.h>
 
 namespace stl {
     class ObjPool;
@@ -79,6 +80,11 @@ struct ChaosMonkey {
     // a GPU readback's fence as its poll delivers it: the screenshot's, or
     // the frame capture's that screencopy clients wait on
     virtual VkResult readbackFence(VkResult result) = 0;
+    // the screenshot's file, built on the offload lane: the memfd fresh
+    // from memfd_create (a replacement failure closes it and returns -1),
+    // then the result of each write into it
+    virtual int shotFile(int fd) = 0;
+    virtual ssize_t shotWrite(ssize_t written) = 0;
     // the texture descriptor chain: a pool being created for it, and a set
     // being allocated from one of its pools
     virtual VkResult descriptorPool(VkResult result) = 0;

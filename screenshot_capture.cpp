@@ -409,7 +409,7 @@ void ScreenshotCaptureImpl::buildFileWork() {
 }
 
 int ScreenshotCaptureImpl::buildFile() {
-    int mfd = memfd_create("imway-shot", MFD_CLOEXEC);
+    int mfd = comp->chaos->shotFile(memfd_create("imway-shot", MFD_CLOEXEC));
 
     if (mfd < 0) {
         return -1;
@@ -421,11 +421,12 @@ int ScreenshotCaptureImpl::buildFile() {
         u32 h;
     } header = {0x31574d49u, (u32)capW, (u32)capH};
 
-    auto writeAll = [mfd](const void* data, size_t size) {
+    ChaosMonkey* chaos = comp->chaos;
+    auto writeAll = [mfd, chaos](const void* data, size_t size) {
         auto* p = (const u8*)data;
 
         while (size) {
-            ssize_t n = write(mfd, p, size);
+            ssize_t n = chaos->shotWrite(write(mfd, p, size));
 
             if (n < 0 && errno == EINTR) {
                 continue;
