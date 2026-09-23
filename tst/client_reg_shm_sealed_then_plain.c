@@ -9,7 +9,10 @@
 
 static struct wl_buffer* sealed_solid(int w, int h, uint32_t argb) {
     int stride = w * 4;
-    int size = stride * h;
+    int page = (int)sysconf(_SC_PAGESIZE);
+    // a udmabuf covers whole pages of the pool, so a pool that ends inside
+    // a page is never sampled in place
+    int size = (stride * h + page - 1) / page * page;
     int fd = memfd_create("sealed-shm", MFD_ALLOW_SEALING);
 
     if (fd < 0 || ftruncate(fd, size) < 0) {
