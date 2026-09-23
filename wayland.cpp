@@ -7814,18 +7814,11 @@ namespace {
                 return;
             }
 
-            regionX = (int)t->surface->imgX;
-            regionY = (int)t->surface->imgY;
+            // imgX/imgY is the buffer's origin; the window is its geometry
+            regionX = (int)t->surface->imgX + t->surface->geomX();
+            regionY = (int)t->surface->imgY + t->surface->geomY();
 
-            if (regionX < 0) {
-                regionX = 0;
-            }
-
-            if (regionY < 0) {
-                regionY = 0;
-            }
-
-            if (regionX + (int)wantW > srv->scene->outW || regionY + (int)wantH > srv->scene->outH) {
+            if (regionX < 0 || regionY < 0 || regionX + (int)wantW > srv->scene->outW || regionY + (int)wantH > srv->scene->outH) {
                 // partially offscreen: nothing sane to deliver
                 captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
 

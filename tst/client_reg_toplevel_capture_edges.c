@@ -3,8 +3,10 @@
 // constraints and then deliver at the new size; a window that unmapped
 // stops the session and fails its frames as stopped, and a new session on
 // it stops at once; a handle whose window is gone yields a source whose
-// sessions stop — never one that captures the whole output instead; and a
-// window wider than the output cannot be delivered at all.
+// sessions stop — never one that captures the whole output instead; a
+// window wider than the output cannot be delivered at all; and a window
+// whose geometry sits inside its buffer (client-side shadow) is captured
+// from its geometry, not from its buffer's corner.
 
 #include "wl_util.h"
 
@@ -228,6 +230,78 @@ static int capture(struct session* ss, int w, int h) {
     return frame_result;
 }
 
+// one frame into a fresh buffer whose pixels are handed back through *out
+static int capture_pixels(struct session* ss, uint32_t** out) {
+    int stride = (int)ss->w * 4, size = stride * (int)ss->h;
+    int fd = memfd_create("tl-capture-pixels", 0);
+
+    if (fd < 0 || ftruncate(fd, size) < 0) {
+        perror("memfd");
+        exit(2);
+    }
+
+    struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, size);
+    struct wl_buffer* buffer = wl_shm_pool_create_buffer(pool, 0, (int)ss->w, (int)ss->h, stride, WL_SHM_FORMAT_XRGB8888);
+    struct ext_image_copy_capture_frame_v1* frame = ext_image_copy_capture_session_v1_create_frame(ss->s);
+
+    wl_shm_pool_destroy(pool);
+    *out = (uint32_t*)mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+
+    frame_result = -1;
+    ext_image_copy_capture_frame_v1_add_listener(frame, &frame_listener, NULL);
+    ext_image_copy_capture_frame_v1_attach_buffer(frame, buffer);
+    ext_image_copy_capture_frame_v1_capture(frame);
+
+    while (frame_result < 0 && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    ext_image_copy_capture_frame_v1_destroy(frame);
+    wl_buffer_destroy(buffer);
+
+    return frame_result;
+}
+
+// a 300x220 buffer: a 20 pixel cyan rim around a magenta 260x180 middle
+static struct wl_buffer* inset_buffer(void) {
+    const int w = 300, h = 220, stride = w * 4, size = stride * h;
+    int fd = memfd_create("tl-capture-inset", 0);
+
+    if (fd < 0 || ftruncate(fd, size) < 0) {
+        perror("memfd");
+        exit(2);
+    }
+
+    uint32_t* px = (uint32_t*)mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int rim = x < 20 || y < 20 || x >= w - 20 || y >= h - 20;
+
+            px[y * w + x] = rim ? 0xFF00FFFFu : 0xFFFF00FFu;
+        }
+    }
+
+    munmap(px, size);
+
+    struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, size);
+    struct wl_buffer* buffer = wl_shm_pool_create_buffer(pool, 0, w, h, stride, WL_SHM_FORMAT_XRGB8888);
+
+    wl_shm_pool_destroy(pool);
+    close(fd);
+
+    return buffer;
+}
+
+static int frame_seen;
+
+static void on_frame_done(void* d, struct wl_callback* cb, uint32_t t) {
+    (void)d; (void)t;
+    wl_callback_destroy(cb);
+    frame_seen = 1;
+}
+static const struct wl_callback_listener frame_done_listener = {on_frame_done};
+
 static int expect(const char* what, int got, int want) {
     if (got != want) {
         fprintf(stderr, "%s: frame result %d, want %d\n", what, got, want);
@@ -268,7 +342,7 @@ int main(void) {
 
     ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
 
-    struct wl_toplevel_ctx grow, doomed, wide;
+    struct wl_toplevel_ctx grow, doomed, wide, inset;
 
     wl_make_toplevel(&doomed, "tce-doomed", 180, 120, 0xFF00FF00u);
     wl_make_toplevel(&wide, "tce-wide", 8000, 60, 0xFF0000FFu);
@@ -278,6 +352,46 @@ int main(void) {
     int doomedSlot = find_handle("tce-doomed");
     int wideSlot = find_handle("tce-wide");
     struct session ss;
+
+    // the window's geometry is the middle of its buffer: the capture is
+    // that middle (bar the corners the desktop rounds), with none of the
+    // cyan rim around it
+    wl_make_toplevel(&inset, "tce-inset", 300, 220, 0xFF00FFFFu);
+    xdg_surface_set_window_geometry(inset.xs, 20, 20, 260, 180);
+    wl_surface_attach(inset.surface, inset_buffer(), 0, 0);
+    wl_surface_damage(inset.surface, 0, 0, 300, 220);
+    wl_callback_add_listener(wl_surface_frame(inset.surface), &frame_done_listener, NULL);
+    wl_surface_commit(inset.surface);
+    while (!frame_seen && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    open_session(&ss, find_handle("tce-inset"));
+    if (ss.stopped || ss.w != 260 || ss.h != 180) {
+        fprintf(stderr, "inset session: stopped=%d %ux%u\n", ss.stopped, ss.w, ss.h);
+        return 1;
+    }
+
+    uint32_t* px;
+
+    expect("inset", capture_pixels(&ss, &px), ready);
+
+    long rim = 0, middle = 0, total = (long)ss.w * ss.h;
+
+    for (long i = 0; i < total; i++) {
+        uint32_t c = px[i] & 0xffffffu;
+
+        rim += c == 0x00ffffu;
+        middle += c == 0xff00ffu;
+    }
+
+    if (rim || middle < total * 93 / 100) {
+        fprintf(stderr, "the inset window captured %ld rim and %ld middle pixels of %ld\n", rim, middle, total);
+        return 1;
+    }
+
+    munmap(px, (size_t)total * 4);
+    ext_image_copy_capture_session_v1_destroy(ss.s);
+    destroy_window(&inset);
 
     // the window grows under the session: the frame sized for the old
     // window bounces with the new size announced, the next one lands
