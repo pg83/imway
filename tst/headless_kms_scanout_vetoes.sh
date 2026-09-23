@@ -2,9 +2,10 @@
 # imway-env: IMWAY_FAKE_KMS=1
 # imway-args: --device auto
 # What takes a fullscreen dma-buf off the primary plane, and gives it back:
-# a subsurface over it needs composition, and so does an alpha multiplier
-# below one; once the client removes either, the buffer is a direct-scanout
-# candidate again.
+# a subsurface over it needs composition, and so do an alpha multiplier
+# below one and an image description the plane cannot reproduce (the SDR
+# output passes buffer bytes through untouched); once the client removes
+# any of them, the buffer is a direct-scanout candidate again.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -19,7 +20,7 @@ done
 if ! grep -q "taint candidate mapped" "$CLIENT_LOG"; then
     rc=0
     wait "$CLIENT_PID" || rc=$?
-    [[ $rc -eq 77 ]] && { echo "SKIP: no dumb-buffer dma-bufs or alpha modifier"; exit 127; }
+    [[ $rc -eq 77 ]] && { echo "SKIP: no dumb-buffer dma-bufs, alpha modifier or color manager"; exit 127; }
     echo "client died before mapping (rc=$rc)"; cat "$CLIENT_LOG"
     exit 1
 fi
@@ -34,7 +35,7 @@ off_plane() {
 
 await 100 on_plane || { echo "the fullscreen dma-buf never became a candidate"; dump_state; exit 1; }
 
-for phase in "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane"; do
+for phase in "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane"; do
     what=${phase%%:*}
     want=${phase##*:}
     ctl "key 30 press"; ctl "key 30 release" # KEY_A: the next step
@@ -43,4 +44,4 @@ for phase in "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_p
 done
 
 expect_alive "compositor died vetoing direct scanout"
-echo "OK: subsurfaces and alpha take a buffer off the plane, and it comes back"
+echo "OK: subsurfaces, alpha and color management take a buffer off the plane, and it comes back"
