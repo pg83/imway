@@ -1180,7 +1180,8 @@ DmabufBuffer* RendererImpl::makeUdmabuf(ShmContent& content, ShmCache& cache, bo
         return cache.udmabuf;
     }
 
-    if (vkDevice->udmabufFd < 0 || content.fd < 0 || content.offset < 0 || content.stride <= 0 || content.height <= 0) {
+    // wl_shm made the buffer with offset >= 0, stride >= width > 0, height > 0
+    if (vkDevice->udmabufFd < 0 || content.fd < 0) {
         return nullptr;
     }
 
@@ -1362,7 +1363,9 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
     ShmContent& content = *state.content;
     size_t span = (size_t)content.stride * content.height;
 
-    if (!content.stableMapping || content.stride % 4 || content.offset < 0 || content.offset % 4 || span > content.poolSize || (size_t)content.offset > content.poolSize - span) {
+    // the buffer lies inside the pool: wl_shm validated offset + span
+    // against the pool when the buffer was made, and a pool only grows
+    if (!content.stableMapping || content.stride % 4 || content.offset % 4) {
         return nullptr;
     }
 
