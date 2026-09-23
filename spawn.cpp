@@ -25,6 +25,11 @@ extern char** environ;
 
 using namespace stl;
 
+#ifdef IMWAY_FOR_TESTS
+// the coverage runtime's writer, present only in an instrumented build
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+#endif
+
 namespace {
     struct SpawnerImpl: Spawner {
         SpawnerImpl(Composer& c);
@@ -165,7 +170,20 @@ namespace {
         }
 
         closeFrom(passFd >= 0 ? 4 : 3);
+#ifdef IMWAY_FOR_TESTS
+        // exec replaces the image before the coverage runtime's exit hook
+        // runs: what the child did up to here is written out first, in a
+        // file of its own pid
+        if (__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+#endif
         execve(path, argv, envp);
+#ifdef IMWAY_FOR_TESTS
+        if (__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+#endif
         _exit(127);
     }
 }
