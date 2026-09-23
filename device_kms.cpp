@@ -954,6 +954,12 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         heldSession->closeDevice(heldFd);
     });
 
+    // the loop reads flip events once the fd polls readable, but a flip
+    // drain (the idle blanking, a wake, a VT comeback, a remodeset) may
+    // consume the event between that poll and the loop's read: an empty
+    // read has to come back, not wait, however the session opened the node
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
