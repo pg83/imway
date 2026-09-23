@@ -245,13 +245,18 @@ namespace {
         bool noAsync = false;
 
         // the monitor behind the connector's DDC/CI bus (IMWAY_FAKE_KMS_DDC):
-        // absent answers no address, silent never replies, a number is the
-        // brightness maximum of one that does. The bus end is a socket; its
+        // absent answers no address, silent never replies, gone hangs up on
+        // the first request, a number is the brightness maximum of one that
+        // does, and garbled:<number> is one whose first two answers are a
+        // reply of another kind and a stale reply for another code. The
+        // bus end is a socket; its
         // identity, not its fd number, marks the I2C_SLAVE ioctl as ours,
         // since the number is reused once the compositor lets go of it
         bool ddcArmed = false;
         bool ddcAbsent = false;
         bool ddcSilent = false;
+        bool ddcGone = false;
+        int ddcGarbled = 0;
         int ddcMax = 0;
         int ddcCur = 0;
         int ddcPeer = -1;
@@ -1384,6 +1389,10 @@ void FakeKms::ddcLoop() {
             break;
         }
 
+        if (ddcGone) {
+            break;
+        }
+
         // a monitor waking its DDC/CI engine drops the very first request
         if (first || ddcSilent) {
             first = false;
@@ -1393,6 +1402,13 @@ void FakeKms::ddcLoop() {
 
         if (n == 5 && msg[1] == 0x82 && msg[2] == 0x01) {
             u8 rep[11] = {0x6e, 0x88, 0x02, 0x00, msg[3], 0x00, (u8)(ddcMax >> 8), (u8)ddcMax, (u8)(ddcCur >> 8), (u8)ddcCur, 0};
+
+            if (ddcGarbled > 0) {
+                // 2: a reply that is no VCP reply; 1: the answer to an
+                // earlier question about another code
+                rep[ddcGarbled == 2 ? 2 : 4] ^= 0x01;
+                ddcGarbled--;
+            }
 
             for (int i = 0; i < 10; i++) {
                 rep[10] ^= rep[i];
@@ -1736,7 +1752,17 @@ int FakeKms::openDevice() {
     ddcArmed = ddc && *ddc;
     ddcAbsent = ddc && StringView(ddc) == "absent"_sv;
     ddcSilent = ddc && StringView(ddc) == "silent"_sv;
-    ddcMax = ddcArmed && !ddcAbsent && !ddcSilent ? (int)StringView(ddc).stou() : 0;
+    ddcGone = ddc && StringView(ddc) == "gone"_sv;
+
+    StringView ddcLevels = ddc ? StringView(ddc) : StringView();
+    StringView ddcKind, ddcMaxLevel;
+
+    if (ddcLevels.split(':', ddcKind, ddcMaxLevel) && ddcKind == "garbled"_sv) {
+        ddcGarbled = 2;
+        ddcLevels = ddcMaxLevel;
+    }
+
+    ddcMax = ddcArmed && !ddcAbsent && !ddcSilent && !ddcGone ? (int)ddcLevels.stou() : 0;
     ddcCur = ddcMax / 2;
     // a display that refuses to light up: the first N commits, tests too
     failErr = commits ? EINVAL : 0;
