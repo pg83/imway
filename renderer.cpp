@@ -3817,10 +3817,8 @@ bool RendererImpl::renderFrame(int scanIdx) {
         toRead.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
         externalFirstUses.pushBack(tex);
-
-        if (tex->lifetime && !contains(uploadedFrames, tex->lifetime)) {
-            uploadedFrames.pushBack(tex->lifetime);
-        }
+        // an external texture lives in its dma-buf's pool
+        uploadedFrames.pushBack(tex->lifetime);
     });
 
     forEach<SurfaceTexture>(textures, [&](SurfaceTexture& value) {
@@ -3830,7 +3828,9 @@ bool RendererImpl::renderFrame(int scanIdx) {
             return;
         }
 
-        if (tex->lifetime && !contains(uploadedFrames, tex->lifetime)) {
+        // an icon's texture has no pool of its own; a repeat is held once,
+        // below
+        if (tex->lifetime) {
             uploadedFrames.pushBack(tex->lifetime);
         }
 
@@ -4060,6 +4060,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
         return false;
     };
 
+    // each pool once, however many of its textures this frame uploaded
     for (FrameResource* frame : uploadedFrames) {
         if (!frameHeld(frame)) {
             inFlightFrames.pushBack(alloc->make<FrameResourceRef>(frame));
