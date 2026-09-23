@@ -8,6 +8,8 @@
 //      the parent commit still applies it (the compositor holds the storage)
 //   4. the child caches dmabuf C and the subsurface is destroyed with it
 //      cached: C is released
+//   5. a dmabuf shown directly, committed with a get_release callback, is
+//      replaced: it is released, and its callback fires with the release
 // Buffers come from /dev/udmabuf, else a dumb buffer on /dev/dri/card0;
 // exits 77 when neither is there.
 
@@ -231,6 +233,20 @@ int main(void) {
     wl_subsurface_destroy(sub);
     if (!settle(4)) {
         fprintf(stderr, "the dmabuf cached by a destroyed subsurface was not released\n");
+        return 1;
+    }
+
+    // 5: a directly shown dmabuf's release callback
+    wl_surface_attach(plain, tracked(make_buffer(0xff804020), 5), 0, 0);
+    wl_callback_add_listener(wl_surface_get_release(plain), &release_cb_listener, NULL);
+    wl_surface_damage(plain, 0, 0, W, H);
+    wl_surface_commit(plain);
+    wl_display_roundtrip(wl_dpy);
+    usleep(50000);
+    wl_display_roundtrip(wl_dpy);
+    attach(plain, tracked(wl_solid(W, H, 0xff00ff00), 6));
+    if (!settle(5) || release_cb_done != 2) {
+        fprintf(stderr, "the replaced dmabuf: released=%d release callbacks=%d\n", released[5], release_cb_done);
         return 1;
     }
 

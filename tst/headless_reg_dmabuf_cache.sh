@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # dmabufs through a sync subsurface's cache: replaced before the parent
 # commit (released at once, with its release callback), destroyed while
-# cached, cached by a subsurface that is destroyed; and an shm surface
-# switching to a dmabuf. The client checks the release events.
+# cached, cached by a subsurface that is destroyed; an shm surface
+# switching to a dmabuf, and a directly shown dmabuf's release callback
+# firing when it is replaced. The client checks the release events.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
