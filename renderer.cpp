@@ -165,6 +165,17 @@ namespace {
         }
     }
 
+    // the first of typeBits' memory types that has every flag in props
+    static u32 memoryTypeWith(const VkPhysicalDeviceMemoryProperties& mp, u32 typeBits, VkMemoryPropertyFlags props) {
+        for (u32 i = 0; i < mp.memoryTypeCount; i++) {
+            if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) {
+                return i;
+            }
+        }
+
+        return UINT32_MAX;
+    }
+
     void surfaceColorCallback(const ImDrawList*, const ImDrawCmd* cmd) {
         Surface* surface = (Surface*)cmd->UserCallbackData;
 
@@ -1079,13 +1090,7 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
 
     vkGetPhysicalDeviceMemoryProperties(phys, &mp);
 
-    for (u32 i = 0; i < mp.memoryTypeCount; i++) {
-        if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) {
-            return i;
-        }
-    }
-
-    return UINT32_MAX;
+    return memoryTypeWith(mp, typeBits, props);
 }
 
 VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
@@ -1436,7 +1441,12 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
         return nullptr;
     }
 
-    u32 memoryType = findMemoryType(req.memoryTypeBits & hostProps.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+    VkPhysicalDeviceMemoryProperties memoryProps{};
+
+    vkGetPhysicalDeviceMemoryProperties(phys, &memoryProps);
+    comp->chaos->hostMemoryTypes(memoryProps);
+
+    u32 memoryType = memoryTypeWith(memoryProps, req.memoryTypeBits & hostProps.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
     if (memoryType == UINT32_MAX) {
         *comp->log << "imway: wl_shm external-host has no compatible memory type (buffer="_sv << req.memoryTypeBits << " host="_sv << hostProps.memoryTypeBits << ")"_sv << endL;
@@ -1471,12 +1481,8 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
         return nullptr;
     }
 
-    VkPhysicalDeviceMemoryProperties memoryProps{};
-
-    vkGetPhysicalDeviceMemoryProperties(phys, &memoryProps);
-
     if (!(memoryProps.memoryTypes[memoryType].propertyFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)) {
-        result = vkMapMemory(device, upload->memory, 0, VK_WHOLE_SIZE, 0, &upload->map);
+        result = comp->chaos->clientImport(vkMapMemory(device, upload->memory, 0, VK_WHOLE_SIZE, 0, &upload->map));
 
         if (result != VK_SUCCESS) {
             *comp->log << "imway: wl_shm external-host map failed ("_sv << (long)result << ")"_sv << endL;
@@ -1490,7 +1496,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
 
         range.memory = upload->memory;
         range.size = VK_WHOLE_SIZE;
-        result = vkFlushMappedMemoryRanges(device, 1, &range);
+        result = comp->chaos->clientImport(vkFlushMappedMemoryRanges(device, 1, &range));
 
         if (result != VK_SUCCESS) {
             *comp->log << "imway: wl_shm external-host flush failed ("_sv << (long)result << ")"_sv << endL;

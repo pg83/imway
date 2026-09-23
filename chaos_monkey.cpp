@@ -84,7 +84,10 @@ using namespace stl;
 //   cursor-submit=N   the next N cursor shape rasterize submits are refused
 //   setup=K           K boot-time setup calls pass, the one after runs out
 //                     of device memory
-// renderer: the screenshot capture
+// renderer: wl_shm host imports and the screenshot capture
+//   host-memory=M     every wl_shm host-pointer import finds the device's
+//                     memory types changed: M=incoherent, none of them is
+//                     host-coherent; M=none, there are none at all
 //   shot-submit=N     the next N screenshot capture submits are refused
 // the screenshot viewer, a process of its own with its own monkey:
 //   swapchain=K       K swapchain acquires and presents pass, the one after
@@ -159,7 +162,8 @@ namespace {
         int outputTargetSkip = -1;
         Vector<StringView> hiddenExtensions;
         int setupSkip = -1;
-        // renderer: the screenshot capture
+        // renderer: wl_shm host imports and the screenshot capture
+        StringView hostMemory;
         int shotSubmitFaults = 0;
         // screenshot viewer
         int swapchainSkip = -1;
@@ -214,7 +218,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
-        // renderer: the screenshot capture
+        // renderer: wl_shm host imports and the screenshot capture
+        void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
@@ -323,8 +328,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         cursorSubmitFaults = (int)arg.stou();
     } else if (fault == "setup"_sv) {
         setupSkip = (int)arg.stou();
+    } else if (fault == "host-memory"_sv) {
+        // renderer: wl_shm host imports and the screenshot capture
+        hostMemory = arg;
     } else if (fault == "shot-submit"_sv) {
-        // renderer: the screenshot capture
         shotSubmitFaults = (int)arg.stou();
     } else if (fault == "swapchain"_sv || fault == "swapchain-suboptimal"_sv) {
         swapchainSkip = (int)arg.stou();
@@ -713,7 +720,17 @@ VkResult TestChaosMonkey::setup(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
-// renderer: the screenshot capture
+// renderer: wl_shm host imports and the screenshot capture
+void TestChaosMonkey::hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) {
+    if (hostMemory == "none"_sv) {
+        props.memoryTypeCount = 0;
+    } else if (hostMemory == "incoherent"_sv) {
+        for (u32 i = 0; i < props.memoryTypeCount; i++) {
+            props.memoryTypes[i].propertyFlags &= ~(VkMemoryPropertyFlags)VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        }
+    }
+}
+
 VkResult TestChaosMonkey::shotSubmit(VkResult pending) {
     return spend(shotSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
 }
@@ -846,7 +863,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
-        // renderer: the screenshot capture
+        // renderer: wl_shm host imports and the screenshot capture
+        void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
@@ -975,7 +993,10 @@ VkResult IdleChaosMonkey::setup(VkResult result) {
     return result;
 }
 
-// renderer: the screenshot capture
+// renderer: wl_shm host imports and the screenshot capture
+void IdleChaosMonkey::hostMemoryTypes(VkPhysicalDeviceMemoryProperties&) {
+}
+
 VkResult IdleChaosMonkey::shotSubmit(VkResult pending) {
     return pending;
 }

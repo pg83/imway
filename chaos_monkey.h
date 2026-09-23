@@ -116,9 +116,12 @@ struct ChaosMonkey {
     // pipelines and pools, the texture chain's layout, the capture's pool
     virtual VkResult setup(VkResult result) = 0;
 
-    // renderer: the screenshot capture
-    // the outcome its copy submit is about to have, under the same rule as
-    // the other submits
+    // renderer: wl_shm host imports and the screenshot capture
+    // the device's memory types as a wl_shm pool's host-pointer import
+    // picks its heap from them
+    virtual void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) = 0;
+    // the outcome the screenshot capture's copy submit is about to have,
+    // under the same rule as the other submits
     virtual VkResult shotSubmit(VkResult pending) = 0;
 
     // screenshot viewer (imway screenshot, its own process and monkey)
