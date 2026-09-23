@@ -256,6 +256,7 @@ jobs:
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -323,6 +324,7 @@ jobs:
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -390,6 +392,7 @@ jobs:
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
@@ -457,6 +460,7 @@ jobs:
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
+            python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
           } 2>&1 | tee "$RUNNER_TEMP/coverage.log"
 
