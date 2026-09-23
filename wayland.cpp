@@ -10682,7 +10682,8 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
 
         if (!target || wl_resource_get_client(dev->seat) != wl_resource_get_client(resOf(target))) {
             // left every surface of this client: proximity_out if entered
-            if (dev->focus && (!target || wl_resource_get_client(dev->seat) != wl_resource_get_client(resOf(dev->focus)))) {
+            // (the focus is only ever one of this client's surfaces)
+            if (dev->focus) {
                 if (dev->down) {
                     zwp_tablet_tool_v2_send_up(dev->tool);
                     dev->down = false;
