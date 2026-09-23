@@ -42,10 +42,11 @@ InputRouter::InputRouter(Composer& c)
 {
 }
 
+// The wayland seat is made before any input source and outlives them all
+// (the pool unwinds in reverse), sits last in the sink list and claims every
+// event: a walk always ends at a claiming sink, and the router claims too.
 void InputRouter::activity() {
-    if (comp->wayland) {
-        comp->wayland->inputActivity();
-    }
+    comp->wayland->inputActivity();
 }
 
 bool InputRouter::pointerMotion(PointerMotionEvent& ev) {
@@ -53,11 +54,11 @@ bool InputRouter::pointerMotion(PointerMotionEvent& ev) {
 
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->pointerMotion(ev)) {
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::button(u32 evdevBtn, bool pressed) {
@@ -65,11 +66,11 @@ bool InputRouter::button(u32 evdevBtn, bool pressed) {
 
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->button(evdevBtn, pressed)) {
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::key(u32 evdevCode, bool pressed) {
@@ -77,11 +78,11 @@ bool InputRouter::key(u32 evdevCode, bool pressed) {
 
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->key(evdevCode, pressed)) {
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::scroll(const ScrollEvent& ev) {
@@ -89,11 +90,11 @@ bool InputRouter::scroll(const ScrollEvent& ev) {
 
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->scroll(ev)) {
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::tabletTool(const TabletToolEvent& ev) {
@@ -101,11 +102,11 @@ bool InputRouter::tabletTool(const TabletToolEvent& ev) {
 
     for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
         if (sink->tabletTool(ev)) {
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::swipeBegin(u32 fingers) {
@@ -121,11 +122,11 @@ bool InputRouter::swipeBegin(u32 fingers) {
         if (sink->swipeBegin(fingers)) {
             swipeOwner.bind(sink->weak);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::swipeUpdate(double dx, double dy) {
@@ -141,7 +142,7 @@ bool InputRouter::swipeUpdate(double dx, double dy) {
         if (sink == swipeOwner.get()) {
             sink->swipeUpdate(dx, dy);
 
-            return true;
+            break;
         }
 
         if (sink->swipeUpdate(dx, dy)) {
@@ -150,11 +151,11 @@ bool InputRouter::swipeUpdate(double dx, double dy) {
             swipeOwner.reset();
             previous->swipeEnd(true);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::swipeEnd(bool cancelled) {
@@ -171,7 +172,7 @@ bool InputRouter::swipeEnd(bool cancelled) {
             swipeOwner.reset();
             sink->swipeEnd(cancelled);
 
-            return true;
+            break;
         }
 
         if (sink->swipeEnd(cancelled)) {
@@ -180,11 +181,11 @@ bool InputRouter::swipeEnd(bool cancelled) {
             swipeOwner.reset();
             previous->swipeEnd(true);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::pinchBegin(u32 fingers) {
@@ -200,11 +201,11 @@ bool InputRouter::pinchBegin(u32 fingers) {
         if (sink->pinchBegin(fingers)) {
             pinchOwner.bind(sink->weak);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotation) {
@@ -220,7 +221,7 @@ bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotatio
         if (sink == pinchOwner.get()) {
             sink->pinchUpdate(dx, dy, scale, rotation);
 
-            return true;
+            break;
         }
 
         if (sink->pinchUpdate(dx, dy, scale, rotation)) {
@@ -229,11 +230,11 @@ bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotatio
             pinchOwner.reset();
             previous->pinchEnd(true);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::pinchEnd(bool cancelled) {
@@ -250,7 +251,7 @@ bool InputRouter::pinchEnd(bool cancelled) {
             pinchOwner.reset();
             sink->pinchEnd(cancelled);
 
-            return true;
+            break;
         }
 
         if (sink->pinchEnd(cancelled)) {
@@ -259,11 +260,11 @@ bool InputRouter::pinchEnd(bool cancelled) {
             pinchOwner.reset();
             previous->pinchEnd(true);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::holdBegin(u32 fingers) {
@@ -279,11 +280,11 @@ bool InputRouter::holdBegin(u32 fingers) {
         if (sink->holdBegin(fingers)) {
             holdOwner.bind(sink->weak);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 bool InputRouter::holdEnd(bool cancelled) {
@@ -300,7 +301,7 @@ bool InputRouter::holdEnd(bool cancelled) {
             holdOwner.reset();
             sink->holdEnd(cancelled);
 
-            return true;
+            break;
         }
 
         if (sink->holdEnd(cancelled)) {
@@ -309,11 +310,11 @@ bool InputRouter::holdEnd(bool cancelled) {
             holdOwner.reset();
             previous->holdEnd(true);
 
-            return true;
+            break;
         }
     }
 
-    return false;
+    return true;
 }
 
 InputSink* createInputRouter(Composer& c) {
