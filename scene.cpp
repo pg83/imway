@@ -115,9 +115,11 @@ Toplevel* Surface::rootToplevel() {
 }
 
 bool Surface::contentMappedThroughAncestors() const {
+    // the walk ends at the root: each step goes to a parent it has just
+    // seen to be there
     const Surface* surface = this;
 
-    while (surface) {
+    for (;;) {
         if (!surface->hasContent) {
             return false;
         }
@@ -128,8 +130,6 @@ bool Surface::contentMappedThroughAncestors() const {
 
         surface = surface->sub->parent.get();
     }
-
-    return false;
 }
 
 void unionRect(RectI& a, const RectI& b) {
