@@ -1,7 +1,8 @@
 // xdg-foreign-v2: an exported toplevel's handle imported by another party
 // must attach the importer's toplevel as a child of the exported one, and
 // revoking the export must break the relationship with a destroyed event,
-// leaving the import of another window's export alone.
+// leaving the import of another window's export alone. The handle of an
+// export whose window is gone imports as a dead import.
 
 #include "wl_util.h"
 #include <xdg-foreign-unstable-v2-client-protocol.h>
@@ -50,6 +51,22 @@ static void other_imported_gone(void* d, struct zxdg_imported_v2* i) {
     other_destroyed = 1;
 }
 static const struct zxdg_imported_v2_listener other_imported_listener = {other_imported_gone};
+
+// the export of a window that is then destroyed
+static char gone_handle[256];
+static int gone_destroyed;
+
+static void gone_exported_handle(void* d, struct zxdg_exported_v2* e, const char* h) {
+    (void)d; (void)e;
+    snprintf(gone_handle, sizeof(gone_handle), "%s", h);
+}
+static const struct zxdg_exported_v2_listener gone_exported_listener = {gone_exported_handle};
+
+static void gone_imported_gone(void* d, struct zxdg_imported_v2* i) {
+    (void)d; (void)i;
+    gone_destroyed = 1;
+}
+static const struct zxdg_imported_v2_listener gone_imported_listener = {gone_imported_gone};
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -121,6 +138,30 @@ int main(void) {
         return 1;
     }
     printf("client_reg_xdg_foreign: revoked\n");
+
+    struct wl_toplevel_ctx gone;
+    wl_make_toplevel(&gone, "foreign-gone", 120, 90, 0xFF408020u);
+
+    struct zxdg_exported_v2* gone_exported = zxdg_exporter_v2_export_toplevel(exporter, gone.surface);
+
+    zxdg_exported_v2_add_listener(gone_exported, &gone_exported_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+    if (!gone_handle[0]) {
+        fprintf(stderr, "no handle for the third export\n");
+        return 1;
+    }
+    xdg_toplevel_destroy(gone.tl);
+    wl_display_roundtrip(wl_dpy);
+
+    struct zxdg_imported_v2* gone_imported = zxdg_importer_v2_import_toplevel(importer, gone_handle);
+
+    zxdg_imported_v2_add_listener(gone_imported, &gone_imported_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+    if (!gone_destroyed) {
+        fprintf(stderr, "the handle of a destroyed window imported alive\n");
+        return 1;
+    }
+    printf("client_reg_xdg_foreign: dead import\n");
 
     while (wl_display_dispatch(wl_dpy) != -1) {
     }

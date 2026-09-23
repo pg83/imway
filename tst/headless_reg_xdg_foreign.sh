@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # xdg-foreign-v2: the imported handle parents a foreign toplevel; revoking
-# the export breaks the link and notifies the importer.
+# the export breaks the link and notifies the importer; the handle of a
+# window destroyed under its export imports dead.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -23,4 +24,5 @@ sleep 0.3
 cparent=$(dump_field 'app_id=foreign-child' parent)
 [[ "$cparent" == "0" ]] || { echo "parent link survived the revoke: $cparent"; exit 1; }
 
+wait_client "dead import"
 echo "OK: xdg-foreign attached and revoked the foreign parent"
