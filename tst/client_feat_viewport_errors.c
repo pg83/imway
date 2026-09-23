@@ -1,6 +1,8 @@
 // Feature: viewporter error paths. Malformed source/destination rectangles
 // must raise the right protocol errors, and a source rectangle larger than the
-// buffer must be caught at commit.
+// buffer must be caught at commit: against the buffer as its transform turns
+// it, and against what a synchronized subsurface's commit leaves in effect
+// when it caches only part of the state (the source, the scale).
 
 #include "wl_util.h"
 #include <errno.h>
@@ -57,6 +59,63 @@ int main(int argc, char** argv) {
         wp_viewport_set_source(vp, 0, 0, wl_fixed_from_int(200), wl_fixed_from_int(200));
         wp_viewport_set_destination(vp, 200, 200);
         wl_surface_commit(surface);
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+    }
+
+    if (!strcmp(argv[1], "rotated-out-of-buffer")) {
+        // 80x40 fits the 100x50 buffer, not the 50x100 it turns into
+        wl_surface_attach(surface, wl_solid(100, 50, 0xFF00FF00), 0, 0);
+        wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_90);
+        wp_viewport_set_source(vp, 0, 0, wl_fixed_from_int(80), wl_fixed_from_int(40));
+        wl_surface_commit(surface);
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+    }
+
+    if (!strcmp(argv[1], "fractional-height")) {
+        // a whole width does not excuse a fractional height
+        wl_surface_attach(surface, wl_solid(100, 100, 0xFF00FF00), 0, 0);
+        wp_viewport_set_source(vp, 0, 0, wl_fixed_from_int(10), wl_fixed_from_double(10.5));
+        wl_surface_commit(surface);
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_SIZE);
+    }
+
+    // the rest run on a synchronized subsurface: its commits cache, and
+    // the checks weigh the cached state over what is already in effect
+    struct wl_surface* parent = wl_compositor_create_surface(wl_comp);
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+    struct wp_viewport* cvp = wp_viewporter_get_viewport(viewporter, child);
+
+    wl_subcompositor_get_subsurface(wl_subcomp, child, parent);
+
+    if (!strcmp(argv[1], "cached-size")) {
+        // the buffer waits in the cache; a later scale must divide it
+        wl_surface_attach(child, wl_solid(100, 100, 0xFF00FF00), 0, 0);
+        wl_surface_commit(child);
+        wl_surface_set_buffer_scale(child, 3);
+        wl_surface_commit(child);
+        return expect_error(wl_surface_interface.name, WL_SURFACE_ERROR_INVALID_SIZE);
+    }
+
+    // a 100x100 buffer shown through an 80x80 source, in effect
+    wl_surface_attach(child, wl_solid(100, 100, 0xFF00FF00), 0, 0);
+    wp_viewport_set_source(cvp, 0, 0, wl_fixed_from_int(80), wl_fixed_from_int(80));
+    wl_surface_commit(child);
+    wl_surface_commit(parent);
+    if (wl_display_roundtrip(wl_dpy) < 0) { fprintf(stderr, "the applied subsurface state was refused\n"); return 1; }
+
+    if (!strcmp(argv[1], "cached-source")) {
+        // only the source is cached: the buffer in effect bounds it
+        wp_viewport_set_source(cvp, 0, 0, wl_fixed_from_int(120), wl_fixed_from_int(120));
+        wp_viewport_set_destination(cvp, 60, 60);
+        wl_surface_commit(child);
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+    }
+
+    if (!strcmp(argv[1], "cached-scale")) {
+        // only the scale is cached: at 2 the buffer is 50x50 of content,
+        // and the source in effect no longer fits
+        wl_surface_set_buffer_scale(child, 2);
+        wl_surface_commit(child);
         return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
     }
 
