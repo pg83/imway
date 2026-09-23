@@ -738,6 +738,7 @@ namespace {
         VkPhysicalDeviceMemoryProperties mp;
 
         vkGetPhysicalDeviceMemoryProperties(gPhys, &mp);
+        gChaos->memoryTypes(mp);
 
         for (u32 i = 0; i < mp.memoryTypeCount; i++) {
             if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) {
@@ -745,7 +746,7 @@ namespace {
             }
         }
 
-        return 0;
+        fail("no vulkan memory type fits"_sv);
     }
 
     VkShaderModule shaderModule(const u32* code, size_t bytes) {
