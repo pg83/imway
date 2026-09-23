@@ -12115,10 +12115,12 @@ void SeatState::surfaceGone(Surface* s) {
 
 void SeatState::toplevelGone(Toplevel* t) {
     // the weak ring already detached the drag box's attached pointer and
-    // the scene's dragToplevel/focusedToplevel
-
-    if (ptrFocus && ptrFocus->rootToplevel() == t) {
-        ptrFocus = nullptr;
+    // the scene's dragToplevel/focusedToplevel. It also cleared the
+    // surface's toplevel pointer, so the pointer focus is matched by the
+    // toplevel's surface tree: the role is gone but the wl_surface may live
+    // on, and the pointer leaves it now, as it would on an unmap
+    if (ptrFocus && t->surface && ptrFocus->rootSurface() == t->surface.get()) {
+        pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
     }
 
@@ -12350,19 +12352,14 @@ WaylandImpl::~WaylandImpl() noexcept {
 
 void WaylandImpl::stopSecurityContexts() noexcept {
     // active event sources are not freed by wl_display_destroy: stop every
-    // sandbox listener first; a context whose object still exists is
-    // released by the resource destroy hook later
+    // sandbox listener first. No context object is left by now: run() calls
+    // this after wl_display_destroy_clients, whose destroy hooks cleared
+    // every ctx->res, and without run() no client ever made a context
     while (!securityContexts.empty()) {
         auto* ctx = (SecurityContext*)securityContexts.mutFront();
 
         securityStop(ctx);
-
-        if (ctx->res) {
-            ctx->unlink();
-            ctx->committed = false;
-        } else {
-            securityRelease(ctx);
-        }
+        securityRelease(ctx);
     }
 }
 
