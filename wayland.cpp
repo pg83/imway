@@ -1699,6 +1699,9 @@ namespace {
 
         // stop every sandbox listener and free the contexts nothing refers to
         void stopSecurityContexts() noexcept;
+        // takes every client down and destroys the display, on every way
+        // out of the loop
+        void closeDisplay() noexcept;
 
         void run() override;
         void inputActivity() override;
@@ -13636,8 +13639,22 @@ void WaylandImpl::onListen(void* arg) {
 }
 
 void WaylandImpl::run() {
-    ev_run(loop, 0);
+    // an exception out of a loop callback (a Vulkan refusal the session
+    // cannot survive) still takes the clients down here, while the renderer
+    // and everything else their destroy hooks reach are alive; the pools
+    // unwinding after the throw would free those first
+    try {
+        ev_run(loop, 0);
+    } catch (...) {
+        closeDisplay();
 
+        throw;
+    }
+
+    closeDisplay();
+}
+
+void WaylandImpl::closeDisplay() noexcept {
     wl_display_destroy_clients(display);
     stopSecurityContexts();
     wl_display_destroy(display);
