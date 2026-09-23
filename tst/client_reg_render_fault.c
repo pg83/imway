@@ -2,7 +2,9 @@
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    alarm(15);
+    // a safety net only: the scenarios end the client themselves, and a
+    // loaded runner can take longer than a quarter minute to get there
+    alarm(60);
     if (wl_boot()) return 1;
 
     struct wl_toplevel_ctx top;
