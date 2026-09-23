@@ -50,9 +50,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    static struct wl_toplevel_ctx tops[16];
+    static struct wl_toplevel_ctx tops[24];
 
-    for (int i = 1; i < argc && i < 16; i++) {
+    for (int i = 1; i < argc && i < 24; i++) {
         wl_make_toplevel(&tops[i], argv[i], 120, 80, 0xFF203040 + (uint32_t)i * 0x100010);
     }
 

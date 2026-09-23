@@ -7,7 +7,9 @@
 # must not index hicolor twice). Desktop files whose Icon= is an absolute
 # svg, png or other path (one without a trailing newline), stray files and
 # directories where desktop files, svgs and pngs belong, size directories
-# that are not plain NxN, a png present in two data dirs, a name with only
+# that are not plain NxN (letters, a sign, no width), a png present in two
+# data dirs, a desktop file id present in two (the first one's Icon= wins),
+# an Icon= name no theme has, a png with no width, a name with only
 # a smaller png, and pngs and svgs that cannot be decoded, a png too tall
 # and an svg with no extent, a size dir with no apps in it, an svg present
 # in two data dirs, and two applications sharing one Icon= name (the
@@ -49,7 +51,7 @@ text(rt + '/abs.svg', svg)
 png(rt + '/abs.png', 48, 48)
 text(rt + '/abs.xpm', '/* XPM */')
 
-text(apps + '/imway-abs-svg.desktop', '[Desktop Entry]\nName=a\nIcon=%s/abs.svg\n' % rt)
+text(apps + '/imway-abs-svg.desktop', '[Desktop Entry]\n\nName=a\nIcon=%s/abs.svg\n' % rt)
 text(apps + '/imway-abs-png.desktop', '[Other]\nIcon=nope\n[Desktop Entry]\nIcon=%s/abs.png' % rt)
 text(apps + '/imway-abs-other.desktop', '[Desktop Entry]\nIcon=%s/abs.xpm\n' % rt)
 text(apps + '/README', 'not a desktop file\n')
@@ -64,6 +66,9 @@ os.makedirs(hc + '/48x48/apps/folder.png', exist_ok=True)
 png(hc + '/48x48@2/apps/imway-scaled.png', 96, 96)
 png(hc + '/4a4x4a4/apps/imway-letters.png', 16, 16)
 png(hc + '/48x32/apps/imway-oblong.png', 48, 32)
+png(hc + '/x16/apps/imway-nowidth.png', 16, 16)
+png(hc + '/+4x+4/apps/imway-signed.png', 4, 4)
+png(hc + '/24x24/apps/imway-zero.png', 0, 16, data=False)
 text(hc + '/READ.ME', 'a file among the size dirs\n')
 text(hc + '/64x64/apps/imway-garbage.png', 'not a png at all')
 png(hc + '/128x128/apps/imway-huge.png', 2000, 2000, data=False)
@@ -72,6 +77,10 @@ png(hc + '/256x256/apps/imway-truncated.png', 256, 256, truncate=True)
 # the same name and size again in the second data dir: the first one wins
 png(rt + '/xdg2/icons/hicolor/48x48/apps/imway-small.png', 48, 48)
 text(rt + '/xdg2/icons/hicolor/scalable/apps/imway-badsvg.svg', svg)
+# a desktop file id in both data dirs: the first one's Icon= wins
+text(rt + '/xdg2/applications/imway-abs-png.desktop', '[Desktop Entry]\nIcon=imway-no-such-icon\n')
+# an Icon= name no theme has
+text(apps + '/imway-unknown.desktop', '[Desktop Entry]\nIcon=imway-no-such-icon\n')
 
 png(hc + '/16x16/apps/imway-tall.png', 16, 2000, data=False)
 text(hc + '/scalable/apps/imway-flat.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>')
@@ -95,7 +104,7 @@ fail() {
 }
 
 stage
-start_client imway-abs-svg imway-abs-png imway-abs-other imway-small imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat imway-share-a imway-share-b
+start_client imway-abs-svg imway-abs-png imway-abs-other imway-small imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat imway-share-a imway-share-b imway-nowidth imway-signed imway-zero imway-unknown
 wait_client "windows mapped"
 
 # reload through the theme setting: an empty theme, then hicolor itself
@@ -111,7 +120,7 @@ icon_is imway-abs-other 0 || fail "an Icon= path of another format produced an i
 icon_is imway-small 48 || fail "a name with only a smaller png did not fall back to it"
 icon_is imway-share-a 48 || fail "an app sharing an Icon= name got no icon"
 icon_is imway-share-b 48 || fail "the second app sharing an Icon= name got no icon"
-for app in imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat; do
+for app in imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat imway-nowidth imway-signed imway-zero imway-unknown; do
     icon_is "$app" 0 || fail "$app produced an icon"
 done
 
