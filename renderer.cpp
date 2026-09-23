@@ -3704,7 +3704,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
                     bool ready = drmSyncobjTimelineWait(drmFd, &handle, &point, 1, 0, DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE, nullptr) == 0;
                     u32 binary = 0;
                     int syncFd = -1;
-                    bool exported = ready && drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0 && syncFd >= 0;
+                    bool exported = ready && drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0;
 
                     if (exported) {
                         syncFd = comp->chaos->syncFile(syncFd);
@@ -3725,10 +3725,11 @@ bool RendererImpl::renderFrame(int scanIdx) {
                 return;
             }
 
+            // linux-dmabuf made the buffer with an fd in every plane
             for (int i = 0; i < s->dmabuf->nplanes; i++) {
                 int fd = s->dmabuf->fds[i];
 
-                if (fd < 0 || contains(frameSyncFds, fd)) {
+                if (contains(frameSyncFds, fd)) {
                     continue;
                 }
 
@@ -3739,7 +3740,8 @@ bool RendererImpl::renderFrame(int scanIdx) {
                 exp.flags = DMA_BUF_SYNC_WRITE;
                 exp.fd = -1;
 
-                if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0 || exp.fd < 0) {
+                // a successful export always carries its sync file
+                if (ioctl(fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE, &exp) != 0) {
                     continue;
                 }
 
