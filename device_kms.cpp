@@ -975,10 +975,10 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
 
     struct ev_loop* heldLoop = loop;
 
+    // libev's stop functions return early on an inactive watcher, which a
+    // zeroed pool object is until started
     pooledGuard(*pool, [heldLoop, drmIo] {
-        if (ev_is_active(drmIo)) {
-            ev_io_stop(heldLoop, drmIo);
-        }
+        ev_io_stop(heldLoop, drmIo);
     });
     ev_io_init(drmIo, drmIoCb, fd, EV_READ);
     drmIo->data = (void*)(intptr_t)fd;
@@ -1008,9 +1008,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
         ev_io* udevIo = pool->make<ev_io>();
 
         pooledGuard(*pool, [heldLoop, udevIo] {
-            if (ev_is_active(udevIo)) {
-                ev_io_stop(heldLoop, udevIo);
-            }
+            ev_io_stop(heldLoop, udevIo);
         });
         ev_io_init(udevIo, udevIoCb, udev_monitor_get_fd(mon), EV_READ);
         udevIo->data = this;
@@ -1024,8 +1022,10 @@ int KmsDevice::drmFd() const {
     return fd;
 }
 
+// the constructor either opened the node and made the vulkan device on it
+// or threw
 bool KmsDevice::explicitSyncSupported() const {
-    return fd >= 0 && vk && vk->hasSyncFd;
+    return vk->hasSyncFd;
 }
 
 unsigned long long KmsDevice::renderDevice() const {
@@ -2745,10 +2745,9 @@ void KmsOutput::initDdc(StringView connName) {
     struct ev_loop* heldLoop = loop;
     ev_timer* heldTimer = ddcTimer;
 
+    // stopping an inactive timer is a no-op in libev
     pooledGuard(*pool, [heldLoop, heldTimer] {
-        if (ev_is_active(heldTimer)) {
-            ev_timer_stop(heldLoop, heldTimer);
-        }
+        ev_timer_stop(heldLoop, heldTimer);
     });
     *(c->log) << "imway: ddc/ci brightness on "_sv << sv(busDev) << ", max "_sv << ddcMax << endL;
 }
