@@ -35,4 +35,27 @@ PY
 
 await 40 settled || { echo "the dithered gradient never settled:"; settled; exit 1; }
 
-echo "OK: output dithering distributes codes without luminance bias"
+# with dithering switched off the same surface quantizes to a single code
+flat() {
+    screenshot "$XDG_RUNTIME_DIR/flat.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/flat.ppm" <<'PY'
+import collections, sys
+
+f = open(sys.argv[1], 'rb')
+assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split())
+assert f.readline().strip() == b'255'
+d = f.read(w*h*3)
+colors = collections.Counter(zip(d[::3], d[1::3], d[2::3]))
+gray = {rgb: n for rgb, n in colors.items()
+        if 106 <= rgb[0] <= 111 and rgb[0] == rgb[1] == rgb[2]}
+count = sum(gray.values())
+print('codes', sorted(rgb[0] for rgb in gray), 'count', count)
+assert count >= 55000, 'test surface was not found'
+assert max(gray.values()) >= count - 500, 'the undithered surface still spreads over several codes'
+PY
+}
+ctl "set advanced.dithering false"
+await 40 flat || { echo "switching dithering off did not quantize the surface to one code:"; flat; exit 1; }
+
+echo "OK: output dithering distributes codes without luminance bias, and switches off"
