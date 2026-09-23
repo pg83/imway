@@ -35,6 +35,7 @@ def parse_header(path: str) -> dict:
     pre: list[str] = []
     expect_exit = False
     private_bus = False
+    startup_exit = False
     wrap = None
     with open(path) as f:
         for line in f.read(2048).splitlines():
@@ -65,10 +66,16 @@ def parse_header(path: str) -> dict:
                 wrap = m.group(1).strip()
             if re.match(r"\s*#\s*expect-compositor-exit\s*$", line):
                 expect_exit = True
+            # the compositor is to refuse to start (a bad argument, a device
+            # it cannot use): the scenario runs after it is gone and judges
+            # its log and IMWAY_RC
+            if re.match(r"\s*#\s*expect-startup-exit\s*$", line):
+                startup_exit = True
             if re.match(r"\s*#\s*private-session-bus\s*$", line):
                 private_bus = True
     return dict(xfail=xfail, args=args, env=extra_env, pre=pre,
-                expect_exit=expect_exit, private_bus=private_bus, wrap=wrap)
+                expect_exit=expect_exit, private_bus=private_bus, wrap=wrap,
+                startup_exit=startup_exit)
 
 
 def is_sock(p: str) -> bool:
@@ -257,6 +264,25 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         shutil.rmtree(rt, ignore_errors=True)
         return dict(status=FAIL, seconds=time.monotonic() - started, detail=detail, artifacts=arts)
 
+    def startup_verdict(comp_rc: int) -> dict:
+        # a refusal is an exit with a code; a signal is a crash on the way
+        if comp_rc < 0:
+            stop_bus()
+            return fail(f"compositor died by signal {-comp_rc} during startup")
+        env["IMWAY_RC"] = str(comp_rc)
+        cp = subprocess.run(
+            ["timeout", "60s", "bash", scenario], cwd=rt, env=env, timeout=timeout,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        stop_bus()
+        if cp.returncode != 0:
+            arts = collect(rt, cp.stdout)
+            shutil.rmtree(rt, ignore_errors=True)
+            return dict(status=FAIL, seconds=time.monotonic() - started,
+                        detail=f"scenario rc={cp.returncode}: {last_line(cp.stdout)}", artifacts=arts)
+        shutil.rmtree(rt, ignore_errors=True)
+        return dict(status=PASS, seconds=time.monotonic() - started, detail="", artifacts={})
+
     for cmd in meta["pre"]:
         cp = subprocess.run(["/bin/sh", "-c", cmd], cwd=rt, env=env, timeout=30,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -279,12 +305,20 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             logf.close()
+            if meta["startup_exit"]:
+                return startup_verdict(proc.returncode)
             stop_bus()
             return fail(f"compositor exited during startup (rc={proc.returncode})")
         if is_sock(sock) and is_fifo(ctl) and "control FIFO:" in tail(log, 200):
             ready = True
             break
         time.sleep(0.05)
+    if ready and meta["startup_exit"]:
+        signal_group(proc.pid, signal.SIGKILL)
+        proc.wait()
+        logf.close()
+        stop_bus()
+        return fail("compositor started though the scenario expects it to refuse")
     if not ready:
         signal_group(proc.pid, signal.SIGKILL)
         proc.wait()
