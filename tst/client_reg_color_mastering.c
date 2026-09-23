@@ -97,11 +97,13 @@ int main(void) {
         wp_color_manager_v1_create_parametric_creator(cm);
     wp_image_description_creator_params_v1_set_primaries_named(
         params, WP_COLOR_MANAGER_V1_PRIMARIES_DCI_P3);
-    wp_image_description_creator_params_v1_set_tf_power(params, 2400000); // gamma 2.4
-    wp_image_description_creator_params_v1_set_luminances(params, 1, 10000000, 2030000);
+    // the exponent is in 1/10000: gamma 2.4
+    wp_image_description_creator_params_v1_set_tf_power(params, 24000);
+    // min in 1/10000 cd/m², max and reference in cd/m²
+    wp_image_description_creator_params_v1_set_luminances(params, 1, 1000, 203);
     wp_image_description_creator_params_v1_set_mastering_display_primaries(
-        params, 680000, 320000, 265000, 690000, 150000, 60000, 31270, 32900);
-    wp_image_description_creator_params_v1_set_mastering_luminance(params, 10, 10000000);
+        params, 680000, 320000, 265000, 690000, 150000, 60000, 312700, 329000);
+    wp_image_description_creator_params_v1_set_mastering_luminance(params, 10, 1000);
     wp_image_description_creator_params_v1_set_max_cll(params, 1000);
     wp_image_description_creator_params_v1_set_max_fall(params, 400);
 
@@ -111,7 +113,13 @@ int main(void) {
 
     while (!desc_ready && !desc_failed && wl_display_dispatch(wl_dpy) != -1) {
     }
-    if (desc_failed) return 1;
+    // a protocol error ends the dispatch loop too: only a ready
+    // description counts
+    if (!desc_ready) {
+        fprintf(stderr, "no ready description (failed=%d, display error %d)\n", desc_failed,
+                wl_display_get_error(wl_dpy));
+        return 1;
+    }
 
     printf("color-mastering done\n");
     fflush(stdout);
