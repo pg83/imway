@@ -13,8 +13,15 @@ focus_color 255 0 0 || { echo "cursor window not found"; exit 1; }
 wait_client "first enter"
 wait_client "pointer left"
 wait_client "surface remapped"
-for _ in 1 2 3; do screenshot "$XDG_RUNTIME_DIR/_cursor.ppm"; sleep 0.1; done
-wait_client "stale cursor sent"
+# the client waits for the pointer to enter the remapped window with a new
+# serial: aim at it again (it may map elsewhere, and a slow runner may pass
+# the unmap's re-pick before it is back) until the client has had its enter
+reentered() {
+    grep -q "^stale cursor sent$" "$CLIENT_LOG" && return 0
+    focus_color 255 0 0 || true
+    grep -q "^stale cursor sent$" "$CLIENT_LOG"
+}
+await 50 reentered || { echo "the pointer never re-entered the remapped window"; cat "$CLIENT_LOG"; exit 1; }
 [[ $(dump_field '^cursor ' surface) == 0 ]] || { echo "stale enter serial changed cursor"; exit 1; }
 ctl "key 2 press"; ctl "key 2 release"
 wait_client "current cursor sent"
