@@ -6000,13 +6000,13 @@ namespace {
     }
 
     // ---- wp-pointer-warp ----
-    void pointerWarp(wl_client* client, wl_resource* res, wl_resource* surfaceRes, wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
+    void pointerWarp(wl_client*, wl_resource* res, wl_resource* surfaceRes, wl_resource* pointerRes, wl_fixed_t x, wl_fixed_t y, u32 serial) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
 
         // only the focused surface, with a serial that matches its pointer
         // enter, may place the cursor — and only within the surface
-        if (!s || srv->seat.ptrFocus != s || !srv->seat.validPointerEnter(pointerRes, serial) || wl_resource_get_client(resOf(s)) != client) {
+        if (srv->seat.ptrFocus != s || !srv->seat.validPointerEnter(pointerRes, serial)) {
             return;
         }
 
@@ -6024,9 +6024,7 @@ namespace {
         ev.x = s->imgX + lx;
         ev.y = s->imgY + ly;
 
-        if (srv->composer && srv->composer->entry) {
-            srv->composer->entry->pointerMotion(ev);
-        }
+        srv->composer->entry->pointerMotion(ev);
     }
 
     const struct wp_pointer_warp_v1_interface pointerWarpImpl = {
