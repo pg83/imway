@@ -51,9 +51,7 @@ steps() { # <step:want>...
 
 steps "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane" "below on:off_plane" "below off:on_plane" "short on:off_plane" "short off:on_plane"
 
-# the cursor steps need the pointer on the surface, and picking it there
-# needs composed frames: the flips stay off, the candidate is still judged
-ctl "set advanced.direct_scanout false"
+# the cursor steps need the pointer on the surface
 pointer_in() {
     ctl "motion 640 400"
     ctl "relmotion 1 1"
