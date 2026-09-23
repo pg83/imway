@@ -26,6 +26,7 @@ static const char* kStation = "/dev0";
 static const char* kNet1 = "/dev0/n1";
 static const char* kNet2 = "/dev0/n2";
 static const char* kNet3 = "/dev0/n3";
+static const char* request_net = "/dev0/n1";
 
 static void var_string(DBusMessageIter* dict, const char* key, const char* value) {
     DBusMessageIter entry, var;
@@ -122,6 +123,7 @@ static void tree(DBusMessage* reply, const char* state, int connected) {
 
     object_open(&objs, kStation, "net.connman.iwd.Station", &entry, &ifaces, &ifentry, &props);
     var_string(&props, "State", state);
+    var_bool(&props, "Scanning", 0);
     object_close(&objs, &entry, &ifaces, &ifentry, &props);
 
     object_open(&objs, "/dev0/phy", "net.connman.iwd.Device", &entry, &ifaces, &ifentry, &props);
@@ -131,6 +133,7 @@ static void tree(DBusMessage* reply, const char* state, int connected) {
     object_open(&objs, kNet1, "net.connman.iwd.Network", &entry, &ifaces, &ifentry, &props);
     var_string(&props, "Name", "iwd-one");
     var_string(&props, "Type", "psk");
+    var_string(&props, "Foo", "not a property");
     var_bool(&props, "Connected", connected);
     var_path(&props, "KnownNetwork", "/known/1");
     object_close(&objs, &entry, &ifaces, &ifentry, &props);
@@ -382,7 +385,7 @@ static DBusMessage* agent_call(const char* method) {
     DBusMessage* call = dbus_message_new_method_call(agent_dest, agent_path, "net.connman.iwd.Agent", method);
 
     if (!strcmp(method, "RequestPassphrase")) {
-        dbus_message_append_args(call, DBUS_TYPE_OBJECT_PATH, &kNet1, DBUS_TYPE_INVALID);
+        dbus_message_append_args(call, DBUS_TYPE_OBJECT_PATH, &request_net, DBUS_TYPE_INVALID);
     }
 
     return call;
@@ -478,6 +481,7 @@ int main(void) {
 
     /* iwd gives up: the prompt goes, then the agent is released */
     agent_ask("Cancel");
+    agent_ask("Cancel"); /* with nothing left to cancel */
     dbus_pending_call_cancel(second);
     agent_ask("Release");
     agent_ask("Bogus");
@@ -493,7 +497,9 @@ int main(void) {
 
     wait_go("cancelled");
 
-    /* left pending into the shutdown: a prompt and an object read */
+    /* left pending into the shutdown: a prompt, for a network the tree
+     * never listed, and an object read */
+    request_net = "/dev0/ghost";
     agent_request();
     wait_go("pending");
     puts("iwd edges done");

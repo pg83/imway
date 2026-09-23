@@ -37,6 +37,8 @@ static const char* kConn[] = {
     "/org/freedesktop/NetworkManager/Settings/1",
     "/org/freedesktop/NetworkManager/Settings/2",
     "/org/freedesktop/NetworkManager/Settings/3",
+    "/org/freedesktop/NetworkManager/Settings/4",
+    "/org/freedesktop/NetworkManager/Settings/5",
 };
 static const char* kConn9[] = {
     "/org/freedesktop/NetworkManager/Settings/9",
@@ -280,12 +282,13 @@ static void get_all(DBusMessage* call, const char* path, const char* iface) {
         reply = dict_reply(call, &it, &dict);
         var_u32(&dict, "DeviceType", 2);
         var_u32(&dict, "State", round_no == 2 ? 50 : 100);
+        var_string(&dict, "Driver", "fake");
         send_dict(reply, &it, &dict);
     } else if (!strcmp(path, kWlan2)) {
-        reply = dict_reply(call, &it, &dict);
-        var_u32(&dict, "DeviceType", 2);
-        var_u32(&dict, "State", 30);
-        send_dict(reply, &it, &dict);
+        /* an answer with nothing in it */
+        reply = dbus_message_new_method_return(call);
+        dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
     } else if (!strcmp(path, kWlan0)) {
         if (round_no >= 6) {
             held = dbus_message_ref(call);
@@ -300,6 +303,7 @@ static void get_all(DBusMessage* call, const char* path, const char* iface) {
             var_path(&dict, "ActiveAccessPoint", kAp[0]);
             var_paths(&dict, "AccessPoints", kAp, 5);
         } else if (round_no == 5) {
+            var_string(&dict, "AccessPoints", "none");
             var_paths(&dict, "AccessPoints", kAp9, 2);
         } else {
             var_paths(&dict, "AccessPoints", NULL, 0);
@@ -341,7 +345,7 @@ static void connections(DBusMessage* call) {
     if (round_no == 2) {
         reply_error(call);
     } else if (round_no == 3) {
-        reply_paths(call, kConn, 3);
+        reply_paths(call, kConn, 5);
     } else if (round_no == 5) {
         reply_paths(call, kConn9, 2);
     } else if (round_no == 6) {
@@ -382,6 +386,23 @@ static void settings(DBusMessage* call, const char* path) {
         }
 
         dbus_message_iter_close_container(&it, &groups);
+        dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
+    } else if (!strcmp(path, kConn[3])) {
+        /* settings with nothing in them */
+        DBusMessage* reply = dbus_message_new_method_return(call);
+
+        dbus_connection_send(conn, reply, NULL);
+        dbus_message_unref(reply);
+    } else if (!strcmp(path, kConn[4])) {
+        /* the wireless group as a variant, not a dict */
+        DBusMessage* reply = dbus_message_new_method_return(call);
+        DBusMessageIter it, dict;
+
+        dbus_message_iter_init_append(reply, &it);
+        dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &dict);
+        var_string(&dict, "802-11-wireless", "flat");
+        dbus_message_iter_close_container(&it, &dict);
         dbus_connection_send(conn, reply, NULL);
         dbus_message_unref(reply);
     } else if (!strcmp(path, kConn9[0])) {

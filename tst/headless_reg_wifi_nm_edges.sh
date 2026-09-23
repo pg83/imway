@@ -52,7 +52,7 @@ await 100 wifi_is 3 1 || fail "the surviving access point did not connect"
 line=$(dump_state | grep '^wifinet ')
 [[ "$line" == *"strength=70 "* && "$line" == *"connected=1 "* && "$line" == *"type=open "* && "$line" == *"name=edge-one" ]] || fail "the access point was misread: $line"
 await 50 history_is 1 || fail "connecting posted no toast"
-nm "settings /org/freedesktop/NetworkManager/Settings/3" || fail "the saved connections were not all read"
+nm "settings /org/freedesktop/NetworkManager/Settings/5" || fail "the saved connections were not all read"
 ! nm "scan requested" || fail "a scan went out without a device"
 
 # the device list empties
