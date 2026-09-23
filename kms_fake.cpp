@@ -665,11 +665,6 @@ int FakeKms::emuGetCap(drm_get_cap* c) {
         case DRM_CAP_ATOMIC_ASYNC_PAGE_FLIP:
             c->value = noAsync ? 0 : 1;
             return 0;
-        case DRM_CAP_ADDFB2_MODIFIERS:
-        case DRM_CAP_PRIME:
-        case DRM_CAP_TIMESTAMP_MONOTONIC:
-            c->value = c->capability == DRM_CAP_PRIME ? 3 : 1;
-            return 0;
         default:
             // syncobj and friends: the companion node answers truthfully
             return rawIoctl(renderFd, DRM_IOCTL_GET_CAP, c) == 0 ? 0 : -EINVAL;
