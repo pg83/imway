@@ -381,21 +381,14 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     VK_CHECK(chaos.setup(vkCreateDevice(this->phys, &dci, nullptr, &this->device)));
     vkGetDeviceQueue(this->device, this->queueFamily, 0, &this->queue);
 
+    // both extensions were enabled on the device above, and the device
+    // hands out every command of an enabled extension
     if (hasDmabufMemory) {
         this->getMemoryFdProps = (PFN_vkGetMemoryFdPropertiesKHR)vkGetDeviceProcAddr(this->device, "vkGetMemoryFdPropertiesKHR");
-
-        if (!this->getMemoryFdProps) {
-            this->hasDmabuf = false;
-            canImportDmabufBuffer = false;
-        }
     }
 
     if (this->tryShmExternalHost) {
         this->getMemoryHostPointerProps = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(this->device, "vkGetMemoryHostPointerPropertiesEXT");
-
-        if (!this->getMemoryHostPointerProps) {
-            this->tryShmExternalHost = false;
-        }
     }
 
     this->udmabufFd = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
