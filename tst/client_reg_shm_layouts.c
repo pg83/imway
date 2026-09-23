@@ -1,5 +1,5 @@
 // wl_shm buffers laid out in ways the zero-copy imports refuse, all legal:
-// a 480x100 dark toplevel carrying six 60x60 subsurfaces 80 pixels apart,
+// a 640x100 dark toplevel carrying eight 60x60 subsurfaces 80 pixels apart,
 // each from a sealed memfd pool, each with a coloured top half and a white
 // bottom half so a misread stride or offset shows:
 //   0 red     stride 242, not a multiple of four
@@ -8,6 +8,8 @@
 //   3 yellow  a 14400-byte pool, not a whole number of pages
 //   4 cyan    offset 0 of a two-buffer pool
 //   5 magenta offset 16384 of that same pool
+//   6 orange  stride 242 again, in a pool of whole pages
+//   7 purple  offset 2 again, in a pool of whole pages
 // Prints "layouts committed".
 
 #include "wl_util.h"
@@ -61,13 +63,15 @@ int main(void) {
     }
 
     struct wl_toplevel_ctx top;
-    wl_make_toplevel(&top, "shm-layouts", 480, 100, 0xff202020);
+    wl_make_toplevel(&top, "shm-layouts", 640, 100, 0xff202020);
 
-    struct wl_buffer* bufs[6];
+    struct wl_buffer* bufs[8];
     bufs[0] = layout(0, 242, 242 * H, 0xffff0000u);
     bufs[1] = layout(2, W * 4, 2 + W * 4 * H, 0xff00ff00u);
     bufs[2] = layout(64, W * 4, 64 + W * 4 * H, 0xff0000ffu);
     bufs[3] = layout(0, W * 4, W * 4 * H, 0xffffff00u);
+    bufs[6] = layout(0, 242, 16384, 0xffff8000u);
+    bufs[7] = layout(2, W * 4, 16384, 0xff8000ffu);
 
     uint8_t* map = NULL;
     size_t shared = 16384 + W * 4 * H;
@@ -81,7 +85,7 @@ int main(void) {
     wl_shm_pool_destroy(pool);
     close(fd);
 
-    for (int i = 0; i < 6; i++) {
+    for (int i = 0; i < 8; i++) {
         struct wl_surface* s = wl_compositor_create_surface(wl_comp);
         struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, s, top.surface);
         wl_subsurface_set_position(sub, 10 + i * 80, 20);

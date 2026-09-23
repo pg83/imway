@@ -1192,8 +1192,10 @@ DmabufBuffer* RendererImpl::makeUdmabuf(ShmContent& content, ShmCache& cache, bo
         return cache.udmabuf;
     }
 
-    // wl_shm made the buffer with offset >= 0, stride >= width > 0, height > 0
-    if (vkDevice->udmabufFd < 0 || content.fd < 0) {
+    // wl_shm made the buffer with offset >= 0, stride >= width > 0, height > 0.
+    // Rows that do not start on a whole pixel are a layout neither a sampled
+    // image nor a buffer-to-image copy takes: those stay with the CPU copy
+    if (content.stride % 4 || content.offset % 4) {
         return nullptr;
     }
 
@@ -1259,10 +1261,6 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
 
     if (cache.udmabufUpload) {
         return cache.udmabufUpload;
-    }
-
-    if (content.stride % 4 || dmabuf.offsets[0] % 4) {
-        return nullptr;
     }
 
     struct stat st{};
