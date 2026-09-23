@@ -3520,7 +3520,9 @@ namespace {
         SurfaceImpl* surface = surfaceFrom(surfaceRes);
         SurfaceImpl* parent = surfaceFrom(parentRes);
 
-        if (surface->role != SurfaceRole::none || surface->xdg || surface->sub) {
+        // a subsurface keeps its role after its sub object dies, so the
+        // role alone also refuses a surface that still has one
+        if (surface->role != SurfaceRole::none || surface->xdg) {
             wl_resource_post_error(res, WL_SUBCOMPOSITOR_ERROR_BAD_SURFACE, "surface already has a role");
 
             return;
@@ -4796,10 +4798,9 @@ namespace {
         }
 
         offer->finished = true;
-
-        if (wl_resource_get_version(src->res) >= 3) {
-            wl_data_source_send_dnd_finished(src->res);
-        }
+        // an action other than none needs the source's set_actions, a v3
+        // request, so this source takes dnd_finished
+        wl_data_source_send_dnd_finished(src->res);
     }
 
     void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32 preferred) {
@@ -4836,10 +4837,8 @@ namespace {
         u32 action = preferred ? preferred : chooseDndAction(available);
 
         offer->action = action;
-
-        if (wl_resource_get_version(res) >= 3) {
-            wl_data_offer_send_action(res, action);
-        }
+        // set_actions is a v3 request: libwayland refuses it on an older offer
+        wl_data_offer_send_action(res, action);
 
         if (wl_resource_get_version(src->res) >= 3) {
             wl_data_source_send_action(src->res, action);
