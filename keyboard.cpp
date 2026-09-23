@@ -3,6 +3,7 @@
 #include "log.h"
 #include "util.h"
 #include "log_extern.h"
+#include "pooled.h"
 #include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
@@ -23,13 +24,16 @@ namespace {
         Log* log = nullptr;
         ChaosMonkey* chaos = nullptr;
         xkb_context* ctx = nullptr;
+        // the keymap generation: the keymap, its state and its file are made
+        // together into one arena and dropped together when the next replaces
+        // them; the keyboard's pool deletes the last one
+        ObjPool** gen = nullptr;
         xkb_keymap* keymap = nullptr;
         xkb_state* state = nullptr;
         int fd = -1;
         u32 size = 0;
 
-        KeyboardImpl(Log& log, ChaosMonkey& chaos);
-        ~KeyboardImpl() noexcept;
+        KeyboardImpl(ObjPool& pool, Log& log, ChaosMonkey& chaos, StringView layout, StringView options);
 
         void configure(StringView layout, StringView options) override;
         void updateKey(u32 evdevCode, bool pressed) override;
@@ -53,30 +57,35 @@ namespace {
     }
 }
 
-KeyboardImpl::KeyboardImpl(Log& l, ChaosMonkey& c)
+KeyboardImpl::KeyboardImpl(ObjPool& pool, Log& l, ChaosMonkey& c, StringView layout, StringView options)
     : log(&l)
     , chaos(&c)
 {
     ctx = chaos->xkbContext(xkb_context_new(XKB_CONTEXT_NO_FLAGS));
     STD_VERIFY(ctx);
+
+    xkb_context* heldCtx = ctx;
+
+    pooledGuard(pool, [heldCtx] {
+        xkb_context_unref(heldCtx);
+    });
+
     xkb_context_set_user_data(ctx, this);
     xkb_context_set_log_fn(ctx, xkbLog);
-}
 
-// the constructor verified the context; the keymap, its state and its file
-// come and go together, and only a failed first configure leaves them unset
-KeyboardImpl::~KeyboardImpl() noexcept {
-    if (fd >= 0) {
-        close(fd);
-    }
+    gen = pool.make<ObjPool*>(nullptr);
 
-    xkb_state_unref(state);
-    xkb_keymap_unref(keymap);
-    xkb_context_unref(ctx);
+    ObjPool** heldGen = gen;
+
+    pooledGuard(pool, [heldGen] {
+        delete *heldGen;
+    });
+
+    configure(layout, options);
 }
 
 // the first call, at boot, has no keymap to keep: a failure there throws,
-// and the half-built keyboard goes with its pool
+// and what the keyboard made so far goes with its pool
 void KeyboardImpl::configure(StringView layout, StringView options) {
     Buffer lb(layout), ob(options);
     xkb_rule_names names{};
@@ -84,6 +93,9 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
     names.layout = lb.cStr();
     names.options = ob.cStr();
 
+    // the next generation is made in an arena of its own: kept whole if
+    // every part of it came out, dropped whole if any did not
+    ObjPool* next = ObjPool::fromMemoryRaw();
     xkb_keymap* nextKeymap = chaos->xkbKeymap(xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS));
 
     // with no layout and no options the first try already was the
@@ -93,9 +105,23 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
         nextKeymap = chaos->xkbKeymap(xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS));
     }
 
+    if (nextKeymap) {
+        pooledGuard(*next, [nextKeymap] {
+            xkb_keymap_unref(nextKeymap);
+        });
+    }
+
     xkb_state* nextState = nextKeymap ? chaos->xkbState(xkb_state_new(nextKeymap)) : nullptr;
+
+    if (nextState) {
+        pooledGuard(*next, [nextState] {
+            xkb_state_unref(nextState);
+        });
+    }
+
     int nextFd = -1;
     u32 nextSize = 0;
+    bool written = false;
 
     if (nextState) {
         char* text = xkb_keymap_get_as_string(nextKeymap, XKB_KEYMAP_FORMAT_TEXT_V1);
@@ -106,21 +132,21 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
         // rewrite the keymap
         nextFd = chaos->keymapFile(memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING));
 
-        bool written = nextFd >= 0 && chaos->keymapWrite(write(nextFd, text, nextSize)) == (ssize_t)nextSize;
+        if (nextFd >= 0) {
+            pooledGuard(*next, [nextFd] {
+                close(nextFd);
+            });
+
+            written = chaos->keymapWrite(write(nextFd, text, nextSize)) == (ssize_t)nextSize;
+        }
 
         free(text);
-
-        if (!written && nextFd >= 0) {
-            close(nextFd);
-            nextFd = -1;
-        }
     }
 
-    if (nextFd < 0) {
+    if (!written) {
         StringView failed = !nextKeymap ? "no keymap compiles"_sv : !nextState ? "no xkb state for it"_sv : "its file cannot be written"_sv;
 
-        xkb_state_unref(nextState);
-        xkb_keymap_unref(nextKeymap);
+        delete next;
         *log << "imway: keymap unusable: "_sv << failed << endL;
         STD_VERIFY(keymap);
         *log << "imway: keeping the current keymap"_sv << endL;
@@ -140,12 +166,8 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
 
     xkb_state_update_mask(nextState, 0, 0, 0, 0, 0, group);
 
-    if (fd >= 0) {
-        close(fd);
-    }
-
-    xkb_state_unref(state);
-    xkb_keymap_unref(keymap);
+    delete *gen;
+    *gen = next;
     fd = nextFd;
     size = nextSize;
     state = nextState;
@@ -251,9 +273,5 @@ u32 KeyboardImpl::activeLayout() const {
 }
 
 Keyboard* Keyboard::create(ObjPool* pool, Log& log, ChaosMonkey& chaos, StringView layout, StringView options) {
-    KeyboardImpl* kb = pool->make<KeyboardImpl>(log, chaos);
-
-    kb->configure(layout, options);
-
-    return kb;
+    return pool->make<KeyboardImpl>(*pool, log, chaos, layout, options);
 }
