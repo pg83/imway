@@ -150,6 +150,8 @@ static void append_leaf(DBusMessageIter* parent, int32_t id, const char* label, 
     } else if (kind == 8) {
         dict_string(&props, "toggle-type", "radio");
         dict_int(&props, "toggle-state", 0);
+    } else if (kind == 9) {
+        dict_string(&props, "disposition", "informative");
     }
 
     dbus_message_iter_close_container(&node, &props);
@@ -236,6 +238,7 @@ static void append_file_menu(DBusMessageIter* root_children) {
     append_variant_leaf(&children, 23, "Invisible option", 5);
     append_variant_leaf(&children, 25, "_Quit danger", 6);
     append_variant_leaf(&children, 26, "Warning option", 7);
+    append_variant_leaf(&children, 24, "Informative option", 9);
     append_variant_leaf(&children, 27, NULL, 0);
     append_variant_leaf(&children, 28, "Radio off", 8);
     {
