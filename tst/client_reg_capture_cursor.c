@@ -51,9 +51,12 @@ static void on_cursor_position(void* d, struct ext_image_copy_capture_cursor_ses
     cursor_y = y;
     positions++;
 }
+static int32_t hot_x = -1, hot_y = -1;
 static void on_cursor_hotspot(void* d, struct ext_image_copy_capture_cursor_session_v1* c,
                               int32_t x, int32_t y) {
-    (void)d; (void)c; (void)x; (void)y;
+    (void)d; (void)c;
+    hot_x = x;
+    hot_y = y;
 }
 static const struct ext_image_copy_capture_cursor_session_v1_listener cursor_listener = {
     .enter = on_cursor_enter,
@@ -258,6 +261,21 @@ int main(void) {
     }
 
     printf("cursor captured %ld px\n", ours);
+
+    // the pointer moving straight down, then the same cursor with its
+    // hotspot moved down only: each change is reported although the other
+    // coordinate stays put
+    int32_t x0 = cursor_x, y0 = cursor_y;
+
+    printf("cursor ready to move\n");
+    while (!(cursor_x == x0 && cursor_y != y0) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    printf("cursor moved down to %d %d\n", cursor_x, cursor_y);
+
+    wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, cursor_surface, 4, 6);
+    while (!(hot_x == 4 && hot_y == 6) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    printf("cursor hotspot %d %d\n", hot_x, hot_y);
 
     // one session per cursor session, and the second one is a protocol error
     ext_image_copy_capture_cursor_session_v1_get_capture_session(cursor);
