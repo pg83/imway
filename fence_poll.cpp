@@ -51,11 +51,12 @@ FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, 
     timer->data = this;
 }
 
+// both owners arm only a poll that is not armed: the capture records a
+// copy only while its poll is idle, and the screenshot submits once per
+// capture it is not busy with
 void FencePollImpl::arm() {
-    if (!active) {
-        active = true;
-        ev_timer_again(loop, timer);
-    }
+    active = true;
+    ev_timer_again(loop, timer);
 }
 
 bool FencePollImpl::armed() const {
