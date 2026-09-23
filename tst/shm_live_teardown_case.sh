@@ -9,8 +9,11 @@
 # is left for the renderer's own teardown to free.
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_shm_external_host"
 
+# the first sealed buffer is enough: sampled in place (udmabuf-image) it is
+# held until something replaces it, so the client would wait forever for
+# the release it needs before its second commit
 start_client
-wait_client "second sealed buffer committed"
+wait_client "first sealed buffer committed"
 
 await 100 in_log "$backend_log" || {
     if in_log "wl_shm backend"; then

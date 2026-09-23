@@ -79,6 +79,7 @@ int main(void) {
 
     wl_make_toplevel(&top, "shm-external-host", 1024, 768, 0xff20c060);
     struct wl_buffer* first = commit_sealed(top.surface);
+    printf("first sealed buffer committed\n");
 
     while (!released && wl_display_dispatch(wl_dpy) != -1) {
     }
