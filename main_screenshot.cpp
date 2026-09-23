@@ -280,11 +280,15 @@ namespace {
         return (u8)lround(encoded * 255.0);
     }
 
+    // the viewer's own fault seam, a monkey of the same kind as the
+    // compositor's, configured from the viewer's environment
+    ChaosMonkey* gChaos = nullptr;
+
     // encode the [x0,y0,x1,y1) region of img (image px, already clamped) as an
     // RGBA png into out; throws on failure
     void encodePng(const Image& img, int x0, int y0, int x1, int y1, Buffer& out) {
-        png_structp png = png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
-        png_infop info = png ? png_create_info_struct(png) : nullptr;
+        png_structp png = gChaos->encoderAlloc(true) ? png_create_write_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr) : nullptr;
+        png_infop info = png && gChaos->encoderAlloc(true) ? png_create_info_struct(png) : nullptr;
 
         if (!png || !info || setjmp(png_jmpbuf(png))) {
             if (png) {
@@ -358,7 +362,7 @@ namespace {
     }
 
     void encodeJxlPixels(const Image& img, const u16* pixels, u32 w, u32 h, Buffer& out) {
-        JxlEncoder* enc = JxlEncoderCreate(nullptr);
+        JxlEncoder* enc = gChaos->encoderAlloc(true) ? JxlEncoderCreate(nullptr) : nullptr;
 
         if (!enc) {
             fail("jxl encoder allocation failed"_sv);
@@ -392,7 +396,7 @@ namespace {
             JxlColorEncodingSetToSRGB(&color, JXL_FALSE);
         }
 
-        JxlEncoderFrameSettings* frame = JxlEncoderFrameSettingsCreate(enc, nullptr);
+        JxlEncoderFrameSettings* frame = gChaos->encoderAlloc(true) ? JxlEncoderFrameSettingsCreate(enc, nullptr) : nullptr;
         JxlPixelFormat format{3, JXL_TYPE_UINT16, JXL_NATIVE_ENDIAN, 0};
         size_t bytes = (size_t)w * h * 3 * sizeof(u16);
         bool lossless = !getenv("IMWAY_SHOT_LOSSLESS") || StringView(getenv("IMWAY_SHOT_LOSSLESS")) != "0"_sv;
@@ -544,10 +548,6 @@ namespace {
     // ui scale handed down from the compositor via IMGUI_SCALE (its clients
     // otherwise render at scale 1, so the panel/text would be tiny on hidpi)
     float gUiScale = 1.f;
-
-    // the viewer's own fault seam, a monkey of the same kind as the
-    // compositor's, configured from the viewer's environment
-    ChaosMonkey* gChaos = nullptr;
 
     void vkc(VkResult e) {
         e = gChaos->vulkan(e);

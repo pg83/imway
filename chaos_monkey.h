@@ -170,5 +170,11 @@ struct ChaosMonkey {
     // failure closes the fd and returns -1 with errno set
     virtual int udmabufOpen(int fd) = 0;
 
+    // screenshot viewer: its encoders
+    // the outcome an encoder allocation is about to have (libpng's write
+    // and info structs, libjxl's encoder and frame settings), handed over
+    // before the call: false stands for it failing, and nothing is made
+    virtual bool encoderAlloc(bool pending) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

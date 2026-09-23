@@ -125,6 +125,9 @@ using namespace stl;
 // device: /dev/udmabuf
 //   udmabuf-open=N    the next N opens of /dev/udmabuf fail with EACCES, as
 //                     for a session not let at it
+// screenshot viewer: its encoders
+//   encoder-alloc=K   K encoder allocations pass, the one after fails as
+//                     without memory
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -202,6 +205,8 @@ namespace {
         size_t fragmentedPools = 0;
         // device: /dev/udmabuf
         int udmabufOpenFaults = 0;
+        // screenshot viewer: its encoders
+        int encoderAllocSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -267,6 +272,8 @@ namespace {
         VkResult descriptorRoom(VkResult result, size_t pool) override;
         // device: /dev/udmabuf
         int udmabufOpen(int fd) override;
+        // screenshot viewer: its encoders
+        bool encoderAlloc(bool pending) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -411,6 +418,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "udmabuf-open"_sv) {
         // device: /dev/udmabuf
         udmabufOpenFaults = (int)arg.stou();
+    } else if (fault == "encoder-alloc"_sv) {
+        // screenshot viewer: its encoders
+        encoderAllocSkip = (int)arg.stou();
     }
 }
 
@@ -929,6 +939,15 @@ int TestChaosMonkey::udmabufOpen(int fd) {
     return -1;
 }
 
+// screenshot viewer: its encoders
+bool TestChaosMonkey::encoderAlloc(bool pending) {
+    if (encoderAllocSkip < 0 || encoderAllocSkip-- > 0) {
+        return pending;
+    }
+
+    return false;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -997,6 +1016,8 @@ namespace {
         VkResult descriptorRoom(VkResult result, size_t pool) override;
         // device: /dev/udmabuf
         int udmabufOpen(int fd) override;
+        // screenshot viewer: its encoders
+        bool encoderAlloc(bool pending) override;
     };
 }
 
@@ -1195,6 +1216,11 @@ VkResult IdleChaosMonkey::descriptorRoom(VkResult result, size_t) {
 // device: /dev/udmabuf
 int IdleChaosMonkey::udmabufOpen(int fd) {
     return fd;
+}
+
+// screenshot viewer: its encoders
+bool IdleChaosMonkey::encoderAlloc(bool pending) {
+    return pending;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
