@@ -112,8 +112,11 @@ static void im_content_type(void* d, struct zwp_input_method_v2* m,
     im_purpose = p;
     im_content_seen++;
 }
+static int im_dones;
+
 static void im_done(void* d, struct zwp_input_method_v2* m) {
     (void)d; (void)m;
+    im_dones++;
 }
 static void im_unavailable_cb(void* d, struct zwp_input_method_v2* m) {
     (void)d; (void)m;
@@ -226,6 +229,52 @@ int main(void) {
     }
     if (strcmp(ti_commit, "hi")) {
         fprintf(stderr, "commit mismatch: \"%s\"\n", ti_commit);
+        return 1;
+    }
+
+    // characters taken out after the cursor only, with the preedit cleared
+    ti_delete_seen = 0;
+    ti_preedit_seen = 0;
+    zwp_input_method_v2_set_preedit_string(im, "", 0, 0);
+    zwp_input_method_v2_delete_surrounding_text(im, 0, 3);
+    zwp_input_method_v2_commit(im, 0);
+
+    while ((!ti_delete_seen || !ti_preedit_seen) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (ti_delete_before != 0 || ti_delete_after != 3 || ti_preedit_text[0]) {
+        fprintf(stderr, "delete after the cursor came through as %u/%u, preedit \"%s\"\n",
+                ti_delete_before, ti_delete_after, ti_preedit_text);
+        return 1;
+    }
+
+    // disabled and enabled again with nothing described: the reactivated
+    // IME hears no surrounding text or content type, and a later commit,
+    // still with nothing, tells it nothing at all
+    zwp_text_input_v3_disable(ti);
+    zwp_text_input_v3_commit(ti);
+    while (im_active && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    im_surrounding_seen = im_content_seen = 0;
+    zwp_text_input_v3_enable(ti);
+    zwp_text_input_v3_commit(ti);
+    while (!im_active && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    wl_display_roundtrip(wl_dpy);
+
+    if (im_surrounding_seen || im_content_seen) {
+        fprintf(stderr, "a bare enable carried the old surrounding text or content type\n");
+        return 1;
+    }
+
+    int dones = im_dones;
+
+    zwp_text_input_v3_commit(ti);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+
+    if (im_dones != dones) {
+        fprintf(stderr, "an empty text input commit sent the IME a done\n");
         return 1;
     }
 
