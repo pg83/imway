@@ -1511,7 +1511,7 @@ namespace {
         void sendDcSelections();
         void sendSelections(wl_client* client);
         void sourceGone(DataSource* src);
-        void startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon);
+        void startDrag(wl_client* client, DataSource* src, Surface* icon);
         void syncToplevelDrag();
         void dragMotion();
         void endDrag();
@@ -1535,7 +1535,6 @@ namespace {
         SeatState(WaylandImpl& impl);
         ~SeatState() noexcept;
 
-        bool sameClient(wl_resource* res, Toplevel* t);
         bool sameClientS(wl_resource* res, Surface* s);
         Surface* pickInTree(Surface& s);
         Surface* pickPointerTarget();
@@ -4974,7 +4973,7 @@ namespace {
             src->usedForDrag = true;
         }
 
-        seat->startDrag(client, serial, src, origin, icon);
+        seat->startDrag(client, src, icon);
     }
 
     void deviceSetSelection(wl_client* client, wl_resource* res, wl_resource* sourceRes, u32 serial) {
@@ -9929,7 +9928,7 @@ namespace {
         return (CursorKind)shape;
     }
 
-    void cursorShapeDeviceSetShape(wl_client* client, wl_resource* res, u32 serial, u32 shape) {
+    void cursorShapeDeviceSetShape(wl_client*, wl_resource* res, u32 serial, u32 shape) {
         auto* seat = (SeatState*)wl_resource_get_user_data(res);
 
         if (!wp_cursor_shape_device_v1_shape_is_valid(shape, wl_resource_get_version(res))) {
@@ -9938,11 +9937,10 @@ namespace {
             return;
         }
 
+        // the enter serials are cleared at every pointer focus change and
+        // only ever recorded for the focused client's pointers, so a valid
+        // one proves the caller owns the focus
         if (!seat || !seat->ptrFocus || !seat->validCursorShapeEnter(res, serial)) {
-            return;
-        }
-
-        if (wl_resource_get_client(resOf(seat->ptrFocus)) != client) {
             return;
         }
 
@@ -10015,14 +10013,12 @@ namespace {
         return (SeatState*)wl_resource_get_user_data(res);
     }
 
-    void pointerSetCursor(wl_client* client, wl_resource* res, u32 serial, wl_resource* surfRes, i32 hotX, i32 hotY) {
+    void pointerSetCursor(wl_client*, wl_resource* res, u32 serial, wl_resource* surfRes, i32 hotX, i32 hotY) {
         SeatState* seat = seatOf(res);
 
+        // a valid enter serial proves the caller owns the focus, see
+        // cursorShapeDeviceSetShape
         if (!seat || !seat->ptrFocus || !seat->validPointerEnter(res, serial)) {
-            return;
-        }
-
-        if (wl_resource_get_client(resOf(seat->ptrFocus)) != client) {
             return;
         }
 
@@ -10390,10 +10386,6 @@ SeatState::~SeatState() noexcept {
 
 bool SeatState::sameClientS(wl_resource* res, Surface* s) {
     return s && wl_resource_get_client(res) == wl_resource_get_client(resOf(s));
-}
-
-bool SeatState::sameClient(wl_resource* res, Toplevel* t) {
-    return t && t->surface && wl_resource_get_client(res) == wl_resource_get_client(resOf(t->surface.get()));
 }
 
 Surface* SeatState::pickInTree(Surface& s) {
@@ -11623,16 +11615,8 @@ void SeatState::syncToplevelDrag() {
     srv->scene->needsFrame = true;
 }
 
-void SeatState::startDrag(wl_client* client, u32 serial, DataSource* src, Surface* origin, Surface* icon) {
-    if (buttonsDown <= 0 || serial != pointerGrabSerial || client != pointerGrabClient || origin != pointerGrabOrigin.get()) {
-        // cancelled exists since v1; see deviceStartDrag
-        if (src) {
-            wl_data_source_send_cancelled(src->res);
-        }
-
-        return;
-    }
-
+// deviceStartDrag, the only caller, has checked the implicit grab
+void SeatState::startDrag(wl_client* client, DataSource* src, Surface* icon) {
     dragSource = src;
     dragClient = client;
     dragTarget.reset();
@@ -12021,11 +12005,8 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
     }
 }
 
+// called from the popup's own map commit, so its surface is alive
 void SeatState::popupGrabStart(Popup* p) {
-    if (!p->surface) {
-        return;
-    }
-
     kbSendLeave(kbTargetRes());
     focusGeneration++;
     grabStack.pushBack((GrabNode*)p->surface.get());
