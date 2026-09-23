@@ -2498,11 +2498,11 @@ Surface* RendererImpl::scanoutCandidate() {
     // below is a lone fullscreen toplevel, drawn output-sized at the origin
     // above the chrome, so the chrome is occluded whenever one exists. Any
     // open compositor ui (dialogs, overlays, toasts, the lock screen) is
-    // one scene scalar, written by the desktop every frame. The desktop
-    // judges whether its ui owns the pointer in composed frames only: while
-    // it says so, compose, or a client mapped over the ui the pointer rested
-    // on would never be judged to have it.
-    if (forceComposition || scene->overlayActive || scene->ptrCaptured || !scene->popups.empty() || scene->dragIcon) {
+    // the desktop's to answer, from its live state. The desktop judges
+    // whether its ui owns the pointer in composed frames only: while it says
+    // so, compose, or a client mapped over the ui the pointer rested on
+    // would never be judged to have it.
+    if (forceComposition || comp->desktop->overlayActive() || scene->ptrCaptured || !scene->popups.empty() || scene->dragIcon) {
         return nullptr;
     }
 

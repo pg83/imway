@@ -420,10 +420,6 @@ struct Scene {
 
     bool needsFrame = true;
     bool drawCursor = false;
-    // the desktop's per-frame verdict: some compositor ui is on screen
-    // (launcher, dialogs, alt-tab, osd, lock, toasts, the color picker) —
-    // the direct-scanout gate reads this instead of the ui internals
-    bool overlayActive = false;
     // current ui scale, written by the desktop when a scale change is
     // applied at a frame edge; the renderer reacts (cursor bitmaps rebake)
     float uiScale = 1.f;

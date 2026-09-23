@@ -630,11 +630,16 @@ namespace {
         bool launcherToggle = false;
         float launcherX = -1.f, launcherY = -1.f;
 
+        // an imgui popup (a menu of the bar or the dock) was open in the
+        // last composed frame; only a composed frame opens or closes one
+        bool imguiPopup = false;
+
         DesktopImpl(Composer& c);
         ~DesktopImpl() noexcept;
 
         void build() override;
         void drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale, int kind) override;
+        bool overlayActive() override;
         void lock() override;
 
         // Composer::outputResizedListeners: place or clamp the pointer
@@ -2130,7 +2135,7 @@ void DesktopImpl::buildUi(Scene& scene) {
     // popups opened by the top bar or dock. Restore the popup invariant at
     // the end of window submission: popups are painted and hit-tested above
     // every client on the following frame.
-    bool imguiPopup = false;
+    imguiPopup = false;
     Vector<ImGuiWindow*> popupWindows;
     ImGuiContext& imgui = *GImGui;
 
@@ -2255,10 +2260,6 @@ void DesktopImpl::buildUi(Scene& scene) {
     }
 
     cursorUi(scene, overClient);
-
-    // the scanout gate reads one scalar instead of the ui internals; the
-    // bell flash counts too — a direct-scanout frame would hide it
-    scene.overlayActive = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState || altTabActive || imguiPopup || osdMs != 0 || pickArmed || pickShow || scene.bellMs != 0 || toastsActive();
 }
 
 void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
@@ -2298,6 +2299,15 @@ void DesktopImpl::cursorUi(Scene& scene, bool overClient) {
 
 void DesktopImpl::build() {
     buildUi(*scene);
+}
+
+// A pending toggle counts: the dialog it asks for exists only once a frame
+// is composed. The bell flash counts too: a direct-scanout frame hides it.
+bool DesktopImpl::overlayActive() {
+    bool open = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState;
+    bool asked = launcherToggle || calendarToggle || wifiToggle || inspectorToggle || historyToggle || logToggle || anrToggle || settingsToggle;
+
+    return open || asked || altTabActive || imguiPopup || osdMs != 0 || pickArmed || pickShow || scene->bellMs != 0 || toastsActive();
 }
 
 bool DesktopImpl::toastsActive() const {

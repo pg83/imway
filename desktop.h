@@ -9,13 +9,20 @@ struct ImVec2;
 // windows, dialogs, overlays, the cursor — routes input as the first
 // InputSink, and owns focus and layout policy. It talks to the GPU only
 // through the Renderer interface and the scene; the renderer calls back
-// through exactly these two methods.
+// through exactly these three methods.
 struct Desktop {
     // the per-frame UI pass, invoked by the renderer inside the ImGui frame
     virtual void build() = 0;
 
     // cursor shape geometry for the renderer's cursor-plane rasterizer
     virtual void drawCursorShape(ImDrawList* dl, const ImVec2& pos, float scale, int kind) = 0;
+
+    // some compositor ui is up or asked for (launcher, dialogs, alt-tab,
+    // osd, lock, toasts, the color picker, the bell): the direct-scanout
+    // gate composes while it is. Answered from live state, not from the
+    // last composed frame: a direct-scanout frame builds no ui, so a verdict
+    // written while building would freeze until something else composed.
+    virtual bool overlayActive() = 0;
 
     virtual void lock() = 0;
 
