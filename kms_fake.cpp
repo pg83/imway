@@ -1846,6 +1846,7 @@ void FakeKms::parseLookupFaults(StringView rules) {
             {"connector", DRM_IOCTL_MODE_GETCONNECTOR},
             {"clientcap", DRM_IOCTL_SET_CLIENT_CAP},
             {"mapdumb", DRM_IOCTL_MODE_MAP_DUMB},
+            {"cap", DRM_IOCTL_GET_CAP},
         };
 
         for (const auto& k : kinds) {
@@ -1887,6 +1888,8 @@ bool FakeKms::lookupFails(u32 req, void* arg) {
             match = ((drm_mode_get_encoder*)arg)->encoder_id == f.id;
         } else if (req == DRM_IOCTL_MODE_GETCONNECTOR) {
             match = ((drm_mode_get_connector*)arg)->connector_id == f.id;
+        } else if (req == DRM_IOCTL_GET_CAP) {
+            match = ((drm_get_cap*)arg)->capability == f.id;
         } else if (req == DRM_IOCTL_MODE_GETPROPERTY) {
             PropDef* p = findProp(((drm_mode_get_property*)arg)->prop_id);
 

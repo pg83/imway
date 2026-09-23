@@ -48,7 +48,8 @@ struct KmsIntercept {
     // prop:<name>, blob:<name of the property holding it>, plane:<id>,
     // resources, createblob (creating any property blob), planes (the plane
     // list), encoder:<id>, connector:<id>, clientcap (setting a client
-    // capability), mapdumb (mapping a dumb buffer). Each rule lets skip
+    // capability), mapdumb (mapping a dumb buffer), cap:<capability>
+    // (reading a device capability). Each rule lets skip
     // matching lookups through first; an empty list clears them
     virtual void failLookups(stl::StringView rules) = 0;
     // the connector's DDC/CI bus, the i2c node the sysfs walk found: the
