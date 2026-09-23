@@ -222,6 +222,15 @@ int main(void) {
 
     puts("leased without the plane");
 
+    wait_marker("go-7");
+
+    if (!try_lease()) {
+        fprintf(stderr, "an unreadable plane list refused the whole lease\n");
+        return 1;
+    }
+
+    puts("leased without planes");
+
     wait_marker("go-0");
 
     if (!try_lease()) {

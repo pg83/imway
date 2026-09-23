@@ -1124,16 +1124,15 @@ int KmsDevice::createLease(const u32* connectorIds, int count, u32& lesseeId) {
         return -ENODEV;
     }
 
-    u32 usedCrtc = output ? output->crtcId : 0;
+    // the desktop output drives a crtc before any client can ask: it is
+    // created before the wayland globals, and never without a pipe
     Vector<u32> takenCrtcs;
 
-    if (usedCrtc) {
-        takenCrtcs.pushBack(usedCrtc);
-    }
+    takenCrtcs.pushBack(output->crtcId);
 
     bool ok = true;
 
-    for (int i = 0; i < count && ok; i++) {
+    for (int i = 0; i < count; i++) {
         objects.pushBack(connectorIds[i]);
 
         drmModeConnector* conn = drmModeGetConnector(fd, connectorIds[i]);
@@ -1229,10 +1228,9 @@ int KmsDevice::createLease(const u32* connectorIds, int count, u32& lesseeId) {
     return leaseFd;
 }
 
+// only a granted lease is revoked: the lessee id is never 0
 void KmsDevice::revokeLease(u32 lesseeId) {
-    if (lesseeId) {
-        drmModeRevokeLease(fd, lesseeId);
-    }
+    drmModeRevokeLease(fd, lesseeId);
 }
 
 ::Output* KmsDevice::createOutput(StringView connector, StringView modeStr, const OutputConfiguration& config) {

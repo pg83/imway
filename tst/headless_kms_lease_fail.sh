@@ -6,7 +6,8 @@
 # encoder gone, every crtc it can reach already driving the desktop, the
 # kernel refusing the lease itself, and the driver failing to list its
 # resources. A device bound meanwhile offers nothing. A plane the driver
-# cannot describe is left out of the lease rather than failing it; healed,
+# cannot describe is left out of the lease rather than failing it, and a
+# plane list it cannot read leaves them all out the same way; healed,
 # the same connector leases out with its crtc and that crtc's own primary
 # plane.
 set -euo pipefail
@@ -35,13 +36,19 @@ touch "$XDG_RUNTIME_DIR/go-6"
 wait_client "leased without the plane"
 in_log "fake-kms: lease 301 303$" || { echo "the lease without its plane is not connector and crtc"; grep "fake-kms: lease" "$IMWAY_LOG"; exit 1; }
 
+ctl "kms-fail-lookup planes"
+dump_state >/dev/null
+touch "$XDG_RUNTIME_DIR/go-7"
+wait_client "leased without planes"
+[[ "$(grep -c "fake-kms: lease 301 303$" "$IMWAY_LOG")" -eq 2 ]] || { echo "the lease without a plane list is not connector and crtc"; grep "fake-kms: lease" "$IMWAY_LOG"; exit 1; }
+
 ctl "kms-fail-lookup "
 dump_state >/dev/null
 touch "$XDG_RUNTIME_DIR/go-0"
 wait_client "^leased$"
 expect_client_ok "the lease client failed"
 in_log "fake-kms: lease 301 303 304$" || { echo "the lease is not connector, crtc and plane"; grep "fake-kms: lease" "$IMWAY_LOG"; exit 1; }
-[[ "$(grep -c "fake-kms: lease" "$IMWAY_LOG")" -eq 2 ]] || { echo "a refused request still reached the kernel"; grep "fake-kms: lease" "$IMWAY_LOG"; exit 1; }
+[[ "$(grep -c "fake-kms: lease" "$IMWAY_LOG")" -eq 3 ]] || { echo "a refused request still reached the kernel"; grep "fake-kms: lease" "$IMWAY_LOG"; exit 1; }
 
 # the desktop pipe never noticed
 flips() { dump_field '^kms' flips; }
