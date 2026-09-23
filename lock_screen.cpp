@@ -823,7 +823,9 @@ void Dialog::draw(Composer& c, bool& open) {
             }
         }
 
-        if (failed && !authenticating) {
+        // never while authenticating: a new attempt clears it, only the
+        // attempt's end sets it
+        if (failed) {
             ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));
             ImGui::TextColored(ImVec4(1.f, 0.42f, 0.42f, 1.f), "wrong password");
         }
