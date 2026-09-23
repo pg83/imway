@@ -17,6 +17,8 @@
  *   "scaled off"     the buffer scale back at 1
  *   "offset on"      the buffer attached one column right
  *   "offset off"     and back
+ *   "lowered on"     the buffer attached one row down
+ *   "lowered off"    and back
  *   "cropped on"     a viewport showing the buffer's top left quarter
  *   "cropped off"    that viewport's source unset
  *   "shrunk on"      a viewport showing the buffer at half size
@@ -112,8 +114,8 @@ static void cursor_step(struct wl_surface* cs, struct wl_buffer* b, int w, int h
     printf("%s\n", what);
 }
 
-static void reattach(int dx) {
-    wl_surface_attach(surface, buffer, dx, 0);
+static void reattach(int dx, int dy) {
+    wl_surface_attach(surface, buffer, dx, dy);
     wl_surface_damage(surface, 0, 0, W, H);
 }
 
@@ -195,7 +197,7 @@ int main(void) {
             pointer_in = 1;
             printf("pointer in\n");
         }
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 23) {
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 25) {
             phase++;
             switch (phase) {
                 case 1:
@@ -267,11 +269,11 @@ int main(void) {
                     step("scaled off");
                     break;
                 case 15:
-                    reattach(1);
+                    reattach(1, 0);
                     step("offset on");
                     break;
                 case 16:
-                    reattach(-1);
+                    reattach(-1, 0);
                     step("offset off");
                     break;
                 case 17:
@@ -291,12 +293,20 @@ int main(void) {
                     step("shrunk off");
                     break;
                 case 21:
-                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    reattach(0, 1);
+                    step("lowered on");
                     break;
                 case 22:
-                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    reattach(0, -1);
+                    step("lowered off");
                     break;
                 case 23:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 24:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 25:
                     wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
                     wl_display_flush(wl_dpy);
                     printf("no cursor\n");

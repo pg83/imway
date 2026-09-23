@@ -52,7 +52,7 @@ steps() { # <step:want>...
 }
 
 steps "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane" "below on:off_plane" "below off:on_plane" "short on:off_plane" "short off:on_plane"
-steps "turned on:off_plane" "turned off:on_plane" "scaled on:off_plane" "scaled off:on_plane" "offset on:off_plane" "offset off:on_plane" "cropped on:off_plane" "cropped off:on_plane" "shrunk on:off_plane" "shrunk off:on_plane"
+steps "turned on:off_plane" "turned off:on_plane" "scaled on:off_plane" "scaled off:on_plane" "offset on:off_plane" "offset off:on_plane" "cropped on:off_plane" "cropped off:on_plane" "shrunk on:off_plane" "shrunk off:on_plane" "lowered on:off_plane" "lowered off:on_plane"
 
 # the cursor steps need the pointer on the surface
 pointer_in() {
