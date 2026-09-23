@@ -859,28 +859,16 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
 }
 
 // A lease is a fresh handle on the same device. Nothing here polices what
-// the lessee then does with it: the objects are only checked for existence,
-// and the returned fd is another reference to the companion node.
+// the lessee then does with it, and the returned fd is another reference to
+// the companion node. The objects are not checked: the backend leases at
+// least the offered connector (an empty request is a protocol error before
+// it), with a crtc and planes from this device's own resource lists.
 int FakeKms::emuCreateLease(drm_mode_create_lease* l) {
-    if (!l->object_count || !l->object_ids) {
-        return -EINVAL;
-    }
-
     if (leaseFaultKind == 4) {
         return -ENOSPC;
     }
 
     const u32* ids = (const u32*)(uintptr_t)l->object_ids;
-
-    for (u32 i = 0; i < l->object_count; i++) {
-        u32 id = ids[i];
-        bool known = id == kLeaseConnectorId || id == kLeaseCrtcId || id == kLeasePlaneId || id == kConnectorId || id == kCrtcId || id == kPlaneId || id == kCursorPlaneId;
-
-        if (!known) {
-            return -ENOENT;
-        }
-    }
-
     int fd = dup(renderFd);
 
     if (fd < 0) {
@@ -903,8 +891,9 @@ int FakeKms::emuCreateLease(drm_mode_create_lease* l) {
     return 0;
 }
 
-int FakeKms::emuRevokeLease(drm_mode_revoke_lease* l) {
-    return l->lessee_id && l->lessee_id <= lastLessee ? 0 : -ENOENT;
+// the backend revokes only leases this device granted
+int FakeKms::emuRevokeLease(drm_mode_revoke_lease*) {
+    return 0;
 }
 
 int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
@@ -915,11 +904,8 @@ int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
     return 0;
 }
 
+// the backend asks only for planes the plane list above names
 int FakeKms::emuGetPlane(drm_mode_get_plane* p) {
-    if (p->plane_id != kPlaneId && p->plane_id != kCursorPlaneId && p->plane_id != kLeasePlaneId) {
-        return -ENOENT;
-    }
-
     fillArray(p->format_type_ptr, p->count_format_types, kFormats, (u32)(sizeof(kFormats) / sizeof(kFormats[0])));
     p->possible_crtcs = p->plane_id == kLeasePlaneId ? 2 : 1;
     p->crtc_id = 0;
