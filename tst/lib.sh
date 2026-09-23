@@ -358,8 +358,6 @@ kms_boot() { # [VAR=value...] -- [imway args...]
     bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
     BOOT_RC=0
     BOOT_OUT=$(env IMWAY_FAKE_KMS=1 IMWAY_SETTINGS=advanced.seat_backend=2 "${envs[@]}" timeout 60 "$bin" --device auto --socket imway-boot --frames 3 "$@" 2>&1) || BOOT_RC=$?
-    # the empty input directory's probe lines are noise here
-    BOOT_OUT=$(grep -v "libinput: client bug: Invalid path" <<<"$BOOT_OUT" || true)
 }
 
 # fail unless the last kms_boot printed (boot_has) or did not print
