@@ -1342,7 +1342,15 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
     allocate.allocationSize = req.size;
     allocate.memoryTypeIndex = memoryType;
 
-    if (vkAllocateMemory(device, &allocate, nullptr, &upload->memory) != VK_SUCCESS) {
+    // a failed import leaves the fd with the caller, so the refusal is
+    // decided before the call: the driver never takes the fd it closes
+    VkResult imported = comp->chaos->clientImport(VK_SUCCESS);
+
+    if (imported == VK_SUCCESS) {
+        imported = vkAllocateMemory(device, &allocate, nullptr, &upload->memory);
+    }
+
+    if (imported != VK_SUCCESS) {
         close(fd);
 
         return nullptr;
