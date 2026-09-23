@@ -10,6 +10,8 @@
 
 static int popup_done_seen;
 static int popup_configured;
+// commit the acked popup once with no buffer before mapping it
+static int popup_empty_first;
 
 static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, int32_t w, int32_t h) {
     (void)d; (void)p; (void)x; (void)y; (void)w; (void)h;
@@ -28,6 +30,8 @@ static void popup_xdg_configure(void* d, struct xdg_surface* xs, uint32_t serial
 
     xdg_surface_ack_configure(xs, serial);
     if (!popup_configured) {
+        if (popup_empty_first)
+            wl_surface_commit(surface);
         wl_surface_attach(surface, wl_solid(40, 40, 0xFF0000FFu), 0, 0);
         wl_surface_commit(surface);
         popup_configured = 1;
@@ -265,6 +269,14 @@ int main(int argc, char** argv) {
     }
 
     if (!strcmp(mode, "grab-mapped-popup")) {
+        xdg_popup_grab(mapped_popup(), wl_seat_g, 0);
+        return wl_expect_error(xdg_popup_interface.name, XDG_POPUP_ERROR_INVALID_GRAB);
+    }
+
+    if (!strcmp(mode, "grab-popup-mapped-late")) {
+        // an acked commit with no buffer leaves the popup unmapped; the
+        // buffer after it maps it, so the grab comes too late
+        popup_empty_first = 1;
         xdg_popup_grab(mapped_popup(), wl_seat_g, 0);
         return wl_expect_error(xdg_popup_interface.name, XDG_POPUP_ERROR_INVALID_GRAB);
     }

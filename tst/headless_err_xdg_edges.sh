@@ -11,7 +11,8 @@ set -euo pipefail
 for mode in attach-offset-y max-under-min resize-edge-none ack-skipped-serial parent-size-flat \
             xdg-on-subsurface xdg-on-shown-surface subsurface-twice toplevel-on-popup \
             popup-twice toplevel-dead-surface popup-dead-surface popup-parent-dead-surface \
-            xdg-before-popup reposition-no-anchor grab-mapped-popup grab-no-parent; do
+            xdg-before-popup reposition-no-anchor grab-mapped-popup grab-popup-mapped-late \
+            grab-no-parent; do
     "$IMWAY_CLIENT" "$mode" || { echo "wrong/no outcome for $mode"; exit 1; }
     expect_alive "compositor died on $mode"
 done
