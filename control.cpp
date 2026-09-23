@@ -19,6 +19,7 @@
 #include "intr_list.h"
 #include "dbus_menu.h"
 #include "input_sink.h"
+#include "chaos_monkey.h"
 #include "kms_intercept.h"
 #include "status_notifier.h"
 
@@ -754,6 +755,8 @@ void ControlImpl::dumpState(StringView outPath) {
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
+    // the millisecond clock as the bell and the OSD read it
+    out << "clock ms="_sv << comp->chaos->clockMs(nowMsec()) << "\n"_sv;
     out << "frames done="_sv << scene->framesDone << "\n"_sv;
 
     if (comp->kmsIntercept) {

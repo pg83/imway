@@ -128,6 +128,10 @@ using namespace stl;
 // screenshot viewer: its encoders
 //   encoder-alloc=K   K encoder allocations pass, the one after fails as
 //                     without memory
+// the millisecond clock:
+//   clock-ms=V        the clock reads V at its first reading and runs on
+//                     from there: V just under 2^32 wraps it round to zero
+//                     early in the session
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -207,6 +211,11 @@ namespace {
         int udmabufOpenFaults = 0;
         // screenshot viewer: its encoders
         int encoderAllocSkip = -1;
+        // the millisecond clock: the offset is fixed at the first reading
+        bool clockSet = false;
+        u32 clockStart = 0;
+        bool clockOffsetKnown = false;
+        u32 clockOffset = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -274,6 +283,8 @@ namespace {
         int udmabufOpen(int fd) override;
         // screenshot viewer: its encoders
         bool encoderAlloc(bool pending) override;
+        // the millisecond clock
+        u32 clockMs(u32 ms) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -421,6 +432,10 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "encoder-alloc"_sv) {
         // screenshot viewer: its encoders
         encoderAllocSkip = (int)arg.stou();
+    } else if (fault == "clock-ms"_sv) {
+        // the millisecond clock
+        clockSet = true;
+        clockStart = (u32)arg.stou();
     }
 }
 
@@ -948,6 +963,21 @@ bool TestChaosMonkey::encoderAlloc(bool pending) {
     return false;
 }
 
+// the millisecond clock: unsigned arithmetic wraps the shifted clock
+// round zero exactly as the real one does
+u32 TestChaosMonkey::clockMs(u32 ms) {
+    if (!clockSet) {
+        return ms;
+    }
+
+    if (!clockOffsetKnown) {
+        clockOffset = clockStart - ms;
+        clockOffsetKnown = true;
+    }
+
+    return ms + clockOffset;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1018,6 +1048,8 @@ namespace {
         int udmabufOpen(int fd) override;
         // screenshot viewer: its encoders
         bool encoderAlloc(bool pending) override;
+        // the millisecond clock
+        u32 clockMs(u32 ms) override;
     };
 }
 
@@ -1221,6 +1253,11 @@ int IdleChaosMonkey::udmabufOpen(int fd) {
 // screenshot viewer: its encoders
 bool IdleChaosMonkey::encoderAlloc(bool pending) {
     return pending;
+}
+
+// the millisecond clock
+u32 IdleChaosMonkey::clockMs(u32 ms) {
+    return ms;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

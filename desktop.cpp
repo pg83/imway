@@ -27,6 +27,7 @@
 #include "renderer.h"
 #include "settings.h"
 #include "weak_ptr.h"
+#include "chaos_monkey.h"
 #include "inspector.h"
 #include "intr_list.h"
 #include "anr_dialog.h"
@@ -987,7 +988,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
             osdKind = 2;
         }
 
-        osdMs = nowMsec() + (u64)(comp->settings->osdSeconds() * 1000.f);
+        osdMs = comp->chaos->clockMs(nowMsec()) + (u64)(comp->settings->osdSeconds() * 1000.f);
         scene->needsFrame = true;
         consumed = true;
     }
@@ -1086,7 +1087,7 @@ void DesktopImpl::wifiChanged() {
 // own listeners; comp->mixer is set once at startup and never cleared
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
-        osdMs = nowMsec() + (u64)(comp->settings->osdSeconds() * 1000.f);
+        osdMs = comp->chaos->clockMs(nowMsec()) + (u64)(comp->settings->osdSeconds() * 1000.f);
         osdKind = 1;
     }
 
@@ -1291,7 +1292,7 @@ void DesktopImpl::altTabCommit() {
 }
 
 void DesktopImpl::sampleStats() {
-    u64 now = nowMsec();
+    u64 now = comp->chaos->clockMs(nowMsec());
 
     if (statMs && now - statMs < 1900) {
         return;
@@ -1597,7 +1598,7 @@ void DesktopImpl::buildUi(Scene& scene) {
     settingsToggle = false;
 
     if (osdMs) {
-        u64 now = nowMsec();
+        u64 now = comp->chaos->clockMs(nowMsec());
 
         if (now >= osdMs) {
             osdMs = 0;
@@ -2245,7 +2246,7 @@ void DesktopImpl::buildUi(Scene& scene) {
 
     // xdg-system-bell: a brief screen flash on ring, fading over ~150ms
     if (scene.bellMs && settings.visualBell()) {
-        u64 now = nowMsec();
+        u64 now = comp->chaos->clockMs(nowMsec());
         u64 age = now >= scene.bellMs ? now - scene.bellMs : 0;
         u64 duration = (u64)(settings.visualBellSeconds() * 1000.f);
 
