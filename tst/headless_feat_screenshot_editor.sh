@@ -76,15 +76,20 @@ tap 11 # 0 resets
 # Keys the editor has no use for must leave it alone. They still travel the
 # whole input path into it, which is where the keymap and the button
 # mapping live, so the sweep is over the punctuation that path names one by
-# one, plus the mouse buttons that are not the primary: right, middle, the
+# one and two letters, one of them held until it repeats, plus the mouse
+# buttons that are not the primary: right, middle, the
 # two side buttons ImGui takes as its fourth and fifth, and one it has no
 # slot for.
 await 50 settled "$XDG_RUNTIME_DIR/s2.ppm" "$XDG_RUNTIME_DIR/idle.ppm" || {
     echo "the editor never settled before the sweep"; exit 1; }
 
-for code in 40 51 52 53 39 26 43 27 41 15 57; do
+for code in 40 51 52 53 39 26 43 27 41 15 57 30 44; do
     ctl "key $code press"; ctl "key $code release"
 done
+# a letter held long enough for the editor's own key repeat to start
+ctl "key 30 press"
+sleep 1
+ctl "key 30 release"
 
 ctl "button right press"; ctl "button right release"
 ctl "button middle press"; ctl "button middle release"
