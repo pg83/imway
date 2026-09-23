@@ -129,6 +129,18 @@ static cmsHPROFILE edgeProfile(const char* mode, bool& accepted) {
         }
         return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
     }
+    if (!strcmp(mode, "curve-toe")) {
+        // BT.709's inverse OETF: a power law above a linear toe, monotonic,
+        // so the gamma estimate lands in range and only the curve check
+        // against that power law can tell it apart
+        const double params[5] = {1 / 0.45, 1 / 1.099, 0.099 / 1.099, 1 / 4.5, 0.081};
+        return rgbProfile(cmsBuildParametricToneCurve(nullptr, 4, params));
+    }
+    if (!strcmp(mode, "no-green-trc")) {
+        cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
+        cmsWriteTag(profile, cmsSigGreenTRCTag, nullptr);
+        return profile;
+    }
     if (!strcmp(mode, "colorspace-class")) {
         accepted = true;
         cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
