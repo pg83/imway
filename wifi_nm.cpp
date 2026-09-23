@@ -38,9 +38,11 @@ namespace {
     constexpr const char* kConnIface = "org.freedesktop.NetworkManager.Settings.Connection";
 
     constexpr u32 kDeviceWifi = 2;
+    // NMDeviceState: PREPARE (40) up to SECONDARIES (90) are the stages of
+    // an activation, ACTIVATED (100) the only connected one; DEACTIVATING
+    // (110) and FAILED (120) follow it and are no connection
     constexpr u32 kStateActivated = 100;
-    constexpr u32 kStateConfig = 40;
-    constexpr u32 kStateNeedAuth = 60;
+    constexpr u32 kStatePrepare = 40;
 
     constexpr int kTimeout = 3000;
 
@@ -492,9 +494,9 @@ void NmWifi::onDevicesDone() {
 
     st = WifiState::disconnected;
 
-    if (curState >= kStateActivated) {
+    if (curState == kStateActivated) {
         st = WifiState::connected;
-    } else if (curState >= kStateConfig && curState <= kStateNeedAuth) {
+    } else if (curState >= kStatePrepare && curState < kStateActivated) {
         st = WifiState::connecting;
     }
 
