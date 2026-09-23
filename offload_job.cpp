@@ -21,7 +21,10 @@ namespace {
         Listener* done = nullptr;
         EventFD fd;
         ev_io* io = nullptr;
+        // passes the worker finished, and those the loop has run the
+        // completion of: a wakeup with nothing new between them is stale
         u32 completion = 0;
+        u32 retiredPasses = 0;
         bool busy = false;
         bool again = false;
 
@@ -85,15 +88,26 @@ void OffloadJobImpl::join() {
 void OffloadJobImpl::drain() {
     while (busy) {
         c->offload->join();
-        // retired() drains the eventfd, so the io watcher has nothing left
-        // to report and the completion still runs exactly once
+        // the io watcher may still report this pass's wakeup, collected
+        // before the drain: retired() takes it for the stale one it is
         retired();
     }
 }
 
 void OffloadJobImpl::retired() {
     fd.drain();
-    (void)stdAtomicFetch(&completion, MemoryOrder::Acquire);
+
+    u32 finished = stdAtomicFetch(&completion, MemoryOrder::Acquire);
+
+    // libev collects the eventfd's wakeup before it runs any callback of
+    // the iteration; when an earlier one drained the pass (a screenshot
+    // taking the shm copy in flight), the wakeup still arrives, for a pass
+    // already retired, or one started since that is still running
+    if (finished == retiredPasses) {
+        return;
+    }
+
+    retiredPasses = finished;
     busy = false;
 
     bool rerun = again;

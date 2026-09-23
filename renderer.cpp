@@ -1652,6 +1652,16 @@ void RendererImpl::startShmCopy() {
 
     shmCopyActive = (ShmCopyTask*)shmCopyQueue.popFront();
     shmCopyJob->run();
+#ifdef IMWAY_FOR_TESTS
+    // a loop descheduled right after handing the copy over (a loaded
+    // host): the copy finishes, and whatever else arrives meanwhile, before
+    // the loop next polls
+    if (const char* text = getenv("IMWAY_SHM_COPY_STALL_MS")) {
+        unsigned long stall = strtoul(text, nullptr, 10);
+
+        usleep((stall > 1000 ? 1000 : stall) * 1000);
+    }
+#endif
 }
 
 void RendererImpl::shmCopyWork() {
