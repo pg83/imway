@@ -817,17 +817,15 @@ bool DesktopImpl::button(u32 btn, bool pressed) {
         if (renderer->readPixel((int)posX, (int)posY, pickR, pickG, pickB)) {
             pickShow = true;
 
-            if (notifier) {
-                static const char hx[] = "0123456789abcdef";
-                char h[8] = {'#', hx[pickR >> 4], hx[pickR & 15], hx[pickG >> 4], hx[pickG & 15], hx[pickB >> 4], hx[pickB & 15], 0};
+            static const char hx[] = "0123456789abcdef";
+            char h[8] = {'#', hx[pickR >> 4], hx[pickR & 15], hx[pickG >> 4], hx[pickG & 15], hx[pickB >> 4], hx[pickB & 15], 0};
 
-                Post p;
+            Post p;
 
-                p.app = "color picker"_sv;
-                p.summary = "color picked"_sv;
-                p.body = StringView(h); // copied by post() before h dies
-                notifier->post(p);
-            }
+            p.app = "color picker"_sv;
+            p.summary = "color picked"_sv;
+            p.body = StringView(h); // copied by post() before h dies
+            notifier->post(p);
         }
 
         scene->needsFrame = true;
@@ -936,15 +934,13 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     inputActivity();
     scene->needsFrame = true;
 
-    if (keyboard) {
-        keyboard->updateKey(code, pressed);
-    }
+    keyboard->updateKey(code, pressed);
 
     bool locked = lockState != nullptr;
     bool consumed = false;
-    u32 mask = keyboard ? keyboard->modMask() : 0;
+    u32 mask = keyboard->modMask();
 
-    if (!locked && shortcutCapture >= 0 && keyboard) {
+    if (!locked && shortcutCapture >= 0) {
         bool modifier = code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL || code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT || code == KEY_LEFTALT || code == KEY_RIGHTALT || code == KEY_LEFTMETA || code == KEY_RIGHTMETA;
 
         if (pressed && code == KEY_ESC) {
@@ -1015,7 +1011,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         scene->needsFrame = true;
     }
 
-    if (!locked && !consumed && !scene->shortcutsInhibited && keyboard && code < 256) {
+    if (!locked && !consumed && !scene->shortcutsInhibited && code < 256) {
         if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
             altTabActive = false;
             altTabSel.reset();
@@ -1060,7 +1056,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         io.AddKeyEvent(key, pressed);
     }
 
-    if (pressed && keyboard) {
+    if (pressed) {
         char buf[8];
 
         if (keyboard->utf8(code, buf, sizeof(buf)) > 0 && (u8)buf[0] >= 0x20) {
@@ -1580,9 +1576,7 @@ void DesktopImpl::buildUi(Scene& scene) {
         wifiToggle = false;
     }
 
-    if (notifier) {
-        drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
-    }
+    drawToasts(*comp, *notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
 
     drawSettings(*comp, settings, settingsToggle, shortcutCapture, &settingsState);
     drawAnrDialog(*comp, anrTarget, anrToggle, &anrState);
@@ -1619,10 +1613,8 @@ void DesktopImpl::buildUi(Scene& scene) {
         inspectorToggle = false;
     }
 
-    if (notifier) {
-        drawHistory(*comp, historyToggle, &historyState);
-        historyToggle = false;
-    }
+    drawHistory(*comp, historyToggle, &historyState);
+    historyToggle = false;
 
     drawLogView(*comp, logToggle, &logState);
     logToggle = false;
@@ -2294,11 +2286,9 @@ void DesktopImpl::build() {
 bool DesktopImpl::toastsActive() const {
     bool any = false;
 
-    if (notifier) {
-        notifier->active([&](Toast&) {
-            any = true;
-        });
-    }
+    notifier->active([&](Toast&) {
+        any = true;
+    });
 
     return any;
 }

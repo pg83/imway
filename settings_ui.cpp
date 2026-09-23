@@ -205,10 +205,6 @@ namespace {
     }
 
     void drawActiveLayout(Composer& c) {
-        if (!c.kb || !c.wayland) {
-            return;
-        }
-
         row("active layout");
 
         for (u32 i = 0; i < c.kb->layoutCount(); i++) {
@@ -261,7 +257,7 @@ void Dialog::pageDisplay(Composer& c, Settings& s) {
     row("mode");
     settingText("##mode", s, s.outputMode(), &Settings::setOutputMode);
 
-    if (c.output && c.output->hasBrightness() && !c.output->colorState().hdr()) {
+    if (c.output->hasBrightness() && !c.output->colorState().hdr()) {
         float brightness = c.output->brightness() * 100.f;
 
         row("brightness");

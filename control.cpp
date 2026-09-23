@@ -249,9 +249,7 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
 void ControlImpl::handleLine(StringView cmd) {
     // every command acts on the state the clients have already produced,
     // never on what the loop happened to have read by now
-    if (comp->wayland) {
-        comp->wayland->drainClients();
-    }
+    comp->wayland->drainClients();
 
     StringView verb, args;
 
@@ -581,7 +579,7 @@ void ControlImpl::handleLine(StringView cmd) {
         // entry point, so a scenario can drive the notifier without a bus
         StringView app, replaces, critical, summary, rest;
 
-        if (comp->notifier && args.split(' ', app, rest) && rest.split(' ', replaces, rest) && rest.split(' ', critical, summary)) {
+        if (args.split(' ', app, rest) && rest.split(' ', replaces, rest) && rest.split(' ', critical, summary)) {
             Post p;
 
             p.app = app;
@@ -678,14 +676,12 @@ void ControlImpl::dumpState(StringView outPath) {
     int activeToasts = 0;
     int keptToasts = 0;
 
-    if (comp->notifier) {
-        comp->notifier->active([&activeToasts](Toast&) {
-            activeToasts++;
-        });
-        comp->notifier->history([&keptToasts](Toast&) {
-            keptToasts++;
-        });
-    }
+    comp->notifier->active([&activeToasts](Toast&) {
+        activeToasts++;
+    });
+    comp->notifier->history([&keptToasts](Toast&) {
+        keptToasts++;
+    });
 
     out << "notifications active="_sv << activeToasts << " history="_sv << keptToasts << "\n"_sv;
 
@@ -738,7 +734,7 @@ void ControlImpl::dumpState(StringView outPath) {
     // the cached indicator and the live xkb group: they are refreshed on
     // different events, so a scenario can tell a stale indicator from a
     // group that really did not move
-    out << "layout "_sv << StringView(scene->layout) << " group="_sv << (comp->kb ? (int)comp->kb->activeLayout() : -1) << " count="_sv << (comp->kb ? (int)comp->kb->layoutCount() : -1) << "\n"_sv;
+    out << "layout "_sv << StringView(scene->layout) << " group="_sv << (int)comp->kb->activeLayout() << " count="_sv << (int)comp->kb->layoutCount() << "\n"_sv;
     out << "captured kb="_sv << (int)scene->kbCaptured << " ptr="_sv << (int)scene->ptrCaptured << "\n"_sv;
     out << "scanout candidate="_sv << scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << scene->bellCount << "\n"_sv;
