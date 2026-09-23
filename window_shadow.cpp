@@ -44,12 +44,9 @@ void bakeWindowShadow(ImFontAtlas* atlas, ShadowSprite& s) {
             unsigned char av = (unsigned char)(a * 255.f + 0.5f);
             unsigned char* p = (unsigned char*)tex->GetPixelsAt(r.x + x, r.y + y);
 
-            if (tex->Format == ImTextureFormat_Alpha8) {
-                p[0] = av;
-            } else {
-                p[0] = p[1] = p[2] = 255;
-                p[3] = av;
-            }
+            // the atlas is always RGBA32 here: nothing asks ImGui for Alpha8
+            p[0] = p[1] = p[2] = 255;
+            p[3] = av;
         }
     }
 
