@@ -9,7 +9,10 @@
 // copy to deliver from, and a cursor surface without content sizes the
 // session 1x1 — both fail their frame too. Last, a single-pixel cursor is
 // copied into a buffer whose memfd was shrunk under the compositor: the
-// copy faults and the client gets a wl_shm error.
+// copy faults and the client gets a wl_shm error. With the argument
+// "unguarded" the memfd stays whole for a compositor that cannot set up
+// its SIGBUS guard (IMWAY_CHAOS=sigbus-record=1): the same error, without
+// touching the memory.
 
 static struct ext_output_image_capture_source_manager_v1* source_mgr;
 static struct ext_image_copy_capture_manager_v1* copy_mgr;
@@ -214,9 +217,11 @@ static void set_cursor(struct wl_buffer* buffer, int w, int h) {
     wl_display_roundtrip(wl_dpy);
 }
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
+
+    int unguarded = argc > 1 && !strcmp(argv[1], "unguarded");
 
     if (wl_boot()) return 2;
 
@@ -256,7 +261,7 @@ int main(void) {
         return 1;
 
     set_cursor(wp_single_pixel_buffer_manager_v1_create_u32_rgba_buffer(sp_mgr, 0, 0, ~0u, ~0u), 1, 1);
-    capture(cursor_session(), 1);
+    capture(cursor_session(), !unguarded);
 
     if (wl_expect_error("wl_buffer", WL_SHM_ERROR_INVALID_FD))
         return 1;

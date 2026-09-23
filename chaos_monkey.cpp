@@ -40,8 +40,9 @@ using namespace stl;
 //                     word per interface, each spent on its own
 //   shm-map=K         wayland: K wl_shm pool mappings pass, the one after
 //                     fails as mmap does without address space
-//   sigbus-record=N   wayland: the next N SIGBUS guard records a thread
-//                     makes for its shm access fail to allocate
+//   sigbus-record=N   wayland: the next N SIGBUS guard records the main
+//                     thread makes for its shm access fail to allocate (the
+//                     renderer's copy lane keeps its own, untouched)
 //   prime-import=E    wayland: the next dma-buf plane the driver is asked
 //                     to import fails with errno E (13 EACCES: a card fd
 //                     that cannot judge; 22 EINVAL: a buffer it refuses)
@@ -396,7 +397,7 @@ void* TestChaosMonkey::shmMap(void* mapped, size_t size) {
 }
 
 void* TestChaosMonkey::sigbusRecord(void* allocated) {
-    if (!allocated || !spend(sigbusRecordFaults)) {
+    if (!allocated || gettid() != getpid() || !spend(sigbusRecordFaults)) {
         return allocated;
     }
 
