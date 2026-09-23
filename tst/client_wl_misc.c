@@ -34,6 +34,7 @@ static struct zwp_tablet_manager_v2* tablets;
 static struct xdg_toplevel_drag_manager_v1* drags;
 static struct zwp_input_method_manager_v2* ims;
 static uint32_t foreign_list_name;
+static uint32_t wm_base_name;
 static struct zwp_text_input_manager_v3* text_inputs;
 // bound so the surfaces of this client can be told which output shows them
 static struct wl_output* output;
@@ -72,6 +73,8 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
         ims = wl_registry_bind(registry, name, &zwp_input_method_manager_v2_interface, 1);
     else if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name))
         foreign_list_name = name;
+    else if (!strcmp(iface, xdg_wm_base_interface.name))
+        wm_base_name = name;
     else if (!strcmp(iface, wl_output_interface.name) && !output)
         output = wl_registry_bind(registry, name, &wl_output_interface, 1);
     else if (!strcmp(iface, zwp_text_input_manager_v3_interface.name))
@@ -265,7 +268,7 @@ static int mode_decoration(const char* policy) {
 }
 
 // ---- popups: unmapping a parent dismisses its popups ------------------------
-static int popup_done_count[3];
+static int popup_done_count[4];
 
 static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, int32_t w, int32_t h) {
     (void)d; (void)p; (void)x; (void)y; (void)w; (void)h;
@@ -335,6 +338,14 @@ static int mode_popups(void) {
     wl_make_toplevel(&t, "misc-popups", 160, 120, 0xFF0000FF);
     map_popup(&p0, t.xs, 0);
     map_popup(&p1, p0.xs, 1);
+
+    // a child popup that never maps rides along in the dismissed tree
+    struct wl_surface* never = wl_compositor_create_surface(wl_comp);
+    struct xdg_surface* never_xs = xdg_wm_base_get_xdg_surface(wl_wm, never);
+
+    struct xdg_popup* never_popup = xdg_surface_get_popup(never_xs, p0.xs, positioner(0));
+
+    xdg_popup_add_listener(never_popup, &popup_listener, (void*)3);
     // a popup that unmaps takes its mapped child popups with it
     wl_surface_attach(p0.surface, NULL, 0, 0);
     wl_surface_commit(p0.surface);
@@ -354,9 +365,18 @@ static int mode_popups(void) {
         return 1;
     }
 
+    // a second wm_base, without surfaces of its own, may go while the first
+    // still has them
+    struct xdg_wm_base* second_wm = wl_registry_bind(extra, wm_base_name, &xdg_wm_base_interface, 1);
+
+    roundtrip("second wm_base");
+    xdg_wm_base_destroy(second_wm);
+    roundtrip("second wm_base destroy");
     // with every xdg object gone, the wm_base itself may go
     xdg_popup_destroy(p2.popup);
     xdg_surface_destroy(p2.xs);
+    xdg_popup_destroy(never_popup);
+    xdg_surface_destroy(never_xs);
     xdg_popup_destroy(p1.popup);
     xdg_surface_destroy(p1.xs);
     xdg_popup_destroy(p0.popup);
@@ -445,23 +465,44 @@ static const struct ext_foreign_toplevel_list_v1_listener list_listener = {list_
 static int mode_foreign_list(void) {
     need((void*)(uintptr_t)foreign_list_name, "ext_foreign_toplevel_list_v1");
 
-    struct wl_toplevel_ctx t;
+    struct wl_toplevel_ctx t, second, late;
 
     wl_make_toplevel(&t, "misc-foreign", 120, 90, 0xFF0000FF);
+    wl_make_toplevel(&second, "misc-foreign-second", 100, 80, 0xFF00FF00);
+
+    // a toplevel without a buffer is not announced
+    struct wl_surface* bare = wl_compositor_create_surface(wl_comp);
+    struct xdg_surface* bare_xs = xdg_wm_base_get_xdg_surface(wl_wm, bare);
+    struct xdg_toplevel* bare_tl = xdg_surface_get_toplevel(bare_xs);
+
+    xdg_toplevel_add_listener(bare_tl, &wl_tl_listener, NULL);
+    wl_surface_commit(bare);
+    roundtrip("bare toplevel");
 
     struct ext_foreign_toplevel_list_v1* list =
         wl_registry_bind(extra, foreign_list_name, &ext_foreign_toplevel_list_v1_interface, 1);
 
     ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
     roundtrip("bind list");
-    if (handles < 1) {
-        fprintf(stderr, "a list bound after the map announced no toplevel\n");
+    if (handles != 2) {
+        fprintf(stderr, "a list bound after two maps announced %d toplevels\n", handles);
         return 1;
     }
+    // an update to one toplevel goes to its own handle only
+    xdg_toplevel_set_title(second.tl, "renamed");
+    wl_surface_commit(second.surface);
+    roundtrip("rename");
     ext_foreign_toplevel_list_v1_stop(list);
     roundtrip("stop");
     if (!finished) {
         fprintf(stderr, "stop was not answered with finished\n");
+        return 1;
+    }
+    // a stopped list hears of no new toplevel
+    wl_make_toplevel(&late, "misc-foreign-late", 90, 60, 0xFFFF0000);
+    roundtrip("late map");
+    if (handles != 2) {
+        fprintf(stderr, "a stopped list announced a new toplevel (%d)\n", handles);
         return 1;
     }
     printf("foreign list ok\n");
@@ -1002,6 +1043,17 @@ static int mode_bad(const char* what) {
 
     struct wl_surface* s = wl_compositor_create_surface(wl_comp);
 
+    if (!strcmp(what, "place-orphan")) {
+        struct wl_surface* parent = wl_compositor_create_surface(wl_comp);
+        struct wl_surface* sibling = wl_compositor_create_surface(wl_comp);
+        struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, s, parent);
+
+        wl_subcompositor_get_subsurface(wl_subcomp, sibling, parent);
+        // the parent goes: the subsurface has no siblings left to stack by
+        wl_surface_destroy(parent);
+        wl_subsurface_place_above(sub, sibling);
+        return wl_expect_error("wl_subsurface", WL_SUBSURFACE_ERROR_BAD_SURFACE);
+    }
     if (!strcmp(what, "place-self")) {
         struct wl_toplevel_ctx t;
 
@@ -1374,6 +1426,8 @@ static int mode_state_repeats(void) {
     wl_make_toplevel(&other, "misc-state-other", 100, 80, 0xFF00FF00);
     st_settle();
 
+    // no window menu to show: the request is accepted and changes nothing
+    xdg_toplevel_show_window_menu(tl, wl_seat_g, 0, 10, 10);
     xdg_toplevel_set_maximized(tl);
     xdg_toplevel_set_maximized(tl);
     if (st_expect(1, 0, "maximized twice")) return 1;
@@ -1596,15 +1650,15 @@ static int mode_dc_offer_limits(void) {
     struct ext_data_control_source_v1* src = ext_data_control_manager_v1_create_data_source(dc);
     char mime[300];
 
+    // a type too long to store is dropped
+    memset(mime, 'x', sizeof(mime) - 1);
+    mime[sizeof(mime) - 1] = 0;
+    ext_data_control_source_v1_offer(src, mime);
     // 70 types: the source keeps the first 64
     for (int i = 0; i < 70; i++) {
         snprintf(mime, sizeof(mime), "text/x-limit-%d", i);
         ext_data_control_source_v1_offer(src, mime);
     }
-    // a type too long to store is dropped
-    memset(mime, 'x', sizeof(mime) - 1);
-    mime[sizeof(mime) - 1] = 0;
-    ext_data_control_source_v1_offer(src, mime);
     ext_data_control_device_v1_set_selection(dev, src);
     // offers after the source became the selection are ignored
     ext_data_control_source_v1_offer(src, "text/x-late");
@@ -1613,7 +1667,59 @@ static int mode_dc_offer_limits(void) {
         fprintf(stderr, "the selection offer lists %d types, want 64\n", dc_mimes);
         return 1;
     }
+
+    // a device created now is seeded with the selection that exists
+    struct ext_data_control_device_v1* late = ext_data_control_manager_v1_get_data_device(dc, wl_seat_g);
+
+    dc_offer = NULL;
+    ext_data_control_device_v1_add_listener(late, &dcl_device_listener, NULL);
+    roundtrip("late device");
+    if (!dc_offer) {
+        fprintf(stderr, "a device created with a selection in place got no offer\n");
+        return 1;
+    }
+    // a null source clears the selection for every device
+    ext_data_control_device_v1_set_selection(dev, NULL);
+    roundtrip("clear");
+    if (dc_offer) {
+        fprintf(stderr, "a cleared selection still has an offer\n");
+        return 1;
+    }
     printf("dc offer limits ok\n");
+    return 0;
+}
+
+// ---- dialog-inert: an xdg_dialog outliving its toplevel ---------------------
+static int mode_dialog_inert(void) {
+    need(dialogs, "xdg_wm_dialog_v1");
+
+    struct wl_toplevel_ctx parent, t;
+
+    wl_make_toplevel(&parent, "misc-dialog-inert-parent", 160, 120, 0xFF0000FF);
+    wl_make_toplevel(&t, "misc-dialog-inert", 100, 80, 0xFF00FF00);
+    xdg_toplevel_set_parent(t.tl, parent.tl);
+
+    struct xdg_dialog_v1* d = xdg_wm_dialog_v1_get_xdg_dialog(dialogs, t.tl);
+
+    xdg_toplevel_destroy(t.tl);
+    roundtrip("toplevel destroy");
+    // the dialog object is inert now: its requests change nothing
+    xdg_dialog_v1_set_modal(d);
+    xdg_dialog_v1_unset_modal(d);
+    roundtrip("inert dialog");
+    xdg_dialog_v1_destroy(d);
+    roundtrip("inert dialog destroy");
+    printf("dialog inert ok\n");
+    return 0;
+}
+
+// ---- plain-window: a toplevel without any decoration object ---------------
+static int mode_plain_window(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-plain", 160, 120, 0xFF0000FF);
+    printf("plain mapped\n");
+    idle();
     return 0;
 }
 
@@ -1651,6 +1757,8 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "dialog-inert")) return mode_dialog_inert();
+    if (!strcmp(mode, "plain-window")) return mode_plain_window();
     if (!strcmp(mode, "tearing-dead-surface")) return mode_tearing_dead_surface();
     if (!strcmp(mode, "dc-offer-limits")) return mode_dc_offer_limits();
     if (!strcmp(mode, "damage")) return mode_damage();

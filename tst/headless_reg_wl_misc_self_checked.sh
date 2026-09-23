@@ -17,7 +17,9 @@
 # subsurface whose wl_surface is gone, and window-state requests sent twice
 # (the second changes nothing) with a minimize of the unfocused window, a
 # tearing hint on a control whose surface is gone, and the offers a
-# data-control source keeps (64 types, none too long, none after use).
+# data-control source keeps (64 types, none too long, none after use), a
+# device seeded with the selection in place and a cleared selection, and an
+# xdg_dialog outliving its toplevel.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -27,7 +29,7 @@ next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next st
 for mode in popups suspended foreign-list dc-receive toplevel-drag im-grab im-popup text-input \
             foreign-gone foreign-bad-parent shm release rescale vp-transforms \
             nested timed-subsurface inert-subsurface state-repeats \
-            tearing-dead-surface dc-offer-limits; do
+            tearing-dead-surface dc-offer-limits dialog-inert; do
     "$IMWAY_CLIENT" "$mode" || { echo "$mode failed"; exit 1; }
     expect_alive "the compositor died in $mode"
 done
