@@ -6,10 +6,11 @@
 // A selection replaced by the next one cancels the source it displaces, on
 // every kind of source and slot: a wl_data_source clipboard, a primary
 // selection source, and data-control sources in both the clipboard and the
-// primary slot. A selection under a bogus serial takes no slot, and a
-// drag started with no button held is cancelled at once. A clipboard source
-// its owner destroys empties the clipboard, which the focused client hears
-// as a null selection; clearing an empty clipboard sends nothing.
+// primary slot. A clipboard cleared with a null source cancels the source
+// it held. A selection under a bogus serial takes no slot, and a drag
+// started with no button held is cancelled at once. A clipboard source its
+// owner destroys empties the clipboard, which the focused client hears as
+// a null selection; clearing an empty clipboard sends nothing.
 
 static struct zwp_primary_selection_device_manager_v1* primary_mgr;
 static struct ext_data_control_manager_v1* dc_mgr;
@@ -180,6 +181,19 @@ int main(void) {
     wl_data_device_set_selection(dd, wl_source(), serial);
     if (expect_one_cancel("clipboard"))
         return 1;
+
+    // clearing the clipboard cancels its source just the same, and a
+    // selection set after it displaces nothing
+    wl_data_device_set_selection(dd, NULL, serial);
+    if (expect_one_cancel("clipboard cleared"))
+        return 1;
+    wl_data_device_set_selection(dd, wl_source(), serial);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    if (cancelled) {
+        fprintf(stderr, "a selection into the cleared clipboard cancelled a source\n");
+        return 1;
+    }
 
     // a drag with no button held is refused, the source cancelled
     wl_data_device_start_drag(dd, wl_source(), ctx.surface, NULL, serial);
