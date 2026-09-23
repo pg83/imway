@@ -866,11 +866,14 @@ bool DesktopImpl::swipeBegin(u32) {
     return swipeOwned;
 }
 
+// a lock arriving mid-gesture claims the client's swipe or pinch at its next
+// event: the router then ends it cancelled for the client, which gets no
+// motion from behind the overlay
 bool DesktopImpl::swipeUpdate(double dx, double dy) {
     swipeDx += dx;
     swipeDy += dy;
 
-    return swipeOwned;
+    return swipeOwned || lockState;
 }
 
 bool DesktopImpl::swipeEnd(bool cancelled) {
@@ -886,7 +889,7 @@ bool DesktopImpl::swipeEnd(bool cancelled) {
         }
     }
 
-    return owned;
+    return owned || lockState;
 }
 
 bool DesktopImpl::pinchBegin(u32) {
@@ -900,7 +903,7 @@ bool DesktopImpl::pinchBegin(u32) {
 bool DesktopImpl::pinchUpdate(double, double, double scale, double) {
     pinchScale = scale;
 
-    return pinchOwned;
+    return pinchOwned || lockState;
 }
 
 bool DesktopImpl::pinchEnd(bool cancelled) {
@@ -916,7 +919,7 @@ bool DesktopImpl::pinchEnd(bool cancelled) {
         }
     }
 
-    return owned;
+    return owned || lockState;
 }
 
 bool DesktopImpl::holdBegin(u32) {
