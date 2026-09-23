@@ -1848,32 +1848,32 @@ void RendererImpl::setup() {
     sceneDone.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     rpci.dependencyCount = 1;
     rpci.pDependencies = &sceneDone;
-    VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &renderPass));
+    VK_CHECK(comp->chaos->setup(vkCreateRenderPass(device, &rpci, nullptr, &renderPass)));
 
     att.format = fmt;
     att.finalLayout = scanout ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     rpci.dependencyCount = 0;
     rpci.pDependencies = nullptr;
-    VK_CHECK(vkCreateRenderPass(device, &rpci, nullptr, &outputPass));
+    VK_CHECK(comp->chaos->setup(vkCreateRenderPass(device, &rpci, nullptr, &outputPass)));
 
     VkCommandPoolCreateInfo cpci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
 
     cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpci.queueFamilyIndex = queueFamily;
-    VK_CHECK(vkCreateCommandPool(device, &cpci, nullptr, &cmdPool));
+    VK_CHECK(comp->chaos->setup(vkCreateCommandPool(device, &cpci, nullptr, &cmdPool)));
 
     VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 
     cbai.commandPool = cmdPool;
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
-    VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &cmd));
-    VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &captureCmd));
+    VK_CHECK(comp->chaos->setup(vkAllocateCommandBuffers(device, &cbai, &cmd)));
+    VK_CHECK(comp->chaos->setup(vkAllocateCommandBuffers(device, &cbai, &captureCmd)));
 
     VkFenceCreateInfo fenci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
-    VK_CHECK(vkCreateFence(device, &fenci, nullptr, &fence));
-    VK_CHECK(vkCreateFence(device, &fenci, nullptr, &captureFence));
+    VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &fence)));
+    VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &captureFence)));
     captureFencePoll = FencePoll::create(*pool, loop, device, captureFence, *pool->make<CallCaptureRetired>(this));
 
     if (hasSyncFd) {
@@ -1890,14 +1890,14 @@ void RendererImpl::setup() {
         VkSemaphoreCreateInfo sci2{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
         sci2.pNext = &exp;
-        VK_CHECK(vkCreateSemaphore(device, &sci2, nullptr, &syncOut));
+        VK_CHECK(comp->chaos->setup(vkCreateSemaphore(device, &sci2, nullptr, &syncOut)));
 
         VkSemaphoreCreateInfo plain{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 
         for (int i = 0; i < 16; i++) {
             VkSemaphore sem = VK_NULL_HANDLE;
 
-            VK_CHECK(vkCreateSemaphore(device, &plain, nullptr, &sem));
+            VK_CHECK(comp->chaos->setup(vkCreateSemaphore(device, &plain, nullptr, &sem)));
             syncWaitPool.pushBack(sem);
         }
     }
@@ -1911,7 +1911,7 @@ void RendererImpl::setup() {
     sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    VK_CHECK(vkCreateSampler(device, &sci, nullptr, &sampler));
+    VK_CHECK(comp->chaos->setup(vkCreateSampler(device, &sci, nullptr, &sampler)));
 
     setupOutputTransform();
 
@@ -1987,10 +1987,10 @@ void RendererImpl::setup() {
         cvi.viewType = VK_IMAGE_VIEW_TYPE_2D;
         cvi.format = VK_FORMAT_R16G16B16A16_SFLOAT;
         cvi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curSceneView));
+        VK_CHECK(comp->chaos->setup(vkCreateImageView(device, &cvi, nullptr, &curSceneView)));
         cvi.image = curImg;
         cvi.format = fmt;
-        VK_CHECK(vkCreateImageView(device, &cvi, nullptr, &curView));
+        VK_CHECK(comp->chaos->setup(vkCreateImageView(device, &cvi, nullptr, &curView)));
 
         VkFramebufferCreateInfo cfi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
@@ -2000,10 +2000,10 @@ void RendererImpl::setup() {
         cfi.width = (u32)hwCapW;
         cfi.height = (u32)hwCapH;
         cfi.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &cfi, nullptr, &curSceneFb));
+        VK_CHECK(comp->chaos->setup(vkCreateFramebuffer(device, &cfi, nullptr, &curSceneFb)));
         cfi.renderPass = outputPass;
         cfi.pAttachments = &curView;
-        VK_CHECK(vkCreateFramebuffer(device, &cfi, nullptr, &curFb));
+        VK_CHECK(comp->chaos->setup(vkCreateFramebuffer(device, &cfi, nullptr, &curFb)));
 
         VkDescriptorImageInfo imageInfo{sampler, curSceneView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -2021,11 +2021,11 @@ void RendererImpl::setup() {
         cba.commandPool = cmdPool;
         cba.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
         cba.commandBufferCount = 1;
-        VK_CHECK(vkAllocateCommandBuffers(device, &cba, &curCmd));
+        VK_CHECK(comp->chaos->setup(vkAllocateCommandBuffers(device, &cba, &curCmd)));
 
         VkFenceCreateInfo cfe{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
-        VK_CHECK(vkCreateFence(device, &cfe, nullptr, &curFence));
+        VK_CHECK(comp->chaos->setup(vkCreateFence(device, &cfe, nullptr, &curFence)));
         hwCursorReady = true;
     }
 
@@ -2655,7 +2655,7 @@ void RendererImpl::setupOutputTransform() {
 
     dlci.bindingCount = 1;
     dlci.pBindings = &binding;
-    VK_CHECK(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &outputSetLayout));
+    VK_CHECK(comp->chaos->setup(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &outputSetLayout)));
 
     VkPushConstantRange push{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 32 * sizeof(float)};
     VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
@@ -2664,25 +2664,25 @@ void RendererImpl::setupOutputTransform() {
     plci.pSetLayouts = &outputSetLayout;
     plci.pushConstantRangeCount = 1;
     plci.pPushConstantRanges = &push;
-    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &outputPipeLayout));
+    VK_CHECK(comp->chaos->setup(vkCreatePipelineLayout(device, &plci, nullptr, &outputPipeLayout)));
 
     VkPushConstantRange cursorPush{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 12 * sizeof(float)};
 
     plci.pPushConstantRanges = &cursorPush;
-    VK_CHECK(vkCreatePipelineLayout(device, &plci, nullptr, &cursorPipeLayout));
+    VK_CHECK(comp->chaos->setup(vkCreatePipelineLayout(device, &plci, nullptr, &cursorPipeLayout)));
 
     VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     VkShaderModule vert = VK_NULL_HANDLE, frag = VK_NULL_HANDLE, cursorFrag = VK_NULL_HANDLE;
 
     smci.codeSize = sizeof(fullscreen_spv);
     smci.pCode = fullscreen_spv;
-    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &vert));
+    VK_CHECK(comp->chaos->setup(vkCreateShaderModule(device, &smci, nullptr, &vert)));
     smci.codeSize = sizeof(renderer_output_spv);
     smci.pCode = renderer_output_spv;
-    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &frag));
+    VK_CHECK(comp->chaos->setup(vkCreateShaderModule(device, &smci, nullptr, &frag)));
     smci.codeSize = sizeof(renderer_cursor_spv);
     smci.pCode = renderer_cursor_spv;
-    VK_CHECK(vkCreateShaderModule(device, &smci, nullptr, &cursorFrag));
+    VK_CHECK(comp->chaos->setup(vkCreateShaderModule(device, &smci, nullptr, &cursorFrag)));
 
     VkPipelineShaderStageCreateInfo stages[2] = {};
 
@@ -2744,11 +2744,11 @@ void RendererImpl::setupOutputTransform() {
     gpci.pDynamicState = &dynamic;
     gpci.layout = outputPipeLayout;
     gpci.renderPass = outputPass;
-    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &outputPipeline));
+    VK_CHECK(comp->chaos->setup(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &outputPipeline)));
 
     stages[1].module = cursorFrag;
     gpci.layout = cursorPipeLayout;
-    VK_CHECK(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &cursorPipeline));
+    VK_CHECK(comp->chaos->setup(vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gpci, nullptr, &cursorPipeline)));
 
     vkDestroyShaderModule(device, cursorFrag, nullptr);
     vkDestroyShaderModule(device, frag, nullptr);
@@ -2760,7 +2760,7 @@ void RendererImpl::setupOutputTransform() {
     dpci.maxSets = 2;
     dpci.poolSizeCount = 1;
     dpci.pPoolSizes = &poolSize;
-    VK_CHECK(vkCreateDescriptorPool(device, &dpci, nullptr, &outputDescPool));
+    VK_CHECK(comp->chaos->setup(vkCreateDescriptorPool(device, &dpci, nullptr, &outputDescPool)));
 
     VkDescriptorSetAllocateInfo dsai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
 
@@ -2772,7 +2772,7 @@ void RendererImpl::setupOutputTransform() {
     VkDescriptorSetLayout layouts[2] = {outputSetLayout, outputSetLayout};
 
     dsai.pSetLayouts = layouts;
-    VK_CHECK(vkAllocateDescriptorSets(device, &dsai, sets));
+    VK_CHECK(comp->chaos->setup(vkAllocateDescriptorSets(device, &dsai, sets)));
     outputDesc = sets[0];
     cursorOutputDesc = sets[1];
     // outputDesc gets its scene view on the first mode announcement, which

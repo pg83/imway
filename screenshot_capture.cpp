@@ -154,18 +154,18 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
 
     cpci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     cpci.queueFamilyIndex = queueFamily;
-    VK_CHECK(vkCreateCommandPool(device, &cpci, nullptr, &commandPool));
+    VK_CHECK(comp->chaos->setup(vkCreateCommandPool(device, &cpci, nullptr, &commandPool)));
 
     VkCommandBufferAllocateInfo cbai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
 
     cbai.commandPool = commandPool;
     cbai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
     cbai.commandBufferCount = 1;
-    VK_CHECK(vkAllocateCommandBuffers(device, &cbai, &command));
+    VK_CHECK(comp->chaos->setup(vkAllocateCommandBuffers(device, &cbai, &command)));
 
     VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 
-    VK_CHECK(vkCreateFence(device, &fci, nullptr, &fence));
+    VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fci, nullptr, &fence)));
 
     fencePoll = FencePoll::create(*c.pool, c.loop, device, fence, *c.pool->make<CallShotFenceDone>(this));
     fileJob = OffloadJob::create(c, [](void* self) {

@@ -105,6 +105,10 @@ struct ChaosMonkey {
     virtual VkResult readbackSubmit(VkResult pending) = 0;
     virtual VkResult captureSubmit(VkResult pending) = 0;
     virtual VkResult cursorSubmit(VkResult pending) = 0;
+    // the result of a Vulkan call building the session's once-only GPU
+    // objects at boot: the instance and device, the renderer's passes,
+    // pipelines and pools, the texture chain's layout, the capture's pool
+    virtual VkResult setup(VkResult result) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one

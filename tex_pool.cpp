@@ -54,7 +54,7 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosM
 
     dlci.bindingCount = 2;
     dlci.pBindings = bindings;
-    STD_VERIFY(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout) == VK_SUCCESS);
+    STD_VERIFY(chaos->setup(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout)) == VK_SUCCESS);
 
     // one guard for the whole chain, registered now: a chunk grown later
     // than the renderer that frees sets into it still dies where the chain

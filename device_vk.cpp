@@ -141,7 +141,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
         instInfo.ppEnabledExtensionNames = &debugExt;
     }
 
-    VK_CHECK(vkCreateInstance(&instInfo, nullptr, &this->instance));
+    VK_CHECK(chaos.setup(vkCreateInstance(&instInfo, nullptr, &this->instance)));
 
     if (debugUtils) {
         auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkCreateDebugUtilsMessengerEXT");
@@ -366,7 +366,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     dci.pQueueCreateInfos = &qci;
     dci.enabledExtensionCount = (u32)devExts.length();
     dci.ppEnabledExtensionNames = devExts.data();
-    VK_CHECK(vkCreateDevice(this->phys, &dci, nullptr, &this->device));
+    VK_CHECK(chaos.setup(vkCreateDevice(this->phys, &dci, nullptr, &this->device)));
     vkGetDeviceQueue(this->device, this->queueFamily, 0, &this->queue);
 
     if (hasDmabufMemory) {
