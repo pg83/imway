@@ -52,6 +52,9 @@ struct KmsIntercept {
     // the connector's DDC/CI bus, the i2c node the sysfs walk found: the
     // fd of an emulated monitor, or -errno when none answers on it
     virtual int openDdc(stl::StringView bus) = 0;
+    // page-flip events held back (a driver or link that stops completing
+    // flips) until released; a held flip is delivered on release
+    virtual void holdFlips(bool hold) = 0;
     // page-flip events delivered so far: the ground truth for "a frame
     // made it to the screen", independent of the compositor's counters
     virtual unsigned long long flips() = 0;

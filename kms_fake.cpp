@@ -194,6 +194,7 @@ namespace {
         bool noPrime = false;
         bool asyncFlipLogged = false;
         bool cursorOnLogged = false;
+        bool flipsHeld = false;
         Vector<PropDef> props;
         Vector<FakeBlob*> blobs;
         Vector<FakeFb> fbs;
@@ -272,6 +273,7 @@ namespace {
         void parseLookupFaults(StringView rules);
         bool lookupFails(u32 req, void* arg);
         int openDdc(StringView bus) override;
+        void holdFlips(bool hold) override;
         unsigned long long flips() override;
 
         PropDef* findProp(u32 id);
@@ -1309,7 +1311,7 @@ void FakeKms::flipLoop() {
     pthread_mutex_lock(&mu);
 
     for (;;) {
-        if (!flipPending) {
+        if (!flipPending || flipsHeld) {
             pthread_cond_wait(&cv, &mu);
 
             continue;
@@ -1903,6 +1905,13 @@ void FakeKms::failLookups(StringView rules) {
 void FakeKms::leaseFault(int kind) {
     pthread_mutex_lock(&mu);
     leaseFaultKind = kind;
+    pthread_mutex_unlock(&mu);
+}
+
+void FakeKms::holdFlips(bool hold) {
+    pthread_mutex_lock(&mu);
+    flipsHeld = hold;
+    pthread_cond_signal(&cv);
     pthread_mutex_unlock(&mu);
 }
 

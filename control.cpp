@@ -521,6 +521,8 @@ void ControlImpl::handleLine(StringView cmd) {
         comp->scene->needsFrame = true;
     } else if (verb == "kms-modes"_sv && comp->kmsIntercept) {
         comp->kmsIntercept->setModes((int)args.stou());
+    } else if (verb == "kms-hold-flips"_sv && comp->kmsIntercept) {
+        comp->kmsIntercept->holdFlips(args.stou() != 0);
     } else if (verb == "kms-lease-fault"_sv && comp->kmsIntercept) {
         comp->kmsIntercept->leaseFault((int)args.stou());
     } else if (verb == "kms-fail-lookup"_sv && comp->kmsIntercept) {
