@@ -638,6 +638,19 @@ namespace {
         ((RendererImpl*)w->data)->scene->needsFrame = true;
     }
 
+    // a system font tried after the configured one; the test build can
+    // stand another file in for every one of them (IMWAY_SYSTEM_FONT), a
+    // missing file playing a system that has none
+    StringView systemFont(StringView path) {
+#ifdef IMWAY_FOR_TESTS
+        if (const char* font = getenv("IMWAY_SYSTEM_FONT"); font && *font) {
+            return StringView(font);
+        }
+#endif
+
+        return path;
+    }
+
     bool failShmForTest(StringView backend) {
 #ifdef IMWAY_FOR_TESTS
         const char* value = getenv("IMWAY_SHM_FAIL");
@@ -1743,8 +1756,8 @@ void RendererImpl::loadFont() {
 
     StringView fontCandidates[] = {
         comp->settings->fontPath(),
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv,
-        "/usr/share/fonts/TTF/DejaVuSans.ttf"_sv,
+        systemFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"_sv),
+        systemFont("/usr/share/fonts/TTF/DejaVuSans.ttf"_sv),
     };
     float size = comp->settings->fontSize();
 
