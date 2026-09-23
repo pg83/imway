@@ -27,8 +27,10 @@ static const struct zwp_linux_dmabuf_v1_listener dumb_dmabuf_listener = {dumb_fo
 static void dumb_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d;
     (void)v;
-    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         dumb_dmabuf_g = wl_registry_bind(r, name, &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(dumb_dmabuf_g, &dumb_dmabuf_listener, NULL);
+    }
 }
 static void dumb_global_remove(void* d, struct wl_registry* r, uint32_t n) {
     (void)d;
@@ -43,7 +45,6 @@ static int dumb_boot(void) {
     wl_registry_add_listener(reg, &dumb_registry_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!dumb_dmabuf_g) return 77;
-    zwp_linux_dmabuf_v1_add_listener(dumb_dmabuf_g, &dumb_dmabuf_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     return dumb_linear_argb ? 0 : 77;
 }

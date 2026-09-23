@@ -61,6 +61,7 @@ static const wp_image_description_v1_listener descriptionListener = {
 static void extraGlobal(void*, wl_registry* registry, uint32_t name, const char* interface, uint32_t version) {
     if (!strcmp(interface, wp_color_manager_v1_interface.name)) {
         manager = (wp_color_manager_v1*)wl_registry_bind(registry, name, &wp_color_manager_v1_interface, version < 3 ? version : 3);
+        wp_color_manager_v1_add_listener(manager, &managerListener, nullptr);
     }
 }
 
@@ -120,7 +121,6 @@ int main() {
         return 2;
     }
 
-    wp_color_manager_v1_add_listener(manager, &managerListener, nullptr);
     wl_display_roundtrip(wl_dpy);
     if (!managerDone || !gotIccFeature) {
         fprintf(stderr, "ICC feature was not advertised\n");

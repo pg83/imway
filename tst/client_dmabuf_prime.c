@@ -37,8 +37,10 @@ static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t v) {
     (void)d;
     (void)v;
-    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         dmabuf = wl_registry_bind(r, name, &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
+    }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
     (void)d;
@@ -99,7 +101,6 @@ int main(void) {
         fprintf(stderr, "no linux-dmabuf global\n");
         return 1;
     }
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!linear_ok) {
         fprintf(stderr, "no ARGB8888+LINEAR\n");

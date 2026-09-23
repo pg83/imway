@@ -47,8 +47,10 @@ static const struct wp_presentation_feedback_listener fb_listener = {
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, wp_presentation_interface.name))
+    if (!strcmp(iface, wp_presentation_interface.name)) {
         presentation = wl_registry_bind(r, name, &wp_presentation_interface, 1);
+        wp_presentation_add_listener(presentation, &pres_listener, NULL);
+    }
 }
 static void reg2_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener reg2_listener = {reg2_global, reg2_remove};
@@ -62,7 +64,6 @@ int main(void) {
     wl_registry_add_listener(reg2, &reg2_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!presentation) { fprintf(stderr, "no wp_presentation\n"); return 1; }
-    wp_presentation_add_listener(presentation, &pres_listener, NULL);
 
     wl_make_toplevel(&top, "client_kms_presentation", 300, 200, 0xFFFF0000);
 

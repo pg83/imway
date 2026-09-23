@@ -6,11 +6,15 @@
 
 static struct ext_foreign_toplevel_list_v1* list;
 
+static const struct ext_foreign_toplevel_list_v1_listener list_listener;
+
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name))
+    if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name)) {
         list = wl_registry_bind(r, name, &ext_foreign_toplevel_list_v1_interface, 1);
+        ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
+    }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d;(void)r;(void)n; }
 static const struct wl_registry_listener extra_listener = {extra_global, extra_remove};
@@ -59,8 +63,6 @@ int main(void) {
         fprintf(stderr, "no ext_foreign_toplevel_list_v1\n");
         return 1;
     }
-
-    ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
 
     struct wl_toplevel_ctx top;
     wl_make_toplevel(&top, "appid-initial", 300, 200, 0xFF3060A0u);

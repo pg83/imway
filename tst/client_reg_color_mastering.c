@@ -46,8 +46,10 @@ static const struct wp_color_manager_v1_listener cm_listener = {
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t ver) {
     (void)d; (void)ver;
-    if (!strcmp(iface, wp_color_manager_v1_interface.name))
+    if (!strcmp(iface, wp_color_manager_v1_interface.name)) {
         cm = wl_registry_bind(r, name, &wp_color_manager_v1_interface, 1);
+        wp_color_manager_v1_add_listener(cm, &cm_listener, NULL);
+    }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
     (void)d; (void)r; (void)n;
@@ -79,7 +81,6 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     if (!cm) return 2;
 
-    wp_color_manager_v1_add_listener(cm, &cm_listener, NULL);
     wl_display_roundtrip(wl_dpy);
 
     if (!feat_tf_power || !feat_mastering_prim || !feat_mastering_lum) {

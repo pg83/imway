@@ -35,9 +35,11 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {
 static void dmabuf_registry(void* d, struct wl_registry* registry, uint32_t name,
                             const char* iface, uint32_t version) {
     (void)d; (void)version;
-    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         dmabuf_test_global = wl_registry_bind(registry, name,
                                               &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(dmabuf_test_global, &dmabuf_listener, NULL);
+    }
 }
 
 static void dmabuf_registry_remove(void* d, struct wl_registry* registry, uint32_t name) {
@@ -56,7 +58,6 @@ static int dmabuf_test_boot(void) {
     wl_display_roundtrip(wl_dpy);
     if (!dmabuf_test_global) return 77;
 
-    zwp_linux_dmabuf_v1_add_listener(dmabuf_test_global, &dmabuf_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     return dmabuf_test_format ? 0 : 77;
 }

@@ -23,6 +23,8 @@ static int lease_done;
 static dev_t main_device;
 static int feedback_done;
 
+static const struct wp_drm_lease_device_v1_listener dev_listener;
+
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t v) {
     (void)d;
@@ -31,6 +33,7 @@ static void extra_global(void* d, struct wl_registry* r, uint32_t name,
         dmabuf = wl_registry_bind(r, name, &zwp_linux_dmabuf_v1_interface, v < 4 ? v : 4);
     } else if (!strcmp(iface, wp_drm_lease_device_v1_interface.name)) {
         lease_dev = wl_registry_bind(r, name, &wp_drm_lease_device_v1_interface, 1);
+        wp_drm_lease_device_v1_add_listener(lease_dev, &dev_listener, NULL);
     } else if (!strcmp(iface, "wp_linux_drm_syncobj_manager_v1")) {
         syncobj = 1;
     }
@@ -148,8 +151,6 @@ int main(int argc, char** argv) {
         fprintf(stderr, "no lease device on a drm node\n");
         return 1;
     }
-
-    wp_drm_lease_device_v1_add_listener(lease_dev, &dev_listener, NULL);
 
     if (dmabuf_version < 4) {
         fprintf(stderr, "linux-dmabuf v%u: no feedback on a drm node\n", dmabuf_version);

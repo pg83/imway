@@ -18,12 +18,15 @@ static struct ext_foreign_toplevel_list_v1* list;
 static struct ext_foreign_toplevel_image_capture_source_manager_v1* tl_source_mgr;
 static struct ext_image_copy_capture_manager_v1* copy_mgr;
 
+static const struct ext_foreign_toplevel_list_v1_listener list_listener;
+
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name))
+    if (!strcmp(iface, ext_foreign_toplevel_list_v1_interface.name)) {
         list = wl_registry_bind(r, name, &ext_foreign_toplevel_list_v1_interface, 1);
-    else if (!strcmp(iface, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name))
+        ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
+    } else if (!strcmp(iface, ext_foreign_toplevel_image_capture_source_manager_v1_interface.name))
         tl_source_mgr = wl_registry_bind(r, name,
             &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1);
     else if (!strcmp(iface, ext_image_copy_capture_manager_v1_interface.name))
@@ -339,8 +342,6 @@ int main(void) {
         fprintf(stderr, "missing globals\n");
         return 2;
     }
-
-    ext_foreign_toplevel_list_v1_add_listener(list, &list_listener, NULL);
 
     struct wl_toplevel_ctx grow, doomed, wide, inset;
 

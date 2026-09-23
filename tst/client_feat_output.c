@@ -48,9 +48,10 @@ static const struct zxdg_output_v1_listener xo_listener = {
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, wl_output_interface.name))
+    if (!strcmp(iface, wl_output_interface.name)) {
         output = wl_registry_bind(r, name, &wl_output_interface, 4);
-    else if (!strcmp(iface, zxdg_output_manager_v1_interface.name))
+        wl_output_add_listener(output, &out_listener, NULL);
+    } else if (!strcmp(iface, zxdg_output_manager_v1_interface.name))
         xdg_out_mgr = wl_registry_bind(r, name, &zxdg_output_manager_v1_interface, 3);
 }
 static void reg2_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
@@ -68,7 +69,6 @@ int main(void) {
         return 1;
     }
 
-    wl_output_add_listener(output, &out_listener, NULL);
     struct zxdg_output_v1* xo = zxdg_output_manager_v1_get_xdg_output(xdg_out_mgr, output);
     zxdg_output_v1_add_listener(xo, &xo_listener, NULL);
     wl_display_roundtrip(wl_dpy);

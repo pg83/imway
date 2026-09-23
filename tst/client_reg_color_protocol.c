@@ -41,6 +41,8 @@ static const struct wl_output_listener output_listener = {
     .description = output_description,
 };
 
+static const struct wp_color_manager_v1_listener manager_listener;
+
 static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
                          const char* interface, uint32_t version) {
     (void)d;
@@ -48,6 +50,7 @@ static void extra_global(void* d, struct wl_registry* registry, uint32_t name,
         color_version = version;
         color_mgr = wl_registry_bind(registry, name, &wp_color_manager_v1_interface,
                                      version < 3 ? version : 3);
+        wp_color_manager_v1_add_listener(color_mgr, &manager_listener, NULL);
     } else if (!strcmp(interface, wl_output_interface.name)) {
         output = wl_registry_bind(registry, name, &wl_output_interface,
                                   version < 4 ? version : 4);
@@ -287,7 +290,6 @@ static int boot_color(void) {
         fprintf(stderr, "missing color/output globals\n");
         return 1;
     }
-    wp_color_manager_v1_add_listener(color_mgr, &manager_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     return 0;
 }

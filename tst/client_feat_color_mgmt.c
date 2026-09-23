@@ -49,7 +49,7 @@ static const struct wp_image_description_v1_listener desc_listener = {
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, wp_color_manager_v1_interface.name))
+    if (!strcmp(iface, wp_color_manager_v1_interface.name)) {
         cm = wl_registry_bind(r, name, &wp_color_manager_v1_interface,
 #ifdef COLOR_WINDOWS_BT2100
                               v < 3 ? v : 3
@@ -57,6 +57,8 @@ static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const cha
                               1
 #endif
         );
+        wp_color_manager_v1_add_listener(cm, &cm_listener, NULL);
+    }
 }
 static void reg2_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener reg2_listener = {reg2_global, reg2_remove};
@@ -73,7 +75,6 @@ int main(void) {
     wl_registry_add_listener(reg2, &reg2_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!cm) { fprintf(stderr, "no color-manager\n"); return 1; }
-    wp_color_manager_v1_add_listener(cm, &cm_listener, NULL);
 
     for (int i = 0; i < 400 && !cm_done; i++) { wl_display_roundtrip(wl_dpy); usleep(20000); }
     if (!cm_done || !got_intent || !got_feature) {

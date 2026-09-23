@@ -10,12 +10,16 @@
 static struct wp_color_manager_v1* cm;
 static struct wl_output* output;
 
+static const struct wl_output_listener output_listener;
+
 static void extra_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
     (void)d; (void)v;
     if (!strcmp(iface, wp_color_manager_v1_interface.name))
         cm = wl_registry_bind(r, name, &wp_color_manager_v1_interface, 1);
-    else if (!strcmp(iface, wl_output_interface.name) && !output)
+    else if (!strcmp(iface, wl_output_interface.name) && !output) {
         output = wl_registry_bind(r, name, &wl_output_interface, 1);
+        wl_output_add_listener(output, &output_listener, NULL);
+    }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener extra_listener = {extra_global, extra_remove};
@@ -58,8 +62,6 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     if (!cm || !output) return 2;
-
-    wl_output_add_listener(output, &output_listener, NULL);
 
     struct counts live = {0, 0}, dead = {0, 0};
     struct wl_surface* doomed = wl_compositor_create_surface(wl_comp);

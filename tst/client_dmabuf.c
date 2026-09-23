@@ -50,8 +50,10 @@ static void registry_global(void* data, struct wl_registry* reg, uint32_t name,
         compositor = wl_registry_bind(reg, name, &wl_compositor_interface, 4);
     else if (!strcmp(iface, xdg_wm_base_interface.name))
         wm_base = wl_registry_bind(reg, name, &xdg_wm_base_interface, 1);
-    else if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    else if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         dmabuf = wl_registry_bind(reg, name, &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
+    }
 }
 
 static void registry_global_remove(void* d, struct wl_registry* r, uint32_t n) {
@@ -160,7 +162,6 @@ int main(void) {
         fprintf(stderr, "client_dmabuf: missing globals (dmabuf=%p)\n", (void*)dmabuf);
         return 1;
     }
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
     wl_display_roundtrip(display); // receive modifier events
     if (!linear_ok) {

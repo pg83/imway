@@ -28,8 +28,10 @@ static void sync_registry(void* d, struct wl_registry* registry, uint32_t name,
     if (!strcmp(iface, wp_linux_drm_syncobj_manager_v1_interface.name))
         sync_manager = wl_registry_bind(
             registry, name, &wp_linux_drm_syncobj_manager_v1_interface, 1);
-    else if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    else if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         sync_dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(sync_dmabuf, &sync_dmabuf_listener, NULL);
+    }
 }
 static void sync_registry_remove(void* d, struct wl_registry* registry, uint32_t name) {
     (void)d; (void)registry; (void)name;
@@ -44,7 +46,6 @@ static int sync_test_boot(void) {
     wl_registry_add_listener(registry, &sync_registry_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (sync_dmabuf) {
-        zwp_linux_dmabuf_v1_add_listener(sync_dmabuf, &sync_dmabuf_listener, NULL);
         wl_display_roundtrip(wl_dpy);
     }
     return sync_manager ? 0 : 77;

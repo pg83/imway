@@ -89,6 +89,7 @@ static void extra_global(void* d, struct wl_registry* r, uint32_t name,
     if (!strcmp(iface, wp_drm_lease_device_v1_interface.name)) {
         lease_name = name;
         lease_dev = wl_registry_bind(r, name, &wp_drm_lease_device_v1_interface, 1);
+        wp_drm_lease_device_v1_add_listener(lease_dev, &dev_listener, NULL);
     }
 }
 static void extra_remove(void* d, struct wl_registry* r, uint32_t n) {
@@ -177,7 +178,6 @@ int main(void) {
         return 1;
     }
 
-    wp_drm_lease_device_v1_add_listener(lease_dev, &dev_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     wl_display_roundtrip(wl_dpy);
 

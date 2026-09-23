@@ -62,9 +62,10 @@ static void registry_global(void* data, struct wl_registry* registry, uint32_t n
         compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 4);
     else if (!strcmp(interface, xdg_wm_base_interface.name))
         wm_base = wl_registry_bind(registry, name, &xdg_wm_base_interface, 1);
-    else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name))
+    else if (!strcmp(interface, zwp_linux_dmabuf_v1_interface.name)) {
         dmabuf = wl_registry_bind(registry, name, &zwp_linux_dmabuf_v1_interface, 3);
-    else if (!strcmp(interface, wp_color_representation_manager_v1_interface.name))
+        zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
+    } else if (!strcmp(interface, wp_color_representation_manager_v1_interface.name))
         representation_manager = wl_registry_bind(
             registry, name, &wp_color_representation_manager_v1_interface, 1);
 }
@@ -240,7 +241,6 @@ int main(int argc, char** argv) {
     wl_display_roundtrip(display);
     if (!compositor || !wm_base || !dmabuf || !representation_manager) return 1;
 
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     xdg_wm_base_add_listener(wm_base, &wm_base_listener, NULL);
     wl_display_roundtrip(display);
     if ((pixel_format == DRM_FORMAT_NV12 && !nv12_linear) ||
