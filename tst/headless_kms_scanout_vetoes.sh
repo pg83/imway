@@ -4,8 +4,10 @@
 # What takes a fullscreen dma-buf off the primary plane, and gives it back:
 # a subsurface over or under it needs composition, and so do an alpha
 # multiplier below one, an image description the plane cannot reproduce
-# (the SDR output passes buffer bytes through untouched) and a window
-# geometry short of the output; once the client removes any of them, the
+# (the SDR output passes buffer bytes through untouched), a window
+# geometry short of the output, and a buffer the plane would have to turn,
+# scale, shift or crop (a buffer transform or scale, an attach offset, a
+# viewport source or destination); once the client removes any of them, the
 # buffer is a direct-scanout candidate again. A cursor the hardware plane
 # cannot carry (a dma-buf, or one taller than the plane) has to be
 # composited too, and takes the buffer off the plane until it is hidden.
@@ -50,6 +52,7 @@ steps() { # <step:want>...
 }
 
 steps "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane" "below on:off_plane" "below off:on_plane" "short on:off_plane" "short off:on_plane"
+steps "turned on:off_plane" "turned off:on_plane" "scaled on:off_plane" "scaled off:on_plane" "offset on:off_plane" "offset off:on_plane" "cropped on:off_plane" "cropped off:on_plane" "shrunk on:off_plane" "shrunk off:on_plane"
 
 # the cursor steps need the pointer on the surface
 pointer_in() {
@@ -63,4 +66,4 @@ await 100 on_plane || { echo "the pointer took the buffer off the plane"; dump_s
 steps "dmabuf cursor:off_plane" "tall cursor:off_plane" "no cursor:on_plane"
 
 expect_alive "compositor died vetoing direct scanout"
-echo "OK: subsurfaces, alpha, color, geometry and cursors take a buffer off the plane, and it comes back"
+echo "OK: subsurfaces, alpha, color, geometry, transforms, scales, offsets, viewports and cursors take a buffer off the plane, and it comes back"

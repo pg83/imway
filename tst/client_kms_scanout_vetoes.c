@@ -11,6 +11,16 @@
  *   "below off"      that subsurface destroyed
  *   "short on"       a window geometry one row short of the buffer
  *   "short off"      the geometry back at the full buffer
+ *   "turned on"      the buffer turned half a circle
+ *   "turned off"     the buffer upright again
+ *   "scaled on"      a buffer scale of 2, showing it at half size
+ *   "scaled off"     the buffer scale back at 1
+ *   "offset on"      the buffer attached one column right
+ *   "offset off"     and back
+ *   "cropped on"     a viewport showing the buffer's top left quarter
+ *   "cropped off"    that viewport's source unset
+ *   "shrunk on"      a viewport showing the buffer at half size
+ *   "shrunk off"     that viewport's destination unset
  * and then the pointer's cursor, which the plane cannot always carry:
  *   "dmabuf cursor"  a 32x32 dma-buf cursor surface
  *   "tall cursor"    the cursor surface as 16x96 wl_shm stripes
@@ -22,9 +32,11 @@
 
 #include <alpha-modifier-v1-client-protocol.h>
 #include <color-management-v1-client-protocol.h>
+#include <viewporter-client-protocol.h>
 
 static struct wp_alpha_modifier_v1* alpha_mgr;
 static struct wp_color_manager_v1* color_mgr;
+static struct wp_viewporter* viewporter;
 static int desc_ready, desc_failed;
 
 static void veto_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
@@ -34,6 +46,8 @@ static void veto_global(void* d, struct wl_registry* r, uint32_t name, const cha
         alpha_mgr = wl_registry_bind(r, name, &wp_alpha_modifier_v1_interface, 1);
     else if (!strcmp(iface, wp_color_manager_v1_interface.name))
         color_mgr = wl_registry_bind(r, name, &wp_color_manager_v1_interface, 1);
+    else if (!strcmp(iface, wp_viewporter_interface.name))
+        viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
 }
 static const struct wl_registry_listener veto_listener = {veto_global, extra_remove};
 
@@ -98,6 +112,11 @@ static void cursor_step(struct wl_surface* cs, struct wl_buffer* b, int w, int h
     printf("%s\n", what);
 }
 
+static void reattach(int dx) {
+    wl_surface_attach(surface, buffer, dx, 0);
+    wl_surface_damage(surface, 0, 0, W, H);
+}
+
 static void step(const char* what) {
     wl_surface_commit(surface);
     wl_display_flush(wl_dpy);
@@ -114,7 +133,7 @@ int main(void) {
     struct wl_registry* reg2 = wl_display_get_registry(wl_dpy);
     wl_registry_add_listener(reg2, &veto_listener, NULL);
     wl_display_roundtrip(wl_dpy);
-    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr) {
+    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr || !viewporter) {
         fprintf(stderr, "SKIP: a global is missing\n");
         return 77;
     }
@@ -165,6 +184,7 @@ int main(void) {
     struct wl_surface* child = NULL;
     struct wl_subsurface* sub = NULL;
     struct wl_surface* cursor = wl_compositor_create_surface(wl_comp);
+    struct wp_viewport* viewport = wp_viewporter_get_viewport(viewporter, surface);
     int phase = 0;
     int pointer_in = 0;
 
@@ -175,7 +195,7 @@ int main(void) {
             pointer_in = 1;
             printf("pointer in\n");
         }
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 13) {
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 23) {
             phase++;
             switch (phase) {
                 case 1:
@@ -231,12 +251,52 @@ int main(void) {
                     step("short off");
                     break;
                 case 11:
-                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_180);
+                    step("turned on");
                     break;
                 case 12:
-                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    wl_surface_set_buffer_transform(surface, WL_OUTPUT_TRANSFORM_NORMAL);
+                    step("turned off");
                     break;
                 case 13:
+                    wl_surface_set_buffer_scale(surface, 2);
+                    step("scaled on");
+                    break;
+                case 14:
+                    wl_surface_set_buffer_scale(surface, 1);
+                    step("scaled off");
+                    break;
+                case 15:
+                    reattach(1);
+                    step("offset on");
+                    break;
+                case 16:
+                    reattach(-1);
+                    step("offset off");
+                    break;
+                case 17:
+                    wp_viewport_set_source(viewport, 0, 0, wl_fixed_from_int(W / 2), wl_fixed_from_int(H / 2));
+                    step("cropped on");
+                    break;
+                case 18:
+                    wp_viewport_set_source(viewport, wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(-1));
+                    step("cropped off");
+                    break;
+                case 19:
+                    wp_viewport_set_destination(viewport, W / 2, H / 2);
+                    step("shrunk on");
+                    break;
+                case 20:
+                    wp_viewport_set_destination(viewport, -1, -1);
+                    step("shrunk off");
+                    break;
+                case 21:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 22:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 23:
                     wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
                     wl_display_flush(wl_dpy);
                     printf("no cursor\n");
