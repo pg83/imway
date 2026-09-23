@@ -795,9 +795,11 @@ void ControlImpl::dumpState(StringView outPath) {
 
     // the path came over the control FIFO — external input never gets to
     // take the session down
+    // the temporary goes before the line that reports it: a reader of the
+    // log finds it gone
     if (rename(tmpPath.cStr(), Buffer(outPath).cStr()) != 0) {
-        *(comp->log) << "imway: dump: cannot rename "_sv << sv(tmpPath) << " to "_sv << outPath << endL;
         unlink(tmpPath.cStr());
+        *(comp->log) << "imway: dump: cannot rename "_sv << sv(tmpPath) << " to "_sv << outPath << endL;
     }
 }
 
