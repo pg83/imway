@@ -1756,12 +1756,11 @@ int KmsOutput::height() const {
 
 double KmsOutput::refresh() const {
     // vrefresh is a rounded integer (59 for 59.94); derive the real rate from
-    // the pixel clock so presentation-time feedback doesn't lie by ~1.6%
-    if (mode.clock > 0 && mode.htotal > 0 && mode.vtotal > 0) {
-        return (double)mode.clock * 1000.0 / ((double)mode.htotal * mode.vtotal);
-    }
-
-    return mode.vrefresh > 0 ? mode.vrefresh : 60.0;
+    // the pixel clock so presentation-time feedback doesn't lie by ~1.6%.
+    // The mode is one the connector listed, and the kernel lists only modes
+    // that pass drm_mode_validate_basic: a nonzero clock, and totals no
+    // smaller than the nonzero active sizes
+    return (double)mode.clock * 1000.0 / ((double)mode.htotal * mode.vtotal);
 }
 
 StringView KmsOutput::outputName() const {

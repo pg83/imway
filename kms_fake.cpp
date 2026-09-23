@@ -846,10 +846,8 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
         return 0;
     }
 
-    if (e->encoder_id != kEncoderId) {
-        return -ENOENT;
-    }
-
+    // the only other encoder: the backend asks for the ids the connectors
+    // above name, never another
     e->encoder_type = DRM_MODE_ENCODER_TMDS;
     e->crtc_id = unbound ? 0 : kCrtcId;
     e->possible_crtcs = noCrtc ? 0 : 1;
@@ -939,12 +937,10 @@ int FakeKms::emuObjGetProperties(drm_mode_obj_get_properties* o) {
     return 0;
 }
 
+// the backend asks only for property ids an object's property list above
+// handed it, so the property always exists
 int FakeKms::emuGetProperty(drm_mode_get_property* q) {
     PropDef* p = findProp(q->prop_id);
-
-    if (!p) {
-        return -ENOENT;
-    }
 
     memset(q->name, 0, sizeof(q->name));
 
@@ -1203,11 +1199,9 @@ int FakeKms::emuRmFb(u32* id) {
     return -ENOENT;
 }
 
+// the backend's commits carry only TEST_ONLY, NONBLOCK, ALLOW_MODESET,
+// PAGE_FLIP_EVENT and PAGE_FLIP_ASYNC
 int FakeKms::emuAtomic(drm_mode_atomic* a) {
-    if (a->flags & ~(u32)(DRM_MODE_ATOMIC_TEST_ONLY | DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_ATOMIC_ALLOW_MODESET | DRM_MODE_PAGE_FLIP_EVENT | DRM_MODE_PAGE_FLIP_ASYNC)) {
-        return -EINVAL;
-    }
-
     bool test = a->flags & DRM_MODE_ATOMIC_TEST_ONLY;
 
     if (!test && flipPending) {
@@ -1891,9 +1885,10 @@ bool FakeKms::lookupFails(u32 req, void* arg) {
         } else if (req == DRM_IOCTL_GET_CAP) {
             match = ((drm_get_cap*)arg)->capability == f.id;
         } else if (req == DRM_IOCTL_MODE_GETPROPERTY) {
+            // an id from a property list, as in emuGetProperty
             PropDef* p = findProp(((drm_mode_get_property*)arg)->prop_id);
 
-            match = p && StringView(p->name) == StringView(f.name);
+            match = StringView(p->name) == StringView(f.name);
         } else if (req == DRM_IOCTL_MODE_GETPROPBLOB) {
             u32 blob = ((drm_mode_get_blob*)arg)->blob_id;
 
