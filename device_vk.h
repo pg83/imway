@@ -31,7 +31,7 @@ struct Log;
 // session is over (see PLAN.md, GPU robustness)
 inline constexpr unsigned long long kGpuWaitNs = 5ull * 1000 * 1000 * 1000;
 
-void vkWaitOrDie(VkDevice device, VkFence fence, const char* what);
+void vkWaitOrDie(VkDevice device, VkFence fence, const char* what, ChaosMonkey& chaos);
 
 struct DeviceVk {
     int drmFd = -1;

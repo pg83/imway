@@ -126,6 +126,10 @@ struct ChaosMonkey {
     // whether a wl_shm pool's udmabuf took the CPU-access bracket that lets
     // the GPU read it (DMA_BUF_IOCTL_SYNC); a refusal sets errno
     virtual bool udmabufRead(bool started) = 0;
+    // the result of a bounded wait on a fence the caller cannot go on
+    // without (vkWaitOrDie): a readback, a cursor shape, the capture's
+    // teardown
+    virtual VkResult gpuWait(VkResult result) = 0;
 
     // screenshot viewer (imway screenshot, its own process and monkey)
     // the result of acquiring a swapchain image or presenting one

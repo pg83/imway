@@ -187,7 +187,7 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
 
     if (fencePoll->armed()) {
         fencePoll->cancel();
-        vkWaitOrDie(device, fence, "screenshot capture teardown");
+        vkWaitOrDie(device, fence, "screenshot capture teardown", *comp->chaos);
     }
 
     fileJob->join();

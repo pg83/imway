@@ -3604,7 +3604,7 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
         return;
     }
 
-    vkWaitOrDie(device, curFence, "cursor rasterize");
+    vkWaitOrDie(device, curFence, "cursor rasterize", *comp->chaos);
     vkResetFences(device, 1, &curFence);
 
     // B8G8R8A8 bytes match DRM ARGB8888, and rendering onto transparent
@@ -4203,7 +4203,7 @@ bool RendererImpl::readbackLastFrame() {
         return false;
     }
 
-    vkWaitOrDie(device, fence, "readback");
+    vkWaitOrDie(device, fence, "readback", *comp->chaos);
     vkResetFences(device, 1, &fence);
 
     return true;

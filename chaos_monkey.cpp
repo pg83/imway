@@ -91,6 +91,8 @@ using namespace stl;
 //   shot-submit=N     the next N screenshot capture submits are refused
 //   udmabuf-read=N    the next N udmabuf read brackets of wl_shm pools are
 //                     refused with EIO
+//   gpu-wait=K        K waits the renderer cannot go on without pass, the
+//                     one after reports a lost device
 // the screenshot viewer, a process of its own with its own monkey:
 //   swapchain=K       K swapchain acquires and presents pass, the one after
 //                     reports the swapchain out of date
@@ -168,6 +170,7 @@ namespace {
         StringView hostMemory;
         int shotSubmitFaults = 0;
         int udmabufReadFaults = 0;
+        int gpuWaitSkip = -1;
         // screenshot viewer
         int swapchainSkip = -1;
         VkResult swapchainFault = VK_SUCCESS;
@@ -225,6 +228,7 @@ namespace {
         void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         bool udmabufRead(bool started) override;
+        VkResult gpuWait(VkResult result) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
         // buses
@@ -339,6 +343,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         shotSubmitFaults = (int)arg.stou();
     } else if (fault == "udmabuf-read"_sv) {
         udmabufReadFaults = (int)arg.stou();
+    } else if (fault == "gpu-wait"_sv) {
+        gpuWaitSkip = (int)arg.stou();
     } else if (fault == "swapchain"_sv || fault == "swapchain-suboptimal"_sv) {
         swapchainSkip = (int)arg.stou();
         swapchainFault = fault == "swapchain"_sv ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUBOPTIMAL_KHR;
@@ -751,6 +757,14 @@ bool TestChaosMonkey::udmabufRead(bool started) {
     return false;
 }
 
+VkResult TestChaosMonkey::gpuWait(VkResult result) {
+    if (gpuWaitSkip < 0 || gpuWaitSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_DEVICE_LOST;
+}
+
 // screenshot viewer
 VkResult TestChaosMonkey::swapchain(VkResult result) {
     if (swapchainSkip < 0 || swapchainSkip-- > 0) {
@@ -883,6 +897,7 @@ namespace {
         void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         bool udmabufRead(bool started) override;
+        VkResult gpuWait(VkResult result) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
         // buses
@@ -1020,6 +1035,10 @@ VkResult IdleChaosMonkey::shotSubmit(VkResult pending) {
 
 bool IdleChaosMonkey::udmabufRead(bool started) {
     return started;
+}
+
+VkResult IdleChaosMonkey::gpuWait(VkResult result) {
+    return result;
 }
 
 // screenshot viewer

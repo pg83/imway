@@ -121,8 +121,8 @@ namespace {
 
 }
 
-void vkWaitOrDie(VkDevice device, VkFence fence, const char* what) {
-    VkResult res = vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs);
+void vkWaitOrDie(VkDevice device, VkFence fence, const char* what, ChaosMonkey& chaos) {
+    VkResult res = chaos.gpuWait(vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs));
 
     if (res != VK_SUCCESS) {
         sysE << "imway: gpu fatal in "_sv << StringView(what) << " ("_sv << (long)res << "), exiting"_sv << endL;
