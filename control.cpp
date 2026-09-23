@@ -272,7 +272,9 @@ void ControlImpl::handleLine(StringView cmd) {
         StringView which, state;
 
         if (args.split(' ', which, state)) {
-            u32 btn = which == "left"_sv ? BTN_LEFT : which == "right"_sv ? BTN_RIGHT : BTN_MIDDLE;
+            // the side buttons of a five-button mouse reach clients that
+            // map them (the screenshot editor's plt binding) as well
+            u32 btn = which == "left"_sv ? BTN_LEFT : which == "right"_sv ? BTN_RIGHT : which == "side"_sv ? BTN_SIDE : which == "extra"_sv ? BTN_EXTRA : which == "forward"_sv ? BTN_FORWARD : BTN_MIDDLE;
 
             comp->entry->button(btn, state == "press"_sv);
         }

@@ -76,7 +76,9 @@ tap 11 # 0 resets
 # Keys the editor has no use for must leave it alone. They still travel the
 # whole input path into it, which is where the keymap and the button
 # mapping live, so the sweep is over the punctuation that path names one by
-# one, plus the two mouse buttons that are not the primary.
+# one, plus the mouse buttons that are not the primary: right, middle, the
+# two side buttons ImGui takes as its fourth and fifth, and one it has no
+# slot for.
 await 50 settled "$XDG_RUNTIME_DIR/s2.ppm" "$XDG_RUNTIME_DIR/idle.ppm" || {
     echo "the editor never settled before the sweep"; exit 1; }
 
@@ -86,6 +88,9 @@ done
 
 ctl "button right press"; ctl "button right release"
 ctl "button middle press"; ctl "button middle release"
+ctl "button side press"; ctl "button side release"     # Auxiliary1
+ctl "button extra press"; ctl "button extra release"   # Auxiliary2
+ctl "button forward press"; ctl "button forward release" # a button ImGui has no slot for
 
 unchanged() {
     screenshot "$XDG_RUNTIME_DIR/swept.ppm" &&
