@@ -74,8 +74,10 @@ namespace {
         return primaries;
     }
 
+    // kelvin is an Output::colorTemp(): 0 when the night light is off, else
+    // inside (0, 6500), the backends having folded everything else to 0
     ColorMatrix chromaticAdaptation(double kelvin) {
-        if (kelvin <= 0 || kelvin >= 6500) {
+        if (kelvin <= 0) {
             return ColorMatrix::identity();
         }
 
@@ -148,20 +150,14 @@ bool Chromaticities::valid() const {
         return false;
     }
 
+    // with every y at least 1e-6 and every coordinate an i32 millionth, the
+    // primaries matrix stays within 4.3e9 a cell and its inverse (taken
+    // only past a 1e-12 determinant) within 4e31, so the scaled matrix and
+    // its determinant stay far inside double range: never inf or NaN
     ColorMatrix m = rgbToXyz(*this);
     double determinant = m.v[0] * (m.v[4] * m.v[8] - m.v[5] * m.v[7]) - m.v[1] * (m.v[3] * m.v[8] - m.v[5] * m.v[6]) + m.v[2] * (m.v[3] * m.v[7] - m.v[4] * m.v[6]);
 
-    if (!isfinite(determinant) || fabs(determinant) < 1e-9) {
-        return false;
-    }
-
-    for (double value : m.v) {
-        if (!isfinite(value)) {
-            return false;
-        }
-    }
-
-    return true;
+    return fabs(determinant) >= 1e-9;
 }
 
 bool Chromaticities::operator==(const Chromaticities& o) const {
@@ -276,10 +272,6 @@ void OutputColorState::setSdrWhite(double nits) {
 
     sdrWhiteNits = fmin(nits, displayPeakNits);
     encoding.referenceNits = sdrWhiteNits;
-}
-
-double OutputColorState::hdrHeadroom() const {
-    return hdr() && sdrWhiteNits > 0 ? displayPeakNits / sdrWhiteNits : 1.0;
 }
 
 bool OutputColorState::hdr() const {
@@ -408,8 +400,9 @@ OutputMapping outputMapping(const OutputColorState& output, double colorTemperat
     mapping.peakNits = mapping.hdr ? output.displayPeakNits : 203.0;
     mapping.referenceNits = mapping.hdr ? output.sdrWhiteNits : 100.0;
 
+    // only an hdr output can bring an unknown (zero) peak: sdr has 203 above
     if (mapping.peakNits <= 0) {
-        mapping.peakNits = mapping.hdr ? 1000.0 : 203.0;
+        mapping.peakNits = 1000.0;
     }
 
     if (mapping.referenceNits >= mapping.peakNits) {

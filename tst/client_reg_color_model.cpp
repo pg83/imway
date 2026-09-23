@@ -35,12 +35,12 @@ int main() {
     }
 
     hdrOutput.setSdrWhite(200.0);
-    if (hdrOutput.sdrWhiteNits != 200.0 || hdrOutput.encoding.referenceNits != 200.0 || hdrOutput.hdrHeadroom() != 5.0) {
+    if (hdrOutput.sdrWhiteNits != 200.0 || hdrOutput.encoding.referenceNits != 200.0) {
         fputs("bad HDR headroom policy\n", stderr);
         return 1;
     }
     hdrOutput.setSdrWhite(2000.0);
-    if (hdrOutput.sdrWhiteNits != 1000.0 || hdrOutput.encoding.referenceNits != 1000.0 || hdrOutput.hdrHeadroom() != 1.0) {
+    if (hdrOutput.sdrWhiteNits != 1000.0 || hdrOutput.encoding.referenceNits != 1000.0) {
         fputs("SDR white exceeds calibrated HDR peak\n", stderr);
         return 1;
     }
@@ -152,8 +152,7 @@ int main() {
         }
     }
 
-    // the SDR white setter ignores a non-positive value, and a zero SDR
-    // white has no headroom to speak of
+    // the SDR white setter ignores a non-positive value
     {
         OutputColorState h = OutputColorState::hdr10(203.0);
 
@@ -162,14 +161,6 @@ int main() {
 
         if (h.sdrWhiteNits != 203.0) {
             fputs("a non-positive SDR white was taken\n", stderr);
-
-            return 1;
-        }
-
-        h.sdrWhiteNits = 0;
-
-        if (h.hdrHeadroom() != 1.0) {
-            fputs("a zero SDR white gave headroom\n", stderr);
 
             return 1;
         }
@@ -210,16 +201,19 @@ int main() {
     }
 
     // night light: no temperature is no adaptation, a temperature below
-    // 2222 K takes the low-temperature locus and warms even more
+    // 2222 K takes the low-temperature locus and warms even more, and one
+    // above 4000 K takes the high-temperature locus and warms less
     {
         OutputMapping off = outputMapping(OutputColorState::sdr(), 0);
         OutputMapping candle = outputMapping(OutputColorState::sdr(), 2000.0);
         OutputMapping warm = outputMapping(OutputColorState::sdr(), 3400.0);
+        OutputMapping mild = outputMapping(OutputColorState::sdr(), 5000.0);
         ColorRgb offWhite = off.toTarget.apply({1, 1, 1});
         ColorRgb candleWhite = candle.toTarget.apply({1, 1, 1});
         ColorRgb warmWhite = warm.toTarget.apply({1, 1, 1});
+        ColorRgb mildWhite = mild.toTarget.apply({1, 1, 1});
 
-        if (offWhite.r < .999 || offWhite.r > 1.001 || offWhite.b < .999 || offWhite.b > 1.001 || candleWhite.b >= warmWhite.b) {
+        if (offWhite.r < .999 || offWhite.r > 1.001 || offWhite.b < .999 || offWhite.b > 1.001 || candleWhite.b >= warmWhite.b || mildWhite.b <= warmWhite.b || mildWhite.b >= offWhite.b) {
             fputs("bad night-light temperatures\n", stderr);
 
             return 1;
@@ -250,6 +244,23 @@ int main() {
 
         if (surfaceMaxNits(ColorDescription::sRgb(), 203) != 203 || surfaceMaxNits(ColorDescription::bt2100Pq(), 203) != 10000 || surfaceMaxNits(ColorDescription::bt2100Hlg(), 203) != 1000 || surfaceMaxNits(ColorDescription::extendedLinear(), 203) < 1e8 || surfaceMaxNits(ColorDescription::bt1886(), 203) != 100 || surfaceMaxNits(icc, 203) != 80 || surfaceMaxNits(noReference, 203) != 203) {
             fputs("bad per-transfer brightest value\n", stderr);
+
+            return 1;
+        }
+    }
+
+    // chromaticities: a zero y anywhere, or primaries on one line, make no
+    // colour space
+    {
+        Chromaticities greenless = Chromaticities::bt2020();
+        Chromaticities blueless = Chromaticities::bt2020();
+        Chromaticities collinear = {100000, 100000, 200000, 200000, 300000, 300000, 312700, 329000};
+
+        greenless.gy = 0;
+        blueless.by = 0;
+
+        if (!Chromaticities::bt2020().valid() || greenless.valid() || blueless.valid() || collinear.valid()) {
+            fputs("bad chromaticity validation\n", stderr);
 
             return 1;
         }
