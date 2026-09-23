@@ -145,6 +145,11 @@ static void append_leaf(DBusMessageIter* parent, int32_t id, const char* label, 
         dict_string(&props, "disposition", "alert");
         dict_shortcut(&props, "shortcut", "Control", "Q");
         dict_icon_data(&props);
+    } else if (kind == 7) {
+        dict_string(&props, "disposition", "warning");
+    } else if (kind == 8) {
+        dict_string(&props, "toggle-type", "radio");
+        dict_int(&props, "toggle-state", 0);
     }
 
     dbus_message_iter_close_container(&node, &props);
@@ -183,6 +188,33 @@ static void append_recent(DBusMessageIter* children) {
     dbus_message_iter_close_container(children, &variant);
 }
 
+// a parent item with the given leaves; <display> sets children-display to
+// "submenu", without it only the children make it a parent
+static void append_parent(DBusMessageIter* children, int32_t id, const char* label, int display, const int32_t* ids, const char* const* labels, int count) {
+    DBusMessageIter variant, node, props, grandchildren;
+
+    dbus_message_iter_open_container(children, DBUS_TYPE_VARIANT, "(ia{sv}av)", &variant);
+    dbus_message_iter_open_container(&variant, DBUS_TYPE_STRUCT, NULL, &node);
+    dbus_message_iter_append_basic(&node, DBUS_TYPE_INT32, &id);
+    dbus_message_iter_open_container(&node, DBUS_TYPE_ARRAY, "{sv}", &props);
+    dict_string(&props, "label", label);
+
+    if (display) {
+        dict_string(&props, "children-display", "submenu");
+    }
+
+    dbus_message_iter_close_container(&node, &props);
+    dbus_message_iter_open_container(&node, DBUS_TYPE_ARRAY, "v", &grandchildren);
+
+    for (int i = 0; i < count; i++) {
+        append_variant_leaf(&grandchildren, ids[i], labels[i], 0);
+    }
+
+    dbus_message_iter_close_container(&node, &grandchildren);
+    dbus_message_iter_close_container(&variant, &node);
+    dbus_message_iter_close_container(children, &variant);
+}
+
 static void append_file_menu(DBusMessageIter* root_children) {
     DBusMessageIter variant, node, props, children;
     int32_t id = 1;
@@ -203,6 +235,15 @@ static void append_file_menu(DBusMessageIter* root_children) {
     append_variant_leaf(&children, 22, "Disabled option", 4);
     append_variant_leaf(&children, 23, "Invisible option", 5);
     append_variant_leaf(&children, 25, "_Quit danger", 6);
+    append_variant_leaf(&children, 26, "Warning option", 7);
+    append_variant_leaf(&children, 27, NULL, 0);
+    append_variant_leaf(&children, 28, "Radio off", 8);
+    {
+        static const int32_t ids[] = {290};
+        static const char* const labels[] = {"Deep item"};
+
+        append_parent(&children, 29, "More", 0, ids, labels, 1);
+    }
     dbus_message_iter_close_container(&node, &children);
     dbus_message_iter_close_container(&variant, &node);
     dbus_message_iter_close_container(root_children, &variant);
@@ -239,6 +280,14 @@ static void send_layout(DBusMessage* call) {
     dbus_message_iter_open_container(&root, DBUS_TYPE_ARRAY, "v", &children);
     append_file_menu(&children);
     append_variant_leaf(&children, 2, "_Help", 0);
+    append_parent(&children, 3, "Empty", 1, NULL, NULL, 0);
+    append_variant_leaf(&children, 4, "Hidden heading", 5);
+    {
+        static const int32_t ids[] = {60};
+        static const char* const labels[] = {"Undo"};
+
+        append_parent(&children, 6, "Edit", 0, ids, labels, 1);
+    }
     dbus_message_iter_close_container(&root, &children);
     dbus_message_iter_close_container(&it, &root);
     dbus_connection_send(bus, reply, NULL);
