@@ -1771,6 +1771,9 @@ void RendererImpl::loadFont() {
         io.FontDefault = io.Fonts->AddFontDefault(&config);
     }
 
+    // ImGui takes the base size from the first font on the first frame
+    // only; a font rebuilt later at another size must set it itself
+    ImGui::GetStyle().FontSizeBase = size;
     bakeWindowShadow(io.Fonts, shadow);
     scene->needsFrame = true;
 }
