@@ -92,8 +92,10 @@ int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s none|<node>\n", argv[0]);
+    // "sync" after the node: it must be the explicit-sync one; exit 3 when
+    // the host has no node with timeline syncobjs to prove that with
+    if (argc != 2 && !(argc == 3 && !strcmp(argv[2], "sync"))) {
+        fprintf(stderr, "usage: %s none|<node> [sync]\n", argv[0]);
         return 2;
     }
 
@@ -135,6 +137,11 @@ int main(int argc, char** argv) {
     if (stat(argv[1], &st) != 0) {
         fprintf(stderr, "cannot stat %s\n", argv[1]);
         return 1;
+    }
+
+    if (argc == 3 && !syncobj) {
+        printf("no timeline syncobj node on this host\n");
+        return 3;
     }
 
     if (!lease_dev) {
