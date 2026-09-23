@@ -64,6 +64,16 @@ for i in $(seq -w 1 150); do
     printf '[Desktop Entry]\nType=Application\nName=bulk%s\nExec=true\n' "$i" >"xdg/applications/bulk$i.desktop"
 done
 open_launcher
+# the window reaches its size over a frame or two: read it once two reads
+# apart agree
+size_settled() {
+    local a b
+    a="$(dump_field '^imgui name=##launcher ' w)x$(dump_field '^imgui name=##launcher ' h)"
+    sleep 0.3
+    b="$(dump_field '^imgui name=##launcher ' w)x$(dump_field '^imgui name=##launcher ' h)"
+    [[ "$a" == "$b" && "$a" != x ]]
+}
+await 30 size_settled || { echo "the launcher never settled its size"; exit 1; }
 lw_many=$(dump_field '^imgui name=##launcher ' w)
 lh_many=$(dump_field '^imgui name=##launcher ' h)
 echo "empty ${lw_empty}px wide, many ${lw_many}x${lh_many}"
