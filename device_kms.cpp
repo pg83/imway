@@ -2774,13 +2774,12 @@ bool KmsOutput::hasBrightness() const {
     return !blPath.empty() || ddcFd >= 0;
 }
 
+// brightness and setBrightness are only called on an output that has it
+// (hasBrightness): a ddc/ci monitor, whose range initDdc checked is not
+// empty, or a backlight
 float KmsOutput::brightness() const {
     if (ddcFd >= 0) {
-        return ddcMax ? (float)ddcCur / (float)ddcMax : 0.f;
-    }
-
-    if (blPath.empty()) {
-        return 0.f;
+        return (float)ddcCur / (float)ddcMax;
     }
 
     auto& p = sb();
@@ -2813,10 +2812,6 @@ void KmsOutput::setBrightness(float v) {
             ev_timer_start(loop, ddcTimer);
         }
 
-        return;
-    }
-
-    if (blPath.empty()) {
         return;
     }
 
