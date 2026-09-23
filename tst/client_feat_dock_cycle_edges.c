@@ -1,6 +1,6 @@
 // Four windows for the dock's cycle action: one of app "dock-one", two of
-// app "dock-two", and one that never sets an app_id. Exits on "done-go"
-// in XDG_RUNTIME_DIR.
+// app "dock-two" (and a third that never maps), and one that never sets an
+// app_id. Exits on "done-go" in XDG_RUNTIME_DIR.
 
 #include "wl_util.h"
 
@@ -56,6 +56,15 @@ int main(void) {
     wl_surface_commit(bare);
     while (!bare_configured && wl_display_dispatch(wl_dpy) != -1) {
     }
+    wl_display_roundtrip(wl_dpy);
+
+    // a third "dock-two" toplevel that never maps: the group's cycle skips it
+    struct wl_surface* pending = wl_compositor_create_surface(wl_comp);
+    struct xdg_surface* pending_xs = xdg_wm_base_get_xdg_surface(wl_wm, pending);
+    struct xdg_toplevel* pending_tl = xdg_surface_get_toplevel(pending_xs);
+    xdg_toplevel_set_app_id(pending_tl, "dock-two");
+    xdg_toplevel_set_title(pending_tl, "dock-two-pending");
+    wl_surface_commit(pending);
     wl_display_roundtrip(wl_dpy);
     puts("client_feat_dock_cycle_edges: mapped");
 

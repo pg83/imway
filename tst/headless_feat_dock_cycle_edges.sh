@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # The dock's cycle click among other applications' slots: a pinned
 # application with one window (its slot first) and a window without an
-# app_id sit beside a two-window group. A click on the lone window's slot
-# focuses it, clicks on the group's slot alternate its two windows and
-# never reach the other applications' windows.
+# app_id sit beside a two-window group (with a third window of the group
+# that never maps). A click on the lone window's slot focuses it, clicks on
+# the group's slot alternate its two mapped windows and never reach the
+# other applications' windows.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -21,7 +22,7 @@ id_of() { # <dump pattern>
     dump_field "$1" id
 }
 one=$(id_of 'app_id=dock-one')
-read -r twoA twoB < <(dump_state | awk '$1 == "toplevel" && / app_id=dock-two / { for (i = 1; i <= NF; i++) if ($i ~ /^id=/) print substr($i, 4) }' | xargs)
+read -r twoA twoB < <(dump_state | awk '$1 == "toplevel" && / mapped=1 / && / app_id=dock-two / { for (i = 1; i <= NF; i++) if ($i ~ /^id=/) print substr($i, 4) }' | xargs)
 [[ -n "$one" && -n "$twoA" && -n "$twoB" ]] || { echo "the windows are not all in the scene"; dump_state; exit 1; }
 focus_id() { dump_field '^focus ' id; }
 focused_is() { [[ "$(focus_id)" == "$1" ]]; }
