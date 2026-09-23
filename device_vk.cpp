@@ -155,18 +155,16 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
 
     VK_CHECK(chaos.setup(vkCreateInstance(&instInfo, nullptr, &this->instance)));
 
+    // the instance enabled the extension, so it hands out its commands
     if (debugUtils) {
         auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkCreateDebugUtilsMessengerEXT");
+        VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
 
-        if (create) {
-            VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
-
-            dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-            dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-            dbg.pfnUserCallback = vkDebugLog;
-            dbg.pUserData = this->log;
-            create(this->instance, &dbg, nullptr, &this->debugMessenger);
-        }
+        dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+        dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+        dbg.pfnUserCallback = vkDebugLog;
+        dbg.pUserData = this->log;
+        create(this->instance, &dbg, nullptr, &this->debugMessenger);
     }
 
     u32 n = 0;
@@ -408,11 +406,10 @@ DeviceVk::~DeviceVk() noexcept {
     }
 
     if (this->debugMessenger) {
+        // a messenger exists only on an instance with the extension enabled
         auto destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkDestroyDebugUtilsMessengerEXT");
 
-        if (destroy) {
-            destroy(this->instance, this->debugMessenger, nullptr);
-        }
+        destroy(this->instance, this->debugMessenger, nullptr);
 
         this->debugMessenger = VK_NULL_HANDLE;
     }
