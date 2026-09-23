@@ -1802,7 +1802,7 @@ void FakeKms::parseLookupFaults(StringView rules) {
 
         LookupFault f;
 
-        f.req = kind == "props"_sv ? DRM_IOCTL_MODE_OBJ_GETPROPERTIES : kind == "prop"_sv ? DRM_IOCTL_MODE_GETPROPERTY : kind == "blob"_sv ? DRM_IOCTL_MODE_GETPROPBLOB : kind == "plane"_sv ? DRM_IOCTL_MODE_GETPLANE : DRM_IOCTL_MODE_GETRESOURCES;
+        f.req = kind == "props"_sv ? DRM_IOCTL_MODE_OBJ_GETPROPERTIES : kind == "prop"_sv ? DRM_IOCTL_MODE_GETPROPERTY : kind == "blob"_sv ? DRM_IOCTL_MODE_GETPROPBLOB : kind == "plane"_sv ? DRM_IOCTL_MODE_GETPLANE : kind == "createblob"_sv ? DRM_IOCTL_MODE_CREATEPROPBLOB : DRM_IOCTL_MODE_GETRESOURCES;
         f.id = (u32)target.stou();
 
         size_t n = target.length() < sizeof(f.name) - 1 ? target.length() : sizeof(f.name) - 1;
