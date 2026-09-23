@@ -12,18 +12,34 @@ sleep 0.3
 
 wait_rect 'app_id=drag-origin'
 wait_placed 'app_id=drag-origin' || { echo "the origin window never settled"; dump_state; exit 1; }
+wait_placed 'app_id=drag-torn' || { echo "the torn window never settled"; dump_state; exit 1; }
 ox=$(dump_field 'app_id=drag-origin' imgx)
 oy=$(dump_field 'app_id=drag-origin' imgy)
-# press low in the origin, clear of the torn window that cascades over its
-# top-left, so the pointer grab origin is the origin surface
-px=$((ox + 30))
-py=$((oy + 270))
+# press in the origin where the torn window (and its chrome) is not, so the
+# pointer grab origin is the origin surface: the torn window's placement
+# depends on the host, try the origin's corners against its settled rect
+txl=$(dump_field 'app_id=drag-torn' x); tyt=$(dump_field 'app_id=drag-torn' y)
+txr=$((txl + $(dump_field 'app_id=drag-torn' w))); tyb=$((tyt + $(dump_field 'app_id=drag-torn' h)))
+px=""
+for cand in "30 270" "370 270" "370 30" "30 30"; do
+    read -r cx cy <<<"$cand"
+    cx=$((ox + cx)); cy=$((oy + cy))
+    if (( cx < txl - 8 || cx > txr + 8 || cy < tyt - 8 || cy > tyb + 8 )); then
+        px=$cx; py=$cy
+        break
+    fi
+done
+[[ -n "$px" ]] || { echo "the torn window covers every corner of the origin"; dump_state; exit 1; }
 
-# press inside the origin so the client gets a button serial for start_drag
-# the pointer focus follows a composed frame: put the pointer there and
-# let two frames carry it before the press, as click_at does
-ctl "motion $px $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
-ctl "motion $((px + 1)) $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
+# press inside the origin so the client gets a button serial for start_drag;
+# the pointer focus follows a composed frame and the ui must have let the
+# pointer go (no chrome or popup under it), so aim until the dump says so
+client_owns_pointer() {
+    ctl "motion $px $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
+    ctl "motion $((px + 1)) $py"; screenshot "$XDG_RUNTIME_DIR/_press.ppm"
+    [[ "$(dump_state | sed -n 's/^captured kb=[0-9]* ptr=//p')" == 0 ]]
+}
+await 20 client_owns_pointer || { echo "the ui kept the pointer over the origin"; dump_state; exit 1; }
 ctl "button left press"
 sleep 0.2
 
