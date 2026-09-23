@@ -7532,7 +7532,7 @@ namespace {
     void captureFrameResourceDestroyed(wl_resource* res) {
         auto* f = (CaptureFrame*)wl_resource_get_user_data(res);
 
-        if (f->inFlight && f->srv->composer->frameCapture) {
+        if (f->inFlight) {
             f->srv->composer->frameCapture->captureCancel(f->capDone);
         }
 
@@ -7878,13 +7878,8 @@ namespace {
             return;
         }
 
+        // the renderer is made before the event loop dispatches a request
         FrameCapture* cap = srv->composer->frameCapture;
-
-        if (!cap) {
-            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
-
-            return;
-        }
 
         if (f.inFlight) {
             return;
@@ -7967,7 +7962,7 @@ namespace {
     void wlrCopyFrameResourceDestroyed(wl_resource* res) {
         auto* f = (WlrCopyFrame*)wl_resource_get_user_data(res);
 
-        if (f->inFlight && f->srv->composer->frameCapture) {
+        if (f->inFlight) {
             f->srv->composer->frameCapture->captureCancel(f->capDone);
         }
 
@@ -8092,15 +8087,8 @@ namespace {
             return;
         }
 
+        // the renderer is made before the event loop dispatches a request
         FrameCapture* cap = srv->composer->frameCapture;
-        ShmBuffer* shm = shmBufferFromResource(f.buffer);
-
-        if (!cap || !shm) {
-            f.armed = false;
-            zwlr_screencopy_frame_v1_send_failed(f.res);
-
-            return;
-        }
 
         if (f.inFlight) {
             return;
