@@ -902,10 +902,20 @@ namespace {
             return fd;
         }
 
+        StringView dri = "/dev/dri"_sv;
+
+#ifdef IMWAY_FOR_TESTS
+        // a staged node directory: a scenario decides which card nodes the
+        // host has, since the runner's own are whatever the machine offers
+        if (const char* staged = getenv("IMWAY_DRI_DIR")) {
+            dri = StringView(staged);
+        }
+#endif
+
         for (int i = 0; i < 8; i++) {
             auto& p = sb();
 
-            p << "/dev/dri/card"_sv << i;
+            p << dri << "/card"_sv << i;
 
             int fd = session.openDevice(p.cStr());
 
@@ -924,7 +934,7 @@ namespace {
             return fd;
         }
 
-        Errno().raise(StringBuilder() << "kms: no device with atomic support under /dev/dri"_sv);
+        Errno().raise(StringBuilder() << "kms: no device with atomic support under "_sv << dri);
 
         return -1;
     }
@@ -3396,10 +3406,19 @@ Device* DeviceKms::create(Composer& c, StringView devPath) {
 }
 
 void DeviceKms::list() {
+    StringView dri = "/dev/dri"_sv;
+
+#ifdef IMWAY_FOR_TESTS
+    // the same staged node directory the backend's own scan honours
+    if (const char* staged = getenv("IMWAY_DRI_DIR")) {
+        dri = StringView(staged);
+    }
+#endif
+
     for (int i = 0; i < 8; i++) {
         auto& p = sb();
 
-        p << "/dev/dri/card"_sv << i;
+        p << dri << "/card"_sv << i;
 
         int fd = open(p.cStr(), O_RDWR | O_CLOEXEC | O_NONBLOCK);
 

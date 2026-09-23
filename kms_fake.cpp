@@ -1638,28 +1638,27 @@ int FakeKms::openDevice() {
         return -errno;
     }
 
+    // the nodes behind the emulated card come from the scenario's staged
+    // directory when it has one, like the backend's own node scan
+    const char* staged = getenv("IMWAY_DRI_DIR");
+    StringView dri = staged ? StringView(staged) : "/dev/dri"_sv;
     int render = -1;
 
     for (int i = 128; i < 136 && render < 0; i++) {
-        char path[32] = "/dev/dri/renderD1";
-        int n = (int)strlen(path);
+        auto& path = sb();
 
-        path[n] = (char)('0' + (i / 10) % 10);
-        path[n + 1] = (char)('0' + i % 10);
-        path[n + 2] = 0;
-        render = open(path, O_RDWR | O_CLOEXEC);
+        path << dri << "/renderD"_sv << i;
+        render = open(path.cStr(), O_RDWR | O_CLOEXEC);
     }
 
     // no render node (a virtual host): a card node still answers the fstat
     // identity and caps; every modeset ioctl stays emulated, and syncobj
     // forwards fail cleanly into "no explicit sync"
     for (int i = 0; i < 8 && render < 0; i++) {
-        char path[32] = "/dev/dri/card";
-        int n = (int)strlen(path);
+        auto& path = sb();
 
-        path[n] = (char)('0' + i);
-        path[n + 1] = 0;
-        render = open(path, O_RDWR | O_CLOEXEC);
+        path << dri << "/card"_sv << i;
+        render = open(path.cStr(), O_RDWR | O_CLOEXEC);
     }
 
     if (render < 0) {
