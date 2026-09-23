@@ -12,6 +12,9 @@ set -euo pipefail
 start_client
 wait_client "trees mapped"
 wait_rect 'title=overlay-trees'
+# aim at where the window settled: a pointer aimed at a first placement
+# lands on the popup, and the cursor then covers its green
+wait_placed 'title=overlay-trees' || { echo "the window never settled"; exit 1; }
 
 x=$(dump_field 'title=overlay-trees' imgx); y=$(dump_field 'title=overlay-trees' imgy)
 # enter the blue half so the client sets its cursor there
