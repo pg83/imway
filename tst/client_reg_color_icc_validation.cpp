@@ -119,6 +119,22 @@ static cmsHPROFILE edgeProfile(const char* mode, bool& accepted) {
         }
         return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
     }
+    if (!strcmp(mode, "curve-bumpy")) {
+        // a gamma of 2.2 with a ripple: the estimate lands in range, the
+        // curve itself does not follow it
+        float table[256];
+        for (int i = 0; i < 256; i++) {
+            float x = (float)i / 255.f;
+            table[i] = powf(x, 2.2f) + 0.02f * sinf(x * 12.f) * x * (1.f - x);
+        }
+        return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
+    }
+    if (!strcmp(mode, "colorspace-class")) {
+        accepted = true;
+        cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
+        cmsSetDeviceClass(profile, cmsSigColorSpaceClass);
+        return profile;
+    }
     if (!strcmp(mode, "version-low") || !strcmp(mode, "version-high")) {
         cmsHPROFILE profile = rgbProfile(cmsBuildGamma(nullptr, 2.2));
         cmsSetProfileVersion(profile, !strcmp(mode, "version-low") ? 1.0 : 5.0);
