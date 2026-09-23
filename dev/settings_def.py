@@ -102,8 +102,10 @@ SETTINGS = [
             "display", "brightness step", custom("pageDisplay")),
     setting("display.hdr_step_nits", "hdrStepNits", "float", "10.f",
             "display", "hdr key step", custom("pageDisplay")),
+    # durations the desktop turns into 32-bit milliseconds: a negative or
+    # huge one would not fit
     setting("display.osd_seconds", "osdSeconds", "float", "1.5f", "display",
-            "osd duration", custom("pageDisplay")),
+            "osd duration", custom("pageDisplay"), normalize=("0.f", "60.f")),
     setting("display.osd_fade_seconds", "osdFadeSeconds", "float", ".3f",
             "display", "osd fade", custom("pageDisplay")),
     setting("display.dpms_seconds", "dpmsSeconds", "double", "0.", "display",
@@ -174,7 +176,8 @@ SETTINGS = [
     setting("appearance.visual_bell_seconds", "visualBellSeconds", "float",
             ".15f", "appearance", "bell duration",
             slider("##bell-seconds", ".02f", "1.f", "%.2f sec",
-                   visible_if="s.visualBell()")),
+                   visible_if="s.visualBell()"),
+            normalize=("0.f", "60.f")),
     setting("appearance.visual_bell_strength", "visualBellStrength", "float",
             ".35f", "appearance", "bell strength",
             slider("##bell-strength", "0.f", "1.f", "%.2f",
