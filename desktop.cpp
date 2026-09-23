@@ -1253,12 +1253,20 @@ void DesktopImpl::altTabStep(long dir) {
         n = dir > 0 ? n->next : n->prev;
 
         if (n == tls.mutEnd()) {
+            // a walk that started at the head is over once it is back
+            // there (only unmapped windows: nothing to offer); one that
+            // started at a window steps over the head and goes on
+            if (start == tls.mutEnd()) {
+                return;
+            }
+
             n = dir > 0 ? n->next : n->prev;
         }
 
+        // the list is not empty, so past the head there is a window
         Toplevel* t = (Toplevel*)n;
 
-        if (n != tls.mutEnd() && t->mapped) {
+        if (t->mapped) {
             altTabActive = true;
             altTabSel.bind(t->weak);
             scene->needsFrame = true;

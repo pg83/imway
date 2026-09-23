@@ -1,6 +1,7 @@
 // Helper client for the alt-tab cycle test: a plain toplevel, a wide one
 // with a very long title, and a third that is configured but never gets a
-// buffer, so it exists without ever mapping. SIGUSR1 destroys the plain one.
+// buffer, so it exists without ever mapping. SIGUSR1 destroys the plain one,
+// SIGUSR2 the wide one.
 
 #include "wl_util.h"
 
@@ -8,11 +9,16 @@
 #include <signal.h>
 
 static struct wl_toplevel_ctx a, b;
-static volatile sig_atomic_t dropRequested;
+static volatile sig_atomic_t dropRequested, dropWideRequested;
 
 static void onUsr1(int sig) {
     (void)sig;
     dropRequested = 1;
+}
+
+static void onUsr2(int sig) {
+    (void)sig;
+    dropWideRequested = 1;
 }
 
 static void pendingConfigure(void* d, struct xdg_surface* xs, uint32_t serial) {
@@ -25,6 +31,7 @@ static const struct xdg_surface_listener pendingListener = {pendingConfigure};
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGUSR1, onUsr1);
+    signal(SIGUSR2, onUsr2);
     alarm(60);
 
     if (wl_boot()) return 1;
@@ -65,6 +72,14 @@ int main(void) {
             xdg_surface_destroy(a.xs);
             wl_surface_destroy(a.surface);
             printf("alt-tab cycle: plain window dropped\n");
+        }
+
+        if (dropWideRequested == 1) {
+            dropWideRequested = 2;
+            xdg_toplevel_destroy(b.tl);
+            xdg_surface_destroy(b.xs);
+            wl_surface_destroy(b.surface);
+            printf("alt-tab cycle: wide window dropped\n");
         }
 
         wl_display_flush(wl_dpy);
