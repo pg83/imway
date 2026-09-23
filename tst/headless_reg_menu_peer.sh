@@ -71,7 +71,7 @@ go too-many
 
 wait_client "stage updates"
 await 100 activation_is 5 || fail "the update signals never landed"
-[[ "$(grep -c '^getlayout' "$CLIENT_LOG")" == 5 ]] || fail "a stale LayoutUpdated refreshed the menu"
+[[ "$(grep -c '^getlayout' "$CLIENT_LOG")" == 7 ]] || fail "a stale LayoutUpdated refreshed the menu"
 line=$(item 4)
 [[ "$line" == *"toggle=1 "* && "$line" == *"label=Four"* ]] || fail "the update of item 4 was lost: $line"
 [[ "$(item 1)" == *"label=" && "$(item 1)" != *"Save"* ]] || fail "the label removal was lost: $(item 1)"

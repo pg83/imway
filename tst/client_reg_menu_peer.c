@@ -25,6 +25,8 @@ enum mode {
     MODE_BAD_FIRST,
     MODE_NO_STRUCT,
     MODE_BAD_ROOT,
+    MODE_EMPTY,
+    MODE_TEXT_ROOT,
     MODE_RICH,
     MODE_TOO_MANY,
     MODE_SMALL,
@@ -240,7 +242,7 @@ static void rich_children(DBusMessageIter* children) {
     /* item 1: mistyped values fall back, an unknown toggle and a label with
      * both kinds of underscore */
     node_open(children, 1, &var, &node, &props);
-    prop_string(&props, "label", "Save__As_x");
+    prop_string(&props, "label", "Save__As_x_");
     prop_string(&props, "toggle-type", "radio");
     prop_string(&props, "toggle-state", "on");
     prop_string(&props, "enabled", "no");
@@ -267,6 +269,11 @@ static void rich_children(DBusMessageIter* children) {
         prop_bytes(&props2, "icon-data", wide, png_header(wide, 2000, 1));
         prop_bytes(&props2, "icon-data", tall, png_header(tall, 1, 2000));
         prop_u32(&props2, "label", 7);
+
+        /* past the icon size the model takes */
+        static unsigned char huge[4 * 1024 * 1024 + 1];
+
+        prop_bytes(&props2, "icon-data", huge, (int)sizeof(huge));
         node_children(&node2, &props2, &kids2);
         node_close(&kids, &var2, &node2, &kids2);
     }
@@ -345,6 +352,16 @@ static void send_layout(DBusConnection* c, DBusMessage* call) {
             revision = 3;
             dbus_message_iter_append_basic(&it, DBUS_TYPE_UINT32, &revision);
             break;
+        case MODE_EMPTY:
+            break;
+        case MODE_TEXT_ROOT: {
+            const char* text = "root";
+
+            revision = 6;
+            dbus_message_iter_append_basic(&it, DBUS_TYPE_UINT32, &revision);
+            dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &text);
+            break;
+        }
         case MODE_BAD_ROOT: {
             const char* text = "root";
 
@@ -427,6 +444,15 @@ static void emit(DBusMessage* sig) {
     dbus_connection_flush(bus);
 }
 
+/* a revision that is no number reads as 0, which always refreshes */
+static void layout_updated_text(const char* path) {
+    DBusMessage* sig = signal_on(path, "LayoutUpdated");
+    const char* revision = "seven";
+
+    dbus_message_append_args(sig, DBUS_TYPE_STRING, &revision, DBUS_TYPE_INVALID);
+    emit(sig);
+}
+
 static void layout_updated(const char* path, int with_revision, uint32_t revision) {
     DBusMessage* sig = signal_on(path, "LayoutUpdated");
     int32_t parent = 0;
@@ -477,6 +503,28 @@ static void properties_updates(const char* path) {
     DBusMessageIter it, arr, row, props, names;
     int32_t id;
     const char* label = "label";
+
+    /* no arguments at all, and a signal the menu does not know */
+    emit(signal_on(path, "ItemsPropertiesUpdated"));
+    emit(signal_on(path, "Poke"));
+
+    /* rows whose properties are a string, then a removed list that is no
+     * array */
+    {
+        const char* text = "label";
+
+        sig = signal_on(path, "ItemsPropertiesUpdated");
+        dbus_message_iter_init_append(sig, &it);
+        dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "(is)", &arr);
+        id = 1;
+        dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, NULL, &row);
+        dbus_message_iter_append_basic(&row, DBUS_TYPE_INT32, &id);
+        dbus_message_iter_append_basic(&row, DBUS_TYPE_STRING, &text);
+        dbus_message_iter_close_container(&arr, &row);
+        dbus_message_iter_close_container(&it, &arr);
+        dbus_message_iter_append_basic(&it, DBUS_TYPE_STRING, &text);
+        emit(sig);
+    }
 
     /* the first argument is not the updated-items array */
     sig = signal_on(path, "ItemsPropertiesUpdated");
@@ -719,6 +767,24 @@ static void registrar_checks(void) {
         exit(1);
     }
 
+    /* unregistering one window leaves the others */
+    reply = registrar(bus, "RegisterWindow", 2, 4343, "/Menu");
+
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    reply = registrar(bus, "UnregisterWindow", 1, 4343, NULL);
+
+    if (reply) {
+        dbus_message_unref(reply);
+    }
+
+    if (listed(bus, 4343) || listed(bus, 4242) != 1) {
+        fprintf(stderr, "unregistering one window touched another\n");
+        exit(1);
+    }
+
     /* a stranger cannot unregister it; its own window dies with it */
     DBusConnection* other = second_connection();
 
@@ -820,19 +886,27 @@ int main(void) {
     mode = MODE_BAD_ROOT;
     layout_updated("/Menu", 1, 0);
     await_layouts(3);
+
+    /* a reply with nothing in it, then a revision and text for a root */
+    mode = MODE_EMPTY;
+    layout_updated("/Menu", 1, 0);
+    await_layouts(4);
+    mode = MODE_TEXT_ROOT;
+    layout_updated_text("/Menu");
+    await_layouts(5);
     activation("/Menu", 2);
     stage("rootless");
 
     mode = MODE_RICH;
     layout_updated("/Menu", 1, 0);
-    await_layouts(4);
+    await_layouts(6);
     activation("/Menu", 3);
     stage("rich");
 
     /* too big to take: the rich model stays */
     mode = MODE_TOO_MANY;
     layout_updated("/Menu", 1, 8);
-    await_layouts(5);
+    await_layouts(7);
     activation("/Menu", 4);
     stage("too-many");
 
@@ -857,10 +931,10 @@ int main(void) {
 
     mode = MODE_HOLD;
     set_address(unique, "/Menu2");
-    await_layouts(6);
+    await_layouts(8);
     mode = MODE_SMALL;
     set_address(unique, "/Menu3");
-    await_layouts(7);
+    await_layouts(9);
     small_revision = 10;
     send_layout(bus, held);
     dbus_message_unref(held);
@@ -872,7 +946,7 @@ int main(void) {
      * and when it leaves the model goes with it */
     small_revision = 21;
     set_address(kName, "/Menu");
-    await_layouts(8);
+    await_layouts(10);
 
     DBusConnection* heir = second_connection();
 
@@ -886,12 +960,12 @@ int main(void) {
 
     small_revision = 22;
 
-    for (int i = 0; i < 500 && layouts < 9; i++) {
+    for (int i = 0; i < 500 && layouts < 11; i++) {
         dbus_connection_read_write_dispatch(heir, 10);
         pump(10);
     }
 
-    if (layouts < 9) {
+    if (layouts < 11) {
         fprintf(stderr, "the new owner was never asked for the layout\n");
         return 1;
     }

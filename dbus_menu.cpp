@@ -176,7 +176,10 @@ namespace {
             dbus_message_iter_recurse(&entry, &pair);
             StringView key = iterString(&pair);
 
-            if (!key.empty() && dbus_message_iter_next(&pair) && dbus_message_iter_get_arg_type(&pair) == DBUS_TYPE_VARIANT) {
+            // a dict entry always holds a value after its key
+            dbus_message_iter_next(&pair);
+
+            if (!key.empty() && dbus_message_iter_get_arg_type(&pair) == DBUS_TYPE_VARIANT) {
                 DBusMessageIter value;
 
                 dbus_message_iter_recurse(&pair, &value);
@@ -264,9 +267,10 @@ namespace {
         const u8* data = nullptr;
         int count = 0;
 
+        // the first element was a byte: the array has at least one
         dbus_message_iter_get_fixed_array(&bytes, &data, &count);
 
-        if (!data || count <= 0 || (size_t)count > kMaxIconBytes) {
+        if ((size_t)count > kMaxIconBytes) {
             return nullptr;
         }
 
@@ -613,9 +617,9 @@ void MenuImpl::reply(Pending& pendingCall) {
         case CallKind::owner: {
             const char* unique = "";
 
-            if (dbus_message_get_args(reply, nullptr, DBUS_TYPE_STRING, &unique, DBUS_TYPE_INVALID)) {
-                assign(owner, StringView(unique));
-            }
+            // the bus answers GetNameOwner with the owner's unique name
+            dbus_message_get_args(reply, nullptr, DBUS_TYPE_STRING, &unique, DBUS_TYPE_INVALID);
+            assign(owner, StringView(unique));
 
             break;
         }

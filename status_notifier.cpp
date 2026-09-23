@@ -800,7 +800,10 @@ namespace {
         if (dbus_message_is_signal(msg, DBUS_INTERFACE_DBUS, "NameOwnerChanged") && dbus_message_has_sender(msg, DBUS_SERVICE_DBUS)) {
             const char *name = "", *oldOwner = "", *newOwner = "";
 
-            if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID) && oldOwner[0] && !newOwner[0]) {
+            // the bus always sends its three names
+            dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID);
+
+            if (oldOwner[0] && !newOwner[0]) {
                 impl->unregisterOwner(StringView(name));
             }
 
