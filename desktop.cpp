@@ -564,7 +564,6 @@ namespace {
         Scene* scene = nullptr;
         ::Output* output = nullptr;
         Renderer* renderer = nullptr;
-        Keyboard* keyboard = nullptr;
         Notifier* notifier = nullptr;
 
         float appliedUiScale = 1.f;
@@ -949,11 +948,11 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     inputActivity();
     scene->needsFrame = true;
 
-    keyboard->updateKey(code, pressed);
+    comp->kb->updateKey(code, pressed);
 
     bool locked = lockState != nullptr;
     bool consumed = false;
-    u32 mask = keyboard->modMask();
+    u32 mask = comp->kb->modMask();
 
     if (!locked && shortcutCapture >= 0) {
         bool modifier = code == KEY_LEFTCTRL || code == KEY_RIGHTCTRL || code == KEY_LEFTSHIFT || code == KEY_RIGHTSHIFT || code == KEY_LEFTALT || code == KEY_RIGHTALT || code == KEY_LEFTMETA || code == KEY_RIGHTMETA;
@@ -971,7 +970,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
             ShortcutBinding binding = comp->settings->shortcut(index);
 
             binding.modifiers = mask;
-            binding.keysym = keyboard->keysymBase(code);
+            binding.keysym = comp->kb->keysymBase(code);
             comp->settings->setShortcut(index, binding);
 
             shortcutCapture = -1;
@@ -1026,7 +1025,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     }
 
     if (!locked && !consumed && !scene->shortcutsInhibited && code < 256) {
-        if (altTabActive && pressed && keyboard->keysymBase(code) == XKB_KEY_Escape) {
+        if (altTabActive && pressed && comp->kb->keysymBase(code) == XKB_KEY_Escape) {
             altTabActive = false;
             altTabSel.reset();
             scene->needsFrame = true;
@@ -1034,7 +1033,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
             consumed = true;
         }
 
-        if (!consumed && pressed && chordAction(mask, keyboard->keysymBase(code))) {
+        if (!consumed && pressed && chordAction(mask, comp->kb->keysymBase(code))) {
             chordDown[code] = true;
             consumed = true;
         }
@@ -1042,7 +1041,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         if (!consumed && !pressed && chordDown[code]) {
             chordDown[code] = false;
 
-            if (altTabActive && keyboard->keysymBase(code) == XKB_KEY_Tab) {
+            if (altTabActive && comp->kb->keysymBase(code) == XKB_KEY_Tab) {
                 altTabCommit();
             }
 
@@ -1073,7 +1072,7 @@ bool DesktopImpl::key(u32 code, bool pressed) {
     if (pressed) {
         char buf[8];
 
-        if (keyboard->utf8(code, buf, sizeof(buf)) > 0 && (u8)buf[0] >= 0x20) {
+        if (comp->kb->utf8(code, buf, sizeof(buf)) > 0 && (u8)buf[0] >= 0x20) {
             io.AddInputCharactersUTF8(buf);
         }
     }
@@ -2356,7 +2355,6 @@ DesktopImpl::DesktopImpl(Composer& c)
     , scene(c.scene)
     , output(c.output)
     , renderer(c.renderer)
-    , keyboard(c.kb)
     , notifier(c.notifier)
     , appliedUiScale(c.settings->uiScale())
 {

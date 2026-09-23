@@ -1504,7 +1504,6 @@ namespace {
         void dragMotion();
         void endDrag();
 
-        Keyboard* kb = nullptr;
         bool uiCaptured = false;
 
         Toplevel* kbFocus = nullptr;
@@ -1620,7 +1619,6 @@ namespace {
         wl_event_loop* wlLoop = nullptr;
 
         StringView socketName;
-        Keyboard* keyboard = nullptr;
         Vector<DmabufFormat> formats;
         Vector<u16> scanoutIndices;
         u64 mainDevice = 0;
@@ -6763,7 +6761,7 @@ namespace {
 
         SeatState& seat = im->srv->seat;
 
-        zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat.kb->keymapFd(), seat.kb->keymapSize());
+        zwp_input_method_keyboard_grab_v2_send_keymap(r, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, im->srv->composer->kb->keymapFd(), im->srv->composer->kb->keymapSize());
         zwp_input_method_keyboard_grab_v2_send_modifiers(r, wl_display_next_serial(im->srv->display), seat.modsDepressed, seat.modsLatched, seat.modsLocked, seat.modsGroup);
         zwp_input_method_keyboard_grab_v2_send_repeat_info(r, im->srv->composer->settings->repeatRate(), im->srv->composer->settings->repeatDelay());
     }
@@ -10140,7 +10138,7 @@ namespace {
         wl_resource_set_implementation(k, &keyboardImpl, seat, keyboardResourceDestroyed);
         seat->keyboards.pushBack(k);
 
-        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->kb->keymapFd(), seat->kb->keymapSize());
+        wl_keyboard_send_keymap(k, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, seat->srv->composer->kb->keymapFd(), seat->srv->composer->kb->keymapSize());
 
         if (wl_resource_get_version(k) >= WL_KEYBOARD_REPEAT_INFO_SINCE_VERSION) {
             wl_keyboard_send_repeat_info(k, seat->srv->composer->settings->repeatRate(), seat->srv->composer->settings->repeatDelay());
@@ -10406,13 +10404,11 @@ void Positioner::place(int& outX, int& outY, int& outW, int& outH, int minX, int
 SeatState::SeatState(WaylandImpl& impl)
     : srv(&impl)
 {
-    kb = impl.keyboard;
-    STD_VERIFY(kb);
     layoutIndicator();
 }
 
 void SeatState::layoutIndicator() {
-    kb->layoutShort(srv->scene->layout);
+    srv->composer->kb->layoutShort(srv->scene->layout);
     srv->scene->needsFrame = true;
 }
 
@@ -11342,7 +11338,7 @@ void SeatState::kbSendEnter(wl_resource* target) {
 }
 
 void SeatState::updateModifiers() {
-    KeyMods m = kb->mods();
+    KeyMods m = srv->composer->kb->mods();
     u32 dep = m.depressed;
     u32 lat = m.latched;
     u32 lock = m.locked;
@@ -11988,7 +11984,7 @@ void SeatState::focusToplevel(Toplevel* t) {
     // With per-window layouts the group follows focus. Global policy leaves
     // the keyboard's current group untouched.
     if (perWindowLayout && kbFocus) {
-        kbFocus->xkbGroup = kb->mods().group;
+        kbFocus->xkbGroup = srv->composer->kb->mods().group;
     }
 
     if (kbFocus && kbFocus->surface) {
@@ -12022,10 +12018,10 @@ void SeatState::focusToplevel(Toplevel* t) {
     kbFocus = t;
 
     if (t && perWindowLayout) {
-        kb->setGroup(t->xkbGroup);
+        srv->composer->kb->setGroup(t->xkbGroup);
 
         // refresh the cache silently so kbSendEnter carries fresh modifiers
-        KeyMods m = kb->mods();
+        KeyMods m = srv->composer->kb->mods();
 
         modsDepressed = m.depressed;
         modsLatched = m.latched;
@@ -12209,16 +12205,19 @@ void WaylandImpl::updateRepeat() {
     }
 }
 
+// the Composer's keyboard was replaced: the keys clients think held are
+// released, then they get the new keymap and the modifiers under it
 void WaylandImpl::updateKeymap() {
+    Composer& c = *composer;
+
     seat.releaseAllKeys();
-    keyboard->configure(composer->settings->xkbLayouts(), composer->settings->xkbOptions());
 
     for (wl_resource* keyboardRes : seat.keyboards) {
-        wl_keyboard_send_keymap(keyboardRes, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keyboard->keymapFd(), keyboard->keymapSize());
+        wl_keyboard_send_keymap(keyboardRes, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, c.kb->keymapFd(), c.kb->keymapSize());
     }
 
     if (seat.inputMethod && seat.inputMethod->grab) {
-        zwp_input_method_keyboard_grab_v2_send_keymap(seat.inputMethod->grab, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, keyboard->keymapFd(), keyboard->keymapSize());
+        zwp_input_method_keyboard_grab_v2_send_keymap(seat.inputMethod->grab, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, c.kb->keymapFd(), c.kb->keymapSize());
     }
 
     seat.modsDepressed = ~0u;
@@ -12325,7 +12324,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     , loop(comp.loop)
     , scene(comp.scene)
     , socketName(cfg.socketName)
-    , keyboard(comp.kb)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
     , windowIcons(comp.pool)
@@ -12416,8 +12414,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     comp.settings->addDpmsSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
     comp.settings->addRepeatRateListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
     comp.settings->addRepeatDelayListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateRepeat));
-    comp.settings->addXkbLayoutsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
-    comp.settings->addXkbOptionsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
+    comp.keyboardListeners.pushBack(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateKeymap));
     comp.settings->addDecorationsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
     comp.settings->addAnrSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
@@ -13814,7 +13811,7 @@ void WaylandImpl::drainClients() {
 }
 
 void WaylandImpl::setLayout(u32 group) {
-    keyboard->setGroup(group);
+    composer->kb->setGroup(group);
     seat.updateModifiers();
 }
 

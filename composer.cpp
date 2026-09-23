@@ -1,9 +1,13 @@
 #include "composer.h"
 
 #include "icon.h"
+#include "keyboard.h"
+#include "listener.h"
 #include "intr_list.h"
 #include "input_router.h"
 #include "icon_provider.h"
+
+#include <std/mem/obj_pool.h>
 
 using namespace stl;
 
@@ -34,4 +38,25 @@ Icon* Composer::findIcon(u64 sym, u32 desired, StringView id) {
     }
 
     return nullptr;
+}
+
+void Composer::rebuildKeyboard(StringView layouts, StringView options) {
+    ObjPool* next = ObjPool::fromMemoryRaw();
+    Keyboard* built = nullptr;
+
+    try {
+        built = Keyboard::create(next, *log, *chaos, layouts, options, kb ? kb->activeLayout() : 0);
+    } catch (...) {
+        delete next;
+
+        throw;
+    }
+
+    delete kbPool;
+    kbPool = next;
+    kb = built;
+
+    forEach<Listener>(keyboardListeners, [](Listener& listener) {
+        listener.onListen();
+    });
 }

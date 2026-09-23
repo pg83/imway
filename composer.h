@@ -59,6 +59,12 @@ struct Composer {
     Icon* findIcon(stl::StringView id, u32 desired);
     Icon* findIcon(u64 sym, u32 desired, stl::StringView id = {});
 
+    // builds a keyboard for these layouts and options in a pool of its own,
+    // in the layout group the current one is in; the one it replaces goes
+    // with its pool, and keyboardListeners hear of it. A keyboard that
+    // cannot be built throws, the old one kept
+    void rebuildKeyboard(stl::StringView layouts, stl::StringView options);
+
     Theme theme;
     // The one authoritative runtime preference component. Subsystems read it
     // directly; the settings dialog edits it in place. Persistence is
@@ -82,6 +88,9 @@ struct Composer {
     Spawner* spawner = nullptr;
     Device* device = nullptr;
     Output* output = nullptr;
+    // the keyboard lives in a pool of its own: other layouts are a new
+    // keyboard in a new pool, swapped in here; read kb from here, never keep it
+    stl::ObjPool* kbPool = nullptr;
     Keyboard* kb = nullptr;
     IconPool* iconPool = nullptr;
     IconResolver* iconResolver = nullptr;
@@ -121,6 +130,9 @@ struct Composer {
     // takes the same path as a hotplug mode change, so this path cannot
     // silently rot — and again whenever a swapped display remodesets.
     stl::IntrusiveList outputResizedListeners;
+    // kb was replaced by one built for other layouts or options: the old
+    // keyboard is already gone, kb and its keymap are the new ones
+    stl::IntrusiveList keyboardListeners;
     // input producers call entry; it walks this list in order and stops at
     // the first sink which returns true
     stl::IntrusiveList inputSinks;

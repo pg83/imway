@@ -20,10 +20,10 @@ refused() { # <chaos> <what the log names> <failed check>
 }
 
 refused xkb-context=1 "" ctx
-refused xkb-keymap=0 "no keymap compiles" keymap
-refused xkb-state=0 "no xkb state for it" keymap
-refused keymap-file=0 "its file cannot be written" keymap
-refused keymap-file=1 "its file cannot be written" keymap
+refused xkb-keymap=0 "no keymap compiles" "fd >= 0"
+refused xkb-state=0 "no xkb state for it" "fd >= 0"
+refused keymap-file=0 "its file cannot be written" "fd >= 0"
+refused keymap-file=1 "its file cannot be written" "fd >= 0"
 
 expect_alive "the scenario's own compositor died"
 echo "OK: a keyboard that cannot be built refuses the boot cleanly"

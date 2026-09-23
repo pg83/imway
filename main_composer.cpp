@@ -1,6 +1,7 @@
 #include "main_composer.h"
 
 #include "device.h"
+#include "pooled.h"
 #include "control.h"
 #include "desktop.h"
 #include "composer.h"
@@ -18,6 +19,8 @@
 #include "icon_store.h"
 #include "input.h"
 #include "keyboard.h"
+#include "listener.h"
+#include "intr_list.h"
 #include "log.h"
 #include "log_extern.h"
 #include "spawn.h"
@@ -77,6 +80,28 @@ namespace {
         scene.workW = scene.outW;
         scene.workH = scene.outH;
         scene.hz = output.refresh();
+    }
+
+    // the keyboard layouts or options changed in the settings: the keyboard
+    // is rebuilt for them, and one that cannot be built leaves the one in use
+    struct CallXkbSettingsChanged: Listener {
+        Composer* c;
+
+        CallXkbSettingsChanged(Composer& comp);
+        void onListen(void*) override;
+    };
+
+    CallXkbSettingsChanged::CallXkbSettingsChanged(Composer& comp)
+        : c(&comp)
+    {
+    }
+
+    void CallXkbSettingsChanged::onListen(void*) {
+        try {
+            c->rebuildKeyboard(c->settings->xkbLayouts(), c->settings->xkbOptions());
+        } catch (...) {
+            *c->log << "imway: keeping the current keymap"_sv << endL;
+        }
     }
 
     void runAutostart(Composer& c) {
@@ -464,9 +489,15 @@ int mainComposer(int argc, char** argv) {
             scanoutFormats.pushBack(f);
         });
 
-        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, *c.chaos, c.settings->xkbLayouts(), c.settings->xkbOptions());
+        Composer* composer = &c;
 
-        c.kb = kb;
+        // the last keyboard goes with the session
+        pooledGuard(*pool, [composer] {
+            delete composer->kbPool;
+        });
+        c.rebuildKeyboard(c.settings->xkbLayouts(), c.settings->xkbOptions());
+        c.settings->addXkbLayoutsListener(pool->make<CallXkbSettingsChanged>(c));
+        c.settings->addXkbOptionsListener(pool->make<CallXkbSettingsChanged>(c));
 
         WaylandConfig wcfg;
 

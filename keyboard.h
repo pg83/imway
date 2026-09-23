@@ -21,12 +21,11 @@ struct KeyMods {
 };
 
 // the single owner of xkb state: clients and the compositor ui both live off
-// this one keymap and group, so they can never disagree about the layout
+// this one keymap and group, so they can never disagree about the layout.
+// A keyboard is built once for its layouts and options; other layouts are
+// another keyboard, made in a pool of its own that replaces the old one in
+// the Composer. Nobody keeps a Keyboard*: it is always read from there.
 struct Keyboard {
-    // Rebuild the keymap in place. Existing Wayland keyboard resources keep
-    // their identity; the Wayland owner broadcasts the new sealed keymap fd.
-    virtual void configure(stl::StringView layout, stl::StringView options) = 0;
-
     virtual void updateKey(u32 evdevCode, bool pressed) = 0;
 
     // switch the active layout group, preserving modifier state
@@ -52,5 +51,8 @@ struct Keyboard {
     virtual stl::StringView layoutName(u32 group) const = 0;
     virtual u32 activeLayout() const = 0;
 
-    static Keyboard* create(stl::ObjPool* pool, Log& log, ChaosMonkey& chaos, stl::StringView layout, stl::StringView options);
+    // a keymap that cannot be built, its state or its sealed file throws,
+    // the reason logged; group is the layout to start in, clamped to the new
+    // list
+    static Keyboard* create(stl::ObjPool* pool, Log& log, ChaosMonkey& chaos, stl::StringView layout, stl::StringView options, u32 group);
 };
