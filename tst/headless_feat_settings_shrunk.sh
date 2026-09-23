@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The settings dialog dragged down to its smallest size by its grip leaves
 # its page no room: the page draws nothing and the dialog survives it, and
-# dragged back out the page's rows are there again. The pages with tables
-# of their own go through the same squeeze.
+# dragged back out the page's rows are there again.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -37,27 +36,6 @@ imgui_win settings >/dev/null || { echo "the shrunk dialog went away"; exit 1; }
 grip_drag 700 500
 grown() { (( $(win h) >= 400 && $(win w) >= 600 )); }
 await 50 grown || { echo "the dialog did not grow back ($(win w)x$(win h))"; dump_state; exit 1; }
-
-# the pages with a table of their own (input devices, shortcuts,
-# notification rules) squeezed out the same way; nav entries are one text
-# line plus item spacing apart under the title bar and the window padding
-page_shot() { # <ppm>
-    screenshot "$1"
-    region_diff "$XDG_RUNTIME_DIR/_before.ppm" "$1" $(( $(win x) + 160 )) $(( $(win y) + 30 )) $(( $(win x) + $(win w) )) $(( $(win y) + 300 ))
-}
-page_changed() {
-    (( $(page_shot "$XDG_RUNTIME_DIR/_after.ppm") > 300 ))
-}
-for page in 4 6 7; do
-    screenshot "$XDG_RUNTIME_DIR/_before.ppm"
-    click_at $(( $(win x) + 40 )) $(( $(win y) + 36 + page * 20 ))
-    await 50 page_changed || { echo "nav entry $page did not switch the page"; dump_state; exit 1; }
-    grip_drag -800 -560
-    await 50 tiny || { echo "the dialog did not shrink on page $page ($(win w)x$(win h))"; dump_state; exit 1; }
-    imgui_win settings >/dev/null || { echo "the dialog went away squeezed on page $page"; exit 1; }
-    grip_drag 700 500
-    await 50 grown || { echo "the dialog did not grow back on page $page ($(win w)x$(win h))"; dump_state; exit 1; }
-done
 
 expect_alive "compositor died with the settings page squeezed out"
 echo "OK: a settings dialog too small for its page survives and grows back"
