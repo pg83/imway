@@ -2501,11 +2501,8 @@ int KmsOutput::cursorCapH() const {
     return color.hdr() ? 0 : curH;
 }
 
+// only reached with cursorCapW() > 0: every renderer call site checks it
 void KmsOutput::setCursorImage(const u32* argb) {
-    if (!curW) {
-        return;
-    }
-
     for (int y = 0; y < curH; y++) {
         memcpy(cursorBuf.map + (size_t)y * cursorBuf.pitch, argb + (size_t)y * curW, (size_t)curW * 4);
     }
