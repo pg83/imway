@@ -233,6 +233,7 @@ namespace {
         bool legacyLimited = false;
         u64 cursorCap = 64;
         bool unbound = false; // cold boot: no encoder or crtc bound yet
+        bool noCrtc = false;  // the encoder reaches no crtc at all
         bool no10Bit = false; // the primary plane lacks the 2101010 formats
         bool tiledOnly = false; // the plane scans out no LINEAR buffer
         int failDumbCount = 0;
@@ -828,7 +829,7 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
 
     e->encoder_type = DRM_MODE_ENCODER_TMDS;
     e->crtc_id = unbound ? 0 : kCrtcId;
-    e->possible_crtcs = 1;
+    e->possible_crtcs = noCrtc ? 0 : 1;
     e->possible_clones = 0;
 
     return 0;
@@ -1695,6 +1696,7 @@ int FakeKms::openDevice() {
     legacyLimited = getenv("IMWAY_FAKE_KMS_LEGACY_RANGE") != nullptr;
     cursorCap = cursor ? StringView(cursor).stou() : 64;
     unbound = getenv("IMWAY_FAKE_KMS_UNBOUND") != nullptr;
+    noCrtc = getenv("IMWAY_FAKE_KMS_NO_CRTC") != nullptr;
     no10Bit = getenv("IMWAY_FAKE_KMS_NO_10BIT") != nullptr;
     tiledOnly = getenv("IMWAY_FAKE_KMS_TILED_ONLY") != nullptr;
     zeroProps = zero ? StringView(zero) : StringView();
@@ -1802,7 +1804,29 @@ void FakeKms::parseLookupFaults(StringView rules) {
 
         LookupFault f;
 
-        f.req = kind == "props"_sv ? DRM_IOCTL_MODE_OBJ_GETPROPERTIES : kind == "prop"_sv ? DRM_IOCTL_MODE_GETPROPERTY : kind == "blob"_sv ? DRM_IOCTL_MODE_GETPROPBLOB : kind == "plane"_sv ? DRM_IOCTL_MODE_GETPLANE : kind == "createblob"_sv ? DRM_IOCTL_MODE_CREATEPROPBLOB : DRM_IOCTL_MODE_GETRESOURCES;
+        static const struct {
+            const char* kind;
+            u32 req;
+        } kinds[] = {
+            {"props", DRM_IOCTL_MODE_OBJ_GETPROPERTIES},
+            {"prop", DRM_IOCTL_MODE_GETPROPERTY},
+            {"blob", DRM_IOCTL_MODE_GETPROPBLOB},
+            {"plane", DRM_IOCTL_MODE_GETPLANE},
+            {"createblob", DRM_IOCTL_MODE_CREATEPROPBLOB},
+            {"resources", DRM_IOCTL_MODE_GETRESOURCES},
+            {"planes", DRM_IOCTL_MODE_GETPLANERESOURCES},
+            {"encoder", DRM_IOCTL_MODE_GETENCODER},
+            {"connector", DRM_IOCTL_MODE_GETCONNECTOR},
+            {"clientcap", DRM_IOCTL_SET_CLIENT_CAP},
+            {"mapdumb", DRM_IOCTL_MODE_MAP_DUMB},
+        };
+
+        for (const auto& k : kinds) {
+            if (kind == StringView(k.kind)) {
+                f.req = k.req;
+            }
+        }
+
         f.id = (u32)target.stou();
 
         size_t n = target.length() < sizeof(f.name) - 1 ? target.length() : sizeof(f.name) - 1;
@@ -1832,6 +1856,10 @@ bool FakeKms::lookupFails(u32 req, void* arg) {
             match = ((drm_mode_obj_get_properties*)arg)->obj_id == f.id;
         } else if (req == DRM_IOCTL_MODE_GETPLANE) {
             match = ((drm_mode_get_plane*)arg)->plane_id == f.id;
+        } else if (req == DRM_IOCTL_MODE_GETENCODER) {
+            match = ((drm_mode_get_encoder*)arg)->encoder_id == f.id;
+        } else if (req == DRM_IOCTL_MODE_GETCONNECTOR) {
+            match = ((drm_mode_get_connector*)arg)->connector_id == f.id;
         } else if (req == DRM_IOCTL_MODE_GETPROPERTY) {
             PropDef* p = findProp(((drm_mode_get_property*)arg)->prop_id);
 

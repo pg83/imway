@@ -44,8 +44,10 @@ struct KmsIntercept {
     // lookups the driver answers with an error, as comma-separated
     // kind:target:skip:count rules (count -1: for good): props:<object id>,
     // prop:<name>, blob:<name of the property holding it>, plane:<id>,
-    // resources, createblob (creating any property blob). Each rule lets
-    // skip matching lookups through first; an empty list clears them
+    // resources, createblob (creating any property blob), planes (the plane
+    // list), encoder:<id>, connector:<id>, clientcap (setting a client
+    // capability), mapdumb (mapping a dumb buffer). Each rule lets skip
+    // matching lookups through first; an empty list clears them
     virtual void failLookups(stl::StringView rules) = 0;
     // the connector's DDC/CI bus, the i2c node the sysfs walk found: the
     // fd of an emulated monitor, or -errno when none answers on it
