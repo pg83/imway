@@ -515,7 +515,8 @@ Icon* IconStoreImpl::loadPngFile(StringView path) {
 
     image.format = PNG_FORMAT_BGRA;
 
-    if (image.width == 0 || image.height == 0 || image.width > 1024 || image.height > 1024) {
+    // libpng refuses a zero width or height in IHDR before begin_read returns
+    if (image.width > 1024 || image.height > 1024) {
         png_image_free(&image);
 
         return nullptr;
@@ -596,7 +597,8 @@ Icon* IconStoreImpl::valueIcon(StringView v, u32 bucket) {
 
     Icon* icon = nullptr;
 
-    if (!v.empty() && v[0] == '/') {
+    // v is a desktop entry's Icon=, which addDesktop indexes only non-empty
+    if (v[0] == '/') {
         if (v.endsWith(".svg"_sv)) {
             icon = loadSvgFile(v, bucket);
         } else if (v.endsWith(".png"_sv)) {
