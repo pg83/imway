@@ -190,6 +190,9 @@ struct ChaosMonkey {
     // one queue family's capabilities as the device reports them: a device
     // with no graphics family cannot draw the session
     virtual VkQueueFlags queueFlags(VkQueueFlags flags) = 0;
+    // the result of one Vulkan call building an icon's texture (the dock's,
+    // the launcher's, a notification's, a tab's)
+    virtual VkResult iconTexture(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

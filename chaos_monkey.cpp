@@ -137,6 +137,8 @@ using namespace stl;
 //                     system without a usable driver
 //   no-graphics=1     no queue family of the device offers graphics, as on
 //                     a compute-only device
+//   icon-texture=K    K icon texture calls pass, the one after runs out of
+//                     device memory
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -224,6 +226,7 @@ namespace {
         // vulkan: the device and the renderer's objects outside setup
         int vulkanDeviceCap = -1;
         bool noGraphics = false;
+        int iconTextureSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -296,6 +299,7 @@ namespace {
         // vulkan: the device and the renderer's objects outside setup
         u32 vulkanDevices(u32 found) override;
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
+        VkResult iconTexture(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -452,6 +456,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         vulkanDeviceCap = (int)arg.stou();
     } else if (fault == "no-graphics"_sv) {
         noGraphics = arg.stou() != 0;
+    } else if (fault == "icon-texture"_sv) {
+        iconTextureSkip = (int)arg.stou();
     }
 }
 
@@ -1007,6 +1013,14 @@ VkQueueFlags TestChaosMonkey::queueFlags(VkQueueFlags flags) {
     return noGraphics ? flags & ~(VkQueueFlags)VK_QUEUE_GRAPHICS_BIT : flags;
 }
 
+VkResult TestChaosMonkey::iconTexture(VkResult result) {
+    if (iconTextureSkip < 0 || iconTextureSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1082,6 +1096,7 @@ namespace {
         // vulkan: the device and the renderer's objects outside setup
         u32 vulkanDevices(u32 found) override;
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
+        VkResult iconTexture(VkResult result) override;
     };
 }
 
@@ -1299,6 +1314,10 @@ u32 IdleChaosMonkey::vulkanDevices(u32 found) {
 
 VkQueueFlags IdleChaosMonkey::queueFlags(VkQueueFlags flags) {
     return flags;
+}
+
+VkResult IdleChaosMonkey::iconTexture(VkResult result) {
+    return result;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

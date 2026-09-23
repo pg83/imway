@@ -502,11 +502,12 @@ namespace {
         // what a GPU allocation is for, which says which fault seam its
         // results report through: a client's (sized by its buffer, its
         // failure a render fault for that client), the output-sized
-        // targets, or the renderer's own
+        // targets, an icon's texture, or the renderer's own
         enum class GpuUse {
             renderer,
             client,
             output,
+            icon,
         };
 
         void createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips = 1, GpuUse use = GpuUse::renderer);
@@ -920,10 +921,16 @@ u64 RendererImpl::iconTexture(const Icon* icon) {
         }
     }
 
+    SurfaceTexture* tex = makeIconTexture(icon->argb.data(), icon->width, icon->height);
+
+    if (!tex) {
+        return 0;
+    }
+
     IconTex it;
 
     it.gen = icon->gen;
-    it.tex = makeIconTexture(icon->argb.data(), icon->width, icon->height);
+    it.tex = tex;
     it.used = true;
     iconTexes.pushBack(it);
 
@@ -943,16 +950,27 @@ SurfaceTexture* RendererImpl::makeIconTexture(const u32* argb, int w, int h) {
         tex->mips++;
     }
 
-    createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, tex->image, tex->memory, tex->mips);
-    createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap);
+    try {
+        createImage(w, h, kVkFormat, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, tex->image, tex->memory, tex->mips, GpuUse::icon);
+        createHostBuffer((VkDeviceSize)w * h * 4, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, tex->staging, tex->stagingMemory, &tex->stagingMap, GpuUse::icon);
 
-    VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
-    vci.image = tex->image;
-    vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    vci.format = kVkFormat;
-    vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
-    VK_CHECK(vkCreateImageView(device, &vci, nullptr, &tex->view));
+        vci.image = tex->image;
+        vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vci.format = kVkFormat;
+        vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, tex->mips, 0, 1};
+        VK_CHECK(allocated(GpuUse::icon, vkCreateImageView(device, &vci, nullptr, &tex->view)));
+    } catch (...) {
+        // an icon is decoration: the frame goes on without it, whatever
+        // the failed step left behind goes with the texture, and the next
+        // frame that draws the icon tries again
+        *(comp->log) << "imway: icon texture allocation failed "_sv << w << "x"_sv << h << endL;
+        destroyTexture(tex);
+
+        return nullptr;
+    }
+
     tex->ds = texPool->alloc(tex->view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, tex->dsPool);
 
     memcpy(tex->stagingMap, argb, (size_t)w * h * 4);
@@ -1114,6 +1132,8 @@ VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
             return comp->chaos->clientTexture(result);
         case GpuUse::output:
             return comp->chaos->outputTarget(result);
+        case GpuUse::icon:
+            return comp->chaos->iconTexture(result);
         case GpuUse::renderer:
             break;
     }
