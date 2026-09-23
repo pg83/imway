@@ -70,7 +70,6 @@ int main(void) {
     wl_registry_add_listener(reg, &extra_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!dmabuf) return 77;
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!linear_ok) return 77;
 

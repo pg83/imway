@@ -36,8 +36,14 @@ static const struct zwp_linux_dmabuf_v1_listener dmabuf_listener = {dmabuf_forma
 static void extra_global(void* d, struct wl_registry* r, uint32_t name,
                          const char* iface, uint32_t v) {
     (void)d; (void)v;
-    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name))
+    // the listener goes on with the bind: the format events answer the
+    // bind, and one dispatched before a listener is there is dropped. The
+    // registry's global burst can arrive in pieces, so the bind may be
+    // flushed, and answered, before the roundtrip that carries it returns
+    if (!strcmp(iface, zwp_linux_dmabuf_v1_interface.name)) {
         dmabuf = wl_registry_bind(r, name, &zwp_linux_dmabuf_v1_interface, 3);
+        zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
+    }
     if (!strcmp(iface, wp_tearing_control_manager_v1_interface.name))
         tearing_mgr = wl_registry_bind(r, name, &wp_tearing_control_manager_v1_interface, 1);
 }
@@ -135,7 +141,6 @@ int main(void) {
     wl_registry_add_listener(reg, &extra_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!dmabuf || !tearing_mgr) return 77;
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
     wl_display_roundtrip(wl_dpy);
     if (!linear_ok) return 77;
 

@@ -114,16 +114,27 @@ int main(void) {
     struct wl_registry* reg2 = wl_display_get_registry(wl_dpy);
     wl_registry_add_listener(reg2, &veto_listener, NULL);
     wl_display_roundtrip(wl_dpy);
-    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr) return 77;
-    zwp_linux_dmabuf_v1_add_listener(dmabuf, &dmabuf_listener, NULL);
+    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr) {
+        fprintf(stderr, "SKIP: a global is missing\n");
+        return 77;
+    }
     wl_display_roundtrip(wl_dpy);
-    if (!linear_ok) return 77;
+    if (!linear_ok) {
+        fprintf(stderr, "SKIP: no LINEAR XRGB8888 dma-buf\n");
+        return 77;
+    }
 
     buffer = make_red_dumb();
-    if (!buffer) return 77;
+    if (!buffer) {
+        fprintf(stderr, "SKIP: no card node made the fullscreen dumb buffer\n");
+        return 77;
+    }
 
     struct wl_buffer* cursor_dmabuf = small_dumb();
-    if (!cursor_dmabuf) return 77;
+    if (!cursor_dmabuf) {
+        fprintf(stderr, "SKIP: no card node made the cursor dumb buffer\n");
+        return 77;
+    }
 
     surface = wl_compositor_create_surface(wl_comp);
     xs = xdg_wm_base_get_xdg_surface(wl_wm, surface);
