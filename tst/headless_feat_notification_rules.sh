@@ -20,7 +20,7 @@ await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; 
 await_imgui settings || { echo "settings did not open"; exit 1; }
 wx=$(dump_field '^imgui name=settings ' x); wy=$(dump_field '^imgui name=settings ' y)
 at() { # <dx> <dy>: click inside the settings window
-    click_at $((wx + $1)) $((wy + $2))
+    click_at_composed $((wx + $1)) $((wy + $2))
 }
 at 40 $((38 + 7 * 20)) # the notifications page
 ctl "motion 1000 700"
@@ -52,7 +52,7 @@ combo_pick() { # <dx> <dy> <item>
     combo_open() { [[ -n "$(dump_field '^imgui name=##Combo' x)" ]]; }
     await 50 combo_open || { echo "the combo at $1,$2 did not open"; dump_state; exit 1; }
     px=$(dump_field '^imgui name=##Combo' x); py=$(dump_field '^imgui name=##Combo' y)
-    click_at $((px + 30)) $((py + 17 + $3 * 20))
+    click_at_composed $((px + 30)) $((py + 17 + $3 * 20))
     combo_closed() { [[ -z "$(dump_field '^imgui name=##Combo' x)" ]]; }
     await 50 combo_closed || { echo "the combo stayed open"; exit 1; }
     ctl "motion 1000 700"
@@ -70,27 +70,19 @@ posted muteme
 await 50 active_is 2 || { echo "the allow policy did not let muteme through"; dump_state; exit 1; }
 
 # type into the rule's name field: ImGui trickles the characters in one a
-# frame, so wait for the field to change and then hold still before anything
-# that would take the keyboard away from it
-field_diff() { # <a> <b>
-    region_diff "$XDG_RUNTIME_DIR/$1.ppm" "$XDG_RUNTIME_DIR/$2.ppm" $((wx + 166)) $((wy + 268)) $((wx + 620)) $((wy + 290))
-}
-type_rule() { # <text>
+# frame, so wait until the field holds all of them before anything that
+# would take the keyboard away from it
+type_rule() { # <text> <what the field then holds>
     at 400 279
     await 100 page_typing || { echo "the rule's name field did not take the keyboard"; exit 1; }
-    screenshot "$XDG_RUNTIME_DIR/before.ppm"
     ctl "type $1"
-    settled() {
-        screenshot "$XDG_RUNTIME_DIR/a.ppm" && sleep 0.3 && screenshot "$XDG_RUNTIME_DIR/b.ppm" &&
-            [[ "$(field_diff before b)" -gt 0 && "$(field_diff a b)" -eq 0 ]]
-    }
-    await 50 settled || { echo "typing '$1' did not reach the field"; exit 1; }
+    await_input "$2" || { echo "typing '$1' did not make the field '$2'"; dump_state | grep '^imgui input' || true; exit 1; }
     at 500 380 # the empty page: the field lets go
 }
 
 # back to mute, then rename the rule: the old name is free again
 combo_pick 670 279 2
-type_rule x
+type_rule x mutemex
 posted muteme
 await_active 3 "muteme after the rule moved to mutemex"
 posted mutemex
@@ -104,7 +96,7 @@ await_active 4 "mutemex after its rule was removed"
 
 # a new rule from the button: name it and mute it
 at 255 279 # "add application rule" moved up into the removed row's place
-type_rule addme
+type_rule addme addme
 combo_pick 670 279 2
 posted addme
 sleep 0.5

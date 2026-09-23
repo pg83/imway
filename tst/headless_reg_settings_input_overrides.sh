@@ -23,10 +23,13 @@ ww=$(dump_field '^imgui name=settings ' w)
 wh=$(dump_field '^imgui name=settings ' h)
 
 # the nav pane is a column of one-line rows; input is the fifth page
-click_at $((wx + 40)) $((wy + 118))
+click_at_composed $((wx + 40)) $((wy + 118))
 
+# settled once a frame of the pane matches the one before it: each try
+# takes one screenshot and compares it with the previous try's
 pane_settled() {
-    screenshot "$XDG_RUNTIME_DIR/a.ppm" && screenshot "$XDG_RUNTIME_DIR/page.ppm" &&
+    [[ -f "$XDG_RUNTIME_DIR/page.ppm" ]] && mv "$XDG_RUNTIME_DIR/page.ppm" "$XDG_RUNTIME_DIR/a.ppm"
+    screenshot "$XDG_RUNTIME_DIR/page.ppm" && [[ -f "$XDG_RUNTIME_DIR/a.ppm" ]] &&
         [[ "$(region_diff "$XDG_RUNTIME_DIR/a.ppm" "$XDG_RUNTIME_DIR/page.ppm" \
             $((wx + 160)) $((wy + 30)) $((wx + ww - 4)) $((wy + wh - 4)))" -lt 40 ]]
 }
@@ -49,7 +52,7 @@ found=0
 # it sits around 455 below the title bar with the default font; the walk is
 # there so a different one does not turn this into a hunt for a pixel
 for y in $(seq $((wy + 448)) 5 $((wy + 488))); do
-    click_at $((wx + 172)) "$y"
+    click_at_composed $((wx + 172)) "$y"
     opened "$y" && { found=1; break; }
 done
 
@@ -62,26 +65,31 @@ done
 # The overrides run past the bottom of the dialog: make it taller by its
 # grip first, so every row below is on screen.
 ctl "motion $((wx + ww - 4)) $((wy + wh - 4))"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+compose_frame
 ctl "motion $((wx + ww - 3)) $((wy + wh - 4))"
-screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+compose_frame
 ctl "button left press"
+compose_frame
 for d in 100 190; do
     ctl "motion $((wx + ww - 3)) $((wy + wh - 4 + d))"
-    screenshot "$XDG_RUNTIME_DIR/_grip.ppm"
+    compose_frame
 done
 ctl "button left release"
+compose_frame
 taller() { (( $(dump_field '^imgui name=settings ' h) >= wh + 150 )); }
 await 50 taller || { echo "the settings dialog did not grow"; dump_state; exit 1; }
 
 # Tick a checkbox of the device's overrides and wait for what it reveals:
 # the rows under the device are one framed checkbox apart, and ticking one
-# shows its value next to it or under it.
+# shows its value next to it or under it. The pointer is parked off the
+# rows for every comparison, so the frame that showed one tick's reveal is
+# the next one's before.
+ctl "motion $((wx + ww / 2)) $((wy + 40))"
+screenshot "$XDG_RUNTIME_DIR/after-tick.ppm"
 tick() { # <dx> <row> <what>
     local ty=$((y + 27 + $2 * 26))
-    ctl "motion $((wx + ww / 2)) $((wy + 40))"
-    screenshot "$XDG_RUNTIME_DIR/before-tick.ppm"
-    click_at $((wx + $1)) "$ty"
+    mv "$XDG_RUNTIME_DIR/after-tick.ppm" "$XDG_RUNTIME_DIR/before-tick.ppm"
+    click_at_composed $((wx + $1)) "$ty"
     ctl "motion $((wx + ww / 2)) $((wy + 40))"
     revealed() {
         screenshot "$XDG_RUNTIME_DIR/after-tick.ppm" &&
