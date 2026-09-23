@@ -2,7 +2,8 @@
 # Two clients with keyboards: the modifiers and keys go to the focused
 # client's keyboard only, and when the launcher takes the keyboard with a
 # key held, the focused client alone gets that key's release when it is
-# let go.
+# let go. Under a global layout policy the group switched in one window
+# stays when the focus moves to the other.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -22,15 +23,20 @@ rect() { # <pattern> -> x y w h of the surface
 }
 read -r ax ay aw ah < <(rect 'title=kbd-a')
 read -r bx by bw bh < <(rect 'title=kbd-b')
-spot=""
-for p in "$((ax + 8)) $((ay + 8))" "$((ax + aw - 8)) $((ay + 8))" "$((ax + 8)) $((ay + ah - 8))" "$((ax + aw - 8)) $((ay + ah - 8))"; do
-    read -r px py <<<"$p"
-    if (( px < bx || px >= bx + bw || py < by || py >= by + bh )); then
-        spot="$p"
-        break
-    fi
-done
-[[ -n "$spot" ]] || { echo "client a's window is fully covered"; dump_state; exit 1; }
+# a corner of one window outside the other: either may be raised
+uncovered() { # <x y w h of the window> <x y w h of the other>
+    local p px py
+    for p in "$(($1 + 8)) $(($2 + 8))" "$(($1 + $3 - 8)) $(($2 + 8))" "$(($1 + 8)) $(($2 + $4 - 8))" "$(($1 + $3 - 8)) $(($2 + $4 - 8))"; do
+        read -r px py <<<"$p"
+        if (( px < $5 || px >= $5 + $7 || py < $6 || py >= $6 + $8 )); then
+            echo "$p"
+            return 0
+        fi
+    done
+    return 1
+}
+spot=$(uncovered "$ax" "$ay" "$aw" "$ah" "$bx" "$by" "$bw" "$bh") || { echo "client a's window is fully covered"; dump_state; exit 1; }
+spot_b=$(uncovered "$bx" "$by" "$bw" "$bh" "$ax" "$ay" "$aw" "$ah") || { echo "client b's window is fully covered"; dump_state; exit 1; }
 
 a_focused() { [[ "$(dump_field 'title=kbd-a' focused)" == 1 ]]; }
 for _ in 1 2 3 4 5; do
@@ -54,6 +60,24 @@ ctl "key 1 press"; ctl "key 1 release" # Escape
 await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; exit 1; }
 
 grep -q "^key \|^mods 1$" "$log_b" && { echo "the unfocused client got keyboard events"; cat "$log_b"; exit 1; }
+
+# a global layout policy: the group switched in one window stays when the
+# focus moves to the other
+ctl "set keyboard.layouts us,ru"
+ctl "set keyboard.options grp:alt_shift_toggle"
+ctl "set keyboard.layout_policy 0"
+await 50 in_log "control: set keyboard.layout_policy" || { echo "settings are not reachable"; exit 1; }
+layout_is() { [[ "$(dump_state | awk '/^layout/ { print $2 }')" == "$1" ]]; }
+await 50 layout_is EN || { echo "the new layout list did not start on its first group"; dump_state; exit 1; }
+ctl "key 56 press"; ctl "key 42 press"; ctl "key 42 release"; ctl "key 56 release" # Alt+Shift
+await 50 layout_is RU || { echo "alt+shift did not switch the group"; dump_state; exit 1; }
+b_focused() { [[ "$(dump_field 'title=kbd-b' focused)" == 1 ]]; }
+for _ in 1 2 3 4 5; do
+    click_at $spot_b
+    await 20 b_focused && break
+done
+b_focused || { echo "client b never took the focus"; dump_state; exit 1; }
+layout_is RU || { echo "a global layout followed the focus"; dump_state; exit 1; }
 
 touch "$XDG_RUNTIME_DIR/go-exit"
 wait "$pid_a" || { echo "client a failed"; cat "$log_a"; exit 1; }
