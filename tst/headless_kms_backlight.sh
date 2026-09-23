@@ -57,6 +57,25 @@ done
 recovered() { [[ "$(raw)" -gt 1 ]]; }
 await 100 recovered || { echo "the brightness did not come back up"; exit 1; }
 
+# all the way up: the ceiling is the device's maximum, never past it
+for _ in $(seq 1 25); do
+    ctl "key 225 press"; ctl "key 225 release"
+done
+ceiling() { [[ "$(raw)" == 255 ]]; }
+await 100 ceiling || { echo "the brightness ceiling is $(raw), expected 255"; exit 1; }
+
+# a brightness that cannot be read back counts as zero: the next step up
+# writes one step above the bottom (write-only to us, not to root)
+if [[ "$(id -u)" != 0 ]]; then
+    level="$XDG_RUNTIME_DIR/backlight/imway0/brightness"
+    chmod 200 "$level"
+    ctl "key 225 press"; ctl "key 225 release"
+    two_digits() { [[ "$(stat -c %s "$level")" == 2 ]]; }
+    await 50 two_digits || { echo "an unreadable brightness was not stepped from zero ($(stat -c %s "$level") bytes)"; exit 1; }
+    chmod 600 "$level"
+    [[ "$(raw)" == 13 ]] || { echo "an unreadable brightness stepped to $(raw), expected 13 (5% of 255)"; exit 1; }
+fi
+
 # the display settings page shows a brightness slider for such a panel
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
 await_typing '##launcher' || { echo "the launcher never took text"; dump_state; exit 1; }
