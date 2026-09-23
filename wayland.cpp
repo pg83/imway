@@ -1943,16 +1943,14 @@ namespace {
             }
         }
 
+        // a child in either pile has its surface: the surface's destroy
+        // unlinks the node right after the ring nulls it
         forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-            if (c.surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
-            }
+            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
         });
 
         forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-            if (c.surface) {
-                fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
-            }
+            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
         });
     }
 
@@ -2657,8 +2655,10 @@ namespace {
             entry->waitAcquire = acquireWait;
             s.fifo->queue.pushBack(entry);
             cache = &entry->cache;
-        } else if (fifoSet && s.fifo) {
+        } else if (fifoSet) {
             // applied in this commit: the barrier goes up with the content
+            // (set_barrier came through the surface's wp_fifo, whose state
+            // lives as long as the surface)
             s.fifo->barrier = true;
         }
 
