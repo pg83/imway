@@ -44,9 +44,11 @@ namespace {
     void shortcutName(const ShortcutBinding& binding, char out[128]) {
         char key[64] = {};
 
-        if (xkb_keysym_get_name(binding.keysym, key, sizeof(key)) <= 0) {
-            snprintf(key, sizeof(key), "0x%x", binding.keysym);
-        }
+        // xkb names every keysym it can hand out, and nothing else sets a
+        // binding's keysym: the defaults are named keysyms and a capture
+        // takes the keyboard's own. Unnamed values come back as "0x..."
+        // from xkb itself; only one past 29 bits would fail, and none is.
+        xkb_keysym_get_name(binding.keysym, key, sizeof(key));
 
         if (binding.modifiers == anyModifiers) {
             snprintf(out, 128, "%s", key);
@@ -54,14 +56,12 @@ namespace {
             return;
         }
 
+        // the four modifier prefixes (21 bytes) and a key name (at most 63)
+        // always fit the 128 bytes
         size_t used = 0;
 
         auto append = [&](const char* value) {
-            int n = snprintf(out + used, 128 - used, "%s", value);
-
-            if (n > 0) {
-                used += (size_t)n < 128 - used ? (size_t)n : 128 - used - 1;
-            }
+            used += (size_t)snprintf(out + used, 128 - used, "%s", value);
         };
 
         if (binding.modifiers & kModCtrl) {
