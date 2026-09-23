@@ -165,9 +165,7 @@ namespace {
         IntrusivePtr<ShmMapping> mapping;
         wl_resource* releaseCb;
         int udmabufFd = -1;
-        bool bufferBusy = true;
         bool udmabufReading = false;
-        bool sourceReleased = false;
         ObjPool::Ref stateLifetime;
 
         ShmUse(SmallObjAllocator* alloc, ShmBuffer* buffer, ShmMapping* mapping, ObjPool* stateLifetime, wl_resource* releaseCb);
@@ -176,7 +174,6 @@ namespace {
 
         static ShmContentRef create(ShmBuffer* buffer, wl_resource* releaseCb);
         bool beginUdmabufRead(int fd);
-        void releaseSource();
     };
 
     pthread_once_t sigbusOnce = PTHREAD_ONCE_INIT;
@@ -244,24 +241,24 @@ namespace {
             return;
         }
 
-        if (sigaction(SIGBUS, &action, &oldSigbusAction) != 0) {
-            pthread_key_delete(sigbusKey);
-
-            return;
-        }
-
+        // SIGBUS is a catchable signal and both structs are ours, so
+        // sigaction has no EINVAL or EFAULT to give back
+        sigaction(SIGBUS, &action, &oldSigbusAction);
         sigbusReady = true;
     }
 
-    bool shmMappingBeginAccess(ShmMapping* mapping) {
-        if (pthread_once(&sigbusOnce, initSigbus) != 0 || !sigbusReady) {
+    bool shmMappingBeginAccess(ChaosMonkey* chaos, ShmMapping* mapping) {
+        // pthread_once reports no errors
+        pthread_once(&sigbusOnce, initSigbus);
+
+        if (!sigbusReady) {
             return false;
         }
 
         auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
 
         if (!access) {
-            access = (SigbusAccess*)calloc(1, sizeof(SigbusAccess));
+            access = (SigbusAccess*)chaos->sigbusRecord(calloc(1, sizeof(SigbusAccess)));
 
             if (!access || pthread_setspecific(sigbusKey, access) != 0) {
                 free(access);
@@ -300,7 +297,7 @@ namespace {
     }
 
     bool shmBufferBeginAccess(ShmBuffer* buffer) {
-        return shmMappingBeginAccess(buffer->pool->mapping.mutPtr());
+        return shmMappingBeginAccess(buffer->pool->chaos, buffer->pool->mapping.mutPtr());
     }
 
     bool shmBufferEndAccess(ShmBuffer*) {
@@ -308,7 +305,9 @@ namespace {
     }
 
     bool shmContentBeginAccess(ShmContent* content) {
-        return shmMappingBeginAccess(((ShmUse*)content)->mapping.mutPtr());
+        auto* use = (ShmUse*)content;
+
+        return shmMappingBeginAccess(use->buffer->pool->chaos, use->mapping.mutPtr());
     }
 
     bool shmContentEndAccess(ShmContent*) {
@@ -568,8 +567,28 @@ namespace {
         b->busyUses++;
     }
 
+    // the use lets go of its source exactly once, here: the udmabuf read
+    // ends, the buffer is released when no other use still holds it, and
+    // the release callback fires
     ShmUse::~ShmUse() noexcept {
-        releaseSource();
+        if (udmabufReading && --buffer->udmabufReaders == 0) {
+            dma_buf_sync sync{};
+
+            sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
+
+            if (ioctl(udmabufFd, DMA_BUF_IOCTL_SYNC, &sync) == 0) {
+                buffer->udmabufCpuAccess = true;
+            }
+        }
+
+        if (--buffer->busyUses == 0 && buffer->resource) {
+            wl_buffer_send_release(buffer->resource);
+        }
+
+        if (releaseCb) {
+            wl_callback_send_done(releaseCb, 0);
+            wl_resource_destroy(releaseCb);
+        }
     }
 
     void ShmUse::operator delete(ShmUse* use, std::destroying_delete_t) noexcept {
@@ -618,42 +637,6 @@ namespace {
         udmabufFd = fd;
 
         return true;
-    }
-
-    void ShmUse::releaseSource() {
-        if (sourceReleased) {
-            return;
-        }
-
-        sourceReleased = true;
-
-        if (udmabufReading) {
-            udmabufReading = false;
-
-            if (--buffer->udmabufReaders == 0) {
-                dma_buf_sync sync{};
-
-                sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
-
-                if (ioctl(udmabufFd, DMA_BUF_IOCTL_SYNC, &sync) == 0) {
-                    buffer->udmabufCpuAccess = true;
-                }
-            }
-        }
-
-        if (bufferBusy) {
-            bufferBusy = false;
-
-            if (--buffer->busyUses == 0 && buffer->resource) {
-                wl_buffer_send_release(buffer->resource);
-            }
-        }
-
-        if (releaseCb) {
-            wl_callback_send_done(releaseCb, 0);
-            wl_resource_destroy(releaseCb);
-            releaseCb = nullptr;
-        }
     }
 
     void assignText(Buffer& out, StringView value) {
