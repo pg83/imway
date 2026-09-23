@@ -24,7 +24,10 @@ start_client
 wait_client "tool ready"
 wait_rect 'app_id=tablet-test'
 
-shot base
+# the rect is in the dump before a frame shows the window: the baseline is
+# whatever two screenshots apart agree on
+settled() { shot base; sleep 0.3; shot again; (( $(changed base again) == 0 )); }
+await 50 settled || { echo "the screen never settled with the window up"; exit 1; }
 ctl "sdr-white 250"
 ctl "night 7000"
 ctl "set display.sdr_nits 200"
