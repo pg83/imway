@@ -6495,8 +6495,10 @@ namespace {
     }
 
     // ---- text-input-v3 / input-method-v2 / virtual-keyboard-v1 ----
+    // every caller's text is a non-nullable protocol string: libwayland
+    // refuses a null one before dispatch
     static void copyText(Buffer& out, const char* s) {
-        assignText(out, s ? StringView(s) : StringView());
+        assignText(out, StringView(s));
     }
 
     void textInputResourceDestroyed(wl_resource* res) {
