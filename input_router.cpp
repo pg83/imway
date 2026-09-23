@@ -37,6 +37,21 @@ namespace {
     };
 }
 
+namespace {
+    // the first sink to claim an event; the walk needs no end test, as the
+    // wayland seat, last in the list, claims every one (see activity())
+    template <typename F>
+    static InputSink* claimant(Composer* comp, F claims) {
+        IntrusiveNode* n = comp->inputSinks.mutFront();
+
+        while (!claims((InputSink*)n)) {
+            n = n->next;
+        }
+
+        return (InputSink*)n;
+    }
+}
+
 InputRouter::InputRouter(Composer& c)
     : comp(&c)
 {
@@ -51,60 +66,45 @@ void InputRouter::activity() {
 
 bool InputRouter::pointerMotion(PointerMotionEvent& ev) {
     activity();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->pointerMotion(ev)) {
-            break;
-        }
-    }
+    claimant(comp, [&](InputSink* sink) {
+        return sink->pointerMotion(ev);
+    });
 
     return true;
 }
 
 bool InputRouter::button(u32 evdevBtn, bool pressed) {
     activity();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->button(evdevBtn, pressed)) {
-            break;
-        }
-    }
+    claimant(comp, [&](InputSink* sink) {
+        return sink->button(evdevBtn, pressed);
+    });
 
     return true;
 }
 
 bool InputRouter::key(u32 evdevCode, bool pressed) {
     activity();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->key(evdevCode, pressed)) {
-            break;
-        }
-    }
+    claimant(comp, [&](InputSink* sink) {
+        return sink->key(evdevCode, pressed);
+    });
 
     return true;
 }
 
 bool InputRouter::scroll(const ScrollEvent& ev) {
     activity();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->scroll(ev)) {
-            break;
-        }
-    }
+    claimant(comp, [&](InputSink* sink) {
+        return sink->scroll(ev);
+    });
 
     return true;
 }
 
 bool InputRouter::tabletTool(const TabletToolEvent& ev) {
     activity();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->tabletTool(ev)) {
-            break;
-        }
-    }
+    claimant(comp, [&](InputSink* sink) {
+        return sink->tabletTool(ev);
+    });
 
     return true;
 }
@@ -117,14 +117,9 @@ bool InputRouter::swipeBegin(u32 fingers) {
     }
 
     swipeOwner.reset();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->swipeBegin(fingers)) {
-            swipeOwner.bind(sink->weak);
-
-            break;
-        }
-    }
+    swipeOwner.bind(claimant(comp, [&](InputSink* sink) {
+        return sink->swipeBegin(fingers);
+    })->weak);
 
     return true;
 }
@@ -132,27 +127,25 @@ bool InputRouter::swipeBegin(u32 fingers) {
 bool InputRouter::swipeUpdate(double dx, double dy) {
     activity();
 
-    if (!swipeOwner.get()) {
+    InputSink* owner = swipeOwner.get();
+
+    if (!owner) {
         swipeOwner.reset();
 
         return false;
     }
 
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink == swipeOwner.get()) {
-            sink->swipeUpdate(dx, dy);
+    // the owner is still in the list (a dead one nulls the weak), so the
+    // walk stops at it at the latest
+    InputSink* sink = claimant(comp, [&](InputSink* s) {
+        return s == owner || s->swipeUpdate(dx, dy);
+    });
 
-            break;
-        }
-
-        if (sink->swipeUpdate(dx, dy)) {
-            InputSink* previous = swipeOwner.get();
-
-            swipeOwner.reset();
-            previous->swipeEnd(true);
-
-            break;
-        }
+    if (sink == owner) {
+        sink->swipeUpdate(dx, dy);
+    } else {
+        swipeOwner.reset();
+        owner->swipeEnd(true);
     }
 
     return true;
@@ -161,28 +154,24 @@ bool InputRouter::swipeUpdate(double dx, double dy) {
 bool InputRouter::swipeEnd(bool cancelled) {
     activity();
 
-    if (!swipeOwner.get()) {
+    InputSink* owner = swipeOwner.get();
+
+    if (!owner) {
         swipeOwner.reset();
 
         return false;
     }
 
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink == swipeOwner.get()) {
-            swipeOwner.reset();
-            sink->swipeEnd(cancelled);
+    InputSink* sink = claimant(comp, [&](InputSink* s) {
+        return s == owner || s->swipeEnd(cancelled);
+    });
 
-            break;
-        }
+    swipeOwner.reset();
 
-        if (sink->swipeEnd(cancelled)) {
-            InputSink* previous = swipeOwner.get();
-
-            swipeOwner.reset();
-            previous->swipeEnd(true);
-
-            break;
-        }
+    if (sink == owner) {
+        sink->swipeEnd(cancelled);
+    } else {
+        owner->swipeEnd(true);
     }
 
     return true;
@@ -196,14 +185,9 @@ bool InputRouter::pinchBegin(u32 fingers) {
     }
 
     pinchOwner.reset();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->pinchBegin(fingers)) {
-            pinchOwner.bind(sink->weak);
-
-            break;
-        }
-    }
+    pinchOwner.bind(claimant(comp, [&](InputSink* sink) {
+        return sink->pinchBegin(fingers);
+    })->weak);
 
     return true;
 }
@@ -211,27 +195,25 @@ bool InputRouter::pinchBegin(u32 fingers) {
 bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotation) {
     activity();
 
-    if (!pinchOwner.get()) {
+    InputSink* owner = pinchOwner.get();
+
+    if (!owner) {
         pinchOwner.reset();
 
         return false;
     }
 
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink == pinchOwner.get()) {
-            sink->pinchUpdate(dx, dy, scale, rotation);
+    // the owner is still in the list (a dead one nulls the weak), so the
+    // walk stops at it at the latest
+    InputSink* sink = claimant(comp, [&](InputSink* s) {
+        return s == owner || s->pinchUpdate(dx, dy, scale, rotation);
+    });
 
-            break;
-        }
-
-        if (sink->pinchUpdate(dx, dy, scale, rotation)) {
-            InputSink* previous = pinchOwner.get();
-
-            pinchOwner.reset();
-            previous->pinchEnd(true);
-
-            break;
-        }
+    if (sink == owner) {
+        sink->pinchUpdate(dx, dy, scale, rotation);
+    } else {
+        pinchOwner.reset();
+        owner->pinchEnd(true);
     }
 
     return true;
@@ -240,28 +222,24 @@ bool InputRouter::pinchUpdate(double dx, double dy, double scale, double rotatio
 bool InputRouter::pinchEnd(bool cancelled) {
     activity();
 
-    if (!pinchOwner.get()) {
+    InputSink* owner = pinchOwner.get();
+
+    if (!owner) {
         pinchOwner.reset();
 
         return false;
     }
 
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink == pinchOwner.get()) {
-            pinchOwner.reset();
-            sink->pinchEnd(cancelled);
+    InputSink* sink = claimant(comp, [&](InputSink* s) {
+        return s == owner || s->pinchEnd(cancelled);
+    });
 
-            break;
-        }
+    pinchOwner.reset();
 
-        if (sink->pinchEnd(cancelled)) {
-            InputSink* previous = pinchOwner.get();
-
-            pinchOwner.reset();
-            previous->pinchEnd(true);
-
-            break;
-        }
+    if (sink == owner) {
+        sink->pinchEnd(cancelled);
+    } else {
+        owner->pinchEnd(true);
     }
 
     return true;
@@ -275,14 +253,9 @@ bool InputRouter::holdBegin(u32 fingers) {
     }
 
     holdOwner.reset();
-
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink->holdBegin(fingers)) {
-            holdOwner.bind(sink->weak);
-
-            break;
-        }
-    }
+    holdOwner.bind(claimant(comp, [&](InputSink* sink) {
+        return sink->holdBegin(fingers);
+    })->weak);
 
     return true;
 }
@@ -290,28 +263,24 @@ bool InputRouter::holdBegin(u32 fingers) {
 bool InputRouter::holdEnd(bool cancelled) {
     activity();
 
-    if (!holdOwner.get()) {
+    InputSink* owner = holdOwner.get();
+
+    if (!owner) {
         holdOwner.reset();
 
         return false;
     }
 
-    for (InputSink* sink : each<InputSink>(comp->inputSinks)) {
-        if (sink == holdOwner.get()) {
-            holdOwner.reset();
-            sink->holdEnd(cancelled);
+    InputSink* sink = claimant(comp, [&](InputSink* s) {
+        return s == owner || s->holdEnd(cancelled);
+    });
 
-            break;
-        }
+    holdOwner.reset();
 
-        if (sink->holdEnd(cancelled)) {
-            InputSink* previous = holdOwner.get();
-
-            holdOwner.reset();
-            previous->holdEnd(true);
-
-            break;
-        }
+    if (sink == owner) {
+        sink->holdEnd(cancelled);
+    } else {
+        owner->holdEnd(true);
     }
 
     return true;
