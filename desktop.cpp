@@ -716,16 +716,14 @@ namespace {
 void DesktopImpl::markTreeUnhovered(Surface& s) {
     s.hovered = false;
 
+    // a node in the stacks always has its surface: the surface's death
+    // unlinks its node in the same step that empties the node's pointer
     forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-        if (c.surface) {
-            markTreeUnhovered(*c.surface);
-        }
+        markTreeUnhovered(*c.surface);
     });
 
     forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-        if (c.surface) {
-            markTreeUnhovered(*c.surface);
-        }
+        markTreeUnhovered(*c.surface);
     });
 }
 
