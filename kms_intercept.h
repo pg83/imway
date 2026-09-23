@@ -48,7 +48,8 @@ struct KmsIntercept {
     // prop:<name>, blob:<name of the property holding it>, plane:<id>,
     // resources, createblob (creating any property blob), planes (the plane
     // list), encoder:<id>, connector:<id>, clientcap (setting a client
-    // capability), mapdumb (mapping a dumb buffer), cap:<capability>
+    // capability), mapdumb (mapping a dumb buffer), mmap (the mmap of a
+    // dumb buffer's memory once mapdumb gave its offset), cap:<capability>
     // (reading a device capability). Each rule lets skip
     // matching lookups through first; an empty list clears them
     virtual void failLookups(stl::StringView rules) = 0;

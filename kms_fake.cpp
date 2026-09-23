@@ -326,6 +326,8 @@ namespace {
     // The map offset is a token, handle-tagged; the real mapping always
     // starts at the memfd's origin.
     constexpr int kDumbOffsetShift = 20;
+    // the lookup-fault kind for that mapping: no ioctl request is zero
+    constexpr u32 kDumbMapping = 0;
 
     u64 nowNs() {
         timespec ts{};
@@ -1582,7 +1584,7 @@ int FakeKms::dumbMemFd(unsigned long long off) {
     pthread_mutex_lock(&mu);
 
     for (const FakeGem& gem : gems) {
-        if (gem.handle == handle && gem.dumbSize) {
+        if (gem.handle == handle && gem.dumbSize && !lookupFails(kDumbMapping, nullptr)) {
             memFd = gem.fd;
         }
     }
@@ -1873,6 +1875,7 @@ void FakeKms::parseLookupFaults(StringView rules) {
             {"connector", DRM_IOCTL_MODE_GETCONNECTOR},
             {"clientcap", DRM_IOCTL_SET_CLIENT_CAP},
             {"mapdumb", DRM_IOCTL_MODE_MAP_DUMB},
+            {"mmap", kDumbMapping},
             {"cap", DRM_IOCTL_GET_CAP},
         };
 
