@@ -13,6 +13,14 @@
 
 static DBusConnection* conn;
 
+// SNI_ID, SNI_TITLE, SNI_STATUS and SNI_SERVICE override the item's
+// properties and bus name, so one scenario can run several items shaped
+// after the windows it maps
+static const char* env_or(const char* name, const char* fallback) {
+    const char* value = getenv(name);
+    return value ? value : fallback;
+}
+
 static void dict_string(DBusMessageIter* dict, const char* key, const char* value) {
     DBusMessageIter entry, var;
     dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &entry);
@@ -80,10 +88,10 @@ static void send_properties(DBusMessage* call) {
     DBusMessageIter it, dict;
     dbus_message_iter_init_append(reply, &it);
     dbus_message_iter_open_container(&it, DBUS_TYPE_ARRAY, "{sv}", &dict);
-    dict_string(&dict, "Id", "dock-status-test");
-    dict_string(&dict, "Title", "Dock status notifier test");
-    dict_string(&dict, "DesktopEntry", "dock-status-test");
-    dict_string(&dict, "Status", "Active");
+    dict_string(&dict, "Id", env_or("SNI_ID", "dock-status-test"));
+    dict_string(&dict, "Title", env_or("SNI_TITLE", "Dock status notifier test"));
+    dict_string(&dict, "DesktopEntry", env_or("SNI_ID", "dock-status-test"));
+    dict_string(&dict, "Status", env_or("SNI_STATUS", "Active"));
     dict_path(&dict, "Menu", "/Menu");
     dict_bool(&dict, "ItemIsMenu", TEST_ITEM_IS_MENU);
     dict_pixmap(&dict);
@@ -168,7 +176,8 @@ int main(void) {
     conn = dbus_bus_get_private(DBUS_BUS_SESSION, &err);
     if (!conn) return 1;
     dbus_connection_set_exit_on_disconnect(conn, FALSE);
-    if (dbus_bus_request_name(conn, "org.example.ImwayDockStatusTest",
+    const char* service = env_or("SNI_SERVICE", "org.example.ImwayDockStatusTest");
+    if (dbus_bus_request_name(conn, service,
             DBUS_NAME_FLAG_DO_NOT_QUEUE, &err) != DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER) return 2;
 
     DBusObjectPathVTable vt = {0};
@@ -179,7 +188,6 @@ int main(void) {
     DBusMessage* call = dbus_message_new_method_call(
         "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
         "org.kde.StatusNotifierWatcher", "RegisterStatusNotifierItem");
-    const char* service = "org.example.ImwayDockStatusTest";
     dbus_message_append_args(call, DBUS_TYPE_STRING, &service, DBUS_TYPE_INVALID);
     DBusMessage* reply = dbus_connection_send_with_reply_and_block(conn, call, 3000, &err);
     dbus_message_unref(call);
