@@ -478,7 +478,7 @@ namespace {
     }
 
     bool initWaylandShm(wl_display* display, ShmGlobal* shm) {
-        return wl_global_create(display, &wl_shm_interface, 2, shm, bindShm) != nullptr;
+        return shm->chaos->global(wl_global_create(display, &wl_shm_interface, 2, shm, bindShm)) != nullptr;
     }
 
     ShmBuffer* shmBufferFromResource(wl_resource* resource) {
@@ -1707,6 +1707,9 @@ namespace {
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
         ~WaylandImpl() noexcept;
+
+        // the socket, the globals and the loop watchers
+        void start();
 
         // stop every sandbox listener and free the contexts nothing refers to
         void stopSecurityContexts() noexcept;
@@ -12286,11 +12289,11 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
         }
     }
 
-    display = wl_display_create();
+    display = comp.chaos->display(wl_display_create());
+    STD_VERIFY(display);
     // cap per-connection event buffering: a client that stops reading its
     // socket otherwise grows the compositor-side queue without bound
     wl_display_set_default_max_buffer_size(display, maxWaylandClientBuffer);
-    STD_VERIFY(display);
 
     wlLoop = wl_display_get_event_loop(display);
 
@@ -12313,6 +12316,13 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     evTimerInit(&dpmsTimer, dpmsTimerCb, 0., 0.);
     dpmsTimer.data = this;
     updateDpms();
+}
+
+// run by create once the object sits in its pool: a throw out of here
+// still reaches the destructor, which takes the display (and its socket)
+// down with whatever else was made by then
+void WaylandImpl::start() {
+    Composer& comp = *composer;
 
     if (wl_display_add_socket(display, Buffer(socketName).cStr()) != 0) {
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
@@ -12373,8 +12383,8 @@ WaylandImpl::~WaylandImpl() noexcept {
         syncEvFd = -1;
     }
 
-    // the constructor starts these unconditionally; a constructor that
-    // throws before them never gets here
+    // start() starts these unconditionally, unless it threw before them:
+    // stopping a watcher that never started changes nothing
     ev_io_stop(loop, &wlIo);
     ev_prepare_stop(loop, &flushPrepare);
     ev_signal_stop(loop, &sigInt);
@@ -13354,13 +13364,13 @@ namespace {
     // version with a log line, and an outright creation failure is fatal --
     // silently dropping a global sends every client to a fast exit ("no
     // XDG shell interface")
-    void global(Log& log, wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
+    void global(Log& log, ChaosMonkey& chaos, wl_display* display, const wl_interface* iface, int version, void* data, wl_global_bind_func_t bind) {
         if (version > iface->version) {
             log << "imway: "_sv << StringView(iface->name) << " capped at v"_sv << (i64)iface->version << " by the linked protocol XML (implemented v"_sv << (i64)version << ")"_sv << endL;
             version = iface->version;
         }
 
-        STD_VERIFY(wl_global_create(display, iface, version, data, bind) != nullptr);
+        STD_VERIFY(chaos.global(wl_global_create(display, iface, version, data, bind)) != nullptr);
     }
 }
 
@@ -13376,70 +13386,70 @@ void WaylandImpl::createGlobals() {
         return !clientSandboxed(srv, client);
     }, this);
 
-    global(*(composer->log), display, &wl_compositor_interface, 7, this, compositorBind);
-    global(*(composer->log), display, &wl_subcompositor_interface, 1, this, subcompositorBind);
-    global(*(composer->log), display, &xdg_wm_base_interface, 7, this, wmBaseBind);
-    global(*(composer->log), display, &wl_output_interface, 4, this, outputBind);
-    global(*(composer->log), display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
-    global(*(composer->log), display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
-    global(*(composer->log), display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
-    global(*(composer->log), display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
-    global(*(composer->log), display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
-    global(*(composer->log), display, &wp_presentation_interface, 2, this, presentationBind);
-    global(*(composer->log), display, &xdg_activation_v1_interface, 1, this, activationBind);
-    global(*(composer->log), display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wl_compositor_interface, 7, this, compositorBind);
+    global(*(composer->log), *(composer->chaos), display, &wl_subcompositor_interface, 1, this, subcompositorBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_wm_base_interface, 7, this, wmBaseBind);
+    global(*(composer->log), *(composer->chaos), display, &wl_output_interface, 4, this, outputBind);
+    global(*(composer->log), *(composer->chaos), display, &wl_seat_interface, kSeatVersion, &seat, seatBind);
+    global(*(composer->log), *(composer->chaos), display, &wl_data_device_manager_interface, 4, this, dataManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_primary_selection_device_manager_v1_interface, 1, this, primaryManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_cursor_shape_manager_v1_interface, 2, this, cursorShapeManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_single_pixel_buffer_manager_v1_interface, 1, this, spbManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_presentation_interface, 2, this, presentationBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_activation_v1_interface, 1, this, activationBind);
+    global(*(composer->log), *(composer->chaos), display, &zxdg_decoration_manager_v1_interface, 1, this, decoManagerBind);
     if (composer->dbusMenus) {
-        global(*(composer->log), display, &org_kde_kwin_appmenu_manager_interface, 2, this, appMenuManagerBind);
+        global(*(composer->log), *(composer->chaos), display, &org_kde_kwin_appmenu_manager_interface, 2, this, appMenuManagerBind);
     }
-    global(*(composer->log), display, &wp_viewporter_interface, 1, this, viewporterBind);
-    global(*(composer->log), display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
-    global(*(composer->log), display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
-    global(*(composer->log), display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
-    global(*(composer->log), display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
-    global(*(composer->log), display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
-    global(*(composer->log), display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
-    global(*(composer->log), display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
-    global(*(composer->log), display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
-    global(*(composer->log), display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
-    global(*(composer->log), display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
-    global(*(composer->log), display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
-    global(*(composer->log), display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
-    global(*(composer->log), display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
-    global(*(composer->log), display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
-    global(*(composer->log), display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
-    global(*(composer->log), display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
-    global(*(composer->log), display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
-    global(*(composer->log), display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
-    global(*(composer->log), display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
-    global(*(composer->log), display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
-    global(*(composer->log), display, &xdg_toplevel_drag_manager_v1_interface, 1, this, toplevelDragManagerBind);
-    global(*(composer->log), display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
-    global(*(composer->log), display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
-    global(*(composer->log), display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);
-    global(*(composer->log), display, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1, this, tlCaptureSourceManagerBind);
-    global(*(composer->log), display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
-    global(*(composer->log), display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
-    global(*(composer->log), display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
-    global(*(composer->log), display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
-    global(*(composer->log), display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
-    global(*(composer->log), display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
-    global(*(composer->log), display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_viewporter_interface, 1, this, viewporterBind);
+    global(*(composer->log), *(composer->chaos), display, &zxdg_output_manager_v1_interface, 3, this, xdgOutputManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_fractional_scale_manager_v1_interface, 1, this, fracManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_alpha_modifier_v1_interface, 1, this, alphaModManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_system_bell_v1_interface, 1, this, systemBellBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_content_type_manager_v1_interface, 1, this, contentTypeManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_tearing_control_manager_v1_interface, 1, this, tearingManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_fifo_manager_v1_interface, 1, this, fifoManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_commit_timing_manager_v1_interface, 1, this, commitTimingManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_output_image_capture_source_manager_v1_interface, 1, this, captureSourceManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_image_copy_capture_manager_v1_interface, 1, this, captureManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwlr_screencopy_manager_v1_interface, 3, this, wlrCopyManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_data_control_manager_v1_interface, 1, this, dcManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_text_input_manager_v3_interface, 1, this, textInputManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_input_method_manager_v2_interface, 1, this, imManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_virtual_keyboard_manager_v1_interface, 1, this, vkManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_security_context_manager_v1_interface, 1, this, securityManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_tablet_manager_v2_interface, 2, this, tabletManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_pointer_warp_v1_interface, 1, this, pointerWarpBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_wm_dialog_v1_interface, 1, this, xdgWmDialogBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_toplevel_tag_manager_v1_interface, 1, this, toplevelTagManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_toplevel_drag_manager_v1_interface, 1, this, toplevelDragManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zxdg_exporter_v2_interface, 1, this, foreignExporterBind);
+    global(*(composer->log), *(composer->chaos), display, &zxdg_importer_v2_interface, 1, this, foreignImporterBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_foreign_toplevel_list_v1_interface, 1, this, foreignListBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1, this, tlCaptureSourceManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_relative_pointer_manager_v1_interface, 1, &seat, relPointerManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_pointer_gestures_v1_interface, 3, &seat, pointerGesturesBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_pointer_constraints_v1_interface, 1, this, pointerConstraintsBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_keyboard_shortcuts_inhibit_manager_v1_interface, 1, this, kbInhibitManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &zwp_idle_inhibit_manager_v1_interface, 1, this, idleInhibitManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &xdg_toplevel_icon_manager_v1_interface, 1, this, iconManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &ext_idle_notifier_v1_interface, 2, this, idleNotifierBind);
     // Color-management: client electrical values are decoded into the linear
     // BT.2020 scene before composition and the output transform encodes that
     // scene for the active output description.
-    global(*(composer->log), display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
-    global(*(composer->log), display, &wp_color_representation_manager_v1_interface, 1, this, representationManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_color_manager_v1_interface, 3, this, colorManagerBind);
+    global(*(composer->log), *(composer->chaos), display, &wp_color_representation_manager_v1_interface, 1, this, representationManagerBind);
 
     u64 syncCap = 0;
 
     if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
-        global(*(composer->log), display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
+        global(*(composer->log), *(composer->chaos), display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
     }
 
     // wp-drm-lease: only with a real drm node behind it; the device offers
     // the non-desktop connectors (none in headless / VM without VR hardware)
     if (drmFd >= 0 && composer->device) {
-        global(*(composer->log), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
+        global(*(composer->log), *(composer->chaos), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
     }
 
     if (!formats.empty()) {
@@ -13447,7 +13457,7 @@ void WaylandImpl::createGlobals() {
 
         if (mainDevice) {
             fbTableSize = (u32)(formats.length() * 16);
-            fbTableFd = memfd_create("imway-format-table", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+            fbTableFd = composer->chaos->formatTable(memfd_create("imway-format-table", MFD_CLOEXEC | MFD_ALLOW_SEALING));
             STD_VERIFY(fbTableFd >= 0);
 
             for (const DmabufFormat& fm : formats) {
@@ -13457,7 +13467,7 @@ void WaylandImpl::createGlobals() {
                     u64 modifier;
                 } entry = {fm.fourcc, 0, fm.modifier};
 
-                STD_VERIFY(write(fbTableFd, &entry, sizeof(entry)) == sizeof(entry));
+                STD_VERIFY(composer->chaos->formatTableWrite(write(fbTableFd, &entry, sizeof(entry))) == sizeof(entry));
             }
 
             fcntl(fbTableFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
@@ -13466,7 +13476,7 @@ void WaylandImpl::createGlobals() {
             dmabufVersion = 5;
         }
 
-        global(*(composer->log), display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
+        global(*(composer->log), *(composer->chaos), display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
     } else {
         *(composer->log) << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
@@ -13903,5 +13913,9 @@ bool WaylandImpl::holdEnd(bool cancelled) {
 }
 
 Wayland* Wayland::create(Composer& c, const WaylandConfig& cfg) {
-    return c.pool->make<WaylandImpl>(c, cfg);
+    WaylandImpl* wayland = c.pool->make<WaylandImpl>(c, cfg);
+
+    wayland->start();
+
+    return wayland;
 }

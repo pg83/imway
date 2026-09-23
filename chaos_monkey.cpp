@@ -155,6 +155,13 @@ using namespace stl;
 //   keymap-file=K     K steps building the keymap's file (its memfd, then
 //                     its write) pass, the one after fails: the memfd with
 //                     EMFILE, the write with ENOSPC
+//   display=N         the next N wayland displays fail to allocate
+//   global=IFACE      the next wayland global of wl_interface IFACE
+//                     (wl_shm, xdg_wm_base, ...) fails to allocate; one
+//                     word per interface, each spent on its own
+//   format-table=K    K steps building the linux-dmabuf format table (its
+//                     memfd, then each entry's write) pass, the one after
+//                     fails: the memfd with EMFILE, a write with ENOSPC
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -252,6 +259,9 @@ namespace {
         int xkbKeymapSkip = -1;
         int xkbStateSkip = -1;
         int keymapFileSkip = -1;
+        int displayFaults = 0;
+        Vector<StringView> globalFaults;
+        int formatTableSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -335,6 +345,10 @@ namespace {
         xkb_state* xkbState(xkb_state* made) override;
         int keymapFile(int fd) override;
         ssize_t keymapWrite(ssize_t written) override;
+        wl_display* display(wl_display* made) override;
+        wl_global* global(wl_global* created) override;
+        int formatTable(int fd) override;
+        ssize_t formatTableWrite(ssize_t written) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -509,6 +523,12 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         xkbStateSkip = (int)arg.stou();
     } else if (fault == "keymap-file"_sv) {
         keymapFileSkip = (int)arg.stou();
+    } else if (fault == "display"_sv) {
+        displayFaults = (int)arg.stou();
+    } else if (fault == "global"_sv) {
+        globalFaults.pushBack(arg);
+    } else if (fault == "format-table"_sv) {
+        formatTableSkip = (int)arg.stou();
     }
 }
 
@@ -1162,6 +1182,57 @@ ssize_t TestChaosMonkey::keymapWrite(ssize_t written) {
     return -1;
 }
 
+wl_display* TestChaosMonkey::display(wl_display* made) {
+    if (!made || !spend(displayFaults)) {
+        return made;
+    }
+
+    wl_display_destroy(made);
+
+    return nullptr;
+}
+
+wl_global* TestChaosMonkey::global(wl_global* created) {
+    if (!created) {
+        return created;
+    }
+
+    StringView name(wl_global_get_interface(created)->name);
+
+    for (size_t i = 0; i < globalFaults.length(); i++) {
+        if (globalFaults[i] == name) {
+            globalFaults.mut(i) = {};
+            wl_global_destroy(created);
+
+            return nullptr;
+        }
+    }
+
+    return created;
+}
+
+int TestChaosMonkey::formatTable(int fd) {
+    if (formatTableSkip < 0 || formatTableSkip-- > 0) {
+        return fd;
+    }
+
+    // a real failure already left -1, which close shrugs off
+    close(fd);
+    errno = EMFILE;
+
+    return -1;
+}
+
+ssize_t TestChaosMonkey::formatTableWrite(ssize_t written) {
+    if (formatTableSkip < 0 || formatTableSkip-- > 0) {
+        return written;
+    }
+
+    errno = ENOSPC;
+
+    return -1;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1248,6 +1319,10 @@ namespace {
         xkb_state* xkbState(xkb_state* made) override;
         int keymapFile(int fd) override;
         ssize_t keymapWrite(ssize_t written) override;
+        wl_display* display(wl_display* made) override;
+        wl_global* global(wl_global* created) override;
+        int formatTable(int fd) override;
+        ssize_t formatTableWrite(ssize_t written) override;
     };
 }
 
@@ -1501,6 +1576,22 @@ int IdleChaosMonkey::keymapFile(int fd) {
 }
 
 ssize_t IdleChaosMonkey::keymapWrite(ssize_t written) {
+    return written;
+}
+
+wl_display* IdleChaosMonkey::display(wl_display* made) {
+    return made;
+}
+
+wl_global* IdleChaosMonkey::global(wl_global* created) {
+    return created;
+}
+
+int IdleChaosMonkey::formatTable(int fd) {
+    return fd;
+}
+
+ssize_t IdleChaosMonkey::formatTableWrite(ssize_t written) {
     return written;
 }
 

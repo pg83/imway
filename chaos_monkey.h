@@ -13,6 +13,8 @@ namespace stl {
 
 struct passwd;
 struct wl_resource;
+struct wl_display;
+struct wl_global;
 struct pam_message;
 struct pam_response;
 struct DBusMessage;
@@ -220,6 +222,16 @@ struct ChaosMonkey {
     // keymap text into it
     virtual int keymapFile(int fd) = 0;
     virtual ssize_t keymapWrite(ssize_t written) = 0;
+    // wayland: the display fresh from wl_display_create, and each global
+    // fresh from wl_global_create; a replacement failure destroys what it
+    // was handed and returns null
+    virtual wl_display* display(wl_display* made) = 0;
+    virtual wl_global* global(wl_global* created) = 0;
+    // the linux-dmabuf feedback's format table: its memfd fresh from
+    // memfd_create (a replacement failure closes it and returns -1), then
+    // the result of each entry's write into it
+    virtual int formatTable(int fd) = 0;
+    virtual ssize_t formatTableWrite(ssize_t written) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
