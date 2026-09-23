@@ -206,21 +206,16 @@ namespace {
         }
     }
 
-    // what the vendored ImGui ever asks for: nothing here calls
-    // SetMouseCursor, and its only Hand producers (TextLink, the debug item
-    // picker) are never used
+    // what the screenshot tool, this binding's one user, ever makes ImGui
+    // ask for: nothing calls SetMouseCursor, the Hand producers (TextLink,
+    // the debug item picker) are never used, and no resize cursor can come
+    // up: both top-level windows are NoDecoration (so NoResize), its child
+    // windows set no ResizeX/Y, and it has no tables, columns or splitters.
+    // Its zoom slider becomes a text field on Ctrl+click.
     plt::PointerIcon pointerIcon(ImGuiMouseCursor cursor) {
         switch (cursor) {
             case ImGuiMouseCursor_TextInput:
                 return plt::PointerIcon::Text;
-            case ImGuiMouseCursor_ResizeNS:
-                return plt::PointerIcon::ResizeNorthSouth;
-            case ImGuiMouseCursor_ResizeEW:
-                return plt::PointerIcon::ResizeEastWest;
-            case ImGuiMouseCursor_ResizeNESW:
-                return plt::PointerIcon::ResizeNorthEastSouthWest;
-            case ImGuiMouseCursor_ResizeNWSE:
-                return plt::PointerIcon::ResizeNorthWestSouthEast;
             default:
                 return plt::PointerIcon::Default;
         }
