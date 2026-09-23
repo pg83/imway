@@ -8465,9 +8465,7 @@ namespace {
 
     // ---- relative-pointer ----
     void relPointerResourceDestroyed(wl_resource* res) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            removeOne(seat->relPointers, res);
-        }
+        removeOne(((SeatState*)wl_resource_get_user_data(res))->relPointers, res);
     }
 
     void relPointerDestroy(wl_client*, wl_resource* res) {
@@ -8509,10 +8507,10 @@ namespace {
 
     // ---- pointer-gestures ----
     void gestureResourceDestroyed(Vector<wl_resource*> SeatState::* list, Vector<wl_resource*> SeatState::* active, wl_resource* res) {
-        if (auto* seat = (SeatState*)wl_resource_get_user_data(res)) {
-            removeOne(seat->*list, res);
-            removeOne(seat->*active, res);
-        }
+        auto* seat = (SeatState*)wl_resource_get_user_data(res);
+
+        removeOne(seat->*list, res);
+        removeOne(seat->*active, res);
     }
 
     void swipeResourceDestroyed(wl_resource* res) {
@@ -8579,19 +8577,14 @@ namespace {
 
     // ---- pointer-constraints ----
     void regionSnapshot(wl_resource* regionRes, Vector<RectI>& out) {
+        auto* rb = (RegionBox*)wl_resource_get_user_data(regionRes);
+
         out.clear();
-        if (auto* rb = (RegionBox*)wl_resource_get_user_data(regionRes)) {
-            out.append(rb->rects.begin(), rb->rects.length());
-        }
+        out.append(rb->rects.begin(), rb->rects.length());
     }
 
     void constraintResourceDestroyed(wl_resource* res) {
         auto* c = (ConstraintBox*)wl_resource_get_user_data(res);
-
-        if (!c) {
-            return;
-        }
-
         SeatState& seat = c->srv->seat;
 
         if (seat.activeConstraint.get() == c) {
@@ -8607,10 +8600,6 @@ namespace {
 
     void constraintSetRegion(wl_client*, wl_resource* res, wl_resource* regionRes) {
         auto* c = (ConstraintBox*)wl_resource_get_user_data(res);
-
-        if (!c) {
-            return;
-        }
 
         c->pendingSet = true;
         c->pendingHasRegion = regionRes != nullptr;
@@ -9300,7 +9289,8 @@ namespace {
             return;
         }
 
-        if (t->pendingOwnIcon && srv->iconPool) {
+        // the composer makes the icon pool before the Wayland server
+        if (t->pendingOwnIcon) {
             srv->iconPool->release(t->pendingOwnIcon);
         }
 
@@ -9313,7 +9303,7 @@ namespace {
 
             box->immutable = true;
 
-            if (box->pixels.length() && srv->iconPool) {
+            if (box->pixels.length()) {
                 Icon* ic = srv->iconPool->acquire();
 
                 ic->width = box->w;
@@ -9392,19 +9382,17 @@ namespace {
         return true;
     }
 
-    void activationTokenSetSerial(wl_client*, wl_resource* res, u32 serial, wl_resource* seatRes) {
+    // the one wl_seat global carries the one seat: whichever seat object
+    // the client names, the serial is that seat's
+    void activationTokenSetSerial(wl_client*, wl_resource* res, u32 serial, wl_resource*) {
         auto* request = (ActivationTokenRequest*)wl_resource_get_user_data(res);
 
         if (!activationTokenMutable(res, request)) {
             return;
         }
 
-        auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
-
-        if (seat == &request->srv->seat) {
-            request->serial = serial;
-            request->serialSet = true;
-        }
+        request->serial = serial;
+        request->serialSet = true;
     }
 
     void activationTokenSetAppId(wl_client*, wl_resource* res, const char* appId) {
