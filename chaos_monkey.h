@@ -60,8 +60,8 @@ struct ChaosMonkey {
     // drmPrimeFDToHandle's result on a client's dma-buf plane, the driver's
     // verdict on the buffer; a failure also sets errno
     virtual int primeImport(int result) = 0;
-    // getrandom's answer for an xdg-activation token's random part (the
-    // byte count, or -1 with errno set)
+    // getrandom's answer for the random part of an xdg-activation token or
+    // an xdg-foreign handle (the byte count, or -1 with errno set)
     virtual long entropy(long got) = 0;
     // security-context: a sandboxed client's connection fresh from accept4
     // (or its -1); a replacement failure closes the fd and returns -1

@@ -5790,7 +5790,15 @@ namespace {
 
         u64 random = 0;
 
-        STD_VERIFY(getrandom(&random, sizeof(random), 0) == sizeof(random));
+        // the random part keeps the handle, all an importer needs to parent
+        // to the window, hard to guess; without entropy yet (early at boot)
+        // the clock and a counter take its place, as for activation tokens,
+        // and the toplevel id keeps it unique either way
+        if (srv->composer->chaos->entropy(getrandom(&random, sizeof(random), GRND_NONBLOCK)) != sizeof(random)) {
+            *(srv->composer->log) << "imway: xdg-foreign: no entropy yet, handle for toplevel "_sv << t->id << " from the clock"_sv << endL;
+            random = ((u64)nowMsec() << 32) ^ ++srv->tokenCounter;
+        }
+
         StringBuilder handle((Buffer&&)ex->handle);
 
         handle << "imway-"_sv << random << "-"_sv << t->id;

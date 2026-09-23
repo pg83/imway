@@ -49,7 +49,8 @@ using namespace stl;
 //                     to import fails with errno E (13 EACCES: a card fd
 //                     that cannot judge; 22 EINVAL: a buffer it refuses)
 //   entropy=N         wayland: the next N getrandom reads for activation
-//                     tokens find no entropy yet (EAGAIN, as early at boot)
+//                     tokens and foreign handles find no entropy yet
+//                     (EAGAIN, as early at boot)
 //   security-accept=N wayland: the next N sandboxed connections a security
 //                     context accepts are aborted (ECONNABORTED)
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
