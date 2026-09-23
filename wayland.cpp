@@ -3628,9 +3628,10 @@ namespace {
     }
 
     bool validToplevelGrab(ToplevelImpl& toplevel, wl_client* client, wl_resource* seatRes, u32 serial) {
+        // the one wl_seat global binds every seat resource to srv->seat
         auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
 
-        return seat == &toplevel.srv->seat && seat->buttonsDown > 0 && seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->pointerGrabOrigin && seat->pointerGrabOrigin->rootToplevel() == &toplevel;
+        return seat->buttonsDown > 0 && seat->pointerGrabClient == client && seat->pointerGrabSerial == serial && seat->pointerGrabOrigin && seat->pointerGrabOrigin->rootToplevel() == &toplevel;
     }
 
     void toplevelShowWindowMenu(wl_client*, wl_resource*, wl_resource*, u32, i32, i32) {
@@ -3797,7 +3798,7 @@ namespace {
             srv->windowIcons.erase(t->iconSym);
         }
 
-        if (t->pendingOwnIcon && srv->iconPool) {
+        if (t->pendingOwnIcon) {
             srv->iconPool->release(t->pendingOwnIcon);
             t->pendingOwnIcon = nullptr;
         }
@@ -3838,7 +3839,9 @@ namespace {
             sendConfigureBounds(*xs.tl());
             xdg_toplevel_send_configure(xs.tl()->res, 0, 0, &states);
             wl_array_release(&states);
-        } else if (xs.popup) {
+        } else {
+            // a commit of an xdg_surface without a role is refused before
+            // this, so not a toplevel is a popup
             PopupImpl& p = *xs.pop();
 
             xdg_popup_send_configure(p.res, p.x, p.y, p.w, p.h);
@@ -6399,7 +6402,9 @@ namespace {
         DataSource* src = sourceRes ? (DataSource*)wl_resource_get_user_data(sourceRes) : nullptr;
 
         if (src) {
-            if (src->usedForSelection || src->usedForDrag) {
+            // a data-control source never drags: start_drag takes only a
+            // wl_data_source
+            if (src->usedForSelection) {
                 wl_resource_post_error(res, EXT_DATA_CONTROL_DEVICE_V1_ERROR_USED_SOURCE, "source already used");
 
                 return;
