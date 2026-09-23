@@ -6373,6 +6373,11 @@ namespace {
     void dcSourceResourceDestroyed(wl_resource* res) {
         auto* src = (DataSource*)wl_resource_get_user_data(res);
 
+        // as for the other sources: the offers made of it (data-control,
+        // regular and primary alike) outlive it, and must find it gone
+        // rather than freed, their list intact for their own unlinks
+        src->weak.invalidate();
+        src->offers.clear();
         src->srv->seat.sourceGone(src);
         src->srv->alloc->release(src);
     }
