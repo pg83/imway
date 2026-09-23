@@ -48,5 +48,15 @@ ctl "motion $((vx + 600)) $((vy + 200))"
 arrow() { [[ "$(shape)" != 9 ]]; }
 await 30 arrow || { echo "the text beam stayed off the field"; exit 1; }
 
+# the editor leaves on its own: one killed with the compositor at teardown
+# never gets to say what it did. The first Escape may only end the zoom
+# field's editing, the next one closes the editor
+viewer_gone() { [[ -z "$(dump_field 'title=imway screenshot' id)" ]]; }
+escape_closes() {
+    ctl "key 1 press"; ctl "key 1 release" # Escape
+    await 20 viewer_gone
+}
+await 5 escape_closes || { echo "Escape did not close the editor"; exit 1; }
+
 expect_alive "compositor died following the editor's pointer shapes"
 echo "OK: the editor's text field gets the text beam, the arrow elsewhere"
