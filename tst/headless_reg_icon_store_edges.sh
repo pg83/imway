@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # private-session-bus
+# expect-compositor-exit
 # imway-env: XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./xdg2::./no-such-dir:/usr/local/share:/usr/share
 # The icon store's odd corners, staged after startup and picked up by an
 # icon-theme change (which reloads the store; setting it to hicolor itself
@@ -7,8 +8,12 @@
 # svg, png or other path (one without a trailing newline), stray files and
 # directories where desktop files, svgs and pngs belong, size directories
 # that are not plain NxN, a png present in two data dirs, a name with only
-# a smaller png, and pngs and svgs that cannot be decoded. Notification
-# icons take the string paths: absolute files and a mixed-case name. The
+# a smaller png, and pngs and svgs that cannot be decoded, a png too tall
+# and an svg with no extent, a size dir with no apps in it, an svg present
+# in two data dirs, and two applications sharing one Icon= name (the
+# second is served from the first's cache). Notification icons take the
+# string paths: absolute files and a mixed-case name. Last, the session
+# quits with a reload still pending on its timer. The
 # system data dirs stay at the end of XDG_DATA_DIRS: on a distribution
 # install the Vulkan loader finds its drivers through them.
 set -euo pipefail
@@ -66,6 +71,13 @@ png(hc + '/256x256/apps/imway-truncated.png', 256, 256, truncate=True)
 
 # the same name and size again in the second data dir: the first one wins
 png(rt + '/xdg2/icons/hicolor/48x48/apps/imway-small.png', 48, 48)
+text(rt + '/xdg2/icons/hicolor/scalable/apps/imway-badsvg.svg', svg)
+
+png(hc + '/16x16/apps/imway-tall.png', 16, 2000, data=False)
+text(hc + '/scalable/apps/imway-flat.svg', '<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>')
+os.makedirs(hc + '/32x32', exist_ok=True)
+text(apps + '/imway-share-a.desktop', '[Desktop Entry]\nIcon=imway-small\n')
+text(apps + '/imway-share-b.desktop', '[Desktop Entry]\nIcon=imway-small\n')
 PY
 }
 
@@ -83,7 +95,7 @@ fail() {
 }
 
 stage
-start_client imway-abs-svg imway-abs-png imway-abs-other imway-small imway-garbage imway-huge imway-truncated imway-badsvg imway-letters
+start_client imway-abs-svg imway-abs-png imway-abs-other imway-small imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat imway-share-a imway-share-b
 wait_client "windows mapped"
 
 # reload through the theme setting: an empty theme, then hicolor itself
@@ -97,7 +109,9 @@ await 100 icon_is imway-abs-svg 64 || fail "an absolute svg Icon= did not render
 icon_is imway-abs-png 48 || fail "an absolute png Icon= did not load"
 icon_is imway-abs-other 0 || fail "an Icon= path of another format produced an icon"
 icon_is imway-small 48 || fail "a name with only a smaller png did not fall back to it"
-for app in imway-garbage imway-huge imway-truncated imway-badsvg imway-letters; do
+icon_is imway-share-a 48 || fail "an app sharing an Icon= name got no icon"
+icon_is imway-share-b 48 || fail "the second app sharing an Icon= name got no icon"
+for app in imway-garbage imway-huge imway-truncated imway-badsvg imway-letters imway-tall imway-flat; do
     icon_is "$app" 0 || fail "$app produced an icon"
 done
 
@@ -117,4 +131,11 @@ done
 [[ "$(toast_h abs-other)" == "$bare" ]] || fail "a notification icon of another format showed"
 
 expect_alive "compositor died on odd icon store content"
+
+# an install arms the debounced reload; the session ends before it fires
+late="$XDG_RUNTIME_DIR/xdg/applications/imway-late.desktop"
+printf '[Desktop Entry]\nIcon=imway-small\n' > "$late"
+ctl quit
+await 100 in_log "clean exit" || fail "the compositor did not shut down with a reload pending"
+[[ "$(grep -c "icon store reloaded" "$IMWAY_LOG")" -eq 2 ]] || fail "the pending reload ran during shutdown"
 echo "OK: the icon store's odd corners resolve or fail cleanly"
