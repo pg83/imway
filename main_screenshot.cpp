@@ -2122,7 +2122,9 @@ int mainScreenshot(StringView path) {
         int action = 0;
         StringView configuredAction(getenv("IMWAY_SHOT_ACTION") ? getenv("IMWAY_SHOT_ACTION") : "editor");
 
-        if (loaded && errText.empty() && configuredAction == "save"_sv) {
+        // errText is still empty here whenever the load succeeded: only the
+        // load's own failure has written it yet
+        if (loaded && configuredAction == "save"_sv) {
             // non-interactive: encode straight from the texture, the window
             // never maps. "copy" lands in the editor below until the
             // clipboard path returns.
@@ -2132,7 +2134,7 @@ int mainScreenshot(StringView path) {
         }
 
         // action phase: encode + save; a failure switches to the error panel
-        if (loaded && errText.empty() && action == 1) {
+        if (loaded && action == 1) {
             try {
                 int x0, y0, x1, y1;
 
