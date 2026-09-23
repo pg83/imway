@@ -964,15 +964,14 @@ bool DesktopImpl::key(u32 code, bool pressed) {
         }
 
         if (pressed && !modifier) {
+            // the settings page arms the capture with its row's index, a
+            // loop index below shortcutCount
             size_t index = (size_t)shortcutCapture;
+            ShortcutBinding binding = comp->settings->shortcut(index);
 
-            if (index < Settings::shortcutCount) {
-                ShortcutBinding binding = comp->settings->shortcut(index);
-
-                binding.modifiers = mask;
-                binding.keysym = keyboard->keysymBase(code);
-                comp->settings->setShortcut(index, binding);
-            }
+            binding.modifiers = mask;
+            binding.keysym = keyboard->keysymBase(code);
+            comp->settings->setShortcut(index, binding);
 
             shortcutCapture = -1;
 
