@@ -1,4 +1,5 @@
 #include "wayland.h"
+#include "pooled.h"
 
 #include "icc.h"
 #include "log.h"
@@ -1613,6 +1614,9 @@ namespace {
         struct ev_loop* loop = nullptr;
         Scene* scene = nullptr;
         wl_display* display = nullptr;
+        // the display as the pool guard that destroys it sees it: closeDisplay
+        // empties it once it has taken the display down itself
+        wl_display** displayCell = nullptr;
         wl_event_loop* wlLoop = nullptr;
 
         StringView socketName;
@@ -1636,14 +1640,15 @@ namespace {
         IntrusiveList wmBases;
         Vector<wl_resource*> outputResources;
         Vector<wl_resource*> xdgOutputResources;
-        ev_timer pingTimer{};
+        ev_timer* pingTimer = nullptr;
         u32 pingSerial = 0;
 
         SeatState seat;
 
-        ev_io wlIo{};
-        ev_prepare flushPrepare{};
-        ev_signal sigInt{}, sigTerm{};
+        ev_io* wlIo = nullptr;
+        ev_prepare* flushPrepare = nullptr;
+        ev_signal* sigInt = nullptr;
+        ev_signal* sigTerm = nullptr;
 
         u64 nextToplevelId = 1;
 
@@ -1668,7 +1673,7 @@ namespace {
         // linux-drm-syncobj acquire parking: the kernel pokes this eventfd
         // when a parked commit's acquire point materializes
         int syncEvFd = -1;
-        ev_io syncEvIo{};
+        ev_io* syncEvIo = nullptr;
         bool syncEventfdOk = false;
 
         struct IdleNotif: IntrusiveNode {
@@ -1695,7 +1700,7 @@ namespace {
         IntrusiveList screencopyFrames;
         ::Output* output = nullptr;
         bool dpmsOff = false;
-        ev_timer dpmsTimer{};
+        ev_timer* dpmsTimer = nullptr;
 
         void activity();
         bool idleBlocked();
@@ -1706,10 +1711,7 @@ namespace {
         void updateAnrTimer();
 
         WaylandImpl(Composer& comp, const WaylandConfig& cfg);
-        ~WaylandImpl() noexcept;
 
-        // the socket, the globals and the loop watchers
-        void start();
 
         // stop every sandbox listener and free the contexts nothing refers to
         void stopSecurityContexts() noexcept;
@@ -10921,7 +10923,7 @@ void WaylandImpl::activity() {
     });
 
     if (composer->settings->dpmsSeconds() > 0) {
-        ev_timer_again(loop, &dpmsTimer);
+        ev_timer_again(loop, dpmsTimer);
 
         if (dpmsOff) {
             dpmsOff = false;
@@ -12236,7 +12238,7 @@ void WaylandImpl::updateDecorations() {
 void WaylandImpl::updateDpms() {
     double seconds = composer->settings->dpmsSeconds();
 
-    ev_timer_stop(loop, &dpmsTimer);
+    ev_timer_stop(loop, dpmsTimer);
 
     if (seconds <= 0.) {
         if (dpmsOff) {
@@ -12248,8 +12250,8 @@ void WaylandImpl::updateDpms() {
         return;
     }
 
-    evTimerSet(&dpmsTimer, seconds, seconds);
-    ev_timer_again(loop, &dpmsTimer);
+    evTimerSet(dpmsTimer, seconds, seconds);
+    ev_timer_again(loop, dpmsTimer);
 }
 
 void WaylandImpl::updateAnrTimer() {
@@ -12266,9 +12268,53 @@ void WaylandImpl::updateAnrTimer() {
         seconds = .05;
     }
 
-    ev_timer_stop(loop, &pingTimer);
-    evTimerSet(&pingTimer, seconds, seconds);
-    ev_timer_start(loop, &pingTimer);
+    ev_timer_stop(loop, pingTimer);
+    evTimerSet(pingTimer, seconds, seconds);
+    ev_timer_start(loop, pingTimer);
+}
+
+namespace {
+    // loop watchers the pool owns and stops as it dies: a zeroed watcher is
+    // inactive until started, and libev's stop returns early on it
+    ev_io* pooledIo(ObjPool& pool, struct ev_loop* loop) {
+        ev_io* w = pool.make<ev_io>();
+
+        pooledGuard(pool, [loop, w] {
+            ev_io_stop(loop, w);
+        });
+
+        return w;
+    }
+
+    ev_timer* pooledTimer(ObjPool& pool, struct ev_loop* loop) {
+        ev_timer* w = pool.make<ev_timer>();
+
+        pooledGuard(pool, [loop, w] {
+            ev_timer_stop(loop, w);
+        });
+
+        return w;
+    }
+
+    ev_prepare* pooledPrepare(ObjPool& pool, struct ev_loop* loop) {
+        ev_prepare* w = pool.make<ev_prepare>();
+
+        pooledGuard(pool, [loop, w] {
+            ev_prepare_stop(loop, w);
+        });
+
+        return w;
+    }
+
+    ev_signal* pooledSignal(ObjPool& pool, struct ev_loop* loop) {
+        ev_signal* w = pool.make<ev_signal>();
+
+        pooledGuard(pool, [loop, w] {
+            ev_signal_stop(loop, w);
+        });
+
+        return w;
+    }
 }
 
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
@@ -12299,6 +12345,18 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 
     display = comp.chaos->display(wl_display_create());
     STD_VERIFY(display);
+    displayCell = comp.pool->make<wl_display*>(display);
+    wl_display** heldDisplay = displayCell;
+
+    // run() takes the display down with its clients; a session that never
+    // got that far (a later step of this setup, or of the composer's, threw)
+    // still loses it, and its socket file, as the pool dies
+    pooledGuard(*comp.pool, [heldDisplay] {
+        if (*heldDisplay) {
+            wl_display_destroy(*heldDisplay);
+        }
+    });
+
     // cap per-connection event buffering: a client that stops reading its
     // socket otherwise grows the compositor-side queue without bound
     wl_display_set_default_max_buffer_size(display, maxWaylandClientBuffer);
@@ -12321,16 +12379,10 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     explicitSyncSupported = cfg.explicitSync;
     maxImageDim = cfg.maxImageDim;
 
-    evTimerInit(&dpmsTimer, dpmsTimerCb, 0., 0.);
-    dpmsTimer.data = this;
+    dpmsTimer = pooledTimer(*comp.pool, loop);
+    evTimerInit(dpmsTimer, dpmsTimerCb, 0., 0.);
+    dpmsTimer->data = this;
     updateDpms();
-}
-
-// run by create once the object sits in its pool: a throw out of here
-// still reaches the destructor, which takes the display (and its socket)
-// down with whatever else was made by then
-void WaylandImpl::start() {
-    Composer& comp = *composer;
 
     if (wl_display_add_socket(display, Buffer(socketName).cStr()) != 0) {
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
@@ -12339,21 +12391,26 @@ void WaylandImpl::start() {
     STD_VERIFY(initWaylandShm(display, &shmGlobal));
     createGlobals();
 
-    evIoInit(&wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
-    wlIo.data = this;
-    ev_io_start(loop, &wlIo);
+    wlIo = pooledIo(*comp.pool, loop);
+    evIoInit(wlIo, wlIoCb, wl_event_loop_get_fd(wlLoop), EV_READ);
+    wlIo->data = this;
+    ev_io_start(loop, wlIo);
 
-    evPrepareInit(&flushPrepare, flushCb);
-    flushPrepare.data = this;
-    ev_prepare_start(loop, &flushPrepare);
+    flushPrepare = pooledPrepare(*comp.pool, loop);
+    evPrepareInit(flushPrepare, flushCb);
+    flushPrepare->data = this;
+    ev_prepare_start(loop, flushPrepare);
 
-    evSignalInit(&sigInt, signalCb, SIGINT);
-    ev_signal_start(loop, &sigInt);
-    evSignalInit(&sigTerm, signalCb, SIGTERM);
-    ev_signal_start(loop, &sigTerm);
+    sigInt = pooledSignal(*comp.pool, loop);
+    evSignalInit(sigInt, signalCb, SIGINT);
+    ev_signal_start(loop, sigInt);
+    sigTerm = pooledSignal(*comp.pool, loop);
+    evSignalInit(sigTerm, signalCb, SIGTERM);
+    ev_signal_start(loop, sigTerm);
 
-    evTimerInit(&pingTimer, pingTimerCb, 0., 0.);
-    pingTimer.data = this;
+    pingTimer = pooledTimer(*comp.pool, loop);
+    evTimerInit(pingTimer, pingTimerCb, 0., 0.);
+    pingTimer->data = this;
     updateAnrTimer();
 
     comp.settings->addDpmsSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDpms));
@@ -12364,7 +12421,15 @@ void WaylandImpl::start() {
     comp.settings->addDecorationsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateDecorations));
     comp.settings->addAnrSecondsListener(comp.pool->make<CallWaylandSetting>(this, &WaylandImpl::updateAnrTimer));
 
-    syncEvFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
+    int* heldSyncFd = comp.pool->make<int>(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK));
+
+    pooledGuard(*comp.pool, [heldSyncFd] {
+        if (*heldSyncFd >= 0) {
+            close(*heldSyncFd);
+        }
+    });
+
+    syncEvFd = *heldSyncFd;
 
     if (syncEvFd >= 0 && drmFd >= 0) {
         // probe like wlroots: ENOENT on an invalid handle proves the ioctl
@@ -12373,37 +12438,13 @@ void WaylandImpl::start() {
     }
 
     if (syncEvFd >= 0) {
-        evIoInit(&syncEvIo, syncEvCb, syncEvFd, EV_READ);
-        syncEvIo.data = this;
-        ev_io_start(loop, &syncEvIo);
+        syncEvIo = pooledIo(*comp.pool, loop);
+        evIoInit(syncEvIo, syncEvCb, syncEvFd, EV_READ);
+        syncEvIo->data = this;
+        ev_io_start(loop, syncEvIo);
     }
 
     *(composer->log) << "imway: socket "_sv << socketName << ", output "_sv << scene->outW << "x"_sv << scene->outH << "@"_sv << (i64)scene->hz << endL;
-}
-
-WaylandImpl::~WaylandImpl() noexcept {
-    ev_timer_stop(loop, &pingTimer);
-    ev_timer_stop(loop, &dpmsTimer);
-
-    if (syncEvFd >= 0) {
-        ev_io_stop(loop, &syncEvIo);
-        close(syncEvFd);
-        syncEvFd = -1;
-    }
-
-    // start() starts these unconditionally, unless it threw before them:
-    // stopping a watcher that never started changes nothing
-    ev_io_stop(loop, &wlIo);
-    ev_prepare_stop(loop, &flushPrepare);
-    ev_signal_stop(loop, &sigInt);
-    ev_signal_stop(loop, &sigTerm);
-
-    stopSecurityContexts();
-
-    if (display) {
-        wl_display_destroy(display);
-        display = nullptr;
-    }
 }
 
 void WaylandImpl::stopSecurityContexts() noexcept {
@@ -13764,6 +13805,7 @@ void WaylandImpl::closeDisplay() noexcept {
     stopSecurityContexts();
     wl_display_destroy(display);
     display = nullptr;
+    *displayCell = nullptr;
 }
 
 void WaylandImpl::drainClients() {
@@ -13921,9 +13963,5 @@ bool WaylandImpl::holdEnd(bool cancelled) {
 }
 
 Wayland* Wayland::create(Composer& c, const WaylandConfig& cfg) {
-    WaylandImpl* wayland = c.pool->make<WaylandImpl>(c, cfg);
-
-    wayland->start();
-
-    return wayland;
+    return c.pool->make<WaylandImpl>(c, cfg);
 }
