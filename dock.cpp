@@ -60,12 +60,14 @@ namespace {
         c.scene->needsFrame = true;
     }
 
+    // t is a dock group's window, and drawDock only groups toplevels that
+    // have a surface this frame
     void toggleMaximize(Composer& c, Toplevel& t) {
         if (!t.maximized) {
             t.restoreX = t.curX;
             t.restoreY = t.curY;
-            t.restoreW = t.surface ? t.surface->geomW() : 0;
-            t.restoreH = t.surface ? t.surface->geomH() : 0;
+            t.restoreW = t.surface->geomW();
+            t.restoreH = t.surface->geomH();
             t.restoreRequested = false;
             t.minimized = false;
             t.maximized = true;
@@ -352,7 +354,7 @@ void drawDock(Composer& c, DockResult& result) {
                 ImGui::PushID((const char*)group.appId.begin(), (const char*)group.appId.end());
             }
 
-            u64 texture = c.iconResolver ? c.iconResolver->iconTexture(icon) : 0;
+            u64 texture = c.iconResolver->iconTexture(icon);
             bool clicked = dockIconButton(c.theme, "##icon", texture, iconSize, group.focused, attention, group.appId);
 
             if (clicked) {

@@ -41,7 +41,7 @@ namespace {
     void drawIcon(Composer& c, DBusMenuItem& item) {
         float size = ImGui::GetFontSize();
         Icon* icon = itemIcon(c, item, (u32)size);
-        u64 texture = c.iconResolver && icon ? c.iconResolver->iconTexture(icon) : 0;
+        u64 texture = icon ? c.iconResolver->iconTexture(icon) : 0;
 
         if (!texture) {
             return;
