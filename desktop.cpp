@@ -1445,10 +1445,6 @@ static void toplevelSizeCb(ImGuiSizeCallbackData* d) {
 }
 
 static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool terminal) {
-    if (cmd.empty() || sock.empty()) {
-        return;
-    }
-
     StringView shellArgs[] = {"sh"_sv, "-c"_sv, cmd};
     Buffer terminalScript;
     StringBuilder terminalBuilder((Buffer&&)terminalScript);
