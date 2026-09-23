@@ -7777,6 +7777,13 @@ namespace {
     }
 
     void fulfillCapture(WaylandImpl* srv, CaptureSession& cs, CaptureFrame& f) {
+        // a copy on the GPU gets its verdict from the readback, a buffer
+        // gone meanwhile included: failing it here as well would send a
+        // second one
+        if (f.inFlight) {
+            return;
+        }
+
         if (!f.buffer) {
             // the attached buffer died before the capture could happen
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
@@ -7876,10 +7883,6 @@ namespace {
 
         // the renderer is made before the event loop dispatches a request
         FrameCapture* cap = srv->composer->frameCapture;
-
-        if (f.inFlight) {
-            return;
-        }
 
         (void)stride;
         f.grabW = wantW;
@@ -8076,6 +8079,12 @@ namespace {
     }
 
     void fulfillWlrCopy(WaylandImpl* srv, WlrCopyFrame& f) {
+        // a copy on the GPU gets its verdict from the readback, a buffer
+        // gone meanwhile included (see fulfillCapture)
+        if (f.inFlight) {
+            return;
+        }
+
         if (!f.buffer) {
             f.armed = false;
             zwlr_screencopy_frame_v1_send_failed(f.res);
@@ -8085,10 +8094,6 @@ namespace {
 
         // the renderer is made before the event loop dispatches a request
         FrameCapture* cap = srv->composer->frameCapture;
-
-        if (f.inFlight) {
-            return;
-        }
 
         f.capDone.frame = &f;
 

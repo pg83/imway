@@ -1,10 +1,15 @@
 // Output copies abandoned while their readback is on the GPU (the scenario
-// keeps the readback fence busy through IMWAY_CHAOS):
-//   an ext-image-copy-capture frame destroyed in flight is dropped from the
-//   readback, so the fence signalling later touches nothing of it, and the
-//   session's next frame captures the green toplevel;
-//   an ext frame, then a zwlr-screencopy frame, whose wl_buffer is destroyed
-//   in flight fails once the readback lands, having nowhere to copy to.
+// keeps the readback fence busy through IMWAY_CHAOS), one per argv[1] mode,
+// each on a compositor of its own so the busy fence is there for it:
+//   abandon      an ext-image-copy-capture frame destroyed in flight is
+//                dropped from the readback, so the fence signalling later
+//                touches nothing of it, and the session's next frame
+//                captures the green toplevel;
+//   ext-orphan   an ext frame whose wl_buffer is destroyed in flight fails
+//                once the readback lands, having nowhere to copy to, and
+//                fails once: kept alive past the readback, it hears nothing
+//                more;
+//   wlr-orphan   the same for a zwlr-screencopy frame.
 
 #include "wl_util.h"
 
@@ -88,7 +93,7 @@ static void on_ready(void* d, struct ext_image_copy_capture_frame_v1* f) {
 }
 static void on_failed(void* d, struct ext_image_copy_capture_frame_v1* f, uint32_t r) {
     (void)f; (void)r;
-    ((struct shot*)d)->failed = 1;
+    ((struct shot*)d)->failed++;
 }
 static const struct ext_image_copy_capture_frame_v1_listener frame_listener = {
     .transform = on_transform,
@@ -133,7 +138,7 @@ static void wlr_ready(void* d, struct zwlr_screencopy_frame_v1* f, uint32_t hi, 
 }
 static void wlr_failed(void* d, struct zwlr_screencopy_frame_v1* f) {
     (void)f;
-    ((struct shot*)d)->failed = 1;
+    ((struct shot*)d)->failed++;
 }
 static void wlr_damage(void* d, struct zwlr_screencopy_frame_v1* f, uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     (void)d; (void)f; (void)x; (void)y; (void)w; (void)h;
@@ -185,7 +190,7 @@ static void capture(struct shot* s, struct ext_image_copy_capture_session_v1* se
 // meanwhile fails after its retries, so try until one lands, which also
 // leaves the readback idle for the next copy
 static int land(struct shot* s, struct ext_image_copy_capture_session_v1* session, struct wl_buffer* buffer, struct wl_toplevel_ctx* top) {
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 400; i++) {
         capture(s, session, buffer);
         next_frame(top, i & 1 ? 0xFF00FF00u : 0xFF00F000u);
         while (!s->ready && !s->failed && wl_display_dispatch(wl_dpy) != -1) {
@@ -198,10 +203,10 @@ static int land(struct shot* s, struct ext_image_copy_capture_session_v1* sessio
     return 0;
 }
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
-    if (wl_boot()) return 2;
+    if (argc < 2 || wl_boot()) return 2;
 
     struct wl_registry* reg = wl_display_get_registry(wl_dpy);
     wl_registry_add_listener(reg, &extra_listener, NULL);
@@ -224,10 +229,92 @@ int main(void) {
     uint32_t* px = NULL;
     struct wl_buffer* buffer = make_buffer(stride, size, &px);
 
+    if (!strcmp(argv[1], "ext-orphan")) {
+        // the destination goes while the copy is on the GPU
+        struct shot orphan;
+        struct wl_buffer* gone = make_buffer(stride, size, NULL);
+
+        capture(&orphan, session, gone);
+        // two frames: the capture is on the GPU by the second at the latest
+        next_frame(&top, 0xFF00C000u);
+        next_frame(&top, 0xFF00B000u);
+        if (orphan.ready || orphan.failed) {
+            fprintf(stderr, "the orphaned capture finished with the readback still busy\n");
+            return 1;
+        }
+        wl_buffer_destroy(gone);
+        while (!orphan.ready && !orphan.failed && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        if (!orphan.failed) {
+            fprintf(stderr, "a capture whose buffer went in flight did not fail\n");
+            return 1;
+        }
+
+        // the frame kept past the end of its readback: no second verdict.
+        // A session holds one frame at a time, so the capture that waits
+        // the readback out runs on a second one
+        struct ext_image_copy_capture_session_v1* second = ext_image_copy_capture_manager_v1_create_session(copy_mgr, source, 0);
+        struct shot after;
+
+        constraints_done = 0;
+        ext_image_copy_capture_session_v1_add_listener(second, &session_listener, NULL);
+        while (!constraints_done && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        if (!land(&after, second, buffer, &top) || orphan.failed != 1 || orphan.ready) {
+            fprintf(stderr, "the bufferless capture failed %d times, ready %d\n", orphan.failed, orphan.ready);
+            return 1;
+        }
+        ext_image_copy_capture_frame_v1_destroy(orphan.frame);
+        printf("capture-abandon: bufferless capture failed\n");
+        return 0;
+    }
+
+    if (!strcmp(argv[1], "wlr-orphan")) {
+        struct shot wlr;
+
+        memset(&wlr, 0, sizeof(wlr));
+        wlr_announced = 0;
+        struct zwlr_screencopy_frame_v1* copy = zwlr_screencopy_manager_v1_capture_output(wlr_mgr, 0, output);
+        zwlr_screencopy_frame_v1_add_listener(copy, &wlr_listener, &wlr);
+        while (!wlr_announced && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        struct wl_buffer* gone = make_buffer(stride, size, NULL);
+        zwlr_screencopy_frame_v1_copy(copy, gone);
+        // two frames: the capture is on the GPU by the second at the latest
+        next_frame(&top, 0xFF00C000u);
+        next_frame(&top, 0xFF00B000u);
+        if (wlr.ready || wlr.failed) {
+            fprintf(stderr, "the orphaned copy finished with the readback still busy\n");
+            return 1;
+        }
+        wl_buffer_destroy(gone);
+        while (!wlr.ready && !wlr.failed && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        if (!wlr.failed) {
+            fprintf(stderr, "a screencopy whose buffer went in flight did not fail\n");
+            return 1;
+        }
+
+        // the frame kept past the end of its readback: no second verdict
+        struct shot after;
+
+        if (!land(&after, session, buffer, &top) || wlr.failed != 1 || wlr.ready) {
+            fprintf(stderr, "the bufferless screencopy failed %d times, ready %d\n", wlr.failed, wlr.ready);
+            return 1;
+        }
+        zwlr_screencopy_frame_v1_destroy(copy);
+        printf("capture-abandon: bufferless screencopy failed\n");
+        return 0;
+    }
+
+    if (strcmp(argv[1], "abandon")) return 2;
+
     struct shot abandoned, kept;
 
     capture(&abandoned, session, buffer);
+    // two frames: the capture is on the GPU by the second at the latest
     next_frame(&top, 0xFF00C000u);
+    next_frame(&top, 0xFF00B000u);
     if (abandoned.ready || abandoned.failed) {
         fprintf(stderr, "the capture finished with the readback still busy\n");
         return 1;
@@ -254,57 +341,6 @@ int main(void) {
     }
 
     printf("capture-abandon: next capture ready\n");
-
-    // the destination goes while the copy is on the GPU
-    struct shot orphan;
-    struct wl_buffer* gone = make_buffer(stride, size, NULL);
-
-    capture(&orphan, session, gone);
-    next_frame(&top, 0xFF00C000u);
-    if (orphan.ready || orphan.failed) {
-        fprintf(stderr, "the orphaned capture finished with the readback still busy\n");
-        return 1;
-    }
-    wl_buffer_destroy(gone);
-    while (!orphan.ready && !orphan.failed && wl_display_dispatch(wl_dpy) != -1) {
-    }
-    ext_image_copy_capture_frame_v1_destroy(orphan.frame);
-    if (!orphan.failed) {
-        fprintf(stderr, "a capture whose buffer went in flight did not fail\n");
-        return 1;
-    }
-    printf("capture-abandon: bufferless capture failed\n");
-
-    if (!land(&kept, session, buffer, &top)) {
-        fprintf(stderr, "no capture landed after the bufferless one\n");
-        return 1;
-    }
-
-    // the same for a zwlr-screencopy copy
-    struct shot wlr;
-
-    memset(&wlr, 0, sizeof(wlr));
-    wlr_announced = 0;
-    struct zwlr_screencopy_frame_v1* copy = zwlr_screencopy_manager_v1_capture_output(wlr_mgr, 0, output);
-    zwlr_screencopy_frame_v1_add_listener(copy, &wlr_listener, &wlr);
-    while (!wlr_announced && wl_display_dispatch(wl_dpy) != -1) {
-    }
-    gone = make_buffer(stride, size, NULL);
-    zwlr_screencopy_frame_v1_copy(copy, gone);
-    next_frame(&top, 0xFF00C000u);
-    if (wlr.ready || wlr.failed) {
-        fprintf(stderr, "the orphaned copy finished with the readback still busy\n");
-        return 1;
-    }
-    wl_buffer_destroy(gone);
-    while (!wlr.ready && !wlr.failed && wl_display_dispatch(wl_dpy) != -1) {
-    }
-    zwlr_screencopy_frame_v1_destroy(copy);
-    if (!wlr.failed) {
-        fprintf(stderr, "a screencopy whose buffer went in flight did not fail\n");
-        return 1;
-    }
-    printf("capture-abandon: bufferless screencopy failed\n");
 
     wl_buffer_destroy(buffer);
     ext_image_copy_capture_session_v1_destroy(session);
