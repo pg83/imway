@@ -43,7 +43,8 @@ struct Wayland {
     virtual void inputActivity() = 0;
 
     // switch the active xkb group and broadcast the modifier change to the
-    // focused client, exactly as a layout hotkey would
+    // focused client, exactly as a layout hotkey would; group is one of the
+    // keyboard's layouts
     virtual void setLayout(u32 group) = 0;
 
     // Process whatever the clients have already sent. The control harness

@@ -1650,7 +1650,6 @@ namespace {
         ev_io wlIo{};
         ev_prepare flushPrepare{};
         ev_signal sigInt{}, sigTerm{};
-        bool watchersStarted = false;
 
         u64 nextToplevelId = 1;
 
@@ -12275,7 +12274,6 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     ev_signal_start(loop, &sigInt);
     ev_signal_init(&sigTerm, signalCb, SIGTERM);
     ev_signal_start(loop, &sigTerm);
-    watchersStarted = true;
 
     ev_timer_init(&pingTimer, pingTimerCb, 0., 0.);
     pingTimer.data = this;
@@ -12316,12 +12314,12 @@ WaylandImpl::~WaylandImpl() noexcept {
         syncEvFd = -1;
     }
 
-    if (watchersStarted) {
-        ev_io_stop(loop, &wlIo);
-        ev_prepare_stop(loop, &flushPrepare);
-        ev_signal_stop(loop, &sigInt);
-        ev_signal_stop(loop, &sigTerm);
-    }
+    // the constructor starts these unconditionally; a constructor that
+    // throws before them never gets here
+    ev_io_stop(loop, &wlIo);
+    ev_prepare_stop(loop, &flushPrepare);
+    ev_signal_stop(loop, &sigInt);
+    ev_signal_stop(loop, &sigTerm);
 
     stopSecurityContexts();
 
@@ -12745,12 +12743,13 @@ const struct wp_image_description_creator_params_v1_interface cmParamsImpl = {
     .set_max_fall = cmParamsSetMaxFall,
 };
 
+// the manager's creators below set every record and its server before the
+// resource can reach a client, and nothing clears them: the destroy hooks
+// release unconditionally
 void cmParamsResourceDestroyed(wl_resource* res) {
     auto* p = (CParams*)wl_resource_get_user_data(res);
 
-    if (p && p->srv) {
-        p->srv->alloc->release(p);
-    }
+    p->srv->alloc->release(p);
 }
 
 // surface color object: user_data = the SurfaceImpl
@@ -12768,9 +12767,11 @@ void cmSurfaceDestroy(wl_client*, wl_resource* res) {
     wl_resource_destroy(res);
 }
 
+// image_description is not nullable, and both image description makers set
+// the record before the resource reaches the client
 void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u32 intent) {
     auto* s = (SurfaceImpl*)wl_resource_get_user_data(res);
-    auto* d = descRes ? (CImgDesc*)wl_resource_get_user_data(descRes) : nullptr;
+    auto* d = (CImgDesc*)wl_resource_get_user_data(descRes);
 
     if (!s) {
         wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_INERT, "the wl_surface is gone");
@@ -12778,7 +12779,7 @@ void cmSurfaceSetImageDesc(wl_client*, wl_resource* res, wl_resource* descRes, u
         return;
     }
 
-    if (!d || !d->ready) {
+    if (!d->ready) {
         wl_resource_post_error(res, WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION, "image description is not ready");
 
         return;
@@ -12860,10 +12861,8 @@ const struct wp_color_management_output_v1_interface cmOutputImpl = {
 void cmOutputResourceDestroyed(wl_resource* res) {
     auto* obj = (CmOutput*)wl_resource_get_user_data(res);
 
-    if (obj) {
-        obj->unlink();
-        obj->srv->alloc->release(obj);
-    }
+    obj->unlink();
+    obj->srv->alloc->release(obj);
 }
 
 void cmFeedbackDestroy(wl_client*, wl_resource* res) {
@@ -12891,10 +12890,8 @@ const struct wp_color_management_surface_feedback_v1_interface cmFeedbackImpl = 
 void cmFeedbackResourceDestroyed(wl_resource* res) {
     auto* obj = (CmFeedback*)wl_resource_get_user_data(res);
 
-    if (obj) {
-        obj->unlink();
-        obj->srv->alloc->release(obj);
-    }
+    obj->unlink();
+    obj->srv->alloc->release(obj);
 }
 
 // manager
@@ -13064,9 +13061,7 @@ const struct wp_image_description_creator_icc_v1_interface cmIccImpl = {
 void cmIccResourceDestroyed(wl_resource* res) {
     auto* icc = (CIcc*)wl_resource_get_user_data(res);
 
-    if (icc && icc->srv) {
-        icc->srv->alloc->release(icc);
-    }
+    icc->srv->alloc->release(icc);
 }
 
 void cmManagerCreateIccCreator(wl_client* client, wl_resource* res, u32 id) {
@@ -13478,11 +13473,6 @@ void WaylandImpl::onListen(void* arg) {
         t.terminateRequested = false;
 
         auto& ti = (ToplevelImpl&)t;
-
-        if (!ti.res) {
-            return;
-        }
-
         pid_t pid = 0;
         uid_t uid = 0;
         gid_t gid = 0;
@@ -13510,10 +13500,7 @@ void WaylandImpl::onListen(void* arg) {
 
         if (ti.closeRequested) {
             ti.closeRequested = false;
-
-            if (ti.res) {
-                xdg_toplevel_send_close(ti.res);
-            }
+            xdg_toplevel_send_close(ti.res);
         }
     });
 
@@ -13687,19 +13674,11 @@ void WaylandImpl::run() {
 }
 
 void WaylandImpl::drainClients() {
-    if (!display || !wlLoop) {
-        return;
-    }
-
     wl_event_loop_dispatch(wlLoop, 0);
     wl_display_flush_clients(display);
 }
 
 void WaylandImpl::setLayout(u32 group) {
-    if (group >= keyboard->layoutCount()) {
-        return;
-    }
-
     keyboard->setGroup(group);
     seat.updateModifiers();
 }
