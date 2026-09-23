@@ -75,6 +75,10 @@ using namespace stl;
 //                     of device memory
 //   no-ext=NAME       the Vulkan device does not offer extension NAME (the
 //                     word may repeat, one extension each)
+//   frame-submit=N    renderer submits: the next N frame submits are refused
+//   readback-submit=N the next N screenshot readback submits are refused
+//   capture-submit=N  the next N frame-capture copy submits are refused
+//   cursor-submit=N   the next N cursor shape rasterize submits are refused
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -103,6 +107,11 @@ namespace {
 
     struct TestChaosMonkey: public ChaosMonkey {
         int accountFaults = 0;
+        // renderer: queue submits
+        int frameSubmitFaults = 0;
+        int readbackSubmitFaults = 0;
+        int captureSubmitFaults = 0;
+        int cursorSubmitFaults = 0;
         bool messageArmed = false;
         int messageStyle = 0;
         int responseFaults = 0;
@@ -172,6 +181,11 @@ namespace {
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
         bool deviceExtension(const char* name, bool offered) override;
+        // renderer: queue submits
+        VkResult frameSubmit(VkResult pending) override;
+        VkResult readbackSubmit(VkResult pending) override;
+        VkResult captureSubmit(VkResult pending) override;
+        VkResult cursorSubmit(VkResult pending) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -262,6 +276,15 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         outputTargetSkip = (int)arg.stou();
     } else if (fault == "no-ext"_sv) {
         hiddenExtensions.pushBack(arg);
+    } else if (fault == "frame-submit"_sv) {
+        // renderer: queue submits
+        frameSubmitFaults = (int)arg.stou();
+    } else if (fault == "readback-submit"_sv) {
+        readbackSubmitFaults = (int)arg.stou();
+    } else if (fault == "capture-submit"_sv) {
+        captureSubmitFaults = (int)arg.stou();
+    } else if (fault == "cursor-submit"_sv) {
+        cursorSubmitFaults = (int)arg.stou();
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -620,6 +643,23 @@ bool TestChaosMonkey::deviceExtension(const char* name, bool offered) {
     return offered;
 }
 
+// renderer: queue submits
+VkResult TestChaosMonkey::frameSubmit(VkResult pending) {
+    return spend(frameSubmitFaults) ? VK_ERROR_DEVICE_LOST : pending;
+}
+
+VkResult TestChaosMonkey::readbackSubmit(VkResult pending) {
+    return spend(readbackSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
+}
+
+VkResult TestChaosMonkey::captureSubmit(VkResult pending) {
+    return spend(captureSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
+}
+
+VkResult TestChaosMonkey::cursorSubmit(VkResult pending) {
+    return spend(cursorSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
+}
+
 // buses
 // a site's own allocation may already have failed
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
@@ -690,6 +730,11 @@ namespace {
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
         bool deviceExtension(const char* name, bool offered) override;
+        // renderer: queue submits
+        VkResult frameSubmit(VkResult pending) override;
+        VkResult readbackSubmit(VkResult pending) override;
+        VkResult captureSubmit(VkResult pending) override;
+        VkResult cursorSubmit(VkResult pending) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -802,6 +847,23 @@ VkResult IdleChaosMonkey::outputTarget(VkResult result) {
 
 bool IdleChaosMonkey::deviceExtension(const char*, bool offered) {
     return offered;
+}
+
+// renderer: queue submits
+VkResult IdleChaosMonkey::frameSubmit(VkResult pending) {
+    return pending;
+}
+
+VkResult IdleChaosMonkey::readbackSubmit(VkResult pending) {
+    return pending;
+}
+
+VkResult IdleChaosMonkey::captureSubmit(VkResult pending) {
+    return pending;
+}
+
+VkResult IdleChaosMonkey::cursorSubmit(VkResult pending) {
+    return pending;
 }
 
 // buses

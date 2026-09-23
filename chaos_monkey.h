@@ -98,6 +98,13 @@ struct ChaosMonkey {
     // whether the Vulkan device offers the named extension, as the device
     // answered: a device without it takes the fallback of its own
     virtual bool deviceExtension(const char* name, bool offered) = 0;
+    // renderer: queue submits (frames, readbacks, captures, cursor shapes)
+    // the outcome a submit is about to have, handed over before the call:
+    // a failure stands for the driver refusing it, and nothing is submitted
+    virtual VkResult frameSubmit(VkResult pending) = 0;
+    virtual VkResult readbackSubmit(VkResult pending) = 0;
+    virtual VkResult captureSubmit(VkResult pending) = 0;
+    virtual VkResult cursorSubmit(VkResult pending) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one

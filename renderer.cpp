@@ -3580,10 +3580,16 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
     si.commandBufferCount = 1;
     si.pCommandBuffers = &curCmd;
 
-    if (VkResult res = vkQueueSubmit(queue, 1, &si, curFence); res != VK_SUCCESS) {
+    VkResult cursorResult = comp->chaos->cursorSubmit(VK_SUCCESS);
+
+    if (cursorResult == VK_SUCCESS) {
+        cursorResult = vkQueueSubmit(queue, 1, &si, curFence);
+    }
+
+    if (cursorResult != VK_SUCCESS) {
         // out is pre-zeroed by the caller: a transparent cursor beats
         // freezing the whole session in an infinite fence wait
-        *(comp->log) << "imway: cursor rasterize submit failed ("_sv << (long)res << ")"_sv << endL;
+        *(comp->log) << "imway: cursor rasterize submit failed ("_sv << (long)cursorResult << ")"_sv << endL;
 
         return;
     }
@@ -4042,7 +4048,11 @@ bool RendererImpl::renderFrame(int scanIdx) {
     si.pWaitDstStageMask = waitStages.data();
     si.signalSemaphoreCount = signalOut ? 1 : 0;
     si.pSignalSemaphores = &syncOut;
-    VkResult submitResult = vkQueueSubmit(queue, 1, &si, fence);
+    VkResult submitResult = comp->chaos->frameSubmit(VK_SUCCESS);
+
+    if (submitResult == VK_SUCCESS) {
+        submitResult = vkQueueSubmit(queue, 1, &si, fence);
+    }
 
     if (submitResult != VK_SUCCESS) {
         releaseInFlightShm();
@@ -4171,8 +4181,14 @@ bool RendererImpl::readbackLastFrame() {
     si.commandBufferCount = 1;
     si.pCommandBuffers = &cmd;
 
-    if (VkResult res = vkQueueSubmit(queue, 1, &si, fence); res != VK_SUCCESS) {
-        *(comp->log) << "imway: readback submit failed ("_sv << (long)res << ")"_sv << endL;
+    VkResult readbackResult = comp->chaos->readbackSubmit(VK_SUCCESS);
+
+    if (readbackResult == VK_SUCCESS) {
+        readbackResult = vkQueueSubmit(queue, 1, &si, fence);
+    }
+
+    if (readbackResult != VK_SUCCESS) {
+        *(comp->log) << "imway: readback submit failed ("_sv << (long)readbackResult << ")"_sv << endL;
 
         return false;
     }
@@ -4342,8 +4358,14 @@ bool RendererImpl::captureRecord() {
 
     vkResetFences(device, 1, &captureFence);
 
-    if (VkResult res = vkQueueSubmit(queue, 1, &si, captureFence); res != VK_SUCCESS) {
-        *(comp->log) << "imway: capture submit failed ("_sv << (long)res << ")"_sv << endL;
+    VkResult captureResult = comp->chaos->captureSubmit(VK_SUCCESS);
+
+    if (captureResult == VK_SUCCESS) {
+        captureResult = vkQueueSubmit(queue, 1, &si, captureFence);
+    }
+
+    if (captureResult != VK_SUCCESS) {
+        *(comp->log) << "imway: capture submit failed ("_sv << (long)captureResult << ")"_sv << endL;
 
         return false;
     }
