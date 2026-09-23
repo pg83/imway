@@ -3221,8 +3221,10 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
+    // a child in either pile has its surface: the surface's destroy
+    // unlinks the node right after the ring nulls it
     forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             drawSurfaceTree(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
     });
@@ -3259,7 +3261,7 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     }
 
     forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             drawSurfaceTree(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
     });
@@ -3292,8 +3294,9 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
         uy1 = (gy + h) * s.bufferScale / th;
     }
 
+    // every node in the piles has its surface, as in drawSurfaceTree
     forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             drawSurfaceTreeOverlay(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
     });
@@ -3316,7 +3319,7 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
     }
 
     forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             drawSurfaceTreeOverlay(*c.surface, x - gx + (float)c.x, y - gy + (float)c.y);
         }
     });
