@@ -3,9 +3,9 @@
 # node directory: a node that is no drm device refuses the atomic
 # capability and is closed, missing nodes are skipped, and a scan that runs
 # out ends the boot with the directory named. --list reports the same node
-# as unusable. The emulator takes the node behind its card from the same
-# directory: with none there it fails the boot, with a render node there it
-# boots on it.
+# as unusable, and says so when no Vulkan driver can make an instance. The
+# emulator takes the node behind its card from the same directory: with
+# none there it fails the boot, with a render node there it boots on it.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -26,6 +26,13 @@ rc=0
 out=$(env IMWAY_DRI_DIR="$nodes" "$bin" --list 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "--list exited $rc: $out"; exit 1; }
 grep -qF "$nodes/card0: ?, NO atomic (unusable)" <<<"$out" || { echo "--list did not report the staged node as unusable: $out"; exit 1; }
+
+# a host without a Vulkan driver: the loader finds none to create an
+# instance on
+rc=0
+out=$(env IMWAY_DRI_DIR="$empty" VK_DRIVER_FILES=/nonexistent.json VK_ICD_FILENAMES=/nonexistent.json "$bin" --list 2>&1) || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "--list without a driver exited $rc: $out"; exit 1; }
+grep -qx "vulkan: unavailable" <<<"$out" || { echo "--list without a driver did not say so: $out"; exit 1; }
 
 kms_boot IMWAY_DRI_DIR="$empty" --
 boot_rc 1 "emulator without a node"
