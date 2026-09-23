@@ -389,7 +389,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
         this->getMemoryHostPointerProps = (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(this->device, "vkGetMemoryHostPointerPropertiesEXT");
     }
 
-    this->udmabufFd = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+    this->udmabufFd = chaos.udmabufOpen(open("/dev/udmabuf", O_RDWR | O_CLOEXEC));
     this->udmabufSizeLimit = readUdmabufLimit();
     this->tryShmUdmabufBuffer = canImportDmabufBuffer && this->udmabufFd >= 0;
     this->tryShmUdmabufImage = this->hasDmabuf && this->udmabufFd >= 0;

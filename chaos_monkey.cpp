@@ -122,6 +122,9 @@ using namespace stl;
 //                     allocation from them runs out of pool memory
 //   descriptor-fragmented=N  the first N pools not full are fragmented:
 //                     every set allocation from them fails as fragmented
+// device: /dev/udmabuf
+//   udmabuf-open=N    the next N opens of /dev/udmabuf fail with EACCES, as
+//                     for a session not let at it
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -197,6 +200,8 @@ namespace {
         // renderer: texture descriptor pools
         size_t fullPools = 0;
         size_t fragmentedPools = 0;
+        // device: /dev/udmabuf
+        int udmabufOpenFaults = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -260,6 +265,8 @@ namespace {
         int devNull(int fd) override;
         // renderer: texture descriptor pools
         VkResult descriptorRoom(VkResult result, size_t pool) override;
+        // device: /dev/udmabuf
+        int udmabufOpen(int fd) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -401,6 +408,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         fullPools = arg.stou();
     } else if (fault == "descriptor-fragmented"_sv) {
         fragmentedPools = arg.stou();
+    } else if (fault == "udmabuf-open"_sv) {
+        // device: /dev/udmabuf
+        udmabufOpenFaults = (int)arg.stou();
     }
 }
 
@@ -906,6 +916,19 @@ VkResult TestChaosMonkey::descriptorRoom(VkResult result, size_t pool) {
     return result;
 }
 
+// device: /dev/udmabuf
+int TestChaosMonkey::udmabufOpen(int fd) {
+    if (!spend(udmabufOpenFaults)) {
+        return fd;
+    }
+
+    // a real failure already left -1, which close shrugs off
+    close(fd);
+    errno = EACCES;
+
+    return -1;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -972,6 +995,8 @@ namespace {
         int devNull(int fd) override;
         // renderer: texture descriptor pools
         VkResult descriptorRoom(VkResult result, size_t pool) override;
+        // device: /dev/udmabuf
+        int udmabufOpen(int fd) override;
     };
 }
 
@@ -1165,6 +1190,11 @@ int IdleChaosMonkey::devNull(int fd) {
 // renderer: texture descriptor pools
 VkResult IdleChaosMonkey::descriptorRoom(VkResult result, size_t) {
     return result;
+}
+
+// device: /dev/udmabuf
+int IdleChaosMonkey::udmabufOpen(int fd) {
+    return fd;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

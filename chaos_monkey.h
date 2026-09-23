@@ -166,5 +166,9 @@ struct ChaosMonkey {
     // the next one in the chain
     virtual VkResult descriptorRoom(VkResult result, size_t pool) = 0;
 
+    // device: /dev/udmabuf fresh from open (or its -1); a replacement
+    // failure closes the fd and returns -1 with errno set
+    virtual int udmabufOpen(int fd) = 0;
+
     static ChaosMonkey* create(stl::ObjPool& pool);
 };
