@@ -24,11 +24,14 @@ namespace {
     // fork() child (libseat's embedded seatd, a spawned client before its
     // exec) inherits the parent's pid in it and writes its profile over the
     // parent's, and when both exit together neither loads. Setting the
-    // pattern again in the child names the file after the child.
+    // pattern again in the child names the file after the child. The
+    // runtime skips a pattern equal to the one it holds, so another one goes
+    // first to make it parse the real one anew.
     void profileForkChild() {
         const char* pattern = getenv("LLVM_PROFILE_FILE");
 
         if (pattern && __llvm_profile_set_filename) {
+            __llvm_profile_set_filename("imway-fork-child.profraw");
             __llvm_profile_set_filename(pattern);
         }
     }
