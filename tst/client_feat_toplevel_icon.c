@@ -1,6 +1,7 @@
 // Feature: xdg-toplevel-icon.  set_icon is double-buffered with wl_surface
 // state, and destroying the source icon after set_icon must not lose the
 // pending toplevel state.  The scenario observes the green icon in Alt+Tab.
+// An argument sets the icon's size instead of the one the manager asks for.
 
 #include "wl_util.h"
 
@@ -46,7 +47,7 @@ static void wait_marker(const char* name) {
     }
 }
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
     if (wl_boot()) return 1;
@@ -62,7 +63,7 @@ int main(void) {
     wl_make_toplevel(&a, "icon-red", 300, 200, 0xFFFF0000);
     wl_make_toplevel(&b, "icon-blue", 300, 200, 0xFF0000FF);
 
-    int size = icon_size > 0 ? icon_size : 48;
+    int size = argc > 1 ? atoi(argv[1]) : icon_size > 0 ? icon_size : 48;
     struct wl_buffer* superseded = wl_solid(size, size, 0xFFFF00FF);
     struct wl_buffer* buffer = wl_solid(size, size, 0xFF00FF00);
     struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icon_mgr);
