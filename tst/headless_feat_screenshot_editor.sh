@@ -23,9 +23,12 @@ tap() { # <keycode>
 }
 
 # a baseline the editor has actually finished painting: two fresh frames
-# that agree, rather than whatever a fixed sleep lands on
+# a moment apart that agree, rather than whatever a fixed sleep lands on.
+# The editor is a client of its own, a frame or more behind a key: after a
+# key that changes the view, wait for the change (differs) before this, or
+# two frames taken before the editor redrew agree on the old view
 settled() { # <scratch> <baseline>
-    screenshot "$1" && screenshot "$2" &&
+    screenshot "$1" && sleep 0.2 && screenshot "$2" &&
         [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -lt 60 ]]
 }
 
@@ -53,6 +56,8 @@ await 50 differs "$XDG_RUNTIME_DIR/before.ppm" "$XDG_RUNTIME_DIR/zoomed.ppm" || 
     echo "zoom in did not change the view"; exit 1; }
 tap 12 # - zooms out
 tap 11 # 0 resets
+await 50 differs "$XDG_RUNTIME_DIR/zoomed.ppm" "$XDG_RUNTIME_DIR/unzoomed.ppm" || {
+    echo "zooming out and resetting did not change the view"; exit 1; }
 
 # the wheel zooms the canvas the pointer is over, which is the editor's own
 # input path rather than the compositor's: the scroll travels out as a
@@ -72,6 +77,8 @@ await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/wheeled.ppm" || 
     echo "the wheel did not zoom the canvas"; exit 1; }
 
 tap 11 # 0 resets
+await 50 differs "$XDG_RUNTIME_DIR/wheeled.ppm" "$XDG_RUNTIME_DIR/unwheeled.ppm" || {
+    echo "the reset did not undo the wheel's zoom"; exit 1; }
 
 # Keys the editor has no use for must leave it alone. They still travel the
 # whole input path into it, which is where the keymap and the button
