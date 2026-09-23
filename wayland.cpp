@@ -8997,7 +8997,7 @@ namespace {
             return;
         }
 
-        wl_resource* r = wl_resource_create(client, &wp_linux_drm_syncobj_surface_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = s->srv->composer->chaos->resource(wl_resource_create(client, &wp_linux_drm_syncobj_surface_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             wl_client_post_no_memory(client);
@@ -9022,7 +9022,7 @@ namespace {
 
         close(fd);
 
-        wl_resource* r = wl_resource_create(client, &wp_linux_drm_syncobj_timeline_v1_interface, wl_resource_get_version(res), id);
+        wl_resource* r = srv->composer->chaos->resource(wl_resource_create(client, &wp_linux_drm_syncobj_timeline_v1_interface, wl_resource_get_version(res), id));
 
         if (!r) {
             drmSyncobjDestroy(srv->drmFd, handle);
@@ -9044,7 +9044,7 @@ namespace {
     };
 
     void syncManagerBind(wl_client* client, void* data, u32 version, u32 id) {
-        wl_resource* res = wl_resource_create(client, &wp_linux_drm_syncobj_manager_v1_interface, version, id);
+        wl_resource* res = ((WaylandImpl*)data)->composer->chaos->resource(wl_resource_create(client, &wp_linux_drm_syncobj_manager_v1_interface, version, id));
 
         if (!res) {
             wl_client_post_no_memory(client);
