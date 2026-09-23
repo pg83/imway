@@ -1075,6 +1075,9 @@ void DesktopImpl::wifiChanged() {
     scene->needsFrame = true;
 }
 
+// the volume OSD comes up only here, and this runs only with a mixer:
+// from the volume keys (which require comp->mixer) and from the mixer's
+// own listeners; comp->mixer is set once at startup and never cleared
 void DesktopImpl::volumeChanged() {
     if (!settingsState) {
         osdMs = nowMsec() + (u64)(comp->settings->osdSeconds() * 1000.f);
@@ -1593,7 +1596,7 @@ void DesktopImpl::buildUi(Scene& scene) {
             float fade = settings.osdFadeSeconds();
             float alpha = rem > fade ? 1.f : rem / fade;
 
-            if (osdKind == 1 && comp->mixer) {
+            if (osdKind == 1) {
                 drawOsd(scene.outW, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
             } else if (osdKind == 2) {
                 drawOsd(scene.outW, uiScale, "brightness"_sv, output->brightness(), false, alpha);
