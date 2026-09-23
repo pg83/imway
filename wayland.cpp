@@ -2516,10 +2516,7 @@ namespace {
     // the head of a fifo queue parked on an unmaterialized acquire point:
     // the armed DRM eventfd wakes the loop for it, no frame polling needed
     bool fifoHeldOnAcquire(SurfaceImpl& s) {
-        if (s.fifo->queue.empty()) {
-            return false;
-        }
-
+        // both callers ask about a non-empty queue
         FifoEntry* e = (FifoEntry*)s.fifo->queue.mutFront();
 
         TimelineBox* acquire = timelinePtr(e->cache.acq);
@@ -2702,7 +2699,9 @@ namespace {
                 } else if (SpbBox* spb = spbFromRes(s.pending.buffer)) {
                     (void)spb;
                     bw = bh = 1;
-                } else if (DmabufBuffer* db = dmabufFromRes(s.pending.buffer)) {
+                } else {
+                    DmabufBuffer* db = dmabufFromRes(s.pending.buffer);
+
                     bw = db->width;
                     bh = db->height;
                 }
@@ -2830,7 +2829,10 @@ namespace {
                     releaseHeldDmabuf(s);
                     releaseHeldShm(s);
                 }
-            } else if (DmabufRef* dmabuf = dmabufRefFromRes(s.pending.buffer)) {
+            } else {
+                // shm, single-pixel and dmabuf are the only wl_buffers this
+                // server creates: what is neither of the first two is a dmabuf
+                DmabufRef* dmabuf = dmabufRefFromRes(s.pending.buffer);
                 DmabufBuffer* db = dmabuf->mutPtr();
 
                 if (cache) {
@@ -2864,10 +2866,8 @@ namespace {
 
                     // the dmabuf releases when the frame that samples it
                     // retires; the release callback fires with it
-                    if (use) {
-                        use->releaseCb = s.pending.releaseCb;
-                        s.pending.releaseCb = nullptr;
-                    }
+                    use->releaseCb = s.pending.releaseCb;
+                    s.pending.releaseCb = nullptr;
 
                     syncApplyPoints(s);
                     s.width = db->width;
@@ -2876,11 +2876,9 @@ namespace {
                     s.hasContent = true;
                     s.dirty = true;
                 }
-            } else {
-                *(s.srv->composer->log) << "imway: unknown buffer type"_sv << endL;
             }
 
-            // any get_release that survived (unknown buffer) is dropped
+            // any get_release no branch above took is dropped
             dropReleaseCb(s.pending.releaseCb);
             detachPendingBuffer(s);
             s.pending.newlyAttached = false;
@@ -3602,12 +3600,10 @@ namespace {
         auto* t = (ToplevelImpl*)wl_resource_get_user_data(res);
         auto* p = parentRes ? (ToplevelImpl*)wl_resource_get_user_data(parentRes) : nullptr;
 
-        if (t) {
-            if (p) {
-                t->parent.bind(p->weak);
-            } else {
-                t->parent.reset();
-            }
+        if (p) {
+            t->parent.bind(p->weak);
+        } else {
+            t->parent.reset();
         }
     }
 
@@ -4421,11 +4417,8 @@ namespace {
     }
 
     void xdgHandleCommit(SurfaceImpl& s) {
+        // both callers commit an xdg surface
         XdgSurface* xs = s.xdg.get();
-
-        if (!xs) {
-            return;
-        }
 
         xs->committedAckSerial = xs->ackedSerial;
 
@@ -4729,10 +4722,6 @@ namespace {
     void sourceResourceDestroyed(wl_resource* res) {
         DataSource* src = sourceFrom(res);
 
-        if (!src) {
-            return;
-        }
-
         // the weak ring nulls every back-reference into this source at once:
         // its live offers and an xdg-toplevel-drag object that may outlive it
         // if the client destroys them out of order, so none can write through
@@ -4758,22 +4747,20 @@ namespace {
     }
 
     Offer* offerFrom(wl_resource* res) {
-        return res ? (Offer*)wl_resource_get_user_data(res) : nullptr;
+        return (Offer*)wl_resource_get_user_data(res);
     }
 
     void offerAccept(wl_client*, wl_resource* res, u32, const char* mime) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source.get() : nullptr;
+        DataSource* src = offer->source.get();
 
-        if (offer && offer->finished) {
+        if (offer->finished) {
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "offer was already finished");
 
             return;
         }
 
-        if (offer) {
-            offer->accepted = mime != nullptr;
-        }
+        offer->accepted = mime != nullptr;
 
         if (src && offer->dnd && !src->primary) {
             wl_data_source_send_target(src->res, mime);
@@ -4793,9 +4780,9 @@ namespace {
 
     void offerReceive(wl_client*, wl_resource* res, const char* mime, i32 fd) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source.get() : nullptr;
+        DataSource* src = offer->source.get();
 
-        if (offer && offer->finished) {
+        if (offer->finished) {
             close(fd);
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "offer was already finished");
 
@@ -4811,9 +4798,9 @@ namespace {
 
     void offerFinish(wl_client*, wl_resource* res) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source.get() : nullptr;
+        DataSource* src = offer->source.get();
 
-        if (!offer || !offer->dnd || offer->finished || !src || !src->dropPerformed || !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
+        if (!offer->dnd || offer->finished || !src || !src->dropPerformed || !offer->accepted || offer->action == WL_DATA_DEVICE_MANAGER_DND_ACTION_NONE) {
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_FINISH, "finish is not valid for this offer state");
 
             return;
@@ -4828,10 +4815,10 @@ namespace {
 
     void offerSetActions(wl_client*, wl_resource* res, u32 actions, u32 preferred) {
         Offer* offer = offerFrom(res);
-        DataSource* src = offer ? offer->source.get() : nullptr;
+        DataSource* src = offer->source.get();
         constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
-        if (!offer || !offer->dnd || offer->finished || !src || src->primary) {
+        if (!offer->dnd || offer->finished || !src || src->primary) {
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "set_actions requires an active drag offer");
 
             return;
@@ -4880,10 +4867,6 @@ namespace {
 
     void offerResourceDestroyed(wl_resource* res) {
         Offer* offer = offerFrom(res);
-
-        if (!offer) {
-            return;
-        }
 
         offer->unlink();
         offer->srv->alloc->release(offer);
@@ -5404,10 +5387,6 @@ namespace {
     void appMenuSetAddress(wl_client*, wl_resource* res, const char* service, const char* path) {
         auto* box = (AppMenuBox*)wl_resource_get_user_data(res);
 
-        if (!box) {
-            return;
-        }
-
         if (box->surface && box->surface->appMenu == box->menu) {
             box->surface->appMenu = nullptr;
         }
@@ -5424,10 +5403,6 @@ namespace {
 
     void appMenuResourceDestroyed(wl_resource* res) {
         auto* box = (AppMenuBox*)wl_resource_get_user_data(res);
-
-        if (!box) {
-            return;
-        }
 
         if (box->surface && box->surface->appMenu == box->menu) {
             box->surface->appMenu = nullptr;
@@ -5700,15 +5675,11 @@ namespace {
 
     // ---- xdg-toplevel-tag ----
     void toplevelTagSetTag(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* tag) {
-        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
-            assignText(t->tag, StringView(tag));
-        }
+        assignText(((ToplevelImpl*)wl_resource_get_user_data(toplevelRes))->tag, StringView(tag));
     }
 
     void toplevelTagSetDescription(wl_client*, wl_resource*, wl_resource* toplevelRes, const char* descr) {
-        if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(toplevelRes)) {
-            assignText(t->tagDescription, StringView(descr));
-        }
+        assignText(((ToplevelImpl*)wl_resource_get_user_data(toplevelRes))->tagDescription, StringView(descr));
     }
 
     const struct xdg_toplevel_tag_manager_v1_interface toplevelTagManagerImpl = {
