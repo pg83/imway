@@ -2546,8 +2546,10 @@ void KmsOutput::setCursorImage(const u32* argb) {
     cursorEnabled = true;
 }
 
+// an enabled cursor has a plane: the image that enables it is only set
+// with cursorCapW() > 0, and losing the plane clears both
 void KmsOutput::setCursorPos(int x, int y, bool visible) {
-    if (!curW || !cursorEnabled) {
+    if (!cursorEnabled) {
         return;
     }
 
