@@ -10765,13 +10765,12 @@ void SeatState::handleTablet(const TabletToolEvent& ev) {
     }
 }
 
+// A begin never finds a gesture of its kind still running: the input router
+// ends its owner's gesture (this seat's, which claims every begin) before
+// it hands out the next begin.
 void SeatState::handleSwipeBegin(u32 fingers) {
     if (!ptrFocus) {
         return;
-    }
-
-    if (!activeSwipes.empty()) {
-        handleSwipeEnd(true);
     }
 
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
@@ -10807,10 +10806,6 @@ void SeatState::handlePinchBegin(u32 fingers) {
         return;
     }
 
-    if (!activePinches.empty()) {
-        handlePinchEnd(true);
-    }
-
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
 
     for (wl_resource* r : pinches) {
@@ -10842,10 +10837,6 @@ void SeatState::handlePinchEnd(bool cancelled) {
 void SeatState::handleHoldBegin(u32 fingers) {
     if (!ptrFocus) {
         return;
-    }
-
-    if (!activeHolds.empty()) {
-        handleHoldEnd(true);
     }
 
     u32 serial = wl_display_next_serial(srv->display), t = nowMsec();
