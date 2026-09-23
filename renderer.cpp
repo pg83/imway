@@ -237,8 +237,11 @@ namespace {
         Cpu,
     };
 
+    // the renderer's per-buffer and per-use wl_shm state, in its lists for
+    // as long as they live: the client that owns them dies with the display,
+    // which WaylandImpl::run closes on every way out of the loop, before
+    // the renderer goes
     struct ShmCache: IntrusiveNode {
-        Weak<RendererImpl> owner;
         ObjPool* key = nullptr;
         DmabufBuffer* udmabuf = nullptr;
         ShmUpload* udmabufUpload = nullptr;
@@ -248,7 +251,6 @@ namespace {
     };
 
     struct ShmState: IntrusiveNode {
-        Weak<RendererImpl> owner;
         ShmContent* content = nullptr;
         ShmUpload* upload = nullptr;
         DmabufBuffer* dmabuf = nullptr;
@@ -530,7 +532,6 @@ namespace {
         void shmCopyWork();
         void shmCopyDone();
         void clearShmCopyTasks();
-        void detachShmState();
         void holdShmForFrame(ShmContent* content);
         void releaseInFlightShm();
         void rasterizeShape(int kind, u32* out);
@@ -719,15 +720,11 @@ ShmCopyTask::ShmCopyTask(Surface& s, ShmContent* c, ShmState* st)
 }
 
 ShmCache::~ShmCache() noexcept {
-    if (owner) {
-        unlink();
-    }
+    unlink();
 }
 
 ShmState::~ShmState() noexcept {
-    if (owner) {
-        unlink();
-    }
+    unlink();
 }
 
 TextureLease::TextureLease(void* o, SurfaceTexture* t, void (*d)(void*, SurfaceTexture*))
@@ -884,7 +881,6 @@ RendererImpl::~RendererImpl() noexcept {
         destroyTexture((SurfaceTexture*)textures.mutBack());
     }
 
-    detachShmState();
     weak.invalidate();
     ImGui_ImplVulkan_Shutdown();
     ImGui::DestroyContext();
@@ -1161,7 +1157,6 @@ ShmCache& RendererImpl::shmCache(ShmContent& content) {
 
     ShmCache* cache = content.storagePool->make<ShmCache>();
 
-    cache->owner.bind(weak);
     cache->key = content.storagePool;
     shmCaches.pushBack(cache);
 
@@ -1177,7 +1172,6 @@ ShmState& RendererImpl::shmState(ShmContent& content) {
 
     ShmState* state = content.statePool->make<ShmState>();
 
-    state->owner.bind(weak);
     state->content = &content;
     state->damage = content.damage;
     shmStates.pushBack(state);
@@ -1727,29 +1721,6 @@ void RendererImpl::clearShmCopyTasks() {
 
         alloc->release(task);
     }
-}
-
-void RendererImpl::detachShmState() {
-    forEach<ShmState>(shmStates, [](ShmState& state) {
-        if (state.upload) {
-            state.upload->finish();
-        }
-
-        state.owner.reset();
-        state.unlink();
-    });
-    forEach<ShmCache>(shmCaches, [](ShmCache& cache) {
-        if (cache.udmabufUpload) {
-            cache.udmabufUpload->finish();
-        }
-
-        if (cache.cpuUpload) {
-            cache.cpuUpload->finish();
-        }
-
-        cache.owner.reset();
-        cache.unlink();
-    });
 }
 
 void RendererImpl::loadFont() {
