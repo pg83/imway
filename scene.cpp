@@ -44,8 +44,10 @@ int Surface::geomY() const {
     return hasGeom ? geom.y : 0;
 }
 
+// a geometry is only ever set from xdg_surface.set_window_geometry, which
+// refuses a size that is not positive
 int Surface::geomW() const {
-    if (!hasGeom || geom.w <= 0) {
+    if (!hasGeom) {
         return viewW();
     }
 
@@ -55,7 +57,7 @@ int Surface::geomW() const {
 }
 
 int Surface::geomH() const {
-    if (!hasGeom || geom.h <= 0) {
+    if (!hasGeom) {
         return viewH();
     }
 
