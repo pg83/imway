@@ -7,7 +7,9 @@
 // every kind of source and slot: a wl_data_source clipboard, a primary
 // selection source, and data-control sources in both the clipboard and the
 // primary slot. A selection under a bogus serial takes no slot, and a
-// drag started with no button held is cancelled at once.
+// drag started with no button held is cancelled at once. A clipboard source
+// its owner destroys empties the clipboard, which the focused client hears
+// as a null selection; clearing an empty clipboard sends nothing.
 
 static struct zwp_primary_selection_device_manager_v1* primary_mgr;
 static struct ext_data_control_manager_v1* dc_mgr;
@@ -66,6 +68,29 @@ static void dc_cancelled(void* d, struct ext_data_control_source_v1* s) {
 static const struct ext_data_control_source_v1_listener dc_listener = {
     .send = dc_send,
     .cancelled = dc_cancelled,
+};
+
+static int selection_events, null_selections;
+
+static void dd_data_offer(void* d, struct wl_data_device* dd, struct wl_data_offer* o) {
+    (void)d; (void)dd; (void)o;
+}
+static void dd_enter(void* d, struct wl_data_device* dd, uint32_t s, struct wl_surface* su,
+                     wl_fixed_t x, wl_fixed_t y, struct wl_data_offer* o) {
+    (void)d; (void)dd; (void)s; (void)su; (void)x; (void)y; (void)o;
+}
+static void dd_leave(void* d, struct wl_data_device* dd) { (void)d; (void)dd; }
+static void dd_motion(void* d, struct wl_data_device* dd, uint32_t t, wl_fixed_t x, wl_fixed_t y) {
+    (void)d; (void)dd; (void)t; (void)x; (void)y;
+}
+static void dd_drop(void* d, struct wl_data_device* dd) { (void)d; (void)dd; }
+static void dd_selection(void* d, struct wl_data_device* dd, struct wl_data_offer* o) {
+    (void)d; (void)dd;
+    selection_events++;
+    null_selections += o == NULL;
+}
+static const struct wl_data_device_listener dd_listener = {
+    dd_data_offer, dd_enter, dd_leave, dd_motion, dd_drop, dd_selection,
 };
 
 static struct wl_data_source* wl_source(void) {
@@ -134,6 +159,8 @@ int main(void) {
 
     uint32_t serial = wlk_enter_serial;
     struct wl_data_device* dd = wl_data_device_manager_get_data_device(wl_ddm, wl_seat_g);
+
+    wl_data_device_add_listener(dd, &dd_listener, NULL);
     struct zwp_primary_selection_device_v1* pd =
         zwp_primary_selection_device_manager_v1_get_device(primary_mgr, wl_seat_g);
     struct ext_data_control_device_v1* dcd = ext_data_control_manager_v1_get_data_device(dc_mgr, wl_seat_g);
@@ -159,7 +186,17 @@ int main(void) {
     if (expect_one_cancel("drag without a grab"))
         return 1;
 
+    // the primary selection refuses a bogus serial the same way
+    zwp_primary_selection_device_v1_set_selection(pd, primary_source(), serial + 1000);
     zwp_primary_selection_device_v1_set_selection(pd, primary_source(), serial);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    if (cancelled) {
+        fprintf(stderr, "a primary selection under a bogus serial took the slot\n");
+        return 1;
+    }
+    printf("primary bogus serial: ok\n");
+
     zwp_primary_selection_device_v1_set_selection(pd, primary_source(), serial);
     if (expect_one_cancel("primary"))
         return 1;
@@ -178,6 +215,36 @@ int main(void) {
     ext_data_control_device_v1_set_primary_selection(dcd, dc_source());
     if (expect_one_cancel("data-control primary"))
         return 1;
+
+    struct wl_data_source* last = wl_source();
+
+    wl_data_device_set_selection(dd, last, serial);
+    if (expect_one_cancel("clipboard over data-control"))
+        return 1;
+
+    int nulls = null_selections;
+
+    wl_data_source_destroy(last);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    if (null_selections != nulls + 1) {
+        fprintf(stderr, "the destroyed clipboard source left no null selection (%d -> %d)\n",
+                nulls, null_selections);
+        return 1;
+    }
+    printf("destroyed clipboard source: ok\n");
+
+    int events = selection_events;
+
+    wl_data_device_set_selection(dd, NULL, serial);
+    wl_display_roundtrip(wl_dpy);
+    wl_display_roundtrip(wl_dpy);
+    if (selection_events != events) {
+        fprintf(stderr, "clearing an empty clipboard sent %d selection events\n",
+                selection_events - events);
+        return 1;
+    }
+    printf("clearing an empty clipboard: ok\n");
 
     printf("selection replace done\n");
 
