@@ -281,13 +281,11 @@ void TestChaosMonkey::armBus(BusFault kind, StringView arg) {
 
 // every armed rule for this member counts the call; the first one due
 // fires and is spent
+// every message the seams see is a method call or a signal, which always
+// carries a member
 bool TestChaosMonkey::busFires(BusFault kind, DBusMessage* msg) {
-    const char* member = msg ? dbus_message_get_member(msg) : nullptr;
+    const char* member = dbus_message_get_member(msg);
     bool fire = false;
-
-    if (!member) {
-        return false;
-    }
 
     for (BusRule& rule : busRules) {
         if (!rule.armed || rule.kind != kind || StringView((const char*)rule.member) != StringView(member)) {
@@ -548,8 +546,9 @@ bool TestChaosMonkey::deviceExtension(const char* name, bool offered) {
 }
 
 // buses
+// a site's own allocation may already have failed
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
-    if (!busFires(BusFault::message, built)) {
+    if (!built || !busFires(BusFault::message, built)) {
         return built;
     }
 

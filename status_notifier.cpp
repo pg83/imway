@@ -453,9 +453,10 @@ ItemBox* StatusNotifierImpl::find(Peer& peer, StringView service, StringView pat
     return nullptr;
 }
 
+// libdbus's own Disconnected signal has no sender; every signal has a path
 ItemBox* StatusNotifierImpl::findSignal(DBusMessage* msg) {
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
-    StringView path(dbus_message_get_path(msg) ? dbus_message_get_path(msg) : "");
+    StringView path(dbus_message_get_path(msg));
 
     for (Peer* peer : each<Peer>(peers)) {
         for (ItemBox* item : peer->items) {

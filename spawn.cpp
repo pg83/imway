@@ -47,7 +47,8 @@ namespace {
 
         if (WIFEXITED(w->rstatus)) {
             log << "imway: child "_sv << (long)w->rpid << " exited with status "_sv << (long)WEXITSTATUS(w->rstatus) << endL;
-        } else if (WIFSIGNALED(w->rstatus)) {
+        } else {
+            // a watcher that does not trace hears of terminations only
             log << "imway: child "_sv << (long)w->rpid << " killed by signal "_sv << (long)WTERMSIG(w->rstatus) << endL;
         }
     }

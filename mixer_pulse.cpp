@@ -380,7 +380,9 @@ void PulseMixer::queryDefaultSink() {
 
 void PulseMixer::updateSink(const pa_sink_info* info) {
     sinkIndex = info->index;
-    channels = info->volume.channels ? info->volume.channels : 2;
+    // a sink's volume carries one entry per channel, and a sink has at
+    // least one
+    channels = info->volume.channels;
     vol = (float)pa_cvolume_avg(&info->volume) / (float)PA_VOLUME_NORM;
     mute = info->mute != 0;
     notify();
@@ -411,10 +413,8 @@ namespace {
                 m->ready = false;
 
                 break;
-            case PA_CONTEXT_TERMINATED:
-                m->ready = false;
-
-                break;
+            // TERMINATED follows only our own disconnect, which silences
+            // this callback first
             default:
                 break;
         }

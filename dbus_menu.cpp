@@ -1016,9 +1016,9 @@ DBusHandlerResult MenusImpl::registrarMessage(DBusMessage* msg) {
 void MenusImpl::nameOwnerChanged(DBusMessage* msg) {
     const char *name = "", *oldOwner = "", *newOwner = "";
 
-    if (!dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID)) {
-        return;
-    }
+    // the filter takes this signal only from the bus, which always sends
+    // its three names
+    dbus_message_get_args(msg, nullptr, DBUS_TYPE_STRING, &name, DBUS_TYPE_STRING, &oldOwner, DBUS_TYPE_STRING, &newOwner, DBUS_TYPE_INVALID);
 
     for (MenuImpl* menu : each<MenuImpl>(menus)) {
         if (text(menu->service) == StringView(name)) {
@@ -1037,9 +1037,10 @@ void MenusImpl::nameOwnerChanged(DBusMessage* msg) {
     }
 }
 
+// libdbus's own Disconnected signal has no sender; every signal has a path
 void MenusImpl::signal(DBusMessage* msg) {
     StringView sender(dbus_message_get_sender(msg) ? dbus_message_get_sender(msg) : "");
-    StringView path(dbus_message_get_path(msg) ? dbus_message_get_path(msg) : "");
+    StringView path(dbus_message_get_path(msg));
 
     for (MenuImpl* menu : each<MenuImpl>(menus)) {
         if (text(menu->path) != path || (text(menu->service) != sender && text(menu->owner) != sender)) {

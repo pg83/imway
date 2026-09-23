@@ -580,7 +580,9 @@ Icon* IconStoreImpl::resolveName(IconName& n, u32 bucket) {
         return loadSvgFile(sv(*n.svg), bucket);
     }
 
-    return largest ? loadPngFile(sv(*largest->path)) : nullptr;
+    // a name is indexed only for an svg or a png, so without the svg there
+    // is a largest png
+    return loadPngFile(sv(*largest->path));
 }
 
 // a name-or-path Icon= value, cached under its own symbol so an app_id
