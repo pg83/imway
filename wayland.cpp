@@ -4756,7 +4756,8 @@ namespace {
 
         offer->accepted = mime != nullptr;
 
-        if (src && offer->dnd && !src->primary) {
+        // a drag offer's source came through start_drag, a wl_data_source
+        if (src && offer->dnd) {
             wl_data_source_send_target(src->res, mime);
         }
     }
@@ -4811,7 +4812,7 @@ namespace {
         DataSource* src = offer->source.get();
         constexpr u32 valid = WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY | WL_DATA_DEVICE_MANAGER_DND_ACTION_MOVE | WL_DATA_DEVICE_MANAGER_DND_ACTION_ASK;
 
-        if (!offer->dnd || offer->finished || !src || src->primary) {
+        if (!offer->dnd || offer->finished || !src) {
             wl_resource_post_error(res, WL_DATA_OFFER_ERROR_INVALID_OFFER, "set_actions requires an active drag offer");
 
             return;
