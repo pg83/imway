@@ -892,10 +892,9 @@ RendererImpl::~RendererImpl() noexcept {
         vkDestroySemaphore(device, syncOut, nullptr);
     }
 
+    // only semaphores that were created ever join the pool
     for (VkSemaphore sem : syncWaitPool) {
-        if (sem) {
-            vkDestroySemaphore(device, sem, nullptr);
-        }
+        vkDestroySemaphore(device, sem, nullptr);
     }
 
     for (VkFramebuffer fb : scanFbs) {
@@ -1100,7 +1099,7 @@ VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
         case GpuUse::output:
             return comp->chaos->outputTarget(result);
         case GpuUse::renderer:
-            return result;
+            break;
     }
 
     return result;
