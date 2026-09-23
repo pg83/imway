@@ -83,6 +83,9 @@
 
 using namespace stl;
 
+// present only in coverage-instrumented builds
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+
 struct TextureLease;
 
 struct ShmUpload {
@@ -1024,7 +1027,14 @@ bool RendererImpl::finishGpuFrame(bool wait) {
     if (status == VK_TIMEOUT) {
         // a frame fence that never signals is a hung gpu, not a slow one
         *(comp->log) << "imway: gpu hang (frame fence timeout), exiting"_sv << endL;
-        // same as a lost device: die where we stand, do not unwind
+
+        // same as a lost device: die where we stand, do not unwind. The
+        // counters are written by hand, as control's gpu-fatal does: what
+        // this session ran is measured like any other's
+        if (__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+
         _exit(1);
     }
 
