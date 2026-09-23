@@ -11432,17 +11432,10 @@ bool SeatState::validSerial(wl_client* client, u32 serial) const {
     return false;
 }
 
+// a pointer is entered at most once per focus: pointerSetFocus clears the
+// list before entering each of the new focus's pointers, and seatGetPointer
+// enters only the one it just created
 void SeatState::rememberPointerEnter(wl_resource* pointer, u32 serial) {
-    for (size_t i = 0; i < pointerEnters.length(); i++) {
-        PointerEnter& entry = pointerEnters.mut(i);
-
-        if (entry.pointer == pointer) {
-            entry.serial = serial;
-
-            return;
-        }
-    }
-
     pointerEnters.pushBack({pointer, serial});
 }
 
