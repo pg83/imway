@@ -79,7 +79,7 @@ jobs:
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
+            python3 ./build -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -120,7 +120,7 @@ jobs:
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
+            python3 ./build -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -161,7 +161,7 @@ jobs:
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
+            python3 ./build -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -202,7 +202,7 @@ jobs:
           set -o pipefail
           {
             python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} test &&
-            python3 ./build -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
+            python3 ./build -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test
           } 2>&1 | tee "$RUNNER_TEMP/tests.log"
 
       - name: Summarize failure
@@ -254,7 +254,7 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+            python3 ./build -B .b-cov -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=0/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -322,7 +322,7 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+            python3 ./build -B .b-cov -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=1/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -390,7 +390,7 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+            python3 ./build -B .b-cov -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=2/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
@@ -458,7 +458,7 @@ jobs:
           {
             python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 ${TEST_FILTER:+-Dfilter=$TEST_FILTER} imway_test test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
-            python3 ./build -B .b-cov -j "$(nproc)" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
+            python3 ./build -B .b-cov -j "$(( $(nproc) / 2 ))" -k -Druns=1 -Dshard=3/4 '-Dfilter=headless_*syncobj*' -Dtest_wrap="$PWD/dev/vng_wrap.sh" test ||
               echo "coverage: failing scenarios above; the Tests slices gate them"
             python3 ./build -B .b-cov -j "$(nproc)" imway_test &&
             bash dev/ci_coverage.sh .b-cov "$RUNNER_TEMP/profiles"
