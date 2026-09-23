@@ -1894,7 +1894,7 @@ void RendererImpl::setup() {
 
     VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &fence)));
     VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &captureFence)));
-    captureFencePoll = FencePoll::create(*comp->pool, comp->loop, *comp->chaos, device, captureFence, *comp->pool->make<CallCaptureRetired>(this));
+    captureFencePoll = FencePoll::create(*comp->pool, *comp, device, captureFence, *comp->pool->make<CallCaptureRetired>(this));
 
     if (hasSyncFd) {
         // DeviceVk enabled VK_KHR_external_semaphore_fd whenever it set
@@ -1935,7 +1935,7 @@ void RendererImpl::setup() {
 
     setupOutputTransform();
 
-    texPool = VkTexturePool::create(*comp->pool, device, sampler, *comp->chaos);
+    texPool = VkTexturePool::create(*comp->pool, device, sampler, *comp);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

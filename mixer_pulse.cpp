@@ -33,7 +33,6 @@ using namespace stl;
 
 struct pa_io_event {
     ev_io io{};
-    struct ev_loop* loop = nullptr;
     pa_mainloop_api* api = nullptr;
     pa_io_event_cb_t cb = nullptr;
     pa_io_event_destroy_cb_t destroy = nullptr;
@@ -42,7 +41,6 @@ struct pa_io_event {
 
 struct pa_time_event {
     ev_timer timer{};
-    struct ev_loop* loop = nullptr;
     pa_mainloop_api* api = nullptr;
     pa_time_event_cb_t cb = nullptr;
     pa_time_event_destroy_cb_t destroy = nullptr;
@@ -51,7 +49,6 @@ struct pa_time_event {
 
 struct pa_defer_event {
     ev_prepare prep{};
-    struct ev_loop* loop = nullptr;
     pa_mainloop_api* api = nullptr;
     pa_defer_event_cb_t cb = nullptr;
     pa_defer_event_destroy_cb_t destroy = nullptr;
@@ -60,18 +57,18 @@ struct pa_defer_event {
 };
 
 namespace {
-    // the allocator context behind pa_mainloop_api::userdata: event objects
-    // come from the composer's small-object allocator (the dbus_conn WatchBox
-    // pattern), not the raw heap. Kept trivially destructible: the pool
-    // preserves the storage until its own death, so PulseMixer's pooledGuard
-    // teardown — which runs after the impl dies and frees the surviving
-    // events through io_free/time_free/defer_free — still releases safely
+    // the context behind pa_mainloop_api::userdata: the composer, whose loop
+    // the events ride and from whose small-object allocator they come (the
+    // dbus_conn WatchBox pattern), not the raw heap. Kept trivially
+    // destructible: the pool preserves the storage until its own death, so
+    // PulseMixer's pooledGuard teardown — which runs after the impl dies and
+    // frees the surviving events through io_free/time_free/defer_free —
+    // still releases safely
     struct PulseApi {
         pa_mainloop_api api{};
-        struct ev_loop* loop = nullptr;
-        SmallObjAllocator* alloc = nullptr;
+        Composer* comp = nullptr;
 
-        PulseApi(SmallObjAllocator* a, struct ev_loop* l);
+        PulseApi(Composer& c);
     };
 
     PulseApi* apiCtx(pa_mainloop_api* a) {
@@ -108,33 +105,32 @@ namespace {
     }
 
     pa_io_event* ioNew(pa_mainloop_api* a, int fd, pa_io_event_flags_t f, pa_io_event_cb_t cb, void* userdata) {
-        pa_io_event* e = apiCtx(a)->alloc->make<pa_io_event>();
+        pa_io_event* e = apiCtx(a)->comp->alloc->make<pa_io_event>();
 
-        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
         evIoInit(&e->io, ioEvCb, fd, toEv(f));
         e->io.data = e;
-        ev_io_start(e->loop, &e->io);
+        ev_io_start(apiCtx(e->api)->comp->loop, &e->io);
 
         return e;
     }
 
     void ioEnable(pa_io_event* e, pa_io_event_flags_t f) {
-        ev_io_stop(e->loop, &e->io);
+        ev_io_stop(apiCtx(e->api)->comp->loop, &e->io);
         evIoSet(&e->io, e->io.fd, toEv(f));
-        ev_io_start(e->loop, &e->io);
+        ev_io_start(apiCtx(e->api)->comp->loop, &e->io);
     }
 
     void ioFree(pa_io_event* e) {
-        ev_io_stop(e->loop, &e->io);
+        ev_io_stop(apiCtx(e->api)->comp->loop, &e->io);
 
         if (e->destroy) {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->alloc->release(e);
+        apiCtx(e->api)->comp->alloc->release(e);
     }
 
     void ioSetDestroy(pa_io_event* e, pa_io_event_destroy_cb_t cb) {
@@ -167,20 +163,19 @@ namespace {
     // a null time disarms the event, as on pulse's own mainloop; it is
     // not a time that has already passed
     void timeRestart(pa_time_event* e, const struct timeval* tv) {
-        ev_timer_stop(e->loop, &e->timer);
+        ev_timer_stop(apiCtx(e->api)->comp->loop, &e->timer);
 
         if (!tv) {
             return;
         }
 
         evTimerSet(&e->timer, delayUntil(*tv), 0.);
-        ev_timer_start(e->loop, &e->timer);
+        ev_timer_start(apiCtx(e->api)->comp->loop, &e->timer);
     }
 
     pa_time_event* timeNew(pa_mainloop_api* a, const struct timeval* tv, pa_time_event_cb_t cb, void* userdata) {
-        pa_time_event* e = apiCtx(a)->alloc->make<pa_time_event>();
+        pa_time_event* e = apiCtx(a)->comp->alloc->make<pa_time_event>();
 
-        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
@@ -192,13 +187,13 @@ namespace {
     }
 
     void timeFree(pa_time_event* e) {
-        ev_timer_stop(e->loop, &e->timer);
+        ev_timer_stop(apiCtx(e->api)->comp->loop, &e->timer);
 
         if (e->destroy) {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->alloc->release(e);
+        apiCtx(e->api)->comp->alloc->release(e);
     }
 
     void timeSetDestroy(pa_time_event* e, pa_time_event_destroy_cb_t cb) {
@@ -212,15 +207,14 @@ namespace {
     }
 
     pa_defer_event* deferNew(pa_mainloop_api* a, pa_defer_event_cb_t cb, void* userdata) {
-        pa_defer_event* e = apiCtx(a)->alloc->make<pa_defer_event>();
+        pa_defer_event* e = apiCtx(a)->comp->alloc->make<pa_defer_event>();
 
-        e->loop = apiCtx(a)->loop;
         e->api = a;
         e->cb = cb;
         e->userdata = userdata;
         evPrepareInit(&e->prep, deferPrepCb);
         e->prep.data = e;
-        ev_prepare_start(e->loop, &e->prep);
+        ev_prepare_start(apiCtx(e->api)->comp->loop, &e->prep);
         e->started = true;
 
         return e;
@@ -228,24 +222,24 @@ namespace {
 
     void deferEnable(pa_defer_event* e, int b) {
         if (b && !e->started) {
-            ev_prepare_start(e->loop, &e->prep);
+            ev_prepare_start(apiCtx(e->api)->comp->loop, &e->prep);
             e->started = true;
         } else if (!b && e->started) {
-            ev_prepare_stop(e->loop, &e->prep);
+            ev_prepare_stop(apiCtx(e->api)->comp->loop, &e->prep);
             e->started = false;
         }
     }
 
     void deferFree(pa_defer_event* e) {
         if (e->started) {
-            ev_prepare_stop(e->loop, &e->prep);
+            ev_prepare_stop(apiCtx(e->api)->comp->loop, &e->prep);
         }
 
         if (e->destroy) {
             e->destroy(e->api, e, e->userdata);
         }
 
-        apiCtx(e->api)->alloc->release(e);
+        apiCtx(e->api)->comp->alloc->release(e);
     }
 
     void deferSetDestroy(pa_defer_event* e, pa_defer_event_destroy_cb_t cb) {
@@ -275,9 +269,8 @@ namespace {
     }
 }
 
-PulseApi::PulseApi(SmallObjAllocator* a, struct ev_loop* l)
-    : loop(l)
-    , alloc(a)
+PulseApi::PulseApi(Composer& c)
+    : comp(&c)
 {
 }
 
@@ -318,7 +311,7 @@ namespace {
 PulseMixer::PulseMixer(Composer& comp)
     : c(&comp)
 {
-    papi = comp.pool->make<PulseApi>(comp.alloc, comp.loop);
+    papi = comp.pool->make<PulseApi>(comp);
     fillApi(*papi);
     ctx = pa_context_new(&papi->api, "imway");
 

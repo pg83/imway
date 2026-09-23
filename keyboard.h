@@ -7,8 +7,7 @@ namespace stl {
     class ObjPool;
 }
 
-struct Log;
-struct ChaosMonkey;
+struct Composer;
 
 // modifier mask for key bindings, resolved from the real xkb state
 inline constexpr u32 kModShift = 1u << 0;
@@ -54,5 +53,5 @@ struct Keyboard {
     // a keymap that cannot be built, its state or its sealed file throws,
     // the reason logged; group is the layout to start in, clamped to the new
     // list
-    static Keyboard* create(stl::ObjPool* pool, Log& log, ChaosMonkey& chaos, stl::StringView layout, stl::StringView options, u32 group);
+    static Keyboard* create(stl::ObjPool* pool, Composer& c, stl::StringView layout, stl::StringView options, u32 group);
 };

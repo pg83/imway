@@ -6,7 +6,7 @@ namespace stl {
     class ObjPool;
 }
 
-struct ChaosMonkey;
+struct Composer;
 
 // A growable allocator of imgui-compatible texture descriptor sets. imgui's
 // own AddTexture draws from a single fixed pool a client can exhaust (one
@@ -27,5 +27,5 @@ struct VkTexturePool {
     // set is one alloc returned, pool the one it named with it
     virtual void free(VkDescriptorSet set, VkDescriptorPool pool) = 0;
 
-    static VkTexturePool* create(stl::ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
+    static VkTexturePool* create(stl::ObjPool& pool, VkDevice device, VkSampler sampler, Composer& c);
 };

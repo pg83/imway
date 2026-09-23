@@ -2,6 +2,7 @@
 
 #include "pooled.h"
 #include "listener.h"
+#include "composer.h"
 #include "chaos_monkey.h"
 #include "ev_watch.h"
 
@@ -13,15 +14,14 @@ using namespace stl;
 
 namespace {
     struct FencePollImpl: FencePoll {
-        struct ev_loop* loop = nullptr;
-        ChaosMonkey* chaos = nullptr;
+        Composer* c = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         Listener* done = nullptr;
         ev_timer* timer = nullptr;
         bool active = false;
 
-        FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, VkDevice d, VkFence f, Listener& listener);
+        FencePollImpl(ObjPool& pool, Composer& comp, VkDevice d, VkFence f, Listener& listener);
 
         void arm() override;
         bool armed() const override;
@@ -34,15 +34,14 @@ namespace {
     }
 }
 
-FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, VkDevice d, VkFence f, Listener& listener)
-    : loop(l)
-    , chaos(&cm)
+FencePollImpl::FencePollImpl(ObjPool& pool, Composer& comp, VkDevice d, VkFence f, Listener& listener)
+    : c(&comp)
     , device(d)
     , fence(f)
     , done(&listener)
 {
     timer = pool.make<ev_timer>();
-    struct ev_loop* heldLoop = loop;
+    struct ev_loop* heldLoop = c->loop;
     ev_timer* heldTimer = timer;
 
     pooledGuard(pool, [heldLoop, heldTimer] {
@@ -57,7 +56,7 @@ FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, 
 // capture it is not busy with
 void FencePollImpl::arm() {
     active = true;
-    ev_timer_again(loop, timer);
+    ev_timer_again(c->loop, timer);
 }
 
 bool FencePollImpl::armed() const {
@@ -66,21 +65,21 @@ bool FencePollImpl::armed() const {
 
 void FencePollImpl::cancel() {
     active = false;
-    ev_timer_stop(loop, timer);
+    ev_timer_stop(c->loop, timer);
 }
 
 void FencePollImpl::poll() {
-    VkResult status = chaos->readbackPoll(vkGetFenceStatus(device, fence));
+    VkResult status = c->chaos->readbackPoll(vkGetFenceStatus(device, fence));
 
     if (status == VK_NOT_READY) {
         return;
     }
 
     active = false;
-    ev_timer_stop(loop, timer);
+    ev_timer_stop(c->loop, timer);
     done->onListen(&status);
 }
 
-FencePoll* FencePoll::create(ObjPool& pool, struct ev_loop* loop, ChaosMonkey& chaos, VkDevice device, VkFence fence, Listener& done) {
-    return pool.make<FencePollImpl>(pool, loop, chaos, device, fence, done);
+FencePoll* FencePoll::create(ObjPool& pool, Composer& c, VkDevice device, VkFence fence, Listener& done) {
+    return pool.make<FencePollImpl>(pool, c, device, fence, done);
 }

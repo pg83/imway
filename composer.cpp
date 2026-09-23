@@ -45,7 +45,7 @@ void Composer::rebuildKeyboard(StringView layouts, StringView options) {
     Keyboard* built = nullptr;
 
     try {
-        built = Keyboard::create(next, *log, *chaos, layouts, options, kb ? kb->activeLayout() : 0);
+        built = Keyboard::create(next, *this, layouts, options, kb ? kb->activeLayout() : 0);
     } catch (...) {
         delete next;
 

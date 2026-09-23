@@ -311,7 +311,6 @@ namespace {
         Composer* comp = nullptr;
         OffloadJob* authJob = nullptr;
         LockFilter filter;
-        Log* log = nullptr;
         char password[256] = "";
         char authPassword[256] = "";
         char authService[64] = "";
@@ -326,7 +325,7 @@ namespace {
             wipe(authPassword, sizeof(authPassword));
             wipe(authService, sizeof(authService));
             wipeImGuiPasswordState();
-            *log << StringView("imway: lockscreen closed") << endL;
+            *comp->log << StringView("imway: lockscreen closed") << endL;
         }
 
         void onListen(void*) override;
@@ -851,7 +850,7 @@ void Dialog::beginAuthentication() {
     failed = false;
     authenticating = true;
     stdAtomicStore(&accepted, false, MemoryOrder::Relaxed);
-    *log << StringView("imway: lockscreen authenticating") << endL;
+    *comp->log << StringView("imway: lockscreen authenticating") << endL;
     authJob->run();
     comp->scene->needsFrame = true;
 }
@@ -860,10 +859,10 @@ void Dialog::onListen(void*) {
     authenticating = false;
 
     if (stdAtomicFetch(&accepted, MemoryOrder::Acquire)) {
-        *log << StringView("imway: lockscreen accepted") << endL;
+        *comp->log << StringView("imway: lockscreen accepted") << endL;
         closeRequested = true;
     } else {
-        *log << StringView("imway: lockscreen rejected") << endL;
+        *comp->log << StringView("imway: lockscreen rejected") << endL;
         failed = true;
         focusField = true;
     }
@@ -880,7 +879,6 @@ void openLockOverlay(Composer& c, DialogState** state) {
     created->pool = pool;
     created->opaque = value;
     value->comp = &c;
-    value->log = c.log;
     value->authJob = OffloadJob::create(c, *pool, [](void* self) {
         auto& dialog = *(Dialog*)self;
 

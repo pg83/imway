@@ -19,20 +19,21 @@ extern "C" {
 using namespace stl;
 
 namespace {
-    // the libwayland and libseat handlers carry no user data: the one log of
-    // this process is reachable only through a static
-    Log* externLogSink = nullptr;
+    // the libwayland and libseat handlers carry no user data: the composer,
+    // and through it the one log of this process, is reachable only through
+    // a static
+    Composer* externComposer = nullptr;
 
     void wlServerLog(const char* fmt, va_list args) {
-        externVLog(*externLogSink, "wayland"_sv, fmt, args);
+        externVLog(*externComposer->log, "wayland"_sv, fmt, args);
     }
 
     void seatLog(enum libseat_log_level, const char* fmt, va_list args) {
-        externVLog(*externLogSink, "seat"_sv, fmt, args);
+        externVLog(*externComposer->log, "seat"_sv, fmt, args);
     }
 
     void lcmsLog(cmsContext, cmsUInt32Number code, const char* text) {
-        *externLogSink << "lcms: error "_sv << (u64)code << ": "_sv << StringView(text) << endL;
+        *externComposer->log << "lcms: error "_sv << (u64)code << ": "_sv << StringView(text) << endL;
     }
 }
 
@@ -56,7 +57,7 @@ void externVLog(Log& log, StringView tag, const char* fmt, va_list args) {
 }
 
 void installExternLogHandlers(Composer& c) {
-    externLogSink = c.log;
+    externComposer = &c;
 
     wl_log_set_handler_server(wlServerLog);
     libseat_set_log_handler(seatLog);

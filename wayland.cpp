@@ -123,20 +123,14 @@ namespace {
         void operator delete(ShmMapping* mapping, std::destroying_delete_t) noexcept;
     };
 
-    // the wl_shm global's data: what every pool it creates allocates from
-    struct ShmGlobal {
-        SmallObjAllocator* alloc = nullptr;
-        ChaosMonkey* chaos = nullptr;
-    };
-
     struct ShmPool final: public ARC {
         SmallObjAllocator* alloc;
-        ChaosMonkey* chaos;
+        Composer* comp;
         wl_resource* resource = nullptr;
         IntrusivePtr<ShmMapping> mapping;
         int fd;
 
-        ShmPool(SmallObjAllocator* alloc, ChaosMonkey* chaos, int fd, ShmMapping* mapping);
+        ShmPool(SmallObjAllocator* alloc, Composer* comp, int fd, ShmMapping* mapping);
         ~ShmPool() noexcept;
         void operator delete(ShmPool* pool, std::destroying_delete_t) noexcept;
     };
@@ -299,7 +293,7 @@ namespace {
     }
 
     bool shmBufferBeginAccess(ShmBuffer* buffer) {
-        return shmMappingBeginAccess(buffer->pool->chaos, buffer->pool->mapping.mutPtr());
+        return shmMappingBeginAccess(buffer->pool->comp->chaos, buffer->pool->mapping.mutPtr());
     }
 
     bool shmBufferEndAccess(ShmBuffer*) {
@@ -309,7 +303,7 @@ namespace {
     bool shmContentBeginAccess(ShmContent* content) {
         auto* use = (ShmUse*)content;
 
-        return shmMappingBeginAccess(use->buffer->pool->chaos, use->mapping.mutPtr());
+        return shmMappingBeginAccess(use->buffer->pool->comp->chaos, use->mapping.mutPtr());
     }
 
     bool shmContentEndAccess(ShmContent*) {
@@ -364,7 +358,7 @@ namespace {
         ObjPool::Ref cacheLifetime = ObjPool::fromMemory();
         IntrusivePtr<ShmBuffer> buffer = pool->alloc->make<ShmBuffer>(pool->alloc, pool, cacheLifetime.mutPtr(), offset, width, height, stride, format);
 
-        buffer->resource = pool->chaos->resource(wl_resource_create(client, &wl_buffer_interface, 1, id));
+        buffer->resource = pool->comp->chaos->resource(wl_resource_create(client, &wl_buffer_interface, 1, id));
 
         if (!buffer->resource) {
             wl_client_post_no_memory(client);
@@ -394,7 +388,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(pool->alloc, pool->chaos, pool->fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(pool->alloc, pool->comp->chaos, pool->fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap");
@@ -420,8 +414,8 @@ namespace {
     }
 
     void shmCreatePool(wl_client* client, wl_resource* resource, u32 id, int fd, i32 size) {
-        auto* shm = (ShmGlobal*)wl_resource_get_user_data(resource);
-        SmallObjAllocator* alloc = shm->alloc;
+        auto* comp = (Composer*)wl_resource_get_user_data(resource);
+        SmallObjAllocator* alloc = comp->alloc;
 
         if (size <= 0) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_STRIDE, "invalid size (%d)", size);
@@ -430,7 +424,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(alloc, shm->chaos, fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(alloc, comp->chaos, fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap fd %d: %s", fd, strerror(errno));
@@ -439,10 +433,10 @@ namespace {
             return;
         }
 
-        IntrusivePtr<ShmPool> pool = alloc->make<ShmPool>(alloc, shm->chaos, fd, mapping);
+        IntrusivePtr<ShmPool> pool = alloc->make<ShmPool>(alloc, comp, fd, mapping);
 
         mappingUpdateStable(pool.mutPtr(), mapping);
-        pool->resource = shm->chaos->resource(wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id));
+        pool->resource = comp->chaos->resource(wl_resource_create(client, &wl_shm_pool_interface, wl_resource_get_version(resource), id));
 
         if (!pool->resource) {
             wl_client_post_no_memory(client);
@@ -464,8 +458,8 @@ namespace {
     };
 
     void bindShm(wl_client* client, void* data, u32 version, u32 id) {
-        auto* shm = (ShmGlobal*)data;
-        wl_resource* resource = shm->chaos->resource(wl_resource_create(client, &wl_shm_interface, version, id));
+        auto* comp = (Composer*)data;
+        wl_resource* resource = comp->chaos->resource(wl_resource_create(client, &wl_shm_interface, version, id));
 
         if (!resource) {
             wl_client_post_no_memory(client);
@@ -478,8 +472,8 @@ namespace {
         wl_shm_send_format(resource, WL_SHM_FORMAT_XRGB8888);
     }
 
-    bool initWaylandShm(wl_display* display, ShmGlobal* shm) {
-        return shm->chaos->global(wl_global_create(display, &wl_shm_interface, 2, shm, bindShm)) != nullptr;
+    bool initWaylandShm(wl_display* display, Composer* comp) {
+        return comp->chaos->global(wl_global_create(display, &wl_shm_interface, 2, comp, bindShm)) != nullptr;
     }
 
     ShmBuffer* shmBufferFromResource(wl_resource* resource) {
@@ -505,9 +499,9 @@ namespace {
         mapping->alloc->release(mapping);
     }
 
-    ShmPool::ShmPool(SmallObjAllocator* a, ChaosMonkey* c, int f, ShmMapping* m)
+    ShmPool::ShmPool(SmallObjAllocator* a, Composer* c, int f, ShmMapping* m)
         : alloc(a)
-        , chaos(c)
+        , comp(c)
         , mapping(m)
         , fd(f)
     {
@@ -1607,7 +1601,6 @@ namespace {
 
     struct WaylandImpl: public Wayland, public InputSink, public Listener, public IconProvider {
         Composer* composer = nullptr;
-        ShmGlobal shmGlobal;
         wl_display* display = nullptr;
         // the display as the pool guard that destroys it sees it: closeDisplay
         // empties it once it has taken the display down itself
@@ -12312,7 +12305,6 @@ namespace {
 
 WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
     : composer(&comp)
-    , shmGlobal{comp.alloc, comp.chaos}
     , socketName(cfg.socketName)
     , mainDevice(cfg.mainDevice)
     , seat(*this)
@@ -12374,7 +12366,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
         Errno().raise(StringBuilder() << "wl socket "_sv << socketName << " failed (XDG_RUNTIME_DIR?)"_sv);
     }
 
-    STD_VERIFY(initWaylandShm(display, &shmGlobal));
+    STD_VERIFY(initWaylandShm(display, composer));
     createGlobals();
 
     wlIo = pooledIo(*comp.pool, composer->loop);

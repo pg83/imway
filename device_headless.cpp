@@ -401,7 +401,7 @@ void HeadlessOutput::present(const void*) {
 HeadlessDevice::HeadlessDevice(Composer& comp)
     : c(&comp)
 {
-    vk = c->pool->make<DeviceVk>(*c->log, *c->chaos, -1);
+    vk = c->pool->make<DeviceVk>(*c, -1);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) {

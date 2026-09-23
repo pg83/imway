@@ -20,7 +20,7 @@ refused() { # <chaos> <failed check>
 }
 
 refused display=1 "display"
-refused global=wl_shm "initWaylandShm(display, &shmGlobal)"
+refused global=wl_shm "initWaylandShm(display, composer)"
 refused global=xdg_wm_base "chaos.global(wl_global_create(display, iface, version, data, bind)"
 refused format-table=0 "fbTableFd >= 0"
 refused format-table=1 "composer->chaos->formatTableWrite(write(fbTableFd, &entry, sizeof(entry))) == sizeof(entry)"

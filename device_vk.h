@@ -24,7 +24,7 @@ inline constexpr u32 kFourccP010 = 0x30313050;
 
 struct ChaosMonkey;
 struct DmabufFormat;
-struct Log;
+struct Composer;
 
 // bounded gpu waits: a lost or hung device must not hang the compositor.
 // The policy is deliberate: no in-process recovery — log and die, the
@@ -55,13 +55,13 @@ struct DeviceVk {
     int udmabufFd = -1;
     PFN_vkGetMemoryFdPropertiesKHR getMemoryFdProps = nullptr;
     PFN_vkGetMemoryHostPointerPropertiesEXT getMemoryHostPointerProps = nullptr;
-    Log* log = nullptr;
+    Composer* comp = nullptr;
     // VK_EXT_debug_utils: loader and validation messages into the log
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 
     // drmFd < 0 picks any vulkan device (headless); otherwise the one that
     // drives that drm node. pool-owned, borrowed by const pointer elsewhere
-    DeviceVk(Log& log, ChaosMonkey& chaos, int drmFd);
+    DeviceVk(Composer& c, int drmFd);
     ~DeviceVk() noexcept;
 
     DeviceVk(const DeviceVk&) = delete;

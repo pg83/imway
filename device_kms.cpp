@@ -956,7 +956,7 @@ KmsDevice::KmsDevice(Composer& comp, StringView devPath)
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_UNIVERSAL_PLANES, 1) == 0);
     STD_VERIFY(drmSetClientCap(fd, DRM_CLIENT_CAP_ATOMIC, 1) == 0);
 
-    vk = c->pool->make<DeviceVk>(*comp.log, *comp.chaos, fd);
+    vk = c->pool->make<DeviceVk>(comp, fd);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) {

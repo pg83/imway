@@ -130,9 +130,11 @@ void vkWaitOrDie(VkDevice device, VkFence fence, const char* what, ChaosMonkey& 
     }
 }
 
-DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
-    : log(&l)
+DeviceVk::DeviceVk(Composer& c, int drmFd)
+    : comp(&c)
 {
+    ChaosMonkey& chaos = *c.chaos;
+
     this->drmFd = drmFd;
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -163,7 +165,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
         dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
         dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
         dbg.pfnUserCallback = vkDebugLog;
-        dbg.pUserData = this->log;
+        dbg.pUserData = this->comp->log;
         create(this->instance, &dbg, nullptr, &this->debugMessenger);
     }
 
@@ -234,7 +236,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
         this->phys = devs[0];
 
         if (drmFd >= 0) {
-            *log << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
+            *comp->log << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
         }
     }
 
@@ -246,7 +248,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
 
     const VkPhysicalDeviceProperties& props = props2.properties;
 
-    *log << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
+    *comp->log << "imway: vulkan device: "_sv << (const char*)props.deviceName << endL;
     this->maxImageDim = props.limits.maxImageDimension2D;
     memcpy(this->deviceUuid, ids.deviceUUID, VK_UUID_SIZE);
 
@@ -291,7 +293,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     for (const char* name : dmabufMemoryExts) {
         if (!hasExt(this->phys, name)) {
             hasDmabufMemory = false;
-            *log << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
+            *comp->log << "imway: vulkan lacks "_sv << name << ", dmabuf disabled"_sv << endL;
         }
     }
 
@@ -304,7 +306,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     bool hasDrmModifier = hasExt(this->phys, VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME);
 
     if (!hasDrmModifier) {
-        *log << "imway: vulkan lacks "_sv << StringView(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) << ", dmabuf image import disabled"_sv << endL;
+        *comp->log << "imway: vulkan lacks "_sv << StringView(VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME) << ", dmabuf image import disabled"_sv << endL;
     }
 
     this->hasDmabuf = hasDmabufMemory && hasDrmModifier;
@@ -332,7 +334,7 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
         }
 
         if (!this->hasSyncFd) {
-            *log << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
+            *comp->log << "imway: no SYNC_FD semaphores, implicit-sync bridge disabled"_sv << endL;
         }
     }
 
@@ -492,5 +494,5 @@ void DeviceVk::queryDmabufFormatsImpl(VisitorFace&& vis) const {
     addFormat(VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, kFourccNv12, 0, true);
     addFormat(VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16, kFourccP010, 0, true);
 
-    *log << "imway: dmabuf formats: "_sv << n << endL;
+    *comp->log << "imway: dmabuf formats: "_sv << n << endL;
 }

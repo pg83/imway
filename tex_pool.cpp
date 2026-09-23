@@ -2,6 +2,7 @@
 
 #include "util.h"
 #include "pooled.h"
+#include "composer.h"
 #include "chaos_monkey.h"
 
 #include <std/lib/vector.h>
@@ -16,7 +17,7 @@ namespace {
     constexpr u32 kMaxShift = 16; // clamp so the chunk size never overflows u32
 
     struct VkTexturePoolImpl: public VkTexturePool {
-        VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos);
+        VkTexturePoolImpl(ObjPool& pool, VkDevice device, VkSampler sampler, Composer& c);
 
         VkDescriptorSet alloc(VkImageView view, VkImageLayout imageLayout, VkDescriptorPool& outPool, VkImageView chromaView) override;
         void free(VkDescriptorSet set, VkDescriptorPool pool) override;
@@ -27,17 +28,17 @@ namespace {
         ObjPool& pool;
         VkDevice device;
         VkSampler sampler;
-        ChaosMonkey* chaos;
+        Composer* comp;
         VkDescriptorSetLayout layout = VK_NULL_HANDLE;
         Vector<VkDescriptorPool>* chunks = nullptr;
     };
 }
 
-VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosMonkey& c)
+VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, Composer& c)
     : pool(p)
     , device(d)
     , sampler(s)
-    , chaos(&c)
+    , comp(&c)
 {
     // identical to imgui's texture descriptor set layout, so imgui binds our
     // sets as-is. Binding 1 carries the interleaved UV plane for NV12/P010.
@@ -54,7 +55,7 @@ VkTexturePoolImpl::VkTexturePoolImpl(ObjPool& p, VkDevice d, VkSampler s, ChaosM
 
     dlci.bindingCount = 2;
     dlci.pBindings = bindings;
-    STD_VERIFY(chaos->setup(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout)) == VK_SUCCESS);
+    STD_VERIFY(comp->chaos->setup(vkCreateDescriptorSetLayout(device, &dlci, nullptr, &layout)) == VK_SUCCESS);
 
     // one guard for the whole chain, registered now: a chunk grown later
     // than the renderer that frees sets into it still dies where the chain
@@ -91,7 +92,7 @@ VkDescriptorPool VkTexturePoolImpl::grow() {
 
     VkDescriptorPool p = VK_NULL_HANDLE;
 
-    if (chaos->descriptorPool(vkCreateDescriptorPool(device, &dpci, nullptr, &p)) != VK_SUCCESS) {
+    if (comp->chaos->descriptorPool(vkCreateDescriptorPool(device, &dpci, nullptr, &p)) != VK_SUCCESS) {
         // a failed creation leaves no pool; one the fault seam refused after
         // the fact is released here
         vkDestroyDescriptorPool(device, p, nullptr);
@@ -140,7 +141,7 @@ VkDescriptorSet VkTexturePoolImpl::alloc(VkImageView view, VkImageLayout imageLa
 
         ai.descriptorPool = p;
         VkDescriptorSet set = VK_NULL_HANDLE;
-        VkResult r = chaos->descriptorRoom(chaos->descriptorSet(vkAllocateDescriptorSets(device, &ai, &set)), i);
+        VkResult r = comp->chaos->descriptorRoom(comp->chaos->descriptorSet(vkAllocateDescriptorSets(device, &ai, &set)), i);
 
         if (r == VK_SUCCESS) {
             write(set, view, chromaView, imageLayout);
@@ -163,6 +164,6 @@ void VkTexturePoolImpl::free(VkDescriptorSet set, VkDescriptorPool pool) {
     vkFreeDescriptorSets(device, pool, 1, &set);
 }
 
-VkTexturePool* VkTexturePool::create(ObjPool& pool, VkDevice device, VkSampler sampler, ChaosMonkey& chaos) {
-    return pool.make<VkTexturePoolImpl>(pool, device, sampler, chaos);
+VkTexturePool* VkTexturePool::create(ObjPool& pool, VkDevice device, VkSampler sampler, Composer& c) {
+    return pool.make<VkTexturePoolImpl>(pool, device, sampler, c);
 }

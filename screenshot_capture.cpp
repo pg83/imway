@@ -176,7 +176,7 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
 
     VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fci, nullptr, &fence)));
 
-    fencePoll = FencePoll::create(*c.pool, c.loop, *c.chaos, device, fence, *c.pool->make<CallShotFenceDone>(this));
+    fencePoll = FencePoll::create(*c.pool, c, device, fence, *c.pool->make<CallShotFenceDone>(this));
     fileJob = OffloadJob::create(c, [](void* self) {
         ((ScreenshotCaptureImpl*)self)->buildFileWork();
     }, this, *c.pool->make<CallShotFileDone>(this));

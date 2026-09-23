@@ -26,7 +26,7 @@ namespace {
 
     struct NotificationsImpl: public Notifications, public Listener {
         DBusConnection* conn = nullptr;
-        Notifier* notifier = nullptr;
+        Composer* comp = nullptr;
 
         NotificationsImpl(Composer& c);
 
@@ -42,7 +42,7 @@ namespace {
 
 NotificationsImpl::NotificationsImpl(Composer& c)
     : conn(c.bus->raw())
-    , notifier(c.notifier)
+    , comp(&c)
 {
     DBusError err;
 
@@ -207,7 +207,7 @@ void NotificationsImpl::notify(DBusMessage* msg) {
     p.expireMs = expireMs;
     p.replacesId = replaces;
 
-    u32 id = notifier->post(p);
+    u32 id = comp->notifier->post(p);
 
     DBusMessage* reply = dbus_message_new_method_return(msg);
 
@@ -220,7 +220,7 @@ void NotificationsImpl::closeCall(DBusMessage* msg) {
     u32 id = 0;
 
     if (dbus_message_get_args(msg, nullptr, DBUS_TYPE_UINT32, &id, DBUS_TYPE_INVALID)) {
-        notifier->close(id, kClosedByCall);
+        comp->notifier->close(id, kClosedByCall);
     }
 
     DBusMessage* reply = dbus_message_new_method_return(msg);
