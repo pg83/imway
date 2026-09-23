@@ -395,7 +395,9 @@ void drawDock(Composer& c, DockResult& result) {
                     } else {
                         c.statusNotifier->activate(tray->primary, (int)mouse.x, (int)mouse.y);
                     }
-                } else if (group.pinned) {
+                } else {
+                    // no window and no tray item: a slot is only ever made
+                    // for one of those or for a pinned application
                     size_t length = group.appId.length() < sizeof(result.launchApp) - 1 ? group.appId.length() : sizeof(result.launchApp) - 1;
 
                     memcpy(result.launchApp, group.appId.begin(), length);

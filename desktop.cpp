@@ -584,7 +584,7 @@ namespace {
 
         // osd: armed by mixer/backlight changes, fades at the tail
         u64 osdMs = 0;
-        int osdKind = 0; // 1 volume, 2 brightness
+        int osdKind = 0; // 1 volume, 2 brightness, 3 hdr sdr white
 
         DialogState* wifiState = nullptr;
         bool wifiToggle = false;
@@ -1605,7 +1605,8 @@ void DesktopImpl::buildUi(Scene& scene) {
                 drawOsd(scene.outW, uiScale, "volume"_sv, comp->mixer->volume(), comp->mixer->muted(), alpha);
             } else if (osdKind == 2) {
                 drawOsd(scene.outW, uiScale, "brightness"_sv, output->brightness(), false, alpha);
-            } else if (osdKind == 3 && output->colorState().hdr()) {
+            } else if (output->colorState().hdr()) {
+                // kind 3, the hdr sdr-white step: gone if hdr went off under it
                 drawOsd(scene.outW, uiScale, "hdr"_sv, (float)(output->colorState().sdrWhiteNits / output->colorState().displayPeakNits), false, alpha);
             }
 

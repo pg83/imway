@@ -9,6 +9,7 @@
 #include "dbus_menu_ui.h"
 
 #include <time.h>
+#include <string.h>
 
 using namespace stl;
 
@@ -28,13 +29,13 @@ namespace {
 
         // Submit both rectangular shadows before either material rectangle.
         // Their internal halves are subsequently covered by chrome itself;
-        // only the union's outer shadow remains visible.
-        if (io.WindowShadowCallback) {
-            ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
+        // only the union's outer shadow remains visible. The renderer
+        // installs the callback when it creates the ImGui context, before
+        // any frame builds the chrome
+        ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking;
 
-            io.WindowShadowCallback(background, pos, ImVec2(dockW, size.y), 0.f, flags, io.WindowShadowCallbackUserData);
-            io.WindowShadowCallback(background, ImVec2(pos.x + dockW, pos.y), ImVec2(size.x - dockW, topH), 0.f, flags, io.WindowShadowCallbackUserData);
-        }
+        io.WindowShadowCallback(background, pos, ImVec2(dockW, size.y), 0.f, flags, io.WindowShadowCallbackUserData);
+        io.WindowShadowCallback(background, ImVec2(pos.x + dockW, pos.y), ImVec2(size.x - dockW, topH), 0.f, flags, io.WindowShadowCallbackUserData);
     }
 
     void drawOuterBorder(Composer& c, ImDrawList& draw) {
@@ -195,13 +196,9 @@ void drawDesktopChrome(Composer& c, const DesktopChromeInfo& info, DesktopChrome
     result.launcherX = dock.launcherX;
     result.launcherY = dock.launcherY;
 
-    for (size_t i = 0; i < sizeof(result.launchApp); i++) {
-        result.launchApp[i] = dock.launchApp[i];
-
-        if (!dock.launchApp[i]) {
-            break;
-        }
-    }
+    // the dock always terminates what it writes, within the same size
+    static_assert(sizeof(result.launchApp) == sizeof(dock.launchApp));
+    memcpy(result.launchApp, dock.launchApp, sizeof(result.launchApp));
 
     Scene& scene = *c.scene;
 
