@@ -120,10 +120,6 @@ SeatSession::SeatSession(Composer& comp)
 }
 
 SeatSession::~SeatSession() noexcept {
-    if (!seat) {
-        return;
-    }
-
     ev_io_stop(loop, &io);
     libseat_close_seat(seat);
     seat = nullptr;
