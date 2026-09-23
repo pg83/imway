@@ -1,6 +1,7 @@
 // xdg-foreign-v2: an exported toplevel's handle imported by another party
 // must attach the importer's toplevel as a child of the exported one, and
-// revoking the export must break the relationship with a destroyed event.
+// revoking the export must break the relationship with a destroyed event,
+// leaving the import of another window's export alone.
 
 #include "wl_util.h"
 #include <xdg-foreign-unstable-v2-client-protocol.h>
@@ -33,6 +34,22 @@ static void imported_gone(void* d, struct zxdg_imported_v2* i) {
     imported_destroyed = 1;
 }
 static const struct zxdg_imported_v2_listener imported_listener = {imported_gone};
+
+// the child's own export, imported too
+static char other_handle[256];
+static int other_destroyed;
+
+static void other_exported_handle(void* d, struct zxdg_exported_v2* e, const char* h) {
+    (void)d; (void)e;
+    snprintf(other_handle, sizeof(other_handle), "%s", h);
+}
+static const struct zxdg_exported_v2_listener other_exported_listener = {other_exported_handle};
+
+static void other_imported_gone(void* d, struct zxdg_imported_v2* i) {
+    (void)d; (void)i;
+    other_destroyed = 1;
+}
+static const struct zxdg_imported_v2_listener other_imported_listener = {other_imported_gone};
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -70,6 +87,24 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     printf("client_reg_xdg_foreign: attached\n");
 
+    struct zxdg_exported_v2* other_exported = zxdg_exporter_v2_export_toplevel(exporter, child.surface);
+
+    zxdg_exported_v2_add_listener(other_exported, &other_exported_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+    if (!other_handle[0]) {
+        fprintf(stderr, "no handle for the second export\n");
+        return 1;
+    }
+
+    struct zxdg_imported_v2* other_imported = zxdg_importer_v2_import_toplevel(importer, other_handle);
+
+    zxdg_imported_v2_add_listener(other_imported, &other_imported_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+    if (other_destroyed) {
+        fprintf(stderr, "the second window's handle did not import\n");
+        return 1;
+    }
+
     // scenario checkpoint, then revoke the export
     wlk_watch_key = 57; // KEY_SPACE
     while (!wlk_watch_hits && wl_display_dispatch(wl_dpy) != -1) {
@@ -79,6 +114,10 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     if (!imported_destroyed) {
         fprintf(stderr, "no destroyed event after the export was revoked\n");
+        return 1;
+    }
+    if (other_destroyed) {
+        fprintf(stderr, "revoking one export destroyed the import of another\n");
         return 1;
     }
     printf("client_reg_xdg_foreign: revoked\n");
