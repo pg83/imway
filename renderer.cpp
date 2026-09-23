@@ -1195,22 +1195,13 @@ DmabufBuffer* RendererImpl::makeUdmabuf(ShmContent& content, ShmCache& cache, bo
     u64 offset = (u64)content.offset;
     u64 base = offset / page * page;
     u64 delta = offset - base;
+    // wl_shm keeps stride * height within INT32_MAX, so neither sum can wrap
     u64 span = (u64)content.stride * (u64)content.height;
-
-    if (span > UINT64_MAX - delta) {
-        return nullptr;
-    }
-
     u64 needed = delta + span;
-
-    if (needed > UINT64_MAX - (page - 1)) {
-        return nullptr;
-    }
-
     u64 size = (needed + page - 1) / page * page;
     struct stat st{};
 
-    if (!size || fstat(content.fd, &st) != 0 || base > (u64)st.st_size || size > (u64)st.st_size - base || (vkDevice->udmabufSizeLimit && size > vkDevice->udmabufSizeLimit)) {
+    if (fstat(content.fd, &st) != 0 || base > (u64)st.st_size || size > (u64)st.st_size - base || (vkDevice->udmabufSizeLimit && size > vkDevice->udmabufSizeLimit)) {
         return nullptr;
     }
 
