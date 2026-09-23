@@ -11296,9 +11296,7 @@ void SeatState::kbSendEnter(wl_resource* target) {
     }
 
     wl_array_release(&keys);
-    if (target) {
-        sendSelections(wl_resource_get_client(target));
-    }
+    sendSelections(enterClient);
 }
 
 void SeatState::updateModifiers() {
