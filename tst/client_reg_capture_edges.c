@@ -222,6 +222,25 @@ static int run_output(void) {
     return 0;
 }
 
+// under IMWAY_CHAOS=capture-submit=3 readback-fence=0: the first frame's
+// copy is refused on all three frames it is retried on, the second one's
+// readback is lost with the device, and the third lands
+static int run_output_faults(void) {
+    const int unknown = EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN;
+    struct ext_image_copy_capture_session_v1* session = output_session();
+    int w = (int)cap_w, h = (int)cap_h;
+
+    if (expect("refused", capture(session, NULL, make_buffer(w, h, w * 4, WL_SHM_FORMAT_XRGB8888), 0), unknown) ||
+        expect("lost", capture(session, NULL, make_buffer(w, h, w * 4, WL_SHM_FORMAT_XRGB8888), 0), unknown) ||
+        expect("landed", capture(session, NULL, make_buffer(w, h, w * 4, WL_SHM_FORMAT_XRGB8888), 0), 0x100)) {
+        return 1;
+    }
+
+    printf("output faults done\n");
+
+    return 0;
+}
+
 // the destination's memfd is cut to nothing before the capture is asked
 // for: the compositor's mapping outlives the file size, and the copy into
 // it faults
@@ -380,6 +399,7 @@ int main(int argc, char** argv) {
 
     if (!strcmp(argv[1], "output")) return run_output();
     if (!strcmp(argv[1], "output-sigbus")) return run_output_sigbus();
+    if (!strcmp(argv[1], "output-faults")) return run_output_faults();
     if (!strcmp(argv[1], "wlr")) return run_wlr();
     if (!strcmp(argv[1], "wlr-sigbus")) return run_wlr_sigbus();
 
