@@ -11,12 +11,14 @@ start_client
 wait_client "render fault ready"
 wait_rect 'title=render-fault-victim'
 
-x=$(dump_field 'title=render-fault-victim' x); y=$(dump_field 'title=render-fault-victim' y)
-w=$(dump_field 'title=render-fault-victim' w); h=$(dump_field 'title=render-fault-victim' h)
-
 band() { # <name>: mean brightness of a band just under the window, settled
-    local a="$XDG_RUNTIME_DIR/$1.a.ppm" b="$XDG_RUNTIME_DIR/$1.b.ppm" i
-    for i in $(seq 1 30); do
+    local a="$XDG_RUNTIME_DIR/$1.a.ppm" b="$XDG_RUNTIME_DIR/$1.b.ppm" i x y w h
+    # a loaded runner may still be placing the window: the rect is re-read
+    # for every try, and a try counts only when two frames agree
+    for i in $(seq 1 60); do
+        x=$(dump_field 'title=render-fault-victim' x); y=$(dump_field 'title=render-fault-victim' y)
+        w=$(dump_field 'title=render-fault-victim' w); h=$(dump_field 'title=render-fault-victim' h)
+        [[ -n "$x" && -n "$h" ]] || continue
         screenshot "$a" && screenshot "$b" || continue
         python3 - "$a" "$b" "$x" "$((y + h + 2))" "$((x + w))" "$((y + h + 12))" <<'PY' && return 0
 import sys
