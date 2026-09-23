@@ -227,11 +227,8 @@ bool ScreenshotCaptureImpl::busy() const {
     return busy_;
 }
 
+// the renderer asks only when no capture is busy (captureScreenshot)
 void ScreenshotCaptureImpl::request() {
-    if (busy_) {
-        return;
-    }
-
     busy_ = true;
     handoff = output->prepareScreenshot(*this);
 
@@ -288,11 +285,10 @@ void ScreenshotCaptureImpl::ensureReadback() {
     VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &readbackMap));
 }
 
+// the renderer submits for a request until a submit takes, and nothing of
+// the request is in flight before one does: busy, no fence armed, no file
+// being built, no scanout waiting to retire
 bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayout layout) {
-    if (!busy_ || fencePoll->armed() || fileJob->inFlight() || waitingRetire) {
-        return false;
-    }
-
     if (handoff && !output->takeScreenshot(scanoutIndex, shared)) {
         handoff = false;
     }
