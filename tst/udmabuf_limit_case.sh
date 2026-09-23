@@ -16,33 +16,29 @@ fi
 start_client
 wait_client "second sealed buffer committed"
 
-# the toplevel's first buffer is a plain pool (always cpu); the two sealed
-# commits come after it
-carried() {
-    [[ $(grep -c "wl_shm backend " "$IMWAY_LOG") -ge 3 ]]
-}
+# the toplevel's first buffer is a plain pool: when a frame uploads it
+# (not always, the sealed commit can replace it first) it goes to cpu.
+# Two frames after the client's last commit, both sealed pools have been
+# prepared; a plain pool never goes to udmabuf, so two udmabuf-buffer lines
+# are both sealed pools, and on the cpu side no udmabuf-buffer line at all
+screenshot "$XDG_RUNTIME_DIR/_a.ppm"
+screenshot "$XDG_RUNTIME_DIR/_b.ppm"
+backend_lines() { grep -c "wl_shm backend $1" "$IMWAY_LOG" || true; }
+carried() { [[ $(backend_lines "$expect") -ge 2 ]]; }
 
 await 100 carried || {
-    echo "the sealed commits reached no wl_shm backend"
-    cat "$IMWAY_LOG"
-    exit 1
-}
-
-if [[ $expect == udmabuf-buffer ]] && in_log "disabling wl_shm UDMABUF"; then
-    echo "SKIP: the udmabuf import itself fails on this host, past the cap"
-    exit 127
-fi
-
-want=2
-[[ $expect == cpu ]] && want=3
-[[ $(grep -c "wl_shm backend $expect" "$IMWAY_LOG") -ge $want ]] || {
+    if [[ $expect == udmabuf-buffer ]] && in_log "disabling wl_shm UDMABUF"; then
+        echo "SKIP: the udmabuf import itself fails on this host, past the cap"
+        exit 127
+    fi
     echo "the 3 MiB pools did not both go to $expect"
     grep "wl_shm" "$IMWAY_LOG"
     exit 1
 }
 
-if [[ $expect == cpu ]] && in_log "disabling wl_shm UDMABUF"; then
+if [[ $expect == cpu ]] && { in_log "disabling wl_shm UDMABUF" || [[ $(backend_lines udmabuf) -gt 0 ]]; }; then
     echo "a pool over the cap was handed to udmabuf anyway"
+    grep "wl_shm" "$IMWAY_LOG"
     exit 1
 fi
 
