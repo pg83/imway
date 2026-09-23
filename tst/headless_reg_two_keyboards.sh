@@ -3,7 +3,8 @@
 # client's keyboard only, and when the launcher takes the keyboard with a
 # key held, the focused client alone gets that key's release when it is
 # let go. Under a global layout policy the group switched in one window
-# stays when the focus moves to the other.
+# stays when the focus moves to the other. Each client's text input, never
+# enabled, follows its own client's keyboard focus alone.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -44,6 +45,7 @@ for _ in 1 2 3 4 5; do
     await 20 a_focused && break
 done
 a_focused || { echo "client a never took the focus"; dump_state; exit 1; }
+await 50 grep -q "^ti enter$" "$log_a" || { echo "client a's text input did not enter"; cat "$log_a"; exit 1; }
 
 ctl "key 42 press"
 await 50 grep -q "^mods 1$" "$log_a" || { echo "client a got no shift"; cat "$log_a"; exit 1; }
@@ -77,6 +79,7 @@ for _ in 1 2 3 4 5; do
     await 20 b_focused && break
 done
 b_focused || { echo "client b never took the focus"; dump_state; exit 1; }
+await 50 grep -q "^ti leave$" "$log_a" || { echo "client a's text input did not leave"; cat "$log_a"; exit 1; }
 layout_is RU || { echo "a global layout followed the focus"; dump_state; exit 1; }
 
 touch "$XDG_RUNTIME_DIR/go-exit"
