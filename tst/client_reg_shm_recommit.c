@@ -1,5 +1,7 @@
 // One sealed wl_shm buffer committed twice: green, then, once the
-// compositor released it, repainted blue in place and attached again.
+// compositor released it, repainted blue in place and attached again. With
+// the argument "outside" the second commit's damage lies wholly outside the
+// buffer.
 
 #include "wl_util.h"
 
@@ -23,14 +25,20 @@ static void fill(uint32_t* pixels, int count, uint32_t argb) {
     }
 }
 
-static void commit(struct wl_surface* surface, struct wl_buffer* buffer, int w, int h) {
+static void commit(struct wl_surface* surface, struct wl_buffer* buffer, int w, int h, int outside) {
     wl_surface_attach(surface, buffer, 0, 0);
-    wl_surface_damage_buffer(surface, 0, 0, w, h);
+
+    if (outside) {
+        wl_surface_damage_buffer(surface, w + 100, h + 100, 10, 10);
+    } else {
+        wl_surface_damage_buffer(surface, 0, 0, w, h);
+    }
+
     wl_surface_commit(surface);
     wl_display_flush(wl_dpy);
 }
 
-int main(void) {
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
 
@@ -38,6 +46,7 @@ int main(void) {
         return 1;
     }
 
+    int outside = argc > 1 && !strcmp(argv[1], "outside");
     int w = 640;
     int h = 480;
     int stride = w * 4;
@@ -72,7 +81,7 @@ int main(void) {
 
     wl_make_toplevel(&top, "shm-recommit", w, h, 0xff00ff00u);
     fill(pixels, w * h, 0xff00ff00u);
-    commit(top.surface, buffer, w, h);
+    commit(top.surface, buffer, w, h, 0);
     printf("green committed\n");
 
     while (!released && wl_display_dispatch(wl_dpy) != -1) {
@@ -84,7 +93,7 @@ int main(void) {
 
     released = 0;
     fill(pixels, w * h, 0xff0000ffu);
-    commit(top.surface, buffer, w, h);
+    commit(top.surface, buffer, w, h, outside);
     printf("blue committed\n");
 
     while (wl_display_dispatch(wl_dpy) != -1) {
