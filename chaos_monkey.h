@@ -44,6 +44,10 @@ struct ChaosMonkey {
     // the driver's answer on whether it can build a scanout image with a
     // candidate modifier
     virtual VkResult scanoutModifier(VkResult result) = 0;
+    // the answer of the VT_GETSTATE query that finds the session's VT
+    virtual int vtState(int result) = 0;
+    // the session's VT just opened; a failure takes over the fd
+    virtual int vtOpen(int fd) = 0;
 
     // wayland drm-lease: the fd the device's lease creation returned (or its
     // negative errno); a replacement failure closes the fd it was handed

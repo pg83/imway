@@ -2892,7 +2892,7 @@ void KmsOutput::setupVt() {
 
         vt_stat st{};
 
-        if (ioctl(fd, VT_GETSTATE, &st) == 0) {
+        if (c->chaos->vtState(ioctl(fd, VT_GETSTATE, &st)) == 0) {
             vt = st.v_active;
         }
 
@@ -2915,7 +2915,7 @@ void KmsOutput::setupVt() {
     // O_NOCTTY here and in the probes: a compositor without a controlling
     // terminal (a service, its own session) would otherwise adopt the
     // console and die of the SIGHUP its next hangup sends
-    ttyFd = open(p.cStr(), O_RDWR | O_NOCTTY | O_CLOEXEC);
+    ttyFd = c->chaos->vtOpen(open(p.cStr(), O_RDWR | O_NOCTTY | O_CLOEXEC));
 
     if (ttyFd < 0) {
         *(c->log) << "imway: "_sv << sv(p) << " unavailable, input will leak to console"_sv << endL;

@@ -41,6 +41,8 @@ using namespace stl;
 //                     one after fails
 //   scanout-modifier=N the next N scanout modifier queries come back
 //                     unsupported
+//   vt-state=N        the next N VT_GETSTATE queries fail
+//   vt-open=N         the next N opens of the session's VT fail
 //   lease=N           wayland drm-lease: the next N lease creations fail
 //                     with EBUSY, as when another lessee holds the objects
 //   client-import=K   renderer: K client-buffer import calls pass, every
@@ -99,6 +101,8 @@ namespace {
         // KMS backend
         int scanoutSkip = -1;
         int modifierFaults = 0;
+        int vtStateFaults = 0;
+        int vtOpenFaults = 0;
         int leaseFaults = 0;
         // renderer
         int clientImportSkip = -1;
@@ -131,6 +135,8 @@ namespace {
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
+        int vtState(int result) override;
+        int vtOpen(int fd) override;
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
@@ -203,6 +209,12 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "scanout-modifier"_sv) {
         // KMS backend
         modifierFaults = (int)arg.stou();
+    } else if (fault == "vt-state"_sv) {
+        // KMS backend
+        vtStateFaults = (int)arg.stou();
+    } else if (fault == "vt-open"_sv) {
+        // KMS backend
+        vtOpenFaults = (int)arg.stou();
     } else if (fault == "lease"_sv) {
         leaseFaults = (int)arg.stou();
     } else if (fault == "client-import"_sv) {
@@ -386,6 +398,24 @@ VkResult TestChaosMonkey::scanoutModifier(VkResult result) {
     return spend(modifierFaults) ? VK_ERROR_FORMAT_NOT_SUPPORTED : result;
 }
 
+int TestChaosMonkey::vtState(int result) {
+    return spend(vtStateFaults) ? -1 : result;
+}
+
+int TestChaosMonkey::vtOpen(int fd) {
+    if (!spend(vtOpenFaults)) {
+        return fd;
+    }
+
+    if (fd >= 0) {
+        close(fd);
+    }
+
+    errno = EACCES;
+
+    return -1;
+}
+
 int TestChaosMonkey::leaseFd(int fd) {
     if (!spend(leaseFaults)) {
         return fd;
@@ -551,6 +581,8 @@ namespace {
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
+        int vtState(int result) override;
+        int vtOpen(int fd) override;
         int leaseFd(int fd) override;
         // renderer
         VkResult clientImport(VkResult result) override;
@@ -604,6 +636,14 @@ VkResult IdleChaosMonkey::scanout(VkResult result) {
 
 VkResult IdleChaosMonkey::scanoutModifier(VkResult result) {
     return result;
+}
+
+int IdleChaosMonkey::vtState(int result) {
+    return result;
+}
+
+int IdleChaosMonkey::vtOpen(int fd) {
+    return fd;
 }
 
 int IdleChaosMonkey::leaseFd(int fd) {
