@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
 # imway-env: IMWAY_SHM_BACKEND=cpu IMWAY_SHM_COPY_DELAY_MS=1500 IMWAY_SHM_TRACE=1
-# The session ends while a wl_shm copy is still running on the offload lane
-# and its client is still connected: teardown waits the copy out, drops the
-# copy task whose completion will never be delivered, and exits cleanly.
+# The session ends while wl_shm copies are still on the offload lane: one
+# running, the others queued behind it (client_reg_shm_layouts commits six
+# buffers in one frame), their client still connected. Teardown waits the
+# running copy out, drops every task whose completion will never be
+# delivered, and exits cleanly.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_shm_offload"
+IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_shm_layouts"
 start_client
-await 50 in_log "wl_shm backend cpu" || { echo "the CPU copy was not selected"; cat "$IMWAY_LOG"; exit 1; }
+queued() {
+    [[ "$(grep -c "wl_shm backend cpu" "$IMWAY_LOG" || true)" -ge 3 ]]
+}
+await 50 queued || { echo "the copies were not queued"; cat "$IMWAY_LOG"; exit 1; }
 ctl "quit"
 exec 3>&-
 
