@@ -3183,9 +3183,10 @@ void KmsOutput::gemHandleRef(u32 handle) {
 }
 
 void KmsOutput::gemHandleUnref(u32 handle) {
+    // every unref pairs with a gemHandleRef of the same handle
     int* refs = gemHandles.find(handle);
 
-    if (refs && --*refs == 0) {
+    if (--*refs == 0) {
         drm_gem_close gc{};
 
         gc.handle = handle;
@@ -3324,10 +3325,6 @@ bool KmsOutput::directScanout(DmabufBuffer* buf, const FrameResourceRef& frame) 
 }
 
 void KmsOutput::dropScanoutFb(DmabufBuffer* buf) {
-    if (buf == currentDirect || (flipPending && buf == queuedDirect)) {
-        return;
-    }
-
     for (size_t i = 0; i < directFbs.length(); i++) {
         if (directFbs[i].buf != buf) {
             continue;
