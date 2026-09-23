@@ -4,7 +4,8 @@
 # a heading whose children make it a menu without children-display (Edit)
 # opens its popup, a heading that declares a submenu but has no children yet
 # (Empty) asks the application to prepare it and shows "loading...", an
-# invisible heading takes no place on the bar, and a second click on an open
+# invisible heading and a separator take no place on the bar, the informative
+# Help heading is drawn blue, and a second click on an open
 # heading closes its menu. Every heading is aimed at from the rect the bar
 # reports in the state dump.
 set -euo pipefail
@@ -29,6 +30,28 @@ nested_up() { grep -q "^about 29$" "$CLIENT_LOG"; }
 
 await 100 has_heading Edit || { echo "the bar reports no Edit heading"; dump_state; exit 1; }
 has_heading "Hidden heading" && { echo "an invisible heading was drawn on the bar"; exit 1; }
+dump_state | grep -q '^menubar heading id=5 ' && { echo "a separator heading was drawn on the bar"; exit 1; }
+
+# Help is informative: its label is drawn in the informative blue, not the
+# grey of the other headings
+blue_label() { # <label>
+    screenshot "$XDG_RUNTIME_DIR/bar.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/bar.ppm" "$(heading "$1" x0)" "$(heading "$1" y0)" "$(heading "$1" x1)" "$(heading "$1" y1)" <<'PY'
+import sys
+f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split()); f.readline(); d = f.read(w * h * 3)
+x0, y0, x1, y1 = map(int, sys.argv[2:6])
+blue = 0
+for y in range(y0, y1):
+    for x in range(x0, x1):
+        r, g, b = d[(y * w + x) * 3:(y * w + x) * 3 + 3]
+        if b > 180 and b > r + 60:
+            blue += 1
+sys.exit(0 if blue > 10 else 1)
+PY
+}
+await 50 blue_label Help || { echo "the informative Help heading is not drawn blue"; exit 1; }
+! blue_label Edit || { echo "the normal Edit heading is drawn blue"; exit 1; }
 
 # click a heading's centre until its popup is up (a click that landed before
 # the frame putting the heading under the pointer is repeated)

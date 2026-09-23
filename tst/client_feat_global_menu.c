@@ -282,7 +282,8 @@ static void send_layout(DBusMessage* call) {
     dbus_message_iter_close_container(&root, &props);
     dbus_message_iter_open_container(&root, DBUS_TYPE_ARRAY, "v", &children);
     append_file_menu(&children);
-    append_variant_leaf(&children, 2, "_Help", 0);
+    append_variant_leaf(&children, 2, "_Help", 9);
+    append_variant_leaf(&children, 5, NULL, 1);
     append_parent(&children, 3, "Empty", 1, NULL, NULL, 0);
     append_variant_leaf(&children, 4, "Hidden heading", 5);
     {
