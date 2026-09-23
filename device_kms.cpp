@@ -1427,6 +1427,35 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
     plCrtcW = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_W");
     plCrtcH = getPropId(fd, planeId, DRM_MODE_OBJECT_PLANE, "CRTC_H");
 
+    // every commit carries these: without one the modeset goes out
+    // incomplete and the kernel refuses it, so a driver lacking one is
+    // refused here, by name
+    const struct {
+        u32 id;
+        const char* name;
+    } required[] = {
+        {connCrtcId, "CRTC_ID"},
+        {crtcModeId, "MODE_ID"},
+        {crtcActive, "ACTIVE"},
+        {plFbId, "FB_ID"},
+        {plCrtcId, "CRTC_ID"},
+        {plSrcX, "SRC_X"},
+        {plSrcY, "SRC_Y"},
+        {plSrcW, "SRC_W"},
+        {plSrcH, "SRC_H"},
+        {plCrtcX, "CRTC_X"},
+        {plCrtcY, "CRTC_Y"},
+        {plCrtcW, "CRTC_W"},
+        {plCrtcH, "CRTC_H"},
+    };
+
+    for (const auto& r : required) {
+        if (!r.id) {
+            *(c.log) << "imway: kms: the driver does not describe "_sv << StringView(r.name) << endL;
+            Errno(ENOTSUP).raise("kms: incomplete atomic property set"_sv);
+        }
+    }
+
     // Fetch the whole legacy color pipeline for the startup scrub: KMS color
     // state survives compositor restarts even though our transform is in the
     // output shader.
