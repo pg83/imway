@@ -301,6 +301,19 @@ int main(void) {
     }
     expect("regrown", capture(&ss, 240, 150), ready);
 
+    // taller only, same width: the height alone is enough to bounce
+    wl_surface_attach(grow.surface, wl_solid(240, 180, 0xFFFF0000u), 0, 0);
+    wl_surface_damage(grow.surface, 0, 0, 240, 180);
+    wl_surface_commit(grow.surface);
+    wl_display_roundtrip(wl_dpy);
+
+    expect("taller", capture(&ss, 240, 150), constraints);
+    if (ss.w != 240 || ss.h != 180) {
+        fprintf(stderr, "no fresh constraints after the window grew taller: %ux%u\n", ss.w, ss.h);
+        return 1;
+    }
+    expect("retaller", capture(&ss, 240, 180), ready);
+
     // the window unmaps: the session stops, and so does every frame after
     wl_surface_attach(grow.surface, NULL, 0, 0);
     wl_surface_commit(grow.surface);

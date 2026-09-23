@@ -4,7 +4,8 @@
 // axis, finger-scrolls, stops both axes and presses two buttons on top of
 // each other. v4 has no frames, sources, discrete steps or stops; v5 gets
 // sources and stops but no discrete step for a half notch; v8 gets no
-// value120 for it either; the other client hears nothing at all.
+// value120 for it either; the other client hears nothing at all. A v4
+// pointer made once the pointer is in is entered at once, without a frame.
 
 #include "wl_util.h"
 
@@ -12,7 +13,7 @@ struct counts {
     int enters, frames, axes, sources, stops, discretes, value120s, buttons;
 };
 
-static struct counts c4, c5, c8, other;
+static struct counts c4, c5, c8, other, late;
 
 static void p_enter(void* d, struct wl_pointer* p, uint32_t s, struct wl_surface* su, wl_fixed_t x, wl_fixed_t y) {
     (void)p; (void)s; (void)su; (void)x; (void)y;
@@ -126,6 +127,15 @@ int main(void) {
     printf("client_reg_pointer_versions: mapped\n");
 
     while (!(c4.enters && c5.enters && c8.enters) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    // a v4 pointer made while the pointer is already in: entered at once,
+    // and without the frame v4 does not know
+    pointer_at(wl_dpy, 4, &late);
+
+    if (late.enters != 1 || late.frames) {
+        fprintf(stderr, "the late v4 pointer: %d enters, %d frames\n", late.enters, late.frames);
+        return 1;
     }
 
     printf("pointer entered\n");
