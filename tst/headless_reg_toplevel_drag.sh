@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # xdg-toplevel-drag: the attached toplevel tracks the cursor during a
-# pointer drag started from another window.
+# pointer drag started from another window; unmapped mid-drag, it is let go.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -50,5 +50,28 @@ dy=$(( wy - (ty - 10) )); dy=${dy#-}
     exit 1
 }
 
+# unmapped mid-drag, the window is let go: mapped again, the cursor moving
+# on no longer carries it
+ctl "key 57 press"
+ctl "key 57 release"
+wait_client "torn remapped"
+remapped() { [[ "$(dump_field 'app_id=drag-torn' mapped)" == 1 ]]; }
+await 50 remapped || { echo "the torn window did not map again"; dump_state; exit 1; }
+tx=1000
+ty=150
+ctl "motion $tx $ty"
+screenshot "$XDG_RUNTIME_DIR/_moved.ppm"
+ctl "motion $((tx + 1)) $ty"
+screenshot "$XDG_RUNTIME_DIR/_moved.ppm"
+wx=$(dump_field 'app_id=drag-torn' x)
+wy=$(dump_field 'app_id=drag-torn' y)
+dx=$(( wx - (tx + 1 - 20) )); dx=${dx#-}
+dy=$(( wy - (ty - 10) )); dy=${dy#-}
+(( dx > 50 || dy > 50 )) || {
+    echo "the remapped window still follows the cursor: at ${wx},${wy}"
+    exit 1
+}
+
 ctl "button left release"
-echo "OK: xdg-toplevel-drag moved the attached window with the cursor"
+expect_alive "compositor died unmapping the dragged window"
+echo "OK: xdg-toplevel-drag moved the attached window with the cursor, and let it go on unmap"

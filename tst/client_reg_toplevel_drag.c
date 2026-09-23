@@ -1,7 +1,8 @@
 // xdg-toplevel-drag: a toplevel attached to a data-source drag follows the
 // cursor. Start a pointer drag from a window, attach a second toplevel to it,
 // move the pointer, and the attached window must track the cursor (observed
-// through the compositor's window position in the state dump).
+// through the compositor's window position in the state dump). Unmapped
+// mid-drag, the window is let go: mapped again, it stays where it is put.
 
 #include "wl_util.h"
 #include <xdg-toplevel-drag-v1-client-protocol.h>
@@ -114,6 +115,19 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     printf("client_reg_toplevel_drag: dragging\n");
+
+    // a second KEY_SPACE tap: the torn window unmaps mid-drag, which ends
+    // its tracking, and maps again as a window of its own
+    while (wlk_watch_hits < 4 && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    wl_surface_attach(torn.surface, NULL, 0, 0);
+    wl_surface_commit(torn.surface);
+    torn.committed = 0;
+    wl_surface_commit(torn.surface);
+    while (!torn.committed && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    wl_display_roundtrip(wl_dpy);
+    printf("client_reg_toplevel_drag: torn remapped\n");
 
     while (wl_display_dispatch(wl_dpy) != -1) {
     }
