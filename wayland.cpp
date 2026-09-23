@@ -11961,15 +11961,11 @@ void SeatState::focusToplevel(Toplevel* t) {
     // under an active popup grab the keyboard belongs to kbOverride: the old
     // focus already got its leave at grab start, and the new one gets enter
     // when the grab ends (popupGone) — sending either here would show the
-    // client two focused surfaces at once
+    // client two focused surfaces at once. The leave covers the old focus's
+    // text inputs too: they get their leave before the new focus's enter,
+    // and an enabled one gives up the input method
     if (kbFocus && kbFocus->surface && !kbOverride) {
-        u32 serial = wl_display_next_serial(srv->display);
-
-        for (wl_resource* k : keyboards) {
-            if (sameClient(k, kbFocus)) {
-                wl_keyboard_send_leave(k, serial, resOf(kbFocus->surface.get()));
-            }
-        }
+        kbSendLeave(resOf(kbFocus->surface.get()));
     }
 
     kbFocus = t;
