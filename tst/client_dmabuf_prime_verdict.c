@@ -2,8 +2,10 @@
 // .create (the asynchronous path). The scenario's IMWAY_CHAOS decides the
 // driver's verdict on the first plane: argv[1] "refused" expects the params
 // to report failed, "unjudged" (a card fd that cannot judge) expects the
-// buffer to be created anyway. Exits 77 without a dma-buf source.
-//   usage: client_dmabuf_prime_verdict refused|unjudged
+// buffer to be created anyway, and "no-memory" (IMWAY_CHAOS=resource=
+// wl_buffer) expects the compositor to run out of memory making the
+// wl_buffer and say so. Exits 77 without a dma-buf source.
+//   usage: client_dmabuf_prime_verdict refused|unjudged|no-memory
 
 #include "wl_util.h"
 
@@ -112,6 +114,15 @@ int main(int argc, char** argv) {
     close(fd);
     zwp_linux_buffer_params_v1_create(params, 64, 64, FOURCC_ARGB8888, 0);
     while (!created && !failed && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (!strcmp(argv[1], "no-memory")) {
+        if (created || failed || wl_display_get_error(wl_dpy) != ENOMEM) {
+            fprintf(stderr, "no-memory: created=%d failed=%d error=%d\n", created, failed, wl_display_get_error(wl_dpy));
+            return 1;
+        }
+        printf("params out of memory\n");
+        return 0;
     }
 
     int want_created = !strcmp(argv[1], "unjudged");
