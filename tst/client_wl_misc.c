@@ -1776,6 +1776,44 @@ static int mode_plain_window(void) {
     return 0;
 }
 
+// ---- unusable-cached: a sync child's buffer the compositor cannot read ------
+// A wl_shm buffer whose stride is shorter than its pixel rows (legal for the
+// pool, which counts bytes against width) cannot be shown: cached on a sync
+// child, it empties the child when the parent commits.
+static int mode_unusable_cached(void) {
+    struct wl_toplevel_ctx t;
+
+    wl_make_toplevel(&t, "misc-unusable", 200, 150, 0xFFFF0000);
+
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+    struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, child, t.surface);
+
+    wl_subsurface_set_position(sub, 20, 20);
+    wl_surface_attach(child, wl_solid(60, 60, 0xFF00FF00), 0, 0);
+    wl_surface_damage(child, 0, 0, 60, 60);
+    wl_surface_commit(child);
+    wl_surface_commit(t.surface);
+    step(1); // the green child shows
+
+    int fd = memfd_create("misc-unusable", 0);
+
+    if (fd < 0 || ftruncate(fd, 60 * 60) < 0) return 2;
+
+    struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, 60 * 60);
+    // one byte per pixel of a four-byte format: no row fits in its stride
+    struct wl_buffer* narrow = wl_shm_pool_create_buffer(pool, 0, 60, 60, 60, WL_SHM_FORMAT_ARGB8888);
+
+    wl_shm_pool_destroy(pool);
+    close(fd);
+    wl_surface_attach(child, narrow, 0, 0);
+    wl_surface_damage(child, 0, 0, 60, 60);
+    wl_surface_commit(child);
+    wl_surface_commit(t.surface);
+    step(2); // the child is empty
+    idle();
+    return 0;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(60);
@@ -1810,6 +1848,7 @@ int main(int argc, char** argv) {
     if (!strcmp(mode, "icon-twice")) return mode_icon_twice();
     if (!strcmp(mode, "rescale")) return mode_rescale();
     if (!strcmp(mode, "nested")) return mode_nested();
+    if (!strcmp(mode, "unusable-cached")) return mode_unusable_cached();
     if (!strcmp(mode, "dialog-inert")) return mode_dialog_inert();
     if (!strcmp(mode, "plain-window")) return mode_plain_window();
     if (!strcmp(mode, "tearing-dead-surface")) return mode_tearing_dead_surface();
