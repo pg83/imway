@@ -139,7 +139,7 @@ static void on_done(void* d, struct ext_image_copy_capture_session_v1* s) {
 }
 static void on_stopped(void* d, struct ext_image_copy_capture_session_v1* s) {
     (void)s;
-    ((struct session*)d)->stopped = 1;
+    ((struct session*)d)->stopped++;
 }
 static const struct ext_image_copy_capture_session_v1_listener session_listener = {
     .buffer_size = on_buffer_size,
@@ -444,6 +444,16 @@ int main(void) {
     open_session(&ss, growSlot);
     if (!ss.stopped) {
         fprintf(stderr, "a session opened on an unmapped window did not stop\n");
+        return 1;
+    }
+
+    // the window dies under the stopped session: it is not stopped twice
+    destroy_window(&grow);
+    while (!handles[growSlot].closed && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    wl_display_roundtrip(wl_dpy);
+    if (ss.stopped != 1) {
+        fprintf(stderr, "a stopped session was stopped %d times\n", ss.stopped);
         return 1;
     }
     ext_image_copy_capture_session_v1_destroy(ss.s);
