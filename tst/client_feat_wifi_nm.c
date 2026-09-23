@@ -394,6 +394,8 @@ static DBusHandlerResult message(DBusConnection* c, DBusMessage* msg, void* data
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(120);
+    // NM_STATE: the device's state at startup, e.g. 50 to come up mid-connect
+    if (getenv("NM_STATE")) wlan_state = (uint32_t)atoi(getenv("NM_STATE"));
     conn = dbus_bus_get_private(DBUS_BUS_SYSTEM, NULL);
     if (!conn) return 1;
     dbus_connection_set_exit_on_disconnect(conn, FALSE);

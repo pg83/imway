@@ -1478,14 +1478,14 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
 
 static StringView wifiGlyph(WifiState s) {
     switch (s) {
-        case WifiState::connected:
-            return "wifi"_sv;
         case WifiState::connecting:
             return "wifi..."_sv;
         case WifiState::disconnected:
             return "wifi off"_sv;
         case WifiState::unavailable:
             return "no wifi"_sv;
+        case WifiState::connected:
+            break;
     }
 
     return "wifi"_sv;

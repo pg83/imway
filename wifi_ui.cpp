@@ -31,10 +31,10 @@ namespace {
             case WifiState::connecting:
                 return "connecting";
             case WifiState::connected:
-                return "connected";
+                break;
         }
 
-        return "";
+        return "connected";
     }
 }
 
