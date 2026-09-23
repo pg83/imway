@@ -13,7 +13,10 @@ y=$(( $(dump_field 'app_id=misc-cursor ' imgy) + 75 ))
 # the hover follows the pointer one composed frame behind, and on a loaded
 # runner the window's frame can still be on its way: aim again until the
 # client has had the enter and set its cursor
+wait_placed 'app_id=misc-cursor ' || { echo "the window never settled"; dump_state; exit 1; }
 for i in $(seq 0 40); do
+    x=$(( $(dump_field 'app_id=misc-cursor ' imgx) + 100 ))
+    y=$(( $(dump_field 'app_id=misc-cursor ' imgy) + 75 ))
     ctl "motion $((x + i % 2)) $y"; screenshot "$XDG_RUNTIME_DIR/_h.ppm"
     grep -q "cursor set" "$CLIENT_LOG" && break
 done

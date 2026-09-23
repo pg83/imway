@@ -305,6 +305,21 @@ await_mean() { # <ppm> <dump-pattern> <cond>
 
 # request a screenshot and wait until the file settles: it appears at
 # open() and fills up afterwards, so mere existence is a truncated read
+# wait until a window stops moving: on a slow runner it can still be placed
+# after it maps, and a rect read then aims at where it is no longer
+wait_placed() { # <dump-pattern>
+    local i last="" now
+
+    for ((i = 0; i < 50; i++)); do
+        now="$(dump_field "$1" imgx) $(dump_field "$1" imgy)"
+        [[ "$now" != " " && "$now" == "$last" ]] && return 0
+        last=$now
+        sleep 0.3
+    done
+
+    return 1
+}
+
 # screenshot until <check> passes on it: a buffer committed before the
 # call can still be a frame away from the output, so one shot after a
 # sleep is a coin toss on a loaded runner. The last try runs the check
