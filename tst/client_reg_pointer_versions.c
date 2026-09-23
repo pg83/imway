@@ -10,7 +10,7 @@
 #include "wl_util.h"
 
 struct counts {
-    int enters, frames, axes, sources, stops, discretes, value120s, buttons;
+    int enters, frames, axes, sources, stops, discretes, value120s, buttons, motions, leaves;
 };
 
 static struct counts c4, c5, c8, other, late;
@@ -19,8 +19,14 @@ static void p_enter(void* d, struct wl_pointer* p, uint32_t s, struct wl_surface
     (void)p; (void)s; (void)su; (void)x; (void)y;
     ((struct counts*)d)->enters++;
 }
-static void p_leave(void* d, struct wl_pointer* p, uint32_t s, struct wl_surface* su) { (void)d; (void)p; (void)s; (void)su; }
-static void p_motion(void* d, struct wl_pointer* p, uint32_t t, wl_fixed_t x, wl_fixed_t y) { (void)d; (void)p; (void)t; (void)x; (void)y; }
+static void p_leave(void* d, struct wl_pointer* p, uint32_t s, struct wl_surface* su) {
+    (void)p; (void)s; (void)su;
+    ((struct counts*)d)->leaves++;
+}
+static void p_motion(void* d, struct wl_pointer* p, uint32_t t, wl_fixed_t x, wl_fixed_t y) {
+    (void)p; (void)t; (void)x; (void)y;
+    ((struct counts*)d)->motions++;
+}
 static void p_button(void* d, struct wl_pointer* p, uint32_t s, uint32_t t, uint32_t b, uint32_t st) {
     (void)p; (void)s; (void)t; (void)b; (void)st;
     ((struct counts*)d)->buttons++;
@@ -151,6 +157,20 @@ int main(void) {
 
     if (other.enters || other.axes || other.buttons || other.frames) {
         fprintf(stderr, "the other client heard the pointer\n");
+        return 1;
+    }
+
+    // motion over the window and out of it: the v4 pointer gets both,
+    // still without a frame
+    int motions = c4.motions;
+
+    printf("move now\n");
+
+    while (!(c4.motions > motions && c4.leaves) && wl_display_dispatch(wl_dpy) != -1) {
+    }
+
+    if (c4.frames) {
+        fprintf(stderr, "the v4 pointer got %d frames with its motion and leave\n", c4.frames);
         return 1;
     }
 

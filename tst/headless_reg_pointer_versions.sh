@@ -37,6 +37,20 @@ ctl "button right press"
 ctl "button right release"
 ctl "button left release"
 
+wait_client "move now"
+x=$(dump_field 'app_id=pointer-versions' imgx)
+y=$(dump_field 'app_id=pointer-versions' imgy)
+ctl "motion $((x + 60)) $((y + 50))"
+
+# then off every client surface, over the dock, until the client saw it leave
+for _ in $(seq 1 20); do
+    ctl "motion 5 400"
+    sleep 0.2
+    ctl "motion 5 401"
+    grep -q "pointer versions done" "$CLIENT_LOG" && break
+    sleep 0.3
+done
+
 wait_client "pointer versions done"
 expect_client_ok "pointer events did not match their seat versions"
 echo "OK: pointer events followed each seat version and kept to the focused client"

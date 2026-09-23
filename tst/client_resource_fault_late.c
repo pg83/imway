@@ -323,6 +323,17 @@ static struct wp_image_description_v1* output_description(void) {
     return wp_color_management_output_v1_get_image_description(out);
 }
 
+// a description that fails (degenerate primaries) is a resource too
+static void colour_failed_description(void) {
+    struct wp_image_description_creator_params_v1* params =
+        wp_color_manager_v1_create_parametric_creator(G(wp_color_manager_v1));
+
+    wp_image_description_creator_params_v1_set_tf_named(params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
+    wp_image_description_creator_params_v1_set_primaries(params, 640000, 0, 300000, 600000, 150000, 60000,
+                                                          312700, 329000);
+    wp_image_description_creator_params_v1_create(params);
+}
+
 static void colour_description(void) {
     output_description();
 }
@@ -378,6 +389,7 @@ static const struct {
     {"colour-feedback", colour_feedback},
     {"colour-params", colour_params},
     {"colour-icc", colour_icc},
+    {"colour-failed-description", colour_failed_description},
     {"colour-description", colour_description},
     {"colour-info", colour_info},
     {"representation-surface", representation_surface},
