@@ -5,8 +5,8 @@
 # actually draw it. The client walks the whole enum; each observed value is
 # acked with a pointer wiggle that releases the client's next set_shape.
 # While the client is parked on a shape new to the renderer (crosshair,
-# grab, zoom-in), the screenshot must show the glyph's white core and black
-# outline over the flat red window.
+# grab, se-resize, zoom-in, all-resize), the screenshot must show the
+# glyph's white core and black outline over the flat red window.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -53,9 +53,8 @@ for shape in $(seq 1 36); do
     [[ -n "$ok" ]] || { echo "shape $shape never reached the scene (now: $(dump_field 'cursor shape' shape))"; exit 1; }
 
     case "$shape" in
-        8|16|33) # crosshair, grab, zoom-in: shapes the renderer never drew before
-            sleep 0.2
-            glyph_visible "$shape" || { echo "shape $shape is not drawn"; exit 1; }
+        8|16|23|33|36) # crosshair, grab, se-resize, zoom-in, all-resize: shapes the renderer never drew before
+            await 20 glyph_visible "$shape" || { echo "shape $shape is not drawn"; exit 1; }
             ;;
     esac
 

@@ -46,8 +46,6 @@ int main(void) {
         wl_display_flush(wl_dpy);
         printf("client_reg_cursor_shape_full: shape %u\n", shape);
 
-        if (shape == WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_ALL_RESIZE) break;
-
         for (int i = 0; i < 500 && wlp_motion_count == seen; i++) {
             if (wl_display_roundtrip(wl_dpy) < 0) { fprintf(stderr, "display error\n"); return 1; }
             usleep(10000);
