@@ -32,10 +32,11 @@ cand=$(dump_field 'scanout' candidate)
 ctl "key 30 press"
 ctl "key 30 release"
 wait_client "phase2"
-sleep 0.5
 
-cand=$(dump_field 'scanout' candidate)
-[[ "$cand" != "0" ]] || {
+# the candidate is picked per frame: on a slow runner the opaque commit
+# reaches one only after a while
+candidate() { [[ "$(dump_field 'scanout' candidate)" != "0" ]]; }
+await 100 candidate || {
     echo "fully opaque ARGB surface is not a scanout candidate"
     exit 1
 }
