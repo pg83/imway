@@ -3648,7 +3648,7 @@ namespace {
     void toplevelMove(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti && validToplevelGrab(*ti, client, seatRes, serial)) {
+        if (validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->moveRequested = true;
             ti->srv->scene->needsFrame = true;
         }
@@ -3663,7 +3663,7 @@ namespace {
             return;
         }
 
-        if (ti && validToplevelGrab(*ti, client, seatRes, serial)) {
+        if (validToplevelGrab(*ti, client, seatRes, serial)) {
             ti->resizeEdges = edges;
             ti->srv->scene->needsFrame = true;
         }
@@ -3700,7 +3700,7 @@ namespace {
     void toplevelSetMaximized(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti && !ti->maximized) {
+        if (!ti->maximized) {
             ti->maximized = true;
             ti->minimized = false;
             ti->restoreRequested = false;
@@ -3711,7 +3711,7 @@ namespace {
     void toplevelUnsetMaximized(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti && ti->maximized) {
+        if (ti->maximized) {
             ti->maximized = false;
             ti->restoreRequested = ti->restoreW > 0 && ti->restoreH > 0;
             ti->srv->scene->needsFrame = true;
@@ -3721,7 +3721,7 @@ namespace {
     void toplevelSetFullscreen(wl_client*, wl_resource* res, wl_resource*) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (!ti || ti->fullscreen) {
+        if (ti->fullscreen) {
             return;
         }
 
@@ -3738,7 +3738,7 @@ namespace {
     void toplevelUnsetFullscreen(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (!ti || !ti->fullscreen) {
+        if (!ti->fullscreen) {
             return;
         }
 
@@ -3750,15 +3750,13 @@ namespace {
     void toplevelSetMinimized(wl_client*, wl_resource* res) {
         auto* ti = (ToplevelImpl*)wl_resource_get_user_data(res);
 
-        if (ti) {
-            ti->minimized = true;
+        ti->minimized = true;
 
-            if (ti->srv->scene->focusedToplevel.get() == ti) {
-                ti->srv->scene->focusedToplevel.reset();
-            }
-
-            ti->srv->scene->needsFrame = true;
+        if (ti->srv->scene->focusedToplevel.get() == ti) {
+            ti->srv->scene->focusedToplevel.reset();
         }
+
+        ti->srv->scene->needsFrame = true;
     }
 
     const struct xdg_toplevel_interface toplevelImpl = {
@@ -5279,10 +5277,9 @@ namespace {
             case DecorationPolicy::clientPreference:
                 return t.requestedDecoration ? t.requestedDecoration : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             case DecorationPolicy::server:
+            default:
                 return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
         }
-
-        return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
     }
 
     void applyDecoration(ToplevelImpl& t) {
@@ -5747,7 +5744,7 @@ namespace {
     void foreignExportToplevel(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
         auto* srv = (WaylandImpl*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
-        ToplevelImpl* t = s ? (ToplevelImpl*)s->toplevel.get() : nullptr;
+        ToplevelImpl* t = (ToplevelImpl*)s->toplevel.get();
 
         if (!t) {
             wl_resource_post_error(res, ZXDG_EXPORTER_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
@@ -5810,7 +5807,7 @@ namespace {
     void foreignImportedSetParentOf(wl_client*, wl_resource* res, wl_resource* surfaceRes) {
         auto* im = (ForeignImport*)wl_resource_get_user_data(res);
         SurfaceImpl* s = surfaceFrom(surfaceRes);
-        ToplevelImpl* t = s ? (ToplevelImpl*)s->toplevel.get() : nullptr;
+        ToplevelImpl* t = (ToplevelImpl*)s->toplevel.get();
 
         if (!t) {
             wl_resource_post_error(res, ZXDG_IMPORTED_V2_ERROR_INVALID_SURFACE, "surface is not an xdg_toplevel");
