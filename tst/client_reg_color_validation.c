@@ -89,6 +89,13 @@ int main(int argc, char** argv) {
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF);
     }
 
+    if (!strcmp(argv[1], "high-tf-power")) {
+        // exponent 10.5 is above the valid 1.0..10.0 range
+        wp_image_description_creator_params_v1_set_tf_power(params, 105000);
+        return expect_error(wp_image_description_creator_params_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_TF);
+    }
+
     if (!strcmp(argv[1], "duplicate-tf-power")) {
         wp_image_description_creator_params_v1_set_tf_power(params, 24000);
         wp_image_description_creator_params_v1_set_tf_power(params, 22000);
@@ -123,6 +130,34 @@ int main(int argc, char** argv) {
         wp_image_description_creator_params_v1_create(params);
         return expect_error(wp_image_description_creator_params_v1_interface.name,
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
+    }
+
+    if (!strcmp(argv[1], "max-cll-below-min")) {
+        // a content light level at or under the 50 cd/m2 minimum is outside
+        // the range too
+        set_required(params);
+        wp_image_description_creator_params_v1_set_luminances(params, 500000, 100, 80);
+        wp_image_description_creator_params_v1_set_max_cll(params, 40);
+        wp_image_description_creator_params_v1_create(params);
+        return expect_error(wp_image_description_creator_params_v1_interface.name,
+                            WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE);
+    }
+
+    if (!strcmp(argv[1], "max-cll-alone")) {
+        // a max_cll in range with no max_fall to compare it to is accepted
+        set_required(params);
+        wp_image_description_creator_params_v1_set_luminances(params, 0, 100, 80);
+        wp_image_description_creator_params_v1_set_max_cll(params, 90);
+        struct wp_image_description_v1* desc =
+            wp_image_description_creator_params_v1_create(params);
+        wp_image_description_v1_add_listener(desc, &image_listener, NULL);
+        wl_display_roundtrip(wl_dpy);
+        if (!image_ready) {
+            fprintf(stderr, "a max_cll alone was not accepted\n");
+            return 1;
+        }
+        printf("max_cll alone ok\n");
+        return 0;
     }
 
     if (!strcmp(argv[1], "parametric-information")) {

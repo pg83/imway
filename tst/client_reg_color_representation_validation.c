@@ -96,5 +96,24 @@ int main(int argc, char** argv) {
         }
         return 0;
     }
+    if (!strcmp(argv[1], "yuv-bad-range")) {
+        // a YCbCr matrix still needs one of the two ranges
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709, 99);
+        return wl_expect_error(wp_color_representation_surface_v1_interface.name,
+                               WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_COEFFICIENTS);
+    }
+    if (!strcmp(argv[1], "inert-destroy")) {
+        // the wl_surface goes first: the object is inert, and destroying it
+        // is still allowed
+        wl_surface_destroy(surface);
+        wl_display_roundtrip(wl_dpy);
+        wp_color_representation_surface_v1_destroy(repr);
+        if (wl_display_roundtrip(wl_dpy) < 0) {
+            fprintf(stderr, "destroying an inert representation object failed\n");
+            return 1;
+        }
+        return 0;
+    }
     return 2;
 }
