@@ -444,10 +444,11 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
                 long r = gi / cols, col = gi % cols;
 
                 if (r > 0) {
-                    long cnt = inSys ? sysN : appsN;
+                    // the row above is a full one, so the cell straight up
+                    // exists: target is gi - cols
                     long target = (r - 1) * cols + col;
 
-                    sel = (inSys ? appsN : 0) + (target < cnt ? target : cnt - 1) + 1;
+                    sel = (inSys ? appsN : 0) + target + 1;
                 } else if (inSys && appsN) {
                     long target = ((appsN - 1) / cols) * cols + col;
 
