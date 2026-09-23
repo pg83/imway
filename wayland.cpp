@@ -10004,8 +10004,8 @@ namespace {
         SeatState* seat = seatOf(res);
 
         // a valid enter serial proves the caller owns the focus, see
-        // cursorShapeDeviceSetShape
-        if (!seat || !seat->ptrFocus || !seat->validPointerEnter(res, serial)) {
+        // cursorShapeDeviceSetShape; every wl_pointer is made with its seat
+        if (!seat->ptrFocus || !seat->validPointerEnter(res, serial)) {
             return;
         }
 
@@ -10573,12 +10573,12 @@ void SeatState::constraintDeactivate() {
     }
 }
 
+// every caller holds an active confinement (not a lock), and it is the
+// pointer focus's: bound only from ptrFocus's constraint, dropped before
+// pointerSetFocus moves the focus, and the one other focus change (the
+// focused surface dying) leaves no commit of it to call here
 bool SeatState::updateConfineRegion() {
     ConstraintBox* c = activeConstraint.get();
-
-    if (!c || c->isLock || !ptrFocus) {
-        return false;
-    }
 
     Scene* scn = srv->scene;
     Vector<RectI> regions;
