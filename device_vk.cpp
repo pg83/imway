@@ -86,8 +86,20 @@ namespace {
         return false;
     }
 
+    // the udmabuf module's size cap; the test build takes a staged file
+    // instead, since a scenario cannot write the real one
+    const char* udmabufLimitPath() {
+#ifdef IMWAY_FOR_TESTS
+        if (const char* path = getenv("IMWAY_SYSFS_UDMABUF_LIMIT"); path && *path) {
+            return path;
+        }
+#endif
+
+        return "/sys/module/udmabuf/parameters/size_limit_mb";
+    }
+
     size_t readUdmabufLimit() {
-        int fd = open("/sys/module/udmabuf/parameters/size_limit_mb", O_RDONLY | O_CLOEXEC);
+        int fd = open(udmabufLimitPath(), O_RDONLY | O_CLOEXEC);
 
         if (fd < 0) {
             return 0;
