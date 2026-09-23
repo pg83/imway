@@ -5,7 +5,9 @@
 # A dma-buf cursor has no CPU copy for the plane: it stays composited into
 # the frame with the plane on. A wl_shm cursor whose file shrank under the
 # pool faults the copy into the plane: its client gets wl_shm invalid_fd
-# and the compositor carries on.
+# and the compositor carries on. The plane copies raw buffer pixels, so a
+# cursor at buffer scale 2, under a buffer transform, through a viewport
+# or with straight alpha is composited too.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -59,6 +61,15 @@ await 50 composited || { echo "the dma-buf cursor never reached the frame with t
 kill "$CLIENT_PID" 2>/dev/null || true
 wait "$CLIENT_PID" 2>/dev/null || true
 
+for mode in scaled turned shrunk straight; do
+    start_client "$mode"
+    wait_client "mapped"
+    set_cursor
+    await 50 composited || { echo "the $mode cursor never reached the frame with the plane on"; exit 1; }
+    kill "$CLIENT_PID" 2>/dev/null || true
+    wait "$CLIENT_PID" 2>/dev/null || true
+done
+
 start_client sigbus
 wait_client "mapped"
 set_cursor
@@ -66,4 +77,4 @@ wait_client "invalid-fd"
 expect_client_ok "the faulted cursor copy did not reach its client as wl_shm invalid_fd"
 
 expect_alive "compositor died on a cursor it could not put on the plane"
-echo "OK: a dma-buf cursor is composited, a shrunk wl_shm cursor faults its client"
+echo "OK: dma-buf, scaled, turned, viewported and straight-alpha cursors are composited, a shrunk wl_shm cursor faults its client"
