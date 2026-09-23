@@ -23,6 +23,7 @@ struct libinput;
 struct xkb_context;
 struct xkb_keymap;
 struct xkb_state;
+struct _drmModeAtomicReq;
 
 // The fault seam, one per board (Composer::chaos). A call site hands over
 // the object it is about to act on, or the result it has just got, and
@@ -232,6 +233,10 @@ struct ChaosMonkey {
     // the result of each entry's write into it
     virtual int formatTable(int fd) = 0;
     virtual ssize_t formatTableWrite(ssize_t written) = 0;
+    // KMS backend: an atomic request fresh from drmModeAtomicAlloc (null
+    // when libdrm had no memory for it); a replacement failure frees it
+    // and returns null
+    virtual _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

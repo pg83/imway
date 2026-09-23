@@ -2271,9 +2271,12 @@ void KmsOutput::announceMode() {
 }
 
 int KmsOutput::tryCommit(u32 fbId, bool doModeset, bool withCursor, int inFenceFd, bool testOnly) {
-    drmModeAtomicReq* req = drmModeAtomicAlloc();
+    drmModeAtomicReq* req = c->chaos->atomicRequest(drmModeAtomicAlloc());
 
-    STD_VERIFY(req);
+    // libdrm had no memory for the request: nothing reached the driver
+    if (!req) {
+        return ENOMEM;
+    }
 
     if (doModeset) {
         drmModeAtomicAddProperty(req, connectorId, connCrtcId, crtcId);
@@ -2384,10 +2387,11 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
     if (doModeset) {
         int testErr = tryCommit(fbId, true, true, inFenceFd, true);
 
-        // EACCES/EPERM (no drm master, vt switched away) and EBUSY say
-        // nothing about the configuration: degrading HDR or the cursor
-        // plane off them would outlive the transient cause by a session
-        if (testErr == EACCES || testErr == EPERM || testErr == EBUSY) {
+        // EACCES/EPERM (no drm master, vt switched away), EBUSY and ENOMEM
+        // (no request to test) say nothing about the configuration:
+        // degrading HDR or the cursor plane off them would outlive the
+        // transient cause by a session
+        if (testErr == EACCES || testErr == EPERM || testErr == EBUSY || testErr == ENOMEM) {
             *(c->log) << "imway: modeset commit unavailable, errno "_sv << testErr << endL;
 
             return false;
@@ -2440,8 +2444,9 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
     }
 
     // bisect: some driver/mode combinations reject the cursor plane in the
-    // same commit — retry without it and fall back to the software cursor
-    if (err != 0 && cursorPlaneId && cursorEnabled) {
+    // same commit — retry without it and fall back to the software cursor;
+    // a commit that never got a request tells nothing about the plane
+    if (err != 0 && err != ENOMEM && cursorPlaneId && cursorEnabled) {
         int errNoCursor = tryCommit(fbId, doModeset, false, inFenceFd);
 
         if (errNoCursor == 0) {

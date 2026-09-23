@@ -22,6 +22,7 @@
     #include <dbus/dbus.h>
     #include <libinput.h>
     #include <xkbcommon/xkbcommon.h>
+    #include <xf86drmMode.h>
 #endif
 
 using namespace stl;
@@ -163,6 +164,8 @@ using namespace stl;
 //   format-table=K    K steps building the linux-dmabuf format table (its
 //                     memfd, then each entry's write) pass, the one after
 //                     fails: the memfd with EMFILE, a write with ENOSPC
+//   atomic-request=K  KMS backend: K atomic requests pass, the one after
+//                     fails to allocate
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -263,6 +266,7 @@ namespace {
         int displayFaults = 0;
         Vector<StringView> globalFaults;
         int formatTableSkip = -1;
+        int atomicRequestSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -350,6 +354,7 @@ namespace {
         wl_global* global(wl_global* created) override;
         int formatTable(int fd) override;
         ssize_t formatTableWrite(ssize_t written) override;
+        _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -530,6 +535,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         globalFaults.pushBack(arg);
     } else if (fault == "format-table"_sv) {
         formatTableSkip = (int)arg.stou();
+    } else if (fault == "atomic-request"_sv) {
+        atomicRequestSkip = (int)arg.stou();
     }
 }
 
@@ -1234,6 +1241,17 @@ ssize_t TestChaosMonkey::formatTableWrite(ssize_t written) {
     return -1;
 }
 
+_drmModeAtomicReq* TestChaosMonkey::atomicRequest(_drmModeAtomicReq* made) {
+    if (atomicRequestSkip < 0 || atomicRequestSkip-- > 0) {
+        return made;
+    }
+
+    // a null request frees to nothing
+    drmModeAtomicFree(made);
+
+    return nullptr;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1324,6 +1342,7 @@ namespace {
         wl_global* global(wl_global* created) override;
         int formatTable(int fd) override;
         ssize_t formatTableWrite(ssize_t written) override;
+        _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) override;
     };
 }
 
@@ -1594,6 +1613,10 @@ int IdleChaosMonkey::formatTable(int fd) {
 
 ssize_t IdleChaosMonkey::formatTableWrite(ssize_t written) {
     return written;
+}
+
+_drmModeAtomicReq* IdleChaosMonkey::atomicRequest(_drmModeAtomicReq* made) {
+    return made;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
