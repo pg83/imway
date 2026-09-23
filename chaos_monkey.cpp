@@ -21,6 +21,7 @@
 
     #include <dbus/dbus.h>
     #include <libinput.h>
+    #include <xkbcommon/xkbcommon.h>
 #endif
 
 using namespace stl;
@@ -147,6 +148,13 @@ using namespace stl;
 //   control-open=N    the next N opens of the control FIFO fail with
 //                     EMFILE, as for a process out of descriptors
 //   libinput=N        the next N libinput contexts fail to allocate
+//   xkb-context=N     the next N xkb contexts fail to allocate
+//   xkb-keymap=K      K keymap compilations pass, every later one fails
+//                     (the fallback to the default layout as well)
+//   xkb-state=K       K xkb states pass, the one after fails to allocate
+//   keymap-file=K     K steps building the keymap's file (its memfd, then
+//                     its write) pass, the one after fails: the memfd with
+//                     EMFILE, the write with ENOSPC
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -240,6 +248,10 @@ namespace {
         // the resources a subsystem checks for
         int controlOpenFaults = 0;
         int libinputFaults = 0;
+        int xkbContextFaults = 0;
+        int xkbKeymapSkip = -1;
+        int xkbStateSkip = -1;
+        int keymapFileSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -318,6 +330,11 @@ namespace {
         // the resources a subsystem checks for
         int controlOpen(int fd) override;
         libinput* libinputContext(libinput* made) override;
+        xkb_context* xkbContext(xkb_context* made) override;
+        xkb_keymap* xkbKeymap(xkb_keymap* compiled) override;
+        xkb_state* xkbState(xkb_state* made) override;
+        int keymapFile(int fd) override;
+        ssize_t keymapWrite(ssize_t written) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -484,6 +501,14 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         controlOpenFaults = (int)arg.stou();
     } else if (fault == "libinput"_sv) {
         libinputFaults = (int)arg.stou();
+    } else if (fault == "xkb-context"_sv) {
+        xkbContextFaults = (int)arg.stou();
+    } else if (fault == "xkb-keymap"_sv) {
+        xkbKeymapSkip = (int)arg.stou();
+    } else if (fault == "xkb-state"_sv) {
+        xkbStateSkip = (int)arg.stou();
+    } else if (fault == "keymap-file"_sv) {
+        keymapFileSkip = (int)arg.stou();
     }
 }
 
@@ -1078,6 +1103,65 @@ libinput* TestChaosMonkey::libinputContext(libinput* made) {
     return nullptr;
 }
 
+xkb_context* TestChaosMonkey::xkbContext(xkb_context* made) {
+    if (!made || !spend(xkbContextFaults)) {
+        return made;
+    }
+
+    xkb_context_unref(made);
+
+    return nullptr;
+}
+
+xkb_keymap* TestChaosMonkey::xkbKeymap(xkb_keymap* compiled) {
+    if (xkbKeymapSkip < 0) {
+        return compiled;
+    }
+
+    if (xkbKeymapSkip > 0) {
+        xkbKeymapSkip--;
+
+        return compiled;
+    }
+
+    // a null keymap unrefs to nothing
+    xkb_keymap_unref(compiled);
+
+    return nullptr;
+}
+
+xkb_state* TestChaosMonkey::xkbState(xkb_state* made) {
+    if (xkbStateSkip < 0 || xkbStateSkip-- > 0) {
+        return made;
+    }
+
+    xkb_state_unref(made);
+
+    return nullptr;
+}
+
+int TestChaosMonkey::keymapFile(int fd) {
+    if (keymapFileSkip < 0 || keymapFileSkip-- > 0) {
+        return fd;
+    }
+
+    // a real failure already left -1, which close shrugs off
+    close(fd);
+    errno = EMFILE;
+
+    return -1;
+}
+
+ssize_t TestChaosMonkey::keymapWrite(ssize_t written) {
+    if (keymapFileSkip < 0 || keymapFileSkip-- > 0) {
+        return written;
+    }
+
+    errno = ENOSPC;
+
+    return -1;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1159,6 +1243,11 @@ namespace {
         // the resources a subsystem checks for
         int controlOpen(int fd) override;
         libinput* libinputContext(libinput* made) override;
+        xkb_context* xkbContext(xkb_context* made) override;
+        xkb_keymap* xkbKeymap(xkb_keymap* compiled) override;
+        xkb_state* xkbState(xkb_state* made) override;
+        int keymapFile(int fd) override;
+        ssize_t keymapWrite(ssize_t written) override;
     };
 }
 
@@ -1393,6 +1482,26 @@ int IdleChaosMonkey::controlOpen(int fd) {
 
 libinput* IdleChaosMonkey::libinputContext(libinput* made) {
     return made;
+}
+
+xkb_context* IdleChaosMonkey::xkbContext(xkb_context* made) {
+    return made;
+}
+
+xkb_keymap* IdleChaosMonkey::xkbKeymap(xkb_keymap* compiled) {
+    return compiled;
+}
+
+xkb_state* IdleChaosMonkey::xkbState(xkb_state* made) {
+    return made;
+}
+
+int IdleChaosMonkey::keymapFile(int fd) {
+    return fd;
+}
+
+ssize_t IdleChaosMonkey::keymapWrite(ssize_t written) {
+    return written;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

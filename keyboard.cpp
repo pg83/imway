@@ -3,6 +3,7 @@
 #include "log.h"
 #include "util.h"
 #include "log_extern.h"
+#include "chaos_monkey.h"
 
 #include <std/ios/sys.h>
 #include <std/dbg/verify.h>
@@ -20,13 +21,14 @@ using namespace stl;
 namespace {
     struct KeyboardImpl: public Keyboard {
         Log* log = nullptr;
+        ChaosMonkey* chaos = nullptr;
         xkb_context* ctx = nullptr;
         xkb_keymap* keymap = nullptr;
         xkb_state* state = nullptr;
         int fd = -1;
         u32 size = 0;
 
-        KeyboardImpl(Log& log, StringView layout, StringView options);
+        KeyboardImpl(Log& log, ChaosMonkey& chaos);
         ~KeyboardImpl() noexcept;
 
         void configure(StringView layout, StringView options) override;
@@ -51,56 +53,30 @@ namespace {
     }
 }
 
-KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
+KeyboardImpl::KeyboardImpl(Log& l, ChaosMonkey& c)
     : log(&l)
+    , chaos(&c)
 {
-    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    ctx = chaos->xkbContext(xkb_context_new(XKB_CONTEXT_NO_FLAGS));
     STD_VERIFY(ctx);
     xkb_context_set_user_data(ctx, this);
     xkb_context_set_log_fn(ctx, xkbLog);
-
-    // xkb wants NUL-terminated strings: materialize right at the call
-    Buffer lb(layout), o(options);
-    xkb_rule_names names{};
-
-    names.layout = lb.cStr();
-    names.options = o.cStr();
-    keymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
-
-    // with no layout and no options the first try already was the
-    // defaults: the retry fails the same way and the verify below reports it
-    if (!keymap) {
-        *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
-        keymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    }
-
-    STD_VERIFY(keymap);
-
-    state = xkb_state_new(keymap);
-    STD_VERIFY(state);
-
-    char* str = xkb_keymap_get_as_string(keymap, XKB_KEYMAP_FORMAT_TEXT_V1);
-
-    size = (u32)StringView(str).length() + 1;
-    // the same fd is duped to every client, and wl_seat v5+ lets them map it
-    // MAP_SHARED — seal it so no client can truncate or rewrite the keymap
-    fd = memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-
-    bool written = fd >= 0 && write(fd, str, size) == (ssize_t)size;
-
-    free(str);
-    STD_VERIFY(written);
-    fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
 }
 
-// the constructor verified all four, and configure only swaps in verified ones
+// the constructor verified the context; the keymap, its state and its file
+// come and go together, and only a failed first configure leaves them unset
 KeyboardImpl::~KeyboardImpl() noexcept {
-    close(fd);
+    if (fd >= 0) {
+        close(fd);
+    }
+
     xkb_state_unref(state);
     xkb_keymap_unref(keymap);
     xkb_context_unref(ctx);
 }
 
+// the first call, at boot, has no keymap to keep: a failure there throws,
+// and the half-built keyboard goes with its pool
 void KeyboardImpl::configure(StringView layout, StringView options) {
     Buffer lb(layout), ob(options);
     xkb_rule_names names{};
@@ -108,20 +84,54 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
     names.layout = lb.cStr();
     names.options = ob.cStr();
 
-    xkb_keymap* nextKeymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
+    xkb_keymap* nextKeymap = chaos->xkbKeymap(xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS));
 
+    // with no layout and no options the first try already was the
+    // defaults: the retry fails the same way
     if (!nextKeymap) {
         *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
-        nextKeymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
+        nextKeymap = chaos->xkbKeymap(xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS));
     }
 
-    STD_VERIFY(nextKeymap);
+    xkb_state* nextState = nextKeymap ? chaos->xkbState(xkb_state_new(nextKeymap)) : nullptr;
+    int nextFd = -1;
+    u32 nextSize = 0;
 
-    xkb_state* nextState = xkb_state_new(nextKeymap);
+    if (nextState) {
+        char* text = xkb_keymap_get_as_string(nextKeymap, XKB_KEYMAP_FORMAT_TEXT_V1);
 
-    STD_VERIFY(nextState);
+        nextSize = (u32)StringView(text).length() + 1;
+        // the same fd is duped to every client, and wl_seat v5+ lets them
+        // map it MAP_SHARED: sealed below, so no client can truncate or
+        // rewrite the keymap
+        nextFd = chaos->keymapFile(memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING));
 
-    u32 group = xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
+        bool written = nextFd >= 0 && chaos->keymapWrite(write(nextFd, text, nextSize)) == (ssize_t)nextSize;
+
+        free(text);
+
+        if (!written && nextFd >= 0) {
+            close(nextFd);
+            nextFd = -1;
+        }
+    }
+
+    if (nextFd < 0) {
+        StringView failed = !nextKeymap ? "no keymap compiles"_sv : !nextState ? "no xkb state for it"_sv : "its file cannot be written"_sv;
+
+        xkb_state_unref(nextState);
+        xkb_keymap_unref(nextKeymap);
+        *log << "imway: keymap unusable: "_sv << failed << endL;
+        STD_VERIFY(keymap);
+        *log << "imway: keeping the current keymap"_sv << endL;
+
+        return;
+    }
+
+    fcntl(nextFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
+
+    // the active group carries over as far as the new list reaches
+    u32 group = state ? xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE) : 0;
     u32 count = xkb_keymap_num_layouts(nextKeymap);
 
     if (count && group >= count) {
@@ -130,16 +140,10 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
 
     xkb_state_update_mask(nextState, 0, 0, 0, 0, 0, group);
 
-    char* text = xkb_keymap_get_as_string(nextKeymap, XKB_KEYMAP_FORMAT_TEXT_V1);
-    u32 nextSize = (u32)StringView(text).length() + 1;
-    int nextFd = memfd_create("imway-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
-    bool written = nextFd >= 0 && write(nextFd, text, nextSize) == (ssize_t)nextSize;
+    if (fd >= 0) {
+        close(fd);
+    }
 
-    free(text);
-    STD_VERIFY(written);
-    fcntl(nextFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
-
-    close(fd);
     xkb_state_unref(state);
     xkb_keymap_unref(keymap);
     fd = nextFd;
@@ -246,6 +250,10 @@ u32 KeyboardImpl::activeLayout() const {
     return xkb_state_serialize_layout(state, XKB_STATE_LAYOUT_EFFECTIVE);
 }
 
-Keyboard* Keyboard::create(ObjPool* pool, Log& log, StringView layout, StringView options) {
-    return pool->make<KeyboardImpl>(log, layout, options);
+Keyboard* Keyboard::create(ObjPool* pool, Log& log, ChaosMonkey& chaos, StringView layout, StringView options) {
+    KeyboardImpl* kb = pool->make<KeyboardImpl>(log, chaos);
+
+    kb->configure(layout, options);
+
+    return kb;
 }

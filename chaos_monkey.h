@@ -18,6 +18,9 @@ struct pam_response;
 struct DBusMessage;
 struct DBusConnection;
 struct libinput;
+struct xkb_context;
+struct xkb_keymap;
+struct xkb_state;
 
 // The fault seam, one per board (Composer::chaos). A call site hands over
 // the object it is about to act on, or the result it has just got, and
@@ -206,6 +209,17 @@ struct ChaosMonkey {
     // input: the libinput context fresh from libinput_path_create_context;
     // a replacement failure unrefs it and returns null
     virtual libinput* libinputContext(libinput* made) = 0;
+    // keyboard: the xkb context, a keymap fresh from compilation (null when
+    // it did not compile) and its state, each as xkbcommon made it; a
+    // replacement failure unrefs what it was handed and returns null
+    virtual xkb_context* xkbContext(xkb_context* made) = 0;
+    virtual xkb_keymap* xkbKeymap(xkb_keymap* compiled) = 0;
+    virtual xkb_state* xkbState(xkb_state* made) = 0;
+    // the keymap's sealed file: its memfd fresh from memfd_create (a
+    // replacement failure closes it and returns -1), then the write of the
+    // keymap text into it
+    virtual int keymapFile(int fd) = 0;
+    virtual ssize_t keymapWrite(ssize_t written) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

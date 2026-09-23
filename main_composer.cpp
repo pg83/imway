@@ -464,7 +464,7 @@ int mainComposer(int argc, char** argv) {
             scanoutFormats.pushBack(f);
         });
 
-        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, c.settings->xkbLayouts(), c.settings->xkbOptions());
+        Keyboard* kb = Keyboard::create(pool.mutPtr(), *log, *c.chaos, c.settings->xkbLayouts(), c.settings->xkbOptions());
 
         c.kb = kb;
 

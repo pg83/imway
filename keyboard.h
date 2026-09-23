@@ -8,6 +8,7 @@ namespace stl {
 }
 
 struct Log;
+struct ChaosMonkey;
 
 // modifier mask for key bindings, resolved from the real xkb state
 inline constexpr u32 kModShift = 1u << 0;
@@ -51,5 +52,5 @@ struct Keyboard {
     virtual stl::StringView layoutName(u32 group) const = 0;
     virtual u32 activeLayout() const = 0;
 
-    static Keyboard* create(stl::ObjPool* pool, Log& log, stl::StringView layout, stl::StringView options);
+    static Keyboard* create(stl::ObjPool* pool, Log& log, ChaosMonkey& chaos, stl::StringView layout, stl::StringView options);
 };
