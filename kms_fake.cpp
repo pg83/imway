@@ -1274,7 +1274,7 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
                 }
 
                 const drm_mode_modeinfo* m = (const drm_mode_modeinfo*)blob->data.data();
-                drm_mode_modeinfo offered[2];
+                drm_mode_modeinfo offered[kMaxModes];
                 u32 n = currentModes(offered);
                 bool listed = false;
 
