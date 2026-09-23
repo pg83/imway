@@ -30,20 +30,34 @@ print(*f.read(3))
 PY
 }
 
+# The window rect is per-frame renderer truth and moves over the first
+# frames on a loaded software rasterizer: a rect read before the screenshot
+# and one read after must agree, or the sample may straddle the window and
+# the desktop behind it (an average of the two, stable and wrong)
+rect() {
+    echo "$(dump_field 'app_id=client_feat_color_mgmt' imgx) $(dump_field 'app_id=client_feat_color_mgmt' imgy)" \
+         "$(dump_field 'app_id=client_feat_color_mgmt' client_w) $(dump_field 'app_id=client_feat_color_mgmt' client_h)"
+}
+
+sample() { # <ppm> -> "r g b n" of the window, or nothing while it moves
+    local before after
+    before=$(rect)
+    screenshot "$1" || return 1
+    after=$(rect)
+    [[ "$before" == "$after" ]] || return 1
+    read -r x y w h <<<"$after"
+    [[ -n "$x" && -n "$w" ]] || return 1
+    surface_color "$1" "$x" "$y" "$w" "$h"
+}
+
 start_client
 wait_client "raw"
 # the raw fill needs a composed frame; poll within the client's raw hold —
-# a loaded software rasterizer takes a while to get there. The window
-# geometry is per-frame renderer truth, so refresh it each attempt.
+# a loaded software rasterizer takes a while to get there
 rn=0
 for _ in $(seq 1 12); do
     sleep 0.2
-    x=$(dump_field 'app_id=client_feat_color_mgmt' imgx)
-    y=$(dump_field 'app_id=client_feat_color_mgmt' imgy)
-    w=$(dump_field 'app_id=client_feat_color_mgmt' client_w)
-    h=$(dump_field 'app_id=client_feat_color_mgmt' client_h)
-    screenshot "$XDG_RUNTIME_DIR/raw.ppm"
-    read -r rr rg rb rn < <(surface_color "$XDG_RUNTIME_DIR/raw.ppm" "$x" "$y" "$w" "$h")
+    read -r rr rg rb rn < <(sample "$XDG_RUNTIME_DIR/raw.ppm") || continue
     [[ "$rn" -gt 40000 ]] && break
 done
 [[ "$rn" -gt 40000 ]] || { echo "raw surface not found"; exit 1; }
@@ -55,8 +69,7 @@ wait_client "managed"
 hn=0
 for _ in $(seq 1 100); do
     sleep 0.2
-    screenshot "$XDG_RUNTIME_DIR/hdr.ppm"
-    read -r hr hg hb hn < <(surface_color "$XDG_RUNTIME_DIR/hdr.ppm" "$x" "$y" "$w" "$h")
+    read -r hr hg hb hn < <(sample "$XDG_RUNTIME_DIR/hdr.ppm") || continue
     [[ "$hn" -gt 40000 && $((hr - 180)) -ge -3 && $((hr - 180)) -le 3 ]] && break
 done
 [[ "$hn" -gt 40000 ]] || { echo "HDR surface not found"; exit 1; }
@@ -75,8 +88,7 @@ ctl "sdr-white 100"
 # the new white takes a frame to reach the readback, like every other
 # change here: poll for the frame that carries it
 lowered() {
-    screenshot "$XDG_RUNTIME_DIR/low-white.ppm" || return 1
-    read -r lr lg lb ln < <(surface_color "$XDG_RUNTIME_DIR/low-white.ppm" "$x" "$y" "$w" "$h")
+    read -r lr lg lb ln < <(sample "$XDG_RUNTIME_DIR/low-white.ppm") || return 1
     read -r bg2r bg2g bg2b < <(first_pixel "$XDG_RUNTIME_DIR/low-white.ppm")
     [[ "$ln" -gt 40000 &&
        $((lr - 180)) -ge -3 && $((lr - 180)) -le 3 &&
