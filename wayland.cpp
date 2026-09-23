@@ -2703,7 +2703,7 @@ namespace {
             bool swapped = transform == WL_OUTPUT_TRANSFORM_90 || transform == WL_OUTPUT_TRANSFORM_270 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_90 || transform == WL_OUTPUT_TRANSFORM_FLIPPED_270;
             int tw = swapped ? bh : bw, th = swapped ? bw : bh;
 
-            if (bw > 0 && (tw % scale != 0 || th % scale != 0)) {
+            if (tw % scale != 0 || th % scale != 0) {
                 wl_resource_post_error(res, WL_SURFACE_ERROR_INVALID_SIZE, "buffer dimensions are not divisible by buffer_scale after transform");
 
                 return;
