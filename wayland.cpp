@@ -5276,7 +5276,8 @@ namespace {
     }
 
     void decoSetMode(wl_client*, wl_resource* res, u32 mode) {
-        if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res)) || (mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE && mode != ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE)) {
+        // the enum holds client_side and server_side, nothing else
+        if (!zxdg_toplevel_decoration_v1_mode_is_valid(mode, wl_resource_get_version(res))) {
             wl_resource_post_error(res, ZXDG_TOPLEVEL_DECORATION_V1_ERROR_INVALID_MODE, "invalid decoration mode");
 
             return;
@@ -5297,10 +5298,11 @@ namespace {
 
     void decoResourceDestroyed(wl_resource* res) {
         // the client dropped the decoration object: back to csd per spec
+        // a toplevel's decoration object carries it as user data exactly
+        // while it is the toplevel's decoRes; a second one never gets this
+        // destructor, and the toplevel's teardown clears both together
         if (auto* t = (ToplevelImpl*)wl_resource_get_user_data(res)) {
-            if (t->decoRes == res) {
-                t->decoRes = nullptr;
-            }
+            t->decoRes = nullptr;
 
             t->requestedDecoration = 0;
             t->csd = true;
