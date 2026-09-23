@@ -4,7 +4,8 @@
 # A mode change probed while a screenshot is building the scanout buffer
 # it will lend its viewer: switching now would rebuild the swapchain under
 # it, so the switch is refused for now, and a hotplug event after the
-# screenshot is done takes it.
+# screenshot is done takes it. A second Print while the first screenshot
+# is in flight is not taken.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -23,6 +24,7 @@ flips() { dump_field '^kms' flips; }
 ctl "kms-hold-flips 1"
 ctl "motion 300 300"
 ctl "key 99 press"; ctl "key 99 release" # Print
+ctl "key 99 press"; ctl "key 99 release" # Print again, while it is busy
 f0=$(flips)
 
 ctl "kms-modes 1"
@@ -39,6 +41,10 @@ switched() {
     in_log "kms output: 1920x1080@60"
 }
 await 100 switched || { echo "no hotplug event after the screenshot switched the mode"; cat "$IMWAY_LOG"; exit 1; }
+
+saved() { in_log "exited with status"; }
+await 100 saved || { echo "the screenshot's viewer never finished"; cat "$IMWAY_LOG"; exit 1; }
+[[ "$(grep -c "screenshot handoff of the scanout buffer" "$IMWAY_LOG")" == 1 ]] || { echo "the Print while busy was taken"; cat "$IMWAY_LOG"; exit 1; }
 
 expect_alive "compositor died deferring a mode switch"
 echo "OK: a mode switch waits for a screenshot in flight"
