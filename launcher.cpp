@@ -354,10 +354,6 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
         open = false;
     };
 
-    if (sel > n) {
-        sel = n;
-    }
-
     const ImGuiStyle& st = ImGui::GetStyle();
     // the grid reuses the dock's icon metrics: the same button side, the
     // same slot-to-icon breathing room as the gap
@@ -522,28 +518,27 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
 
         // bottom-up: the input line, then (group name, group content,
         // delimiter) per group — so top-down each grid carries its header
-        // underneath, and the topmost group has no leading delimiter
-        if (!rows.empty()) {
-            ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
-            ImGui::BeginChild("##groups", ImVec2(0.f, childH));
+        // underneath, and the topmost group has no leading delimiter. There
+        // are always rows: rescan adds the compositor actions first
+        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+        ImGui::BeginChild("##groups", ImVec2(0.f, childH));
 
-            if (appsN) {
-                grid(0, appsN);
-                ImGui::TextDisabled("applications");
-            }
-
-            if (appsN && sysN) {
-                ImGui::Separator();
-            }
-
-            if (sysN) {
-                grid(appsN, sysN);
-                ImGui::TextDisabled("system");
-            }
-
-            ImGui::EndChild();
-            ImGui::PopStyleVar();
+        if (appsN) {
+            grid(0, appsN);
+            ImGui::TextDisabled("applications");
         }
+
+        if (appsN && sysN) {
+            ImGui::Separator();
+        }
+
+        if (sysN) {
+            grid(appsN, sysN);
+            ImGui::TextDisabled("system");
+        }
+
+        ImGui::EndChild();
+        ImGui::PopStyleVar();
 
         ImGui::SetNextItemWidth(-1.f);
 
@@ -559,7 +554,10 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
         }
 
         if (enter && !picked) {
-            if (sel >= 1 && sel <= n) {
+            // sel never exceeds n: the arrows keep it within this frame's
+            // rows, and the rows change only with the query, whose edit
+            // resets sel in the same frame
+            if (sel >= 1) {
                 pick(rows[vis[(size_t)(sel - 1)]]);
             } else {
                 // nothing highlighted: run the typed text as a command
