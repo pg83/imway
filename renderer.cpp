@@ -2568,10 +2568,6 @@ Surface* RendererImpl::scanoutCandidate() {
 }
 
 void RendererImpl::destroyTexture(SurfaceTexture* tex) {
-    if (!tex) {
-        return;
-    }
-
     for (size_t i = 0; i < dmabufCache.length(); i++) {
         if (dmabufCache[i].tex == tex) {
             dmabufCache.mut(i) = dmabufCache.back();
@@ -3305,11 +3301,6 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
 
 void RendererImpl::drawSurfaceRect(Surface& s, void* drawList, float x0, float y0, float x1, float y1) {
     SurfaceTexture* tex = s.texture.get();
-
-    if (!tex) {
-        return;
-    }
-
     auto* dl = (ImDrawList*)drawList;
     float sw = (float)s.geomW(), sh = (float)s.geomH();
     float texW = (float)tex->w, texH = (float)tex->h;
@@ -3374,10 +3365,6 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         output->setCursorPos(0, 0, false);
 
         return true;
-    }
-
-    if (kind <= (int)CursorKind::unset || kind >= (int)CursorKind::hidden) {
-        kind = (int)CursorKind::def;
     }
 
     if (hwKind != kind) {
@@ -3645,13 +3632,6 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
     frameSyncFds.clear();
 
-    if (presentFenceFd >= 0) {
-        // presentImage consumes the fence synchronously.  Reaching another
-        // frame with one still pending would otherwise leak it.
-        close(presentFenceFd);
-        presentFenceFd = -1;
-    }
-
     auto waitOnSyncFile = [&](int syncFd) {
         size_t index = waits.length();
 
@@ -3716,11 +3696,6 @@ bool RendererImpl::renderFrame(int scanIdx) {
 
                     if (binary) {
                         drmSyncobjDestroy(drmFd, binary);
-                    }
-
-                    if (!exported && syncFd >= 0) {
-                        close(syncFd);
-                        syncFd = -1;
                     }
 
                     if (!exported || !waitOnSyncFile(syncFd)) {
