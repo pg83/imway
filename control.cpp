@@ -473,6 +473,10 @@ void ControlImpl::handleLine(StringView cmd) {
         }
 
         comp->entry->tabletTool(ev);
+    } else if (verb == "frame"_sv) {
+        // a composed frame of everything sent before, without a readback:
+        // the barrier a scenario needs before input that must meet it
+        renderer->composeNow();
     } else if (verb == "screenshot"_sv) {
         renderer->screenshot(args);
         *(comp->log) << "imway: screenshot by command: "_sv << args << endL;

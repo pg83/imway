@@ -22,6 +22,9 @@ struct InspectorInfo;
 // windows, focus or input.
 struct Renderer {
     virtual bool screenshot(stl::StringView path) = 0;
+    // compose a frame of the current state now, as a screenshot does before
+    // it reads back; false when there is nothing to compose into yet
+    virtual bool composeNow() = 0;
     virtual u64 colorIntermediateBytes() = 0;
 
     // the interactive screenshot (PrintScreen): capture + viewer handoff

@@ -570,6 +570,7 @@ namespace {
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
         bool screenshot(StringView path) override;
+        bool composeNow() override;
         bool captureSubmit(int x, int y, int w, int h, Listener& done) override;
         void captureCancel(Listener& done) override;
         bool captureRecord();
@@ -4177,7 +4178,7 @@ bool RendererImpl::readbackLastFrame() {
     return true;
 }
 
-bool RendererImpl::screenshot(StringView path) {
+bool RendererImpl::composeNow() {
     // The pixels of a commit that just arrived may still be on the copy
     // thread. The frame loop waits for them (shouldCompose returns false
     // while a copy is active), the forced frame below does not — without
@@ -4193,8 +4194,8 @@ bool RendererImpl::screenshot(StringView path) {
     // before the command, on llvmpipe)
     finishGpuFrame(true);
 
-    // Compose now, always: the readback below returns the last frame, and
-    // whatever a client committed since then would be missing from it. A
+    // Compose now, always: a readback returns the last frame, and whatever
+    // a client committed since then would be missing from it. A
     // direct-scanout frame has nothing to read back at all.
     forceComposition = true;
     scene->needsFrame = true;
@@ -4207,7 +4208,11 @@ bool RendererImpl::screenshot(StringView path) {
 
     finishGpuFrame(true);
 
-    if (!readbackLastFrame()) {
+    return true;
+}
+
+bool RendererImpl::screenshot(StringView path) {
+    if (!composeNow() || !readbackLastFrame()) {
         return false;
     }
 

@@ -169,6 +169,28 @@ click_at() { # <x> <y>
     sleep 0.2
 }
 
+# a frame composed with everything sent before it: the barrier input needs
+# when it must land on what a frame drew (a hover, a combo just opened). A
+# screenshot is one too, at the price of reading the whole output back and
+# writing it out, which a loaded runner pays for in seconds
+compose_frame() {
+    ctl "frame"
+    dump_state >/dev/null
+}
+
+# click_at on composed frames: the hover is judged, the press seen and the
+# release seen each in a frame of its own
+click_at_composed() { # <x> <y>
+    ctl "motion $1 $2"
+    compose_frame || return 1
+    ctl "motion $(($1 + 1)) $2"
+    compose_frame || return 1
+    ctl "button left press"
+    compose_frame || return 1
+    ctl "button left release"
+    compose_frame
+}
+
 # dump compositor state (toplevels/popups/focus, see control.cpp dumpState)
 # to stdout. The compositor renames the file into place, so existence means
 # a complete read.
