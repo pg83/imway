@@ -63,9 +63,13 @@ out=$(timeout 60 "$imway_bin" --device headless --socket imway-mode --frames 3 -
 [[ "$rc" -eq 0 ]] || { echo "an 800x600@75 headless run exited $rc: $out"; exit 1; }
 grep -q "output 800x600@75" <<<"$out" || { echo "the mode was not honoured: $out"; exit 1; }
 
-rc=0
-out=$(timeout 60 "$imway_bin" --device headless --socket imway-mode --frames 3 --mode sideways 2>&1) || rc=$?
-[[ "$rc" -eq 1 ]] || { echo "an unparseable mode exited $rc: $out"; exit 1; }
+# a mode without a size on either side of the x, or with a zero one, is
+# no mode at all
+for mode in sideways x600 800x 0x600 800x0; do
+    rc=0
+    out=$(timeout 60 "$imway_bin" --device headless --socket imway-mode --frames 3 --mode "$mode" 2>&1) || rc=$?
+    [[ "$rc" -eq 1 ]] || { echo "the unparseable mode $mode exited $rc: $out"; exit 1; }
+done
 
 expect_alive "compositor died on headless color controls"
 echo "OK: headless color controls change only what they should"
