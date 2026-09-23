@@ -10,6 +10,7 @@ set -euo pipefail
 start_client
 wait_client "tool ready"
 wait_rect 'app_id=tablet-focus'
+wait_placed 'app_id=tablet-focus' || { echo "the window never settled"; exit 1; }
 x=$(dump_field 'app_id=tablet-focus' imgx)
 y=$(dump_field 'app_id=tablet-focus' imgy)
 main="$((x + 50)) $((y + 100))"
@@ -53,8 +54,10 @@ in_order() { # <first> <second>
 }
 
 pen proximity_in $main
-pen motion $main
-wait_client "prox_in main 1"
+# the first pick waits for a frame that has the window hovered: move again
+# until the client hears the tool come in
+in_main() { pen motion $main; grep -q "^prox_in main 1$" "$CLIENT_LOG"; }
+await 50 in_main || { echo "the pen never came into the window"; cat "$CLIENT_LOG"; exit 1; }
 
 # a lift with the tip not down is no up
 pen up $main
