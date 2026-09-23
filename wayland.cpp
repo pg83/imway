@@ -12010,8 +12010,10 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
     if (kbFocus == t) {
         Toplevel* next = nullptr;
 
+        // a minimized window is not on screen to take the keyboard: the
+        // frame edge would only take it back after its client saw an enter
         for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
-            if (other != t && other->mapped) {
+            if (other != t && other->mapped && !other->minimized) {
                 next = other;
 
                 break;
@@ -12129,7 +12131,7 @@ void SeatState::toplevelGone(Toplevel* t) {
         focusGeneration++;
 
         for (Toplevel* other : eachRev<Toplevel>(srv->scene->toplevels)) {
-            if (other != t && other->mapped) {
+            if (other != t && other->mapped && !other->minimized) {
                 focusToplevel(other);
 
                 break;
