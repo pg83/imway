@@ -214,12 +214,10 @@ ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
     if (readbackMap) {
         vkUnmapMemory(device, readbackMemory);
     }
-    if (fence) {
-        vkDestroyFence(device, fence, nullptr);
-    }
-    if (commandPool) {
-        vkDestroyCommandPool(device, commandPool, nullptr);
-    }
+    // the fence and the pool are the constructor's: only a finished one is
+    // destroyed (the pool registers the destructor once it returns)
+    vkDestroyFence(device, fence, nullptr);
+    vkDestroyCommandPool(device, commandPool, nullptr);
     if (readback) {
         vkDestroyBuffer(device, readback, nullptr);
     }
