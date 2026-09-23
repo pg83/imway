@@ -57,6 +57,14 @@ click_at "$bx" "$by"
 ctl "motion $((wx + 600)) $((wy + 400))"
 await 50 differs "$XDG_RUNTIME_DIR/default.ppm" || { echo "the capture did not re-arm"; exit 1; }
 screenshot "$XDG_RUNTIME_DIR/armed.ppm"
+# every other modifier pressed and let go, and a stray release of a key
+# never pressed, leave it armed too
+for k in 97 42 54 56 100 125 126; do
+    ctl "key $k press"; ctl "key $k release"
+done
+ctl "key 88 release"
+sleep 0.3
+shows "$XDG_RUNTIME_DIR/armed.ppm" || { echo "a modifier or a stray release ended the capture"; exit 1; }
 ctl "key 29 press"
 sleep 0.3
 shows "$XDG_RUNTIME_DIR/armed.ppm" || { echo "a bare modifier ended the capture"; exit 1; }
