@@ -1,7 +1,10 @@
-// xdg-shell and subsurface requests on objects in the wrong state: each mode
-// makes one mistake and must be told with the exact protocol error (or, for
-// a popup grab nothing authorizes, with popup_done). Each mode needs a fresh
-// client because the error disconnects it.
+// xdg-shell, subsurface and surface requests on objects in the wrong state:
+// each mode makes one mistake and must be told with the exact protocol error
+// (or, for a popup grab nothing authorizes, with popup_done). Each mode needs
+// a fresh client because the error disconnects it.
+
+// wl_surface v5: attach offsets moved to wl_surface.offset
+#define REG_COMPOSITOR_VERSION 5
 
 #include "wl_util.h"
 
@@ -82,6 +85,12 @@ int main(int argc, char** argv) {
 
     const char* mode = argv[1];
     struct wl_surface* surface = wl_compositor_create_surface(wl_comp);
+
+    if (!strcmp(mode, "attach-offset-y")) {
+        // a vertical offset alone is as much an offset as a horizontal one
+        wl_surface_attach(surface, wl_solid(20, 20, 0xFF00FF00u), 0, 5);
+        return wl_expect_error(wl_surface_interface.name, WL_SURFACE_ERROR_INVALID_OFFSET);
+    }
 
     if (!strcmp(mode, "max-under-min")) {
         // a max alone (min still 0x0), then a min alone with no width, then
