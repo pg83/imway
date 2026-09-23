@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# #13: a popup grabbed off a key-press serial must map, not kill the client.
+# #13: a popup grabbed off a key-press serial must map and hold the grab,
+# not kill the client.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -14,4 +15,5 @@ await 60 in_log "popup mapped" || {
     echo "popup did not map (client killed by INVALID_GRAB?)"; cat "$CLIENT_LOG" "$IMWAY_LOG"; exit 1; }
 grep -q "disconnected" "$CLIENT_LOG" && { echo "client was disconnected"; cat "$CLIENT_LOG"; exit 1; }
 grep -q "grabbed on key serial" "$CLIENT_LOG" || { echo "client never grabbed"; cat "$CLIENT_LOG"; exit 1; }
+expect_client_ok "the key-serial grab did not hold"
 echo "OK: keyboard-serial popup grab accepted"

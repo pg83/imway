@@ -3,20 +3,25 @@
 // INVALID_GRAB protocol error and the client was killed. The grab must also
 // accept the last key-press serial. Repro: map a toplevel (it takes keyboard
 // focus), wait for an injected key, then grab a popup off that key serial.
-// Success = the popup maps and the client is not disconnected.
+// Success = the popup takes the grab (it gets the keyboard, no popup_done)
+// and the client is not disconnected. The grab uses the press serial: the
+// scenario's release follows at once, and a release is no grab trigger.
 
 #include "wl_util.h"
 
 static struct wl_toplevel_ctx top;
 static struct wl_surface* popup_surface;
 static struct xdg_popup* popup;
-static int popup_committed;
+static int popup_committed, popup_dismissed;
 
 static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, int32_t w,
                             int32_t h) {
     (void)d; (void)p; (void)x; (void)y; (void)w; (void)h;
 }
-static void popup_done(void* d, struct xdg_popup* p) { (void)d; (void)p; }
+static void popup_done(void* d, struct xdg_popup* p) {
+    (void)d; (void)p;
+    popup_dismissed = 1;
+}
 static void popup_reposition(void* d, struct xdg_popup* p, uint32_t t) { (void)d; (void)p; (void)t; }
 static const struct xdg_popup_listener popup_listener = {popup_configure, popup_done,
                                                          popup_reposition};
@@ -48,7 +53,7 @@ int main(void) {
             return 1;
         }
 
-        if (!popup && wlk_key_serial) {
+        if (!popup && wlk_press_serial) {
             struct xdg_positioner* pos = xdg_wm_base_create_positioner(wl_wm);
             xdg_positioner_set_size(pos, 120, 90);
             xdg_positioner_set_anchor_rect(pos, 20, 20, 60, 20);
@@ -57,15 +62,25 @@ int main(void) {
             xdg_surface_add_listener(pxs, &popup_xdg_listener, NULL);
             popup = xdg_surface_get_popup(pxs, top.xs, pos);
             xdg_popup_add_listener(popup, &popup_listener, NULL);
-            xdg_popup_grab(popup, wl_seat_g, wlk_key_serial); // the key serial
+            xdg_popup_grab(popup, wl_seat_g, wlk_press_serial); // the key serial
             xdg_positioner_destroy(pos);
             wl_surface_commit(popup_surface);
-            printf("client_reg_popup_key_serial: grabbed on key serial %u\n", wlk_key_serial);
+            printf("client_reg_popup_key_serial: grabbed on key serial %u\n", wlk_press_serial);
+        }
+
+        if (popup_dismissed) {
+            fprintf(stderr, "client_reg_popup_key_serial: the key-serial grab was refused\n");
+            return 1;
+        }
+
+        if (popup && popup_committed && wlk_focus == popup_surface) {
+            printf("client_reg_popup_key_serial: popup holds the keyboard\n");
+            return 0;
         }
 
         usleep(20000);
     }
 
-    // survived the grab request without being disconnected
-    return 0;
+    fprintf(stderr, "client_reg_popup_key_serial: the popup never got the keyboard\n");
+    return 1;
 }
