@@ -2,10 +2,13 @@
 # imway-env: IMWAY_FAKE_KMS=1
 # imway-args: --device auto
 # What takes a fullscreen dma-buf off the primary plane, and gives it back:
-# a subsurface over it needs composition, and so do an alpha multiplier
-# below one and an image description the plane cannot reproduce (the SDR
-# output passes buffer bytes through untouched); once the client removes
-# any of them, the buffer is a direct-scanout candidate again.
+# a subsurface over or under it needs composition, and so do an alpha
+# multiplier below one, an image description the plane cannot reproduce
+# (the SDR output passes buffer bytes through untouched) and a window
+# geometry short of the output; once the client removes any of them, the
+# buffer is a direct-scanout candidate again. A cursor the hardware plane
+# cannot carry (a dma-buf, or one taller than the plane) has to be
+# composited too, and takes the buffer off the plane until it is hidden.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -35,13 +38,31 @@ off_plane() {
 
 await 100 on_plane || { echo "the fullscreen dma-buf never became a candidate"; dump_state; exit 1; }
 
-for phase in "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane"; do
-    what=${phase%%:*}
-    want=${phase##*:}
-    ctl "key 30 press"; ctl "key 30 release" # KEY_A: the next step
-    wait_client "$what"
-    await 100 "$want" || { echo "after '$what' the candidate is $(dump_field '^scanout' candidate), wanted $want"; exit 1; }
-done
+steps() { # <step:want>...
+    local phase what want
+    for phase in "$@"; do
+        what=${phase%%:*}
+        want=${phase##*:}
+        ctl "key 30 press"; ctl "key 30 release" # KEY_A: the next step
+        wait_client "$what"
+        await 100 "$want" || { echo "after '$what' the candidate is $(dump_field '^scanout' candidate), wanted $want"; exit 1; }
+    done
+}
+
+steps "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane" "below on:off_plane" "below off:on_plane" "short on:off_plane" "short off:on_plane"
+
+# the cursor steps need the pointer on the surface, and picking it there
+# needs composed frames: the flips stay off, the candidate is still judged
+ctl "set advanced.direct_scanout false"
+pointer_in() {
+    ctl "motion 640 400"
+    ctl "relmotion 1 1"
+    grep -q "pointer in" "$CLIENT_LOG"
+}
+await 100 pointer_in || { echo "the pointer never entered the surface"; dump_state; exit 1; }
+await 100 on_plane || { echo "the pointer took the buffer off the plane"; dump_state; exit 1; }
+
+steps "dmabuf cursor:off_plane" "tall cursor:off_plane" "no cursor:on_plane"
 
 expect_alive "compositor died vetoing direct scanout"
-echo "OK: subsurfaces, alpha and color management take a buffer off the plane, and it comes back"
+echo "OK: subsurfaces, alpha, color, geometry and cursors take a buffer off the plane, and it comes back"

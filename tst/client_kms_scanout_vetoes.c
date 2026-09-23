@@ -6,7 +6,16 @@
  *   "alpha on"       an alpha multiplier of one half
  *   "alpha off"      the multiplier back at full
  *   "color on"       a PQ BT.2020 image description on the surface
- *   "color off"      the description unset again */
+ *   "color off"      the description unset again
+ *   "below on"       a 32x32 blue subsurface placed below it
+ *   "below off"      that subsurface destroyed
+ *   "short on"       a window geometry one row short of the buffer
+ *   "short off"      the geometry back at the full buffer
+ * and then the pointer's cursor, which the plane cannot always carry:
+ *   "dmabuf cursor"  a 32x32 dma-buf cursor surface
+ *   "tall cursor"    the cursor surface as 16x96 wl_shm stripes
+ *   "no cursor"      the cursor hidden
+ * A cursor step needs the pointer on the surface first ("pointer in"). */
 #define main taint_main
 #include "client_kms_scanout_taint.c"
 #undef main
@@ -46,6 +55,49 @@ static const struct wp_image_description_v1_listener desc_listener = {
     .ready2 = desc_ready2_ev,
 };
 
+// a small blue dumb buffer from a card node, as a LINEAR dma-buf
+static struct wl_buffer* small_dumb(void) {
+    for (int i = 0; i < 8; i++) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/dri/card%d", i);
+        int fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0) continue;
+
+        struct drm_mode_create_dumb create = {0};
+        create.width = 32;
+        create.height = 32;
+        create.bpp = 32;
+        int prime = -1;
+        if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0 ||
+            drmPrimeHandleToFD(fd, create.handle, DRM_CLOEXEC | DRM_RDWR, &prime) != 0 || prime < 0) {
+            close(fd);
+            continue;
+        }
+        close(fd); /* the prime fd keeps the buffer alive */
+
+        struct zwp_linux_buffer_params_v1* params = zwp_linux_dmabuf_v1_create_params(dmabuf);
+        zwp_linux_buffer_params_v1_add(params, prime, 0, 0, create.pitch, 0, 0);
+        close(prime);
+        struct wl_buffer* b = zwp_linux_buffer_params_v1_create_immed(params, 32, 32, FOURCC_XRGB8888, 0);
+        zwp_linux_buffer_params_v1_destroy(params);
+        return b;
+    }
+    return NULL;
+}
+
+static void cursor_step(struct wl_surface* cs, struct wl_buffer* b, int w, int h, const char* what) {
+    if (!wlp_enter_count) {
+        fprintf(stderr, "%s: the pointer never entered the surface\n", what);
+        exit(1);
+    }
+    wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, cs, 0, 0);
+    wl_surface_attach(cs, b, 0, 0);
+    wl_surface_damage(cs, 0, 0, w, h);
+    wl_surface_commit(cs);
+    wl_display_flush(wl_dpy);
+    printf("%s\n", what);
+}
+
 static void step(const char* what) {
     wl_surface_commit(surface);
     wl_display_flush(wl_dpy);
@@ -69,6 +121,9 @@ int main(void) {
 
     buffer = make_red_dumb();
     if (!buffer) return 77;
+
+    struct wl_buffer* cursor_dmabuf = small_dumb();
+    if (!cursor_dmabuf) return 77;
 
     surface = wl_compositor_create_surface(wl_comp);
     xs = xdg_wm_base_get_xdg_surface(wl_wm, surface);
@@ -98,12 +153,18 @@ int main(void) {
     }
     struct wl_surface* child = NULL;
     struct wl_subsurface* sub = NULL;
+    struct wl_surface* cursor = wl_compositor_create_surface(wl_comp);
     int phase = 0;
+    int pointer_in = 0;
 
     wlk_watch_key = 30; // KEY_A
 
     while (wl_display_dispatch(wl_dpy) >= 0) {
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 6) {
+        if (wlp_enter_count && !pointer_in) {
+            pointer_in = 1;
+            printf("pointer in\n");
+        }
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 13) {
             phase++;
             switch (phase) {
                 case 1:
@@ -135,6 +196,39 @@ int main(void) {
                 case 6:
                     wp_color_management_surface_v1_unset_image_description(cm);
                     step("color off");
+                    break;
+                case 7:
+                    child = wl_compositor_create_surface(wl_comp);
+                    sub = wl_subcompositor_get_subsurface(wl_subcomp, child, surface);
+                    wl_subsurface_place_below(sub, surface);
+                    wl_surface_attach(child, wl_solid(32, 32, 0xff0000ff), 0, 0);
+                    wl_surface_damage(child, 0, 0, 32, 32);
+                    wl_surface_commit(child);
+                    step("below on");
+                    break;
+                case 8:
+                    wl_subsurface_destroy(sub);
+                    wl_surface_destroy(child);
+                    step("below off");
+                    break;
+                case 9:
+                    xdg_surface_set_window_geometry(xs, 0, 0, W, H - 1);
+                    step("short on");
+                    break;
+                case 10:
+                    xdg_surface_set_window_geometry(xs, 0, 0, W, H);
+                    step("short off");
+                    break;
+                case 11:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 12:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 13:
+                    wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
+                    wl_display_flush(wl_dpy);
+                    printf("no cursor\n");
                     break;
             }
         }
