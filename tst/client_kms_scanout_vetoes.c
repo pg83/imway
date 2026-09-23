@@ -19,6 +19,8 @@
  *   "offset off"     and back
  *   "lowered on"     the buffer attached one row down
  *   "lowered off"    and back
+ *   "second on"      a second, small toplevel mapped next to it
+ *   "second off"     that toplevel destroyed
  *   "cropped on"     a viewport showing the buffer's top left quarter
  *   "cropped off"    that viewport's source unset
  *   "shrunk on"      a viewport showing the buffer at half size
@@ -187,6 +189,7 @@ int main(void) {
     struct wl_subsurface* sub = NULL;
     struct wl_surface* cursor = wl_compositor_create_surface(wl_comp);
     struct wp_viewport* viewport = wp_viewporter_get_viewport(viewporter, surface);
+    struct wl_toplevel_ctx second = {0};
     int phase = 0;
     int pointer_in = 0;
 
@@ -197,7 +200,7 @@ int main(void) {
             pointer_in = 1;
             printf("pointer in\n");
         }
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 25) {
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 27) {
             phase++;
             switch (phase) {
                 case 1:
@@ -301,12 +304,23 @@ int main(void) {
                     step("lowered off");
                     break;
                 case 23:
-                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    wl_make_toplevel(&second, "kms-taint-second", 64, 64, 0xff00ff00);
+                    printf("second on\n");
                     break;
                 case 24:
-                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    xdg_toplevel_destroy(second.tl);
+                    xdg_surface_destroy(second.xs);
+                    wl_surface_destroy(second.surface);
+                    wl_display_flush(wl_dpy);
+                    printf("second off\n");
                     break;
                 case 25:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 26:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 27:
                     wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
                     wl_display_flush(wl_dpy);
                     printf("no cursor\n");
