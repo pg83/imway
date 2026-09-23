@@ -25,6 +25,12 @@ for name in LLVM_PROFILE_FILE; do
     fi
 done
 
+# a guest task stuck in the kernel outlives every timeout the runner keeps
+# inside the guest; before the host's timeout kills the VM blind, report
+# where the guest's tasks are blocked, then power it off
+watchdog=$(( ${VNG_TIMEOUT:-300} - 60 ))
+setup+="; (sleep $watchdog; echo \"vng_wrap: guest still running after ${watchdog}s\" >&2; ps -eo pid,stat,wchan:32,args >&2; echo w >/proc/sysrq-trigger; dmesg | tail -n 200 >&2; echo o >/proc/sysrq-trigger) & watchdog=\$!"
+
 # blob resources want the guest's memory in a memfd qemu can hand to udmabuf
 memory=${VNG_MEMORY:-2G}
 
@@ -32,4 +38,4 @@ memory=${VNG_MEMORY:-2G}
 # scenario's own timeout lives inside the guest and cannot reach it
 exec timeout --kill-after=15 "${VNG_TIMEOUT:-300}" vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
     --qemu-opts="-object memory-backend-memfd,id=imway-mem,size=$memory,share=on -machine memory-backend=imway-mem -device ${VNG_GPU:-virtio-gpu-pci,blob=true}" \
-    -- "$setup; cd $dir && $command"
+    -- "$setup; cd $dir && $command; rc=\$?; pkill -P \$watchdog; kill \$watchdog; exit \$rc"
