@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The top bar clock in the locale formats; see clock_formats_case.sh.
+# The top bar clock in the plain day.month formats; see clock_formats_case.sh.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
-locale=true
+locale=false
 . "$(dirname "$0")/clock_formats_case.sh"
