@@ -39,6 +39,9 @@
 
 using namespace stl;
 
+// present only in coverage-instrumented builds
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+
 namespace {
     bool asciiToKey(char c, u32& code, bool& shift) {
         static const struct {
@@ -552,7 +555,13 @@ void ControlImpl::handleLine(StringView cmd) {
         // _exit, not exit: the gpu is gone, and unwinding through atexit
         // (the driver's own, the profile writer's) while the copy thread and
         // the driver's threads are still live is how this died with SIGSEGV
-        // instead of its exit code under an instrumented build
+        // instead of its exit code under an instrumented build. The
+        // counters are written by hand: what this session ran is measured
+        // like any other's
+        if (__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+
         _exit(1);
     } else if (verb == "rule"_sv) {
         // `rule INDEX POLICY APP`: a per-application notification rule, which
@@ -655,23 +664,24 @@ void ControlImpl::dumpState(StringView outPath) {
     });
 
     // the compositor's own ImGui windows drawn last frame, so a scenario
-    // can aim clicks at a dialog from its rectangle
-    if (ImGuiContext* g = ImGui::GetCurrentContext()) {
-        // which of them holds the keyboard, and whether a text field is
-        // taking input: a dialog that lost this cannot be typed into
-        out << "imgui focus name="_sv << StringView(g->NavWindow ? g->NavWindow->Name : "-") << " want_text="_sv << (int)ImGui::GetIO().WantTextInput << " active_id="_sv << (int)(g->ActiveId != 0) << "\n"_sv;
+    // can aim clicks at a dialog from its rectangle; the renderer created
+    // the context in its constructor, before the control FIFO
+    ImGuiContext* g = ImGui::GetCurrentContext();
 
-        // the text the active field holds: typed characters trickle in one
-        // frame at a time, so a scenario presses Enter only once they are all
-        // there
-        if (g->ActiveId && g->InputTextState.ID == g->ActiveId) {
-            out << "imgui input len="_sv << (i64)g->InputTextState.TextLen << " text="_sv << StringView((const u8*)g->InputTextState.TextA.Data, (size_t)g->InputTextState.TextLen) << "\n"_sv;
-        }
+    // which of them holds the keyboard, and whether a text field is
+    // taking input: a dialog that lost this cannot be typed into
+    out << "imgui focus name="_sv << StringView(g->NavWindow ? g->NavWindow->Name : "-") << " want_text="_sv << (int)ImGui::GetIO().WantTextInput << " active_id="_sv << (int)(g->ActiveId != 0) << "\n"_sv;
 
-        for (ImGuiWindow* w : g->Windows) {
-            if (w->WasActive && !w->Hidden && !(w->Flags & ImGuiWindowFlags_ChildWindow)) {
-                out << "imgui name="_sv << StringView(w->Name) << " x="_sv << (int)w->Pos.x << " y="_sv << (int)w->Pos.y << " w="_sv << (int)w->Size.x << " h="_sv << (int)w->Size.y << "\n"_sv;
-            }
+    // the text the active field holds: typed characters trickle in one
+    // frame at a time, so a scenario presses Enter only once they are all
+    // there
+    if (g->ActiveId && g->InputTextState.ID == g->ActiveId) {
+        out << "imgui input len="_sv << (i64)g->InputTextState.TextLen << " text="_sv << StringView((const u8*)g->InputTextState.TextA.Data, (size_t)g->InputTextState.TextLen) << "\n"_sv;
+    }
+
+    for (ImGuiWindow* w : g->Windows) {
+        if (w->WasActive && !w->Hidden && !(w->Flags & ImGuiWindowFlags_ChildWindow)) {
+            out << "imgui name="_sv << StringView(w->Name) << " x="_sv << (int)w->Pos.x << " y="_sv << (int)w->Pos.y << " w="_sv << (int)w->Size.x << " h="_sv << (int)w->Size.y << "\n"_sv;
         }
     }
 

@@ -6,8 +6,9 @@
 # the fake-KMS verbs without the fake device, input verbs short of their
 # arguments, gesture phases that do not exist, an empty line, malformed
 # rule and notify lines, a rule app name longer than a rule holds (cut to
-# it), and "type" text with characters no key produces, which are skipped:
-# the launcher still finds settings from the letters around them.
+# it), "type" text with characters no key produces, which are skipped:
+# the launcher still finds settings from the letters around them, and a
+# character only a shifted key produces, typed with Shift.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -51,6 +52,10 @@ ctl "pinch bogus"
 ctl "hold bogus"
 ctl ""
 ctl "rule 0"
+ctl "rule 0 1"
+ctl "notify lonely 0"
+ctl "notify lonely 0 1"
+ctl "tablet motion 5"
 ctl "rule 99 1 far-past-the-rule-slots"
 ctl "notify lonely"
 ctl "set notifications.timeout 7"
@@ -75,6 +80,16 @@ ctl "type sett§ings"
 ctl "key 103 press"; ctl "key 103 release"
 ctl "key 28 press"; ctl "key 28 release"
 await_imgui settings || { echo "the text with an untypeable character did not reach the launcher"; dump_state; exit 1; }
+
+# a character only a shifted key produces: typed as that key with Shift,
+# it lands in the launcher's field and in the command Enter runs
+ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
+await_typing '##launcher' || { echo "the launcher did not open again"; exit 1; }
+ctl "type touch sh!ft.out"
+field_holds() { [[ "$(dump_state | grep '^imgui input ' | sed 's/.* text=//')" == "touch sh!ft.out" ]]; }
+await 100 field_holds || { echo "the shifted character did not reach the field: $(dump_state | grep '^imgui input ')"; exit 1; }
+ctl "key 28 press"; ctl "key 28 release"
+await 100 test -e 'sh!ft.out' || { echo "the command with the shifted character did not run"; exit 1; }
 
 expect_alive "compositor died on the control FIFO's edges"
 echo "OK: unknown verbs and settings, an overlong line, a failed dump rename and untypeable text"
