@@ -34,8 +34,7 @@ await 100 viewer_gone || { echo "the failed viewer left its window"; exit 1; }
 env IMWAY_SHOT_COLOR=1:203 "$imway_bin" screenshot "$rt/good.shot" >"$rt/viewer.out" 2>&1 &
 vpid=$!
 await 150 viewer_up || { echo "the next HDR viewer did not open"; cat "$rt/viewer.out"; exit 1; }
-ctl "key 1 press"; ctl "key 1 release" # Escape
-await 100 viewer_gone || { echo "Escape did not close the next viewer"; exit 1; }
+escape_until viewer_gone || { echo "Escape did not close the next viewer"; exit 1; }
 rc=0
 wait "$vpid" || rc=$?
 [[ $rc -eq 0 ]] || { echo "the next HDR viewer exited $rc"; cat "$rt/viewer.out"; exit 1; }

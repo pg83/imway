@@ -64,9 +64,7 @@ viewer_gone() {
 }
 
 await 150 viewer_up || { echo "copy action did not open the editor"; cat "$IMWAY_LOG"; exit 1; }
-sleep 0.5
-ctl "key 1 press"; ctl "key 1 release" # Escape
-await 100 viewer_gone || { echo "Escape did not close the editor"; exit 1; }
+escape_until viewer_gone || { echo "Escape did not close the editor"; exit 1; }
 [[ ! -e "$shots/four.png" ]] || { echo "Escape saved a file"; exit 1; }
 
 expect_alive "compositor died during the screenshot actions"

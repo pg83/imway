@@ -249,6 +249,13 @@ imgui_input_is() { # <text>
 }
 await_input() { await 100 imgui_input_is "$1"; }             # <text>
 
+# Escape until <check> holds: a client window can be up (in the dump) before
+# its keyboard focus arrives, and an Escape sent then goes nowhere
+escape_until() { # <check...>
+    escape_then() { ctl "key 1 press"; ctl "key 1 release"; sleep 0.2; "$@"; }
+    await 50 escape_then "$@"
+}
+
 # Print rounded mean R G B and pixel count from the inset client content box.
 # Averaging makes color assertions compatible with output dithering while
 # retaining their sub-code luminance/chromaticity checks.

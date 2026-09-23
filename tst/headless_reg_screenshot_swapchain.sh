@@ -47,8 +47,7 @@ stale() { # <fault>
     local pid=$!
     await 150 viewer_up || { echo "$1: the editor did not open"; cat "$rt/viewer.out"; exit 1; }
     await 50 drawn || { echo "$1: the editor was not drawn after the rebuild"; exit 1; }
-    ctl "key 1 press"; ctl "key 1 release" # Escape
-    await 100 viewer_gone || { echo "$1: Escape did not close the editor"; exit 1; }
+    escape_until viewer_gone || { echo "$1: Escape did not close the editor"; exit 1; }
     local rc=0
     wait "$pid" || rc=$?
     [[ $rc -eq 0 ]] || { echo "$1: the viewer exited $rc"; cat "$rt/viewer.out"; exit 1; }

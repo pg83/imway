@@ -59,9 +59,7 @@ n=1
 for bad in small bad trunc; do
     launch "exec ./shot ./$bad.shot"
     await 150 viewer_up || { echo "the error panel did not open for $bad.shot"; cat "$IMWAY_LOG"; exit 1; }
-    sleep 0.5
-    ctl "key 1 press"; ctl "key 1 release" # Escape: Exit
-    await 100 viewer_gone || { echo "Escape did not close the error panel for $bad.shot"; exit 1; }
+    escape_until viewer_gone || { echo "Escape did not close the error panel for $bad.shot"; exit 1; }
     n=$((n + 1))
     await 100 exits $n || { echo "the error viewer for $bad.shot did not exit"; exit 1; }
 done
