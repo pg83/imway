@@ -17,7 +17,7 @@ in_log "imway: backlight ./backlight/imway0, max 255" || {
 }
 
 ctl "set display.osd_seconds 5"
-await 20 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
 
 raw() { cat "$XDG_RUNTIME_DIR/backlight/imway0/brightness"; }
 

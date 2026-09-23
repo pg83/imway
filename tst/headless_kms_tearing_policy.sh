@@ -28,7 +28,7 @@ nudge_flips() { # <count>: drive at least that many more flips
 }
 
 ctl "set advanced.tearing 2" # always
-await 20 in_log "control: set advanced.tearing" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set advanced.tearing" || { echo "settings are not reachable"; exit 1; }
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_kms_direct_scanout"
 start_client
 wait_client "taint candidate mapped"

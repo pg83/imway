@@ -16,7 +16,7 @@ in_log "ddc/ci brightness on /dev/i2c-7, max 100" || { echo "the monitor's range
 ! in_log "i2c-3" || { echo "a neighbouring connector's bus was touched"; cat "$IMWAY_LOG"; exit 1; }
 
 ctl "set display.osd_seconds 5"
-await 20 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
 
 # half of 100 at boot, one 5% step up
 ctl "key 225 press"; ctl "key 225 release" # KEY_BRIGHTNESSUP

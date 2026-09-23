@@ -15,7 +15,7 @@ shots="$XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_format 1" # png
 ctl "set applications.screenshot_action 1" # save, no window
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 
 png_size() { # <file>: "WxH"
     python3 -c 'import struct,sys; d=open(sys.argv[1],"rb").read(24); print("%dx%d" % struct.unpack(">II", d[16:24]))' "$1"

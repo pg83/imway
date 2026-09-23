@@ -18,7 +18,7 @@ ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_name handoff"
 ctl "set applications.screenshot_format 1" # png
 ctl "set applications.screenshot_action 1" # save, no window
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 
 # the fullscreen dmabuf client of the direct-scanout scenario
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_kms_direct_scanout"

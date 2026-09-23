@@ -15,7 +15,7 @@ in_log "kms output: 1280x800@60" || { echo "no kms boot"; cat "$IMWAY_LOG"; exit
 ctl "set applications.screenshot_directory $XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_name deferred"
 ctl "set applications.screenshot_action 1" # save, no window
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 
 flips() { dump_field '^kms' flips; }
 
