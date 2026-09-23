@@ -2,6 +2,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <stddef.h>
+
 namespace stl {
     class ObjPool;
 }
@@ -38,6 +40,13 @@ struct ChaosMonkey {
     // or bind that asked for it fills it in; a null return stands for the
     // allocation failing (the replacement destroys what it was handed)
     virtual wl_resource* resource(wl_resource* created) = 0;
+    // wayland shm and linux-dmabuf
+    // a wl_shm pool's mapping fresh from mmap (MAP_FAILED when it failed); a
+    // replacement failure unmaps the size it was handed and returns MAP_FAILED
+    virtual void* shmMap(void* mapped, size_t size) = 0;
+    // drmPrimeFDToHandle's result on a client's dma-buf plane, the driver's
+    // verdict on the buffer; a failure also sets errno
+    virtual int primeImport(int result) = 0;
     // KMS backend
     // the result of a Vulkan call building or exporting a scanout buffer
     virtual VkResult scanout(VkResult result) = 0;

@@ -197,8 +197,8 @@ namespace {
         mapping->stable = seals >= 0 && (seals & F_SEAL_SHRINK) && fstat(pool->fd, &st) == 0 && st.st_size >= (off_t)mapping->size;
     }
 
-    ShmMapping* mappingCreate(SmallObjAllocator* alloc, int fd, size_t size) {
-        u8* data = (u8*)mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    ShmMapping* mappingCreate(SmallObjAllocator* alloc, ChaosMonkey* chaos, int fd, size_t size) {
+        u8* data = (u8*)chaos->shmMap(mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0), size);
 
         if (data == MAP_FAILED) {
             return nullptr;
@@ -393,7 +393,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(pool->alloc, pool->fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(pool->alloc, pool->chaos, pool->fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap");
@@ -429,7 +429,7 @@ namespace {
             return;
         }
 
-        ShmMapping* mapping = mappingCreate(alloc, fd, (size_t)size);
+        ShmMapping* mapping = mappingCreate(alloc, shm->chaos, fd, (size_t)size);
 
         if (!mapping) {
             wl_resource_post_error(resource, WL_SHM_ERROR_INVALID_FD, "failed mmap fd %d: %s", fd, strerror(errno));
@@ -9597,7 +9597,7 @@ namespace {
         for (int i = 0; i < b.nplanes; i++) {
             u32 handle = 0;
 
-            if (drmPrimeFDToHandle(srv.drmFd, b.fds[i], &handle) != 0) {
+            if (srv.composer->chaos->primeImport(drmPrimeFDToHandle(srv.drmFd, b.fds[i], &handle)) != 0) {
                 // an unauthenticated card fd cannot judge (EACCES); only a
                 // clean driver verdict rejects
                 if (errno == EACCES || errno == EPERM) {

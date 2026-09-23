@@ -1058,6 +1058,19 @@ static int mode_bad(const char* what) {
 
     struct wl_surface* s = wl_compositor_create_surface(wl_comp);
 
+    if (!strcmp(what, "pool-resize-map")) {
+        // the scenario lets the first mapping (the pool's creation) through
+        int fd = memfd_create("misc-remap", 0);
+
+        if (fd < 0 || ftruncate(fd, 8192) < 0) return 2;
+
+        struct wl_shm_pool* pool = wl_shm_create_pool(wl_shm_g, fd, 4096);
+
+        close(fd);
+        roundtrip("pool");
+        wl_shm_pool_resize(pool, 8192);
+        return wl_expect_error("wl_shm_pool", WL_SHM_ERROR_INVALID_FD);
+    }
     if (!strcmp(what, "place-orphan")) {
         struct wl_surface* parent = wl_compositor_create_surface(wl_comp);
         struct wl_surface* sibling = wl_compositor_create_surface(wl_comp);

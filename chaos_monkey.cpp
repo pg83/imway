@@ -13,6 +13,7 @@
     #include <errno.h>
     #include <stdlib.h>
     #include <string.h>
+    #include <sys/mman.h>
     #include <sys/socket.h>
     #include <unistd.h>
     #include <std/lib/vector.h>
@@ -37,6 +38,11 @@ using namespace stl;
 //   resource=IFACE    wayland: the next resource of wl_interface IFACE
 //                     (wl_shm_pool, xdg_popup, ...) fails to allocate; one
 //                     word per interface, each spent on its own
+//   shm-map=K         wayland: K wl_shm pool mappings pass, the one after
+//                     fails as mmap does without address space
+//   prime-import=E    wayland: the next dma-buf plane the driver is asked
+//                     to import fails with errno E (13 EACCES: a card fd
+//                     that cannot judge; 22 EINVAL: a buffer it refuses)
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
 //   scanout-modifier=N the next N scanout modifier queries come back
@@ -100,6 +106,9 @@ namespace {
         int memoryFaults = 0;
         int vulkanSkip = -1;
         Vector<StringView> resourceFaults;
+        // wayland shm and linux-dmabuf
+        int shmMapSkip = -1;
+        int primeImportErrno = 0;
         // KMS backend
         int scanoutSkip = -1;
         int modifierFaults = 0;
@@ -135,6 +144,9 @@ namespace {
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
         wl_resource* resource(wl_resource* created) override;
+        // wayland shm and linux-dmabuf
+        void* shmMap(void* mapped, size_t size) override;
+        int primeImport(int result) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -253,7 +265,37 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         busSendBuffer = (int)arg.stou();
     } else if (fault == "dbus-recv-limit"_sv) {
         busReceiveLimit = (long)arg.stou();
+    } else if (fault == "shm-map"_sv) {
+        shmMapSkip = (int)arg.stou();
+    } else if (fault == "prime-import"_sv) {
+        primeImportErrno = (int)arg.stou();
     }
+}
+
+// wayland shm and linux-dmabuf
+void* TestChaosMonkey::shmMap(void* mapped, size_t size) {
+    if (shmMapSkip < 0 || mapped == MAP_FAILED) {
+        return mapped;
+    }
+
+    if (shmMapSkip-- > 0) {
+        return mapped;
+    }
+
+    munmap(mapped, size);
+
+    return MAP_FAILED;
+}
+
+int TestChaosMonkey::primeImport(int result) {
+    if (!primeImportErrno || result != 0) {
+        return result;
+    }
+
+    errno = primeImportErrno;
+    primeImportErrno = 0;
+
+    return -1;
 }
 
 void TestChaosMonkey::armBus(BusFault kind, StringView arg) {
@@ -593,6 +635,9 @@ namespace {
         void memoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult vulkan(VkResult result) override;
         wl_resource* resource(wl_resource* created) override;
+        // wayland shm and linux-dmabuf
+        void* shmMap(void* mapped, size_t size) override;
+        int primeImport(int result) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -643,6 +688,15 @@ VkResult IdleChaosMonkey::vulkan(VkResult result) {
 
 wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
     return created;
+}
+
+// wayland shm and linux-dmabuf
+void* IdleChaosMonkey::shmMap(void* mapped, size_t) {
+    return mapped;
+}
+
+int IdleChaosMonkey::primeImport(int result) {
+    return result;
 }
 
 // KMS backend
