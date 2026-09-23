@@ -1734,7 +1734,7 @@ KmsOutput::~KmsOutput() noexcept {
 
     freeDumb(cursorBuf);
     // a constructed output always holds a mode blob: the constructor
-    // creates it or throws, and switchMode replaces it or throws
+    // creates it or throws, and switchMode replaces it only with a new one
     drmModeDestroyPropertyBlob(fd, modeBlob);
 
     if (hdrMetaBlob) {
@@ -2215,19 +2215,30 @@ bool KmsOutput::switchMode(const drmModeModeInfo& next) {
     vkDeviceWaitIdle(vk->device);
 
     drmModeModeInfo old = mode;
+    u32 nextBlob = 0;
+
+    // the new mode's blob before anything is rebuilt: a driver that will
+    // not take it leaves the output whole at the old mode
+    if (drmModeCreatePropertyBlob(fd, &next, sizeof(next), &nextBlob) != 0) {
+        *(c->log) << "imway: mode blob refused at "_sv << next.hdisplay << "x"_sv << next.vdisplay << ", errno "_sv << errno << ", staying at "_sv << old.hdisplay << "x"_sv << old.vdisplay << endL;
+
+        return false;
+    }
 
     mode = next;
 
     if (!rebuildScanout()) {
         *(c->log) << "imway: scanout rebuild failed at "_sv << next.hdisplay << "x"_sv << next.vdisplay << ", staying at "_sv << old.hdisplay << "x"_sv << old.vdisplay << endL;
+        drmModeDestroyPropertyBlob(fd, nextBlob);
         mode = old;
+        // failing again leaves nothing at either size: no frame can go out
         STD_VERIFY(rebuildScanout());
 
         return false;
     }
 
     drmModeDestroyPropertyBlob(fd, modeBlob);
-    STD_VERIFY(drmModeCreatePropertyBlob(fd, &mode, sizeof(mode), &modeBlob) == 0);
+    modeBlob = nextBlob;
 
     // client framebuffers imported for direct scanout are sized for the old
     // mode and can never fly again
