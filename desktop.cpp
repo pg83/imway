@@ -2361,6 +2361,7 @@ DesktopImpl::~DesktopImpl() noexcept {
     dialog(wifiState);
     dialog(inspectorState);
     dialog(historyState);
+    dialog(logState);
     dialog(launcherState);
     closeLockOverlay(&lockState);
 }
