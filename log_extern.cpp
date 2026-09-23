@@ -14,7 +14,6 @@ extern "C" {
 #include <libseat.h>
 }
 
-#include <wayland-client-core.h>
 #include <wayland-server-core.h>
 
 using namespace stl;
@@ -26,10 +25,6 @@ namespace {
 
     void wlServerLog(const char* fmt, va_list args) {
         externVLog(*externLogSink, "wayland"_sv, fmt, args);
-    }
-
-    void wlClientLog(const char* fmt, va_list args) {
-        externVLog(*externLogSink, "wayland-client"_sv, fmt, args);
     }
 
     void seatLog(enum libseat_log_level, const char* fmt, va_list args) {
@@ -64,7 +59,6 @@ void installExternLogHandlers(Composer& c) {
     externLogSink = c.log;
 
     wl_log_set_handler_server(wlServerLog);
-    wl_log_set_handler_client(wlClientLog);
     libseat_set_log_handler(seatLog);
     libseat_set_log_level(LIBSEAT_LOG_LEVEL_INFO);
     cmsSetLogErrorHandler(lcmsLog);
