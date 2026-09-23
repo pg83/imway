@@ -116,6 +116,11 @@ struct ChaosMonkey {
     // pipelines and pools, the texture chain's layout, the capture's pool
     virtual VkResult setup(VkResult result) = 0;
 
+    // renderer: the screenshot capture
+    // the outcome its copy submit is about to have, under the same rule as
+    // the other submits
+    virtual VkResult shotSubmit(VkResult pending) = 0;
+
     // screenshot viewer (imway screenshot, its own process and monkey)
     // the result of acquiring a swapchain image or presenting one
     virtual VkResult swapchain(VkResult result) = 0;

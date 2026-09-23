@@ -333,10 +333,23 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
     si.commandBufferCount = 1;
     si.pCommandBuffers = &command;
 
-    VkResult result = vkQueueSubmit(queue, 1, &si, fence);
+    VkResult result = comp->chaos->shotSubmit(VK_SUCCESS);
+
+    if (result == VK_SUCCESS) {
+        result = vkQueueSubmit(queue, 1, &si, fence);
+    }
 
     if (result != VK_SUCCESS) {
         *(comp->log) << "imway: screenshot submit failed ("_sv << (long)result << ")"_sv << endL;
+
+        // the scanout was exported for a viewer this capture no longer
+        // hands it to: the retry reads the pixels back instead, and the
+        // output swaps its replacement in on its own
+        if (handoff) {
+            close(shared.fd);
+            shared.fd = -1;
+            handoff = false;
+        }
 
         return false;
     }

@@ -84,6 +84,8 @@ using namespace stl;
 //   cursor-submit=N   the next N cursor shape rasterize submits are refused
 //   setup=K           K boot-time setup calls pass, the one after runs out
 //                     of device memory
+// renderer: the screenshot capture
+//   shot-submit=N     the next N screenshot capture submits are refused
 // the screenshot viewer, a process of its own with its own monkey:
 //   swapchain=K       K swapchain acquires and presents pass, the one after
 //                     reports the swapchain out of date
@@ -157,6 +159,8 @@ namespace {
         int outputTargetSkip = -1;
         Vector<StringView> hiddenExtensions;
         int setupSkip = -1;
+        // renderer: the screenshot capture
+        int shotSubmitFaults = 0;
         // screenshot viewer
         int swapchainSkip = -1;
         VkResult swapchainFault = VK_SUCCESS;
@@ -210,6 +214,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
+        // renderer: the screenshot capture
+        VkResult shotSubmit(VkResult pending) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
         // buses
@@ -317,6 +323,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         cursorSubmitFaults = (int)arg.stou();
     } else if (fault == "setup"_sv) {
         setupSkip = (int)arg.stou();
+    } else if (fault == "shot-submit"_sv) {
+        // renderer: the screenshot capture
+        shotSubmitFaults = (int)arg.stou();
     } else if (fault == "swapchain"_sv || fault == "swapchain-suboptimal"_sv) {
         swapchainSkip = (int)arg.stou();
         swapchainFault = fault == "swapchain"_sv ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUBOPTIMAL_KHR;
@@ -704,6 +713,11 @@ VkResult TestChaosMonkey::setup(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+// renderer: the screenshot capture
+VkResult TestChaosMonkey::shotSubmit(VkResult pending) {
+    return spend(shotSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
+}
+
 // screenshot viewer
 VkResult TestChaosMonkey::swapchain(VkResult result) {
     if (swapchainSkip < 0 || swapchainSkip-- > 0) {
@@ -832,6 +846,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
+        // renderer: the screenshot capture
+        VkResult shotSubmit(VkResult pending) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
         // buses
@@ -957,6 +973,11 @@ VkResult IdleChaosMonkey::outputTarget(VkResult result) {
 
 VkResult IdleChaosMonkey::setup(VkResult result) {
     return result;
+}
+
+// renderer: the screenshot capture
+VkResult IdleChaosMonkey::shotSubmit(VkResult pending) {
+    return pending;
 }
 
 // screenshot viewer
