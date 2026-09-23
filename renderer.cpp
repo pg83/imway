@@ -692,7 +692,8 @@ ShmUpload::~ShmUpload() noexcept {
 }
 
 void ShmUpload::finish() noexcept {
-    if (mapped && memory) {
+    // mapped is set only once memory is mapped, and cleared with it below
+    if (mapped) {
         vkUnmapMemory(device, memory);
     }
 
