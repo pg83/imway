@@ -935,7 +935,11 @@ static int mode_input_region(void) {
     printf("enters %d\n", before);
     wl_surface_set_input_region(t.surface, NULL);
     wl_surface_commit(t.surface);
-    step(2); // hovered again: the whole surface takes input
+    roundtrip("reset");
+    // the scenario re-aims the pointer at the window until it enters
+    printf("input region reset\n");
+    while (!wlp_enter_count && wl_display_dispatch(wl_dpy) != -1) {
+    }
     printf("enters %d\n", wlp_enter_count);
     if (before != 0 || wlp_enter_count == 0) {
         fprintf(stderr, "input region: %d enters while empty, %d after reset\n", before, wlp_enter_count);
