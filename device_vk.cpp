@@ -395,15 +395,16 @@ DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     this->tryShmUdmabufImage = this->hasDmabuf && this->udmabufFd >= 0;
 }
 
+// only a finished constructor gets here (a pool registers the destructor
+// once construction returns), and it returns with the device and instance
+// made or throws
 DeviceVk::~DeviceVk() noexcept {
     if (this->udmabufFd >= 0) {
         close(this->udmabufFd);
         this->udmabufFd = -1;
     }
 
-    if (this->device) {
-        vkDestroyDevice(this->device, nullptr);
-    }
+    vkDestroyDevice(this->device, nullptr);
 
     if (this->debugMessenger) {
         // a messenger exists only on an instance with the extension enabled
@@ -414,9 +415,7 @@ DeviceVk::~DeviceVk() noexcept {
         this->debugMessenger = VK_NULL_HANDLE;
     }
 
-    if (this->instance) {
-        vkDestroyInstance(this->instance, nullptr);
-    }
+    vkDestroyInstance(this->instance, nullptr);
 
     this->device = VK_NULL_HANDLE;
     this->instance = VK_NULL_HANDLE;
