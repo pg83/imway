@@ -45,6 +45,8 @@ pick_entry() {
     await_input "$1" || { echo "the field did not take '$1'"; dump_state; exit 1; }
     ctl "key 103 press"; ctl "key 103 release" # Up
     ctl "key 28 press"; ctl "key 28 release"   # Enter
+    # the next launch must not find this launcher still taking its Enter
+    await_no_imgui '##launcher' || { echo "the launcher did not close after '$1'"; dump_state; exit 1; }
 }
 
 pick_entry "Terminal Probe Unique"
