@@ -1888,12 +1888,12 @@ void RendererImpl::setup() {
     captureFencePoll = FencePoll::create(*pool, loop, device, captureFence, *pool->make<CallCaptureRetired>(this));
 
     if (hasSyncFd) {
+        // DeviceVk enabled VK_KHR_external_semaphore_fd whenever it set
+        // hasSyncFd, and the device hands out every command of an enabled
+        // extension
         importSemFd = (PFN_vkImportSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkImportSemaphoreFdKHR");
         getSemFd = (PFN_vkGetSemaphoreFdKHR)vkGetDeviceProcAddr(device, "vkGetSemaphoreFdKHR");
-        hasSyncFd = importSemFd && getSemFd;
-    }
 
-    if (hasSyncFd) {
         VkExportSemaphoreCreateInfo exp{VK_STRUCTURE_TYPE_EXPORT_SEMAPHORE_CREATE_INFO};
 
         exp.handleTypes = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT;
