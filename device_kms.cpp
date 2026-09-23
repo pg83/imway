@@ -2855,10 +2855,10 @@ void KmsOutput::setBrightness(float v) {
     }
 
     // floor at one raw step: zero on an edp panel means a black screen and
-    // a lost user
+    // a lost user; v is at most 1, so raw is at most blMax
     long raw = lroundf(v * (float)blMax);
 
-    raw = raw < 1 ? 1 : raw > blMax ? blMax : raw;
+    raw = raw < 1 ? 1 : raw;
 
     auto& p = sb();
 
