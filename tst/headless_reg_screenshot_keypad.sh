@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# The screenshot editor from the keypad: keypad + zooms in, keypad - out,
-# keypad 0 resets, the wheel turned toward the user zooms out, and keypad
-# Enter saves.
+# The screenshot editor from the keypad: keypad + zooms in, keypad - out
+# down to 10% and no further, keypad 0 resets, the wheel turned toward the
+# user zooms out, and keypad Enter saves.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -43,6 +43,25 @@ tap 74 # keypad -
 await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/out.ppm" || { echo "keypad - did not zoom out"; exit 1; }
 tap 82
 await 50 differs "$XDG_RUNTIME_DIR/out.ppm" "$XDG_RUNTIME_DIR/reset2.ppm" || { echo "keypad 0 did not reset the zoom again"; exit 1; }
+
+# the zoom stops at 10%: from 50%, three steps out give 20% and a fourth
+# 10%; four more change nothing, so one step in is back at 20%
+same() { # <baseline> <shot>
+    screenshot "$2" &&
+        [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -lt 60 ]]
+}
+tap 74; tap 74; tap 74
+await 50 settled "$XDG_RUNTIME_DIR/s1.ppm" "$XDG_RUNTIME_DIR/z20.ppm" || { echo "the editor never settled at 20%"; exit 1; }
+tap 74
+await 50 differs "$XDG_RUNTIME_DIR/z20.ppm" "$XDG_RUNTIME_DIR/z10.ppm" || { echo "keypad - did not zoom out to 10%"; exit 1; }
+await 50 settled "$XDG_RUNTIME_DIR/s2.ppm" "$XDG_RUNTIME_DIR/z10.ppm" || { echo "the editor never settled at 10%"; exit 1; }
+tap 74; tap 74; tap 74; tap 74
+tap 78
+await 50 same "$XDG_RUNTIME_DIR/z20.ppm" "$XDG_RUNTIME_DIR/back.ppm" || { echo "zooming out past 10% moved the zoom"; exit 1; }
+tap 82
+await 50 differs "$XDG_RUNTIME_DIR/back.ppm" "$XDG_RUNTIME_DIR/reset3.ppm" || { echo "keypad 0 did not reset the zoom from 20%"; exit 1; }
+await 50 same "$XDG_RUNTIME_DIR/reset2.ppm" "$XDG_RUNTIME_DIR/reset3.ppm" || { echo "keypad 0 did not return to 50%"; exit 1; }
+cp "$XDG_RUNTIME_DIR/reset3.ppm" "$XDG_RUNTIME_DIR/reset2.ppm"
 
 # the wheel zooms the canvas the pointer is over
 vx=$(dump_field 'title=imway screenshot' imgx); vy=$(dump_field 'title=imway screenshot' imgy)
