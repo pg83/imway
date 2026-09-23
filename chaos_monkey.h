@@ -110,6 +110,10 @@ struct ChaosMonkey {
     // pipelines and pools, the texture chain's layout, the capture's pool
     virtual VkResult setup(VkResult result) = 0;
 
+    // screenshot viewer (imway screenshot, its own process and monkey)
+    // the result of acquiring a swapchain image or presenting one
+    virtual VkResult swapchain(VkResult result) = 0;
+
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one
     // it was handed); a call about to be sent, null to have the send fail

@@ -29,6 +29,8 @@ struct wl_surface;
 #define VK_USE_PLATFORM_WAYLAND_KHR
 #include <vulkan/vulkan.h>
 
+#include "chaos_monkey.h"
+
 #include <plt/window.h>
 #include <plt/platform.h>
 
@@ -534,7 +536,13 @@ namespace {
     // otherwise render at scale 1, so the panel/text would be tiny on hidpi)
     float gUiScale = 1.f;
 
+    // the viewer's own fault seam, a monkey of the same kind as the
+    // compositor's, configured from the viewer's environment
+    ChaosMonkey* gChaos = nullptr;
+
     void vkc(VkResult e) {
+        e = gChaos->vulkan(e);
+
         if (e < 0) {
             fail(sv(StringBuilder() << "vulkan error "_sv << (i64)e));
         }
@@ -1368,7 +1376,7 @@ namespace {
         ImGui_ImplVulkanH_Window* wd = &gWin;
         VkSemaphore acq = wd->FrameSemaphores[wd->SemaphoreIndex].ImageAcquiredSemaphore;
         VkSemaphore done = wd->FrameSemaphores[wd->SemaphoreIndex].RenderCompleteSemaphore;
-        VkResult e = vkAcquireNextImageKHR(gDevice, wd->Swapchain, UINT64_MAX, acq, VK_NULL_HANDLE, &wd->FrameIndex);
+        VkResult e = gChaos->swapchain(vkAcquireNextImageKHR(gDevice, wd->Swapchain, UINT64_MAX, acq, VK_NULL_HANDLE, &wd->FrameIndex));
 
         if (e == VK_ERROR_OUT_OF_DATE_KHR || e == VK_SUBOPTIMAL_KHR) {
             gRebuild = true;
@@ -1460,7 +1468,7 @@ namespace {
         pi.pSwapchains = &wd->Swapchain;
         pi.pImageIndices = &wd->FrameIndex;
 
-        VkResult e = vkQueuePresentKHR(gQueue, &pi);
+        VkResult e = gChaos->swapchain(vkQueuePresentKHR(gQueue, &pi));
 
         if (e == VK_ERROR_OUT_OF_DATE_KHR || e == VK_SUBOPTIMAL_KHR) {
             gRebuild = true;
@@ -1949,6 +1957,8 @@ int mainScreenshot(StringView path) {
         Texture tex;
         FrameDriver driver;
         ObjPool::Ref shot = ObjPool::fromMemory();
+
+        gChaos = ChaosMonkey::create(*shot);
 
         // the platform, the input bridge and the window live in the same
         // arena: LIFO death tears the window down after every vulkan guard

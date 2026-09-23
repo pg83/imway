@@ -81,6 +81,10 @@ using namespace stl;
 //   cursor-submit=N   the next N cursor shape rasterize submits are refused
 //   setup=K           K boot-time setup calls pass, the one after runs out
 //                     of device memory
+// the screenshot viewer, a process of its own with its own monkey:
+//   swapchain=K       K swapchain acquires and presents pass, the one after
+//                     reports the swapchain out of date
+//   swapchain-suboptimal=K  the same, reporting it suboptimal instead
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -145,6 +149,9 @@ namespace {
         int outputTargetSkip = -1;
         Vector<StringView> hiddenExtensions;
         int setupSkip = -1;
+        // screenshot viewer
+        int swapchainSkip = -1;
+        VkResult swapchainFault = VK_SUCCESS;
         // buses
         BusRule busRules[8];
         int busSendBuffer = 0;
@@ -190,6 +197,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
+        // screenshot viewer
+        VkResult swapchain(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -291,6 +300,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         cursorSubmitFaults = (int)arg.stou();
     } else if (fault == "setup"_sv) {
         setupSkip = (int)arg.stou();
+    } else if (fault == "swapchain"_sv || fault == "swapchain-suboptimal"_sv) {
+        swapchainSkip = (int)arg.stou();
+        swapchainFault = fault == "swapchain"_sv ? VK_ERROR_OUT_OF_DATE_KHR : VK_SUBOPTIMAL_KHR;
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -647,6 +659,15 @@ VkResult TestChaosMonkey::setup(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+// screenshot viewer
+VkResult TestChaosMonkey::swapchain(VkResult result) {
+    if (swapchainSkip < 0 || swapchainSkip-- > 0) {
+        return result;
+    }
+
+    return swapchainFault;
+}
+
 bool TestChaosMonkey::deviceExtension(const char* name, bool offered) {
     for (StringView hidden : hiddenExtensions) {
         if (hidden == StringView(name)) {
@@ -750,6 +771,8 @@ namespace {
         VkResult captureSubmit(VkResult pending) override;
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
+        // screenshot viewer
+        VkResult swapchain(VkResult result) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -861,6 +884,11 @@ VkResult IdleChaosMonkey::outputTarget(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::setup(VkResult result) {
+    return result;
+}
+
+// screenshot viewer
+VkResult IdleChaosMonkey::swapchain(VkResult result) {
     return result;
 }
 
