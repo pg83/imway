@@ -16,8 +16,10 @@ fi
 start_client
 wait_client "second sealed buffer committed"
 
+# the toplevel's first buffer is a plain pool (always cpu); the two sealed
+# commits come after it
 carried() {
-    [[ $(grep -c "wl_shm backend " "$IMWAY_LOG") -ge 2 ]]
+    [[ $(grep -c "wl_shm backend " "$IMWAY_LOG") -ge 3 ]]
 }
 
 await 100 carried || {
@@ -31,7 +33,9 @@ if [[ $expect == udmabuf-buffer ]] && in_log "disabling wl_shm UDMABUF"; then
     exit 127
 fi
 
-[[ $(grep -c "wl_shm backend $expect" "$IMWAY_LOG") -ge 2 ]] || {
+want=2
+[[ $expect == cpu ]] && want=3
+[[ $(grep -c "wl_shm backend $expect" "$IMWAY_LOG") -ge $want ]] || {
     echo "the 3 MiB pools did not both go to $expect"
     grep "wl_shm" "$IMWAY_LOG"
     exit 1
