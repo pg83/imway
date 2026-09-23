@@ -4,7 +4,8 @@
 # date or suboptimal (the viewer's IMWAY_CHAOS) makes the viewer rebuild it
 # and carry on, so the editor is on screen and closes cleanly. A Vulkan
 # call the viewer cannot do without, failing while it sets up, ends it with
-# the error on record and status 1, no window.
+# the error on record and status 1, no window, and so does a device that
+# lacks the swapchain extension, naming it.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -62,6 +63,11 @@ rc=0
 env IMWAY_CHAOS=vulkan=0 "$imway_bin" screenshot "$rt/good.shot" >"$rt/viewer.out" 2>&1 || rc=$?
 [[ $rc -eq 1 ]] || { echo "a failed Vulkan instance did not end the viewer (rc=$rc)"; cat "$rt/viewer.out"; exit 1; }
 grep -q "imway screenshot: .*vulkan error" "$rt/viewer.out" || { echo "the failed Vulkan call was not reported"; cat "$rt/viewer.out"; exit 1; }
+
+rc=0
+env IMWAY_CHAOS=no-ext=VK_KHR_swapchain "$imway_bin" screenshot "$rt/good.shot" >"$rt/viewer.out" 2>&1 || rc=$?
+[[ $rc -eq 1 ]] || { echo "a device without swapchains did not end the viewer (rc=$rc)"; cat "$rt/viewer.out"; exit 1; }
+grep -q "imway screenshot: .*vulkan lacks VK_KHR_swapchain" "$rt/viewer.out" || { echo "the missing extension was not named"; cat "$rt/viewer.out"; exit 1; }
 
 expect_alive "compositor died while the viewer rebuilt its swapchain"
 echo "OK: a stale swapchain is rebuilt and a failed setup call is reported"

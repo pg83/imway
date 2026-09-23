@@ -557,13 +557,17 @@ namespace {
         props.zero(count);
         vkEnumerateDeviceExtensionProperties(device, nullptr, &count, props.mutData());
 
+        bool offered = false;
+
         for (const VkExtensionProperties& prop : props) {
             if (StringView(prop.extensionName) == StringView(name)) {
-                return true;
+                offered = true;
+
+                break;
             }
         }
 
-        return false;
+        return gChaos->deviceExtension(name, offered);
     }
 
     void setupVulkan(ObjPool& shot, const char** exts, u32 nexts, const Image& img) {
@@ -639,7 +643,7 @@ namespace {
 
         for (u32 i = 0; i < devExtCount; i++) {
             if (!hasDeviceExtension(gPhys, devExts[i])) {
-                fail("vulkan cannot import shared screenshot"_sv);
+                fail(sv(StringBuilder() << "vulkan lacks "_sv << StringView(devExts[i])));
             }
         }
         float prio = 1.0f;

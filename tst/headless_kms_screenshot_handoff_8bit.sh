@@ -25,7 +25,7 @@ saved() {
     [[ -s "$shots/handoff.png" ]] && in_log "exited with status 0"
 }
 viewer_failed() {
-    [[ -s "$XDG_RUNTIME_DIR/viewer.log" ]] && grep -q "vulkan cannot import shared screenshot" "$XDG_RUNTIME_DIR/viewer.log"
+    [[ -s "$XDG_RUNTIME_DIR/viewer.log" ]] && grep -Eq "vulkan lacks VK_(KHR_external_memory_fd|EXT_external_memory_dma_buf|EXT_image_drm_format_modifier)" "$XDG_RUNTIME_DIR/viewer.log"
 }
 for _ in $(seq 1 200); do
     saved && break

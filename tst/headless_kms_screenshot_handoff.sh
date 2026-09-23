@@ -58,7 +58,7 @@ if saved; then
     await 100 in_log "exited with status 0" || { echo "the viewer did not exit cleanly"; cat "$IMWAY_LOG"; exit 1; }
 else
     viewer_spoke || { echo "the viewer neither encoded nor reported anything"; cat "$IMWAY_LOG"; exit 1; }
-    grep -q "vulkan cannot import shared screenshot" "$XDG_RUNTIME_DIR/viewer.log" || {
+    grep -Eq "vulkan lacks VK_(KHR_external_memory_fd|EXT_external_memory_dma_buf|EXT_image_drm_format_modifier)" "$XDG_RUNTIME_DIR/viewer.log" || {
         echo "the viewer failed to import the shared buffer:"
         cat "$XDG_RUNTIME_DIR/viewer.log"
         exit 1
