@@ -50,6 +50,20 @@ static void count_configure(void* d, struct xdg_surface* xs, uint32_t serial) {
 }
 static const struct xdg_surface_listener count_listener = {count_configure};
 
+static int32_t tl_cfg_w, tl_cfg_h;
+static int tl_configures;
+
+static void tl_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t h, struct wl_array* states) {
+    (void)d; (void)t; (void)states;
+    tl_cfg_w = w;
+    tl_cfg_h = h;
+    tl_configures++;
+}
+static void tl_close(void* d, struct xdg_toplevel* t) { (void)d; (void)t; }
+static void tl_bounds(void* d, struct xdg_toplevel* t, int32_t w, int32_t h) { (void)d; (void)t; (void)w; (void)h; }
+static void tl_caps(void* d, struct xdg_toplevel* t, struct wl_array* c) { (void)d; (void)t; (void)c; }
+static const struct xdg_toplevel_listener tl_listener = {tl_configure, tl_close, tl_bounds, tl_caps};
+
 static struct xdg_positioner* positioner(void) {
     struct xdg_positioner* pos = xdg_wm_base_create_positioner(wl_wm);
 
@@ -113,6 +127,28 @@ int main(int argc, char** argv) {
         xdg_toplevel_set_max_size(tl, 0, 50);
         wl_surface_commit(surface);
         return wl_expect_error(xdg_toplevel_interface.name, XDG_TOPLEVEL_ERROR_INVALID_SIZE);
+    }
+
+    if (!strcmp(mode, "fullscreen-dead-surface")) {
+        // the window's wl_surface is gone: going fullscreen still answers
+        // with the output's size, having no size of its own to park
+        struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wl_wm, surface);
+        struct xdg_toplevel* tl = xdg_surface_get_toplevel(xs);
+
+        xdg_toplevel_add_listener(tl, &tl_listener, NULL);
+        wl_surface_commit(surface);
+        while (tl_configures < 1 && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        wl_surface_destroy(surface);
+        xdg_toplevel_set_fullscreen(tl, NULL);
+        while (tl_configures < 2 && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        if (tl_configures < 2 || tl_cfg_w <= 0 || tl_cfg_h <= 0) {
+            fprintf(stderr, "fullscreen without a surface configured %dx%d (%d configures)\n", tl_cfg_w, tl_cfg_h, tl_configures);
+            return 1;
+        }
+        printf("fullscreen at %dx%d\n", tl_cfg_w, tl_cfg_h);
+        return 0;
     }
 
     if (!strcmp(mode, "resize-edge-none")) {
@@ -279,6 +315,32 @@ int main(int argc, char** argv) {
         popup_empty_first = 1;
         xdg_popup_grab(mapped_popup(), wl_seat_g, 0);
         return wl_expect_error(xdg_popup_interface.name, XDG_POPUP_ERROR_INVALID_GRAB);
+    }
+
+    if (!strcmp(mode, "popup-on-unmapped-popup")) {
+        // the parent popup exists but never mapped
+        static struct wl_toplevel_ctx top;
+
+        wl_make_toplevel(&top, "xdg-edges", 200, 120, 0xFF00FF00u);
+
+        struct wl_surface* parent = wl_compositor_create_surface(wl_comp);
+        struct xdg_surface* parent_xs = xdg_wm_base_get_xdg_surface(wl_wm, parent);
+        struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wl_wm, surface);
+
+        xdg_surface_get_popup(parent_xs, top.xs, positioner());
+        xdg_surface_get_popup(xs, parent_xs, positioner());
+        wl_surface_commit(surface);
+        return wl_expect_error(xdg_wm_base_interface.name, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT);
+    }
+
+    if (!strcmp(mode, "popup-no-parent-commit")) {
+        // a parentless popup is for another protocol to place; committed
+        // as a plain xdg popup it has no parent to be shown against
+        struct xdg_surface* xs = xdg_wm_base_get_xdg_surface(wl_wm, surface);
+
+        xdg_surface_get_popup(xs, NULL, positioner());
+        wl_surface_commit(surface);
+        return wl_expect_error(xdg_wm_base_interface.name, XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT);
     }
 
     if (!strcmp(mode, "grab-no-parent")) {
