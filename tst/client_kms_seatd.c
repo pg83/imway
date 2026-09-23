@@ -2,7 +2,10 @@
 // scenario may drive (the real one owns a VT and switches it for real);
 // this one speaks just enough of the seatd protocol (open/close seat,
 // device opens refused, disable acknowledgement, ping) to play the seat
-// manager's side of a VT switch:
+// manager's side of a VT switch. libseat 0.9 waits for the manager to
+// acknowledge a disable, 0.8 neither waits nor understands the
+// acknowledgement (one would sit unread in front of every later event),
+// so the scenario, which knows the compositor's libseat, sends it:
 //   serve              enable the seat as soon as it is opened
 //   serve-inactive     open the seat, never enable it and garble the
 //                      conversation
@@ -11,11 +14,13 @@
 // with it, and is driven through the FIFO seatd-ctl there:
 //   disable   ask the compositor to give the seat up (a switch away)
 //   enable    hand the seat back (a switch back)
+//   ack       acknowledge the compositor's disable (libseat 0.9)
 //   hangup    drop the connection, as a dying seatd does
-//   garbage   answer a request never made, as a seatd speaking another
-//             protocol revision might
+//   crash     ask for the seat and die with the compositor's answer
+//             unread, as a seatd crashing mid-switch does: the
+//             compositor's end reads a reset connection
 // What the compositor sends lands in seatd-events: "open-seat",
-// "disable-ack" once it has let the seat go, "close-seat", "open PATH".
+// "disable-request" once it lets the seat go, "close-seat", "open PATH".
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -159,8 +164,7 @@ static int client_msg(void) {
             send_msg(SERVER_DEVICE_CLOSED, NULL, 0);
             break;
         case CLIENT_DISABLE_SEAT:
-            event("disable-ack");
-            send_msg(SERVER_SEAT_DISABLED, NULL, 0);
+            event("disable-request");
             break;
         case CLIENT_PING:
             send_msg(SERVER_PONG, NULL, 0);
@@ -183,10 +187,16 @@ static void command(const char* line) {
         send_msg(SERVER_DISABLE_SEAT, NULL, 0);
     } else if (!strncmp(line, "enable", 6)) {
         send_msg(SERVER_ENABLE_SEAT, NULL, 0);
+    } else if (!strncmp(line, "ack", 3)) {
+        send_msg(SERVER_SEAT_DISABLED, NULL, 0);
     } else if (!strncmp(line, "hangup", 6)) {
         hangup();
-    } else if (!strncmp(line, "garbage", 7)) {
-        send_msg(SERVER_DEVICE_CLOSED, NULL, 0);
+    } else if (!strncmp(line, "crash", 5)) {
+        struct pollfd answer = {.fd = client, .events = POLLIN};
+
+        send_msg(SERVER_DISABLE_SEAT, NULL, 0);
+        poll(&answer, 1, 10000);
+        hangup();
     }
 }
 

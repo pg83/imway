@@ -24,10 +24,23 @@ fail() {
 in_log "libseat session on seat0" || fail "the compositor did not take the seat"
 await 100 in_log "kms output: " || fail "no kms output on the seat"
 
+# libseat 0.9 on waits for the manager to acknowledge the disable, 0.8
+# does not know the acknowledgement; only 0.9's seatd backend carries this
+# message, in the compositor's binary or its shared libseat
+libseat_waits() {
+    local lib
+    lib=$(awk '/libseat/ {print $6; exit}' "/proc/$IMWAY_PID/maps")
+    grep -aq "expected background event" "${lib:-/proc/$IMWAY_PID/exe}"
+}
+
 fake disable
 await 100 in_log "session disabled (vt switch away)" || fail "the switch away did not disable the session"
-acked() { events | grep -qx disable-ack; }
-await 100 acked || fail "the compositor did not hand the seat back"
+requested() { events | grep -qx disable-request; }
+await 100 requested || fail "the compositor did not hand the seat back"
+
+if libseat_waits; then
+    fake ack
+fi
 
 fake enable
 await 100 in_log "session enabled, remodeset" || fail "the switch back did not relight the output"
