@@ -1271,6 +1271,9 @@ namespace {
         int pendingX = 0, pendingY = 0, pendingW = 0, pendingH = 0;
         u32 positionSerial = 0;
         bool positionPending = false;
+        // popup_done was sent: a dismissed popup never maps again, the
+        // client can only destroy it
+        bool dismissed = false;
     };
 
     struct RegionBox {
@@ -4153,6 +4156,14 @@ namespace {
         auto* parentSurface = (SurfaceImpl*)p->parent;
         PopupImpl* parentPopup = parentSurface && parentSurface->xdg ? parentSurface->xdg->pop() : nullptr;
 
+        // xdg-shell: the child of a grabbing popup already dismissed is
+        // dismissed at once
+        if (parentPopup && parentPopup->dismissed && !p->mapped) {
+            xdgPopupDismiss(*p);
+
+            return;
+        }
+
         if (p->mapped || !seat || seat != &p->srv->seat || (parentPopup && !parentPopup->grab)) {
             wl_resource_post_error(res, XDG_POPUP_ERROR_INVALID_GRAB, "popup grab serial is not an active implicit grab");
 
@@ -4168,7 +4179,7 @@ namespace {
         // serial; a stale serial is not an error per xdg-shell — dismiss the
         // popup instead of killing the client
         if (!pointerOk && !keyOk) {
-            xdg_popup_send_popup_done(res);
+            xdgPopupDismiss(*p);
 
             return;
         }
@@ -4441,7 +4452,8 @@ namespace {
             tsrv->scene->needsFrame = true;
         }
 
-        if (xs->popup && !xs->initialConfigureSent) {
+        // a dismissed popup's parent may well be gone: it maps nowhere
+        if (xs->popup && !xs->initialConfigureSent && !xs->pop()->dismissed) {
             auto* parent = (SurfaceImpl*)xs->popup->parent;
             bool parentMapped = parent && parent->xdg && ((parent->xdg->toplevel && parent->xdg->toplevel->mapped) || (parent->xdg->popup && parent->xdg->popup->mapped));
 
@@ -4527,7 +4539,7 @@ namespace {
             xs->acked = false;
         }
 
-        if (xs->popup && !xs->popup->mapped && s.hasContent && xs->acked) {
+        if (xs->popup && !xs->popup->mapped && !xs->pop()->dismissed && s.hasContent && xs->acked) {
             xs->popup->mapped = true;
             s.srv->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
@@ -4549,15 +4561,20 @@ namespace {
         }
     }
 
+    // a popup not mapped yet is dismissed as well: it never maps, whatever
+    // it commits after popup_done
     void xdgPopupDismiss(PopupImpl& p) {
-        if (!p.mapped) {
+        if (p.dismissed) {
             return;
         }
 
-        p.mapped = false;
-        p.srv->scene->needsFrame = true;
+        p.dismissed = true;
 
-        p.srv->seat.popupGone(&p);
+        if (p.mapped) {
+            p.mapped = false;
+            p.srv->scene->needsFrame = true;
+            p.srv->seat.popupGone(&p);
+        }
 
         xdg_popup_send_popup_done(p.res);
     }
@@ -11088,7 +11105,8 @@ void SeatState::handleButton(u32 button, bool pressed) {
                 break;
             }
 
-            xdgPopupDismiss(*(PopupImpl*)p);
+            // its plain child popups go with it: their parent is unmapped
+            dismissPopupTree(*(PopupImpl*)p);
         }
     }
 
