@@ -4130,9 +4130,13 @@ namespace {
 
     void popupDestroy(wl_client*, wl_resource* res) {
         auto* popup = (PopupImpl*)wl_resource_get_user_data(res);
+        Surface* surface = popup->surface.get();
 
+        // a popup whose wl_surface is gone parents nothing: its children
+        // were detached when the surface died, and a null surface would
+        // match every orphan (itself included) by its null parent
         for (Popup* child : each<Popup>(popup->srv->scene->popups)) {
-            if (child->parent == popup->surface.get()) {
+            if (surface && child->parent == surface) {
                 wl_resource_post_error(popup->xdg->wmBaseRes, XDG_WM_BASE_ERROR_NOT_THE_TOPMOST_POPUP, "popup has a live child popup");
 
                 return;
