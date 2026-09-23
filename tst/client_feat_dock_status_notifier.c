@@ -15,7 +15,8 @@ static DBusConnection* conn;
 
 // SNI_ID, SNI_TITLE, SNI_STATUS and SNI_SERVICE override the item's
 // properties and bus name, so one scenario can run several items shaped
-// after the windows it maps
+// after the windows it maps; SNI_ICON_NAME and SNI_ATTENTION_ICON_NAME add
+// themed icon names beside the pixmap
 static const char* env_or(const char* name, const char* fallback) {
     const char* value = getenv(name);
     return value ? value : fallback;
@@ -92,6 +93,8 @@ static void send_properties(DBusMessage* call) {
     dict_string(&dict, "Title", env_or("SNI_TITLE", "Dock status notifier test"));
     dict_string(&dict, "DesktopEntry", env_or("SNI_ID", "dock-status-test"));
     dict_string(&dict, "Status", env_or("SNI_STATUS", "Active"));
+    if (getenv("SNI_ICON_NAME")) dict_string(&dict, "IconName", getenv("SNI_ICON_NAME"));
+    if (getenv("SNI_ATTENTION_ICON_NAME")) dict_string(&dict, "AttentionIconName", getenv("SNI_ATTENTION_ICON_NAME"));
     dict_path(&dict, "Menu", "/Menu");
     dict_bool(&dict, "ItemIsMenu", TEST_ITEM_IS_MENU);
     dict_pixmap(&dict);
