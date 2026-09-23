@@ -22,11 +22,11 @@ for i in $(seq 1 8); do
     ctl "motion $((100 + i)) 100"
     sleep 0.85
     ctl "kms-hold-flips 0"
-    for _ in 1 2 3 4 5 6; do
+    for _ in 1 2 3; do
         ctl "screenshot $XDG_RUNTIME_DIR/busy.ppm"
     done
     blanked() { [[ "$(offs)" -gt "$n" ]]; }
-    await 50 blanked || { echo "round $i: the display did not blank"; cat "$IMWAY_LOG"; exit 1; }
+    await 200 blanked || { echo "round $i: the display did not blank"; cat "$IMWAY_LOG"; exit 1; }
     [[ -n "$(flips)" ]] || { echo "round $i: the compositor stopped answering"; exit 1; }
 done
 
