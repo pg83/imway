@@ -52,9 +52,10 @@ mapfile -t good < "$good_list"
 echo "merging ${#good[@]} of ${#profiles[@]} profiles"
 # a dropped profile is a scenario whose coverage is lost: name it and say
 # why it did not load, or lines it ran read as never run
-printf '%s\n' "${profiles[@]}" | grep -vxF -f "$good_list" | while read -r bad; do
+# (diagnostics only: nothing here may fail the report under set -e)
+{ printf '%s\n' "${profiles[@]}" | grep -vxF -f "$good_list" || true; } | while read -r bad; do
     echo "dropped $(basename "$bad") ($(stat -c %s "$bad") bytes):"
-    "$profdata" show "$bad" 2>&1 | head -3 | sed 's/^/    /'
+    { "$profdata" show "$bad" 2>&1 || true; } | head -3 | sed 's/^/    /'
 done
 [[ ${#good[@]} -gt 0 ]] || { echo "no readable profiles in $profile_dir" >&2; exit 1; }
 
