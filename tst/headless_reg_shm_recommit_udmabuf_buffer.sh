@@ -12,6 +12,7 @@ if in_log "wl_shm gates image=0 buffer=0 host=0"; then
     exit 127
 fi
 
+IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_shm_recommit"
 start_client
 wait_client "green committed"
 
