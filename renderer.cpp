@@ -244,7 +244,6 @@ namespace {
         ShmBackend backend = ShmBackend::Cpu;
         RectI damage;
         bool prepared = false;
-        bool copyQueued = false;
         bool copyReady = false;
         bool failed = false;
 
@@ -1627,13 +1626,8 @@ bool RendererImpl::prepareShm(ShmState& state) {
 }
 
 bool RendererImpl::enqueueShmCopy(Surface& surface, ShmState& state) {
-    if (state.copyQueued) {
-        return true;
-    }
-
     ShmCopyTask* task = alloc->make<ShmCopyTask>(surface, state.content, &state);
 
-    state.copyQueued = true;
     shmCopyQueue.pushBack(task);
     startShmCopy();
 
@@ -1656,12 +1650,6 @@ void RendererImpl::shmCopyWork() {
     RectI rect = state.damage;
 
     clipRect(rect, content.width, content.height);
-
-    if (!state.upload || !state.upload->map || rect.empty()) {
-        task.ok = false;
-
-        return;
-    }
 
 #ifdef IMWAY_FOR_TESTS
     if (const char* text = getenv("IMWAY_SHM_COPY_DELAY_MS")) {
@@ -1702,8 +1690,6 @@ void RendererImpl::shmCopyDone() {
     ShmState* state = task->state;
     ShmContent* content = task->content.mutPtr();
 
-    state->copyQueued = false;
-
     if (task->ok) {
         state->upload->initialized = true;
         state->copyReady = true;
@@ -1726,14 +1712,12 @@ void RendererImpl::clearShmCopyTasks() {
         ShmCopyTask* task = shmCopyActive;
 
         shmCopyActive = nullptr;
-        task->state->copyQueued = false;
         alloc->release(task);
     }
 
     while (!shmCopyQueue.empty()) {
         auto* task = (ShmCopyTask*)shmCopyQueue.popFront();
 
-        task->state->copyQueued = false;
         alloc->release(task);
     }
 }
