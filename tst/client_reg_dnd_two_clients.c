@@ -2,13 +2,17 @@
 // test self-drops). Mode "target" maps green, accepts and receives; mode
 // "source" maps red, starts the drag on the first press and serves the
 // payload. The scenario drags from the red window onto the green one.
+// Mode "source-abandon" destroys its source once the scenario says the
+// target has the drag, and
+// mode "target-leave" waits for the leave that ends such a drag instead of
+// a drop.
 
 #include "wl_util.h"
 
 static struct wl_toplevel_ctx top;
 static struct wl_data_device* dev;
 static struct wl_data_offer* offer;
-static int dropped, finished;
+static int dropped, finished, left;
 
 static const char* PAYLOAD = "cross-client-payload";
 
@@ -45,7 +49,10 @@ static void dev_enter(void* d, struct wl_data_device* dd, uint32_t serial, struc
         printf("target entered\n");
     }
 }
-static void dev_leave(void* d, struct wl_data_device* dd) { (void)d; (void)dd; }
+static void dev_leave(void* d, struct wl_data_device* dd) {
+    (void)d; (void)dd;
+    left = 1;
+}
 static void dev_motion(void* d, struct wl_data_device* dd, uint32_t t, wl_fixed_t x, wl_fixed_t y) {
     (void)d; (void)dd; (void)t; (void)x; (void)y;
 }
@@ -66,6 +73,49 @@ int main(int argc, char** argv) {
 
     dev = wl_data_device_manager_get_data_device(wl_ddm, wl_seat_g);
     wl_data_device_add_listener(dev, &dev_listener, NULL);
+
+    if (!strcmp(mode, "source-abandon")) {
+        wl_make_toplevel(&top, "dndsrc", 200, 150, 0xFFFF0000);
+        printf("source ready\n");
+
+        while (wlp_button_count == 0 && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        struct wl_data_source* src = wl_data_device_manager_create_data_source(wl_ddm);
+        wl_data_source_add_listener(src, &src_listener, NULL);
+        wl_data_source_offer(src, "text/plain");
+        wl_data_source_set_actions(src, WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+        wl_data_device_start_drag(dev, src, top.surface, NULL, wlp_button_serial);
+        wl_display_flush(wl_dpy);
+        printf("dragging\n");
+
+        // the scenario says when the target has the drag: the source's own
+        // window, under the pointer as the drag starts, accepts it too
+        char go[512];
+        snprintf(go, sizeof(go), "%s/go-abandon", getenv("XDG_RUNTIME_DIR"));
+        while (access(go, F_OK) != 0) {
+            if (wl_display_roundtrip(wl_dpy) < 0) return 1;
+            usleep(20000);
+        }
+        // the data device lives on: only the source goes
+        wl_data_source_destroy(src);
+        wl_display_roundtrip(wl_dpy);
+        printf("source abandoned\n");
+        return 0;
+    }
+
+    if (!strcmp(mode, "target-leave")) {
+        wl_make_toplevel(&top, "dndtgt", 200, 150, 0xFF00FF00);
+        printf("target ready\n");
+
+        while (!left && wl_display_dispatch(wl_dpy) != -1) {
+        }
+        if (!offer || dropped) {
+            fprintf(stderr, "the abandoned drag %s\n", dropped ? "dropped" : "never entered");
+            return 1;
+        }
+        printf("target left\n");
+        return 0;
+    }
 
     if (!strcmp(mode, "source")) {
         wl_make_toplevel(&top, "dndsrc", 200, 150, 0xFFFF0000);
