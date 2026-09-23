@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS=host-memory=none IMWAY_SHM_TRACE=1
+# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS=pool-memory=none IMWAY_SHM_TRACE=1
 # The host pointer is importable and the buffer exists, but no memory type
 # of the device can take the import.
 set -euo pipefail

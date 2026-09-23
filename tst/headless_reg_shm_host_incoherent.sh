@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS=host-memory=incoherent IMWAY_SHM_TRACE=1
+# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS=pool-memory=incoherent IMWAY_SHM_TRACE=1
 # A device whose host-visible memory is not host-coherent (IMWAY_CHAOS
 # strips the bit from every type): the imported pool has to be mapped and
 # flushed before the GPU reads it, and both sealed commits still reach the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS="host-memory=incoherent client-import=5" IMWAY_SHM_TRACE=1
+# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS="pool-memory=incoherent client-import=5" IMWAY_SHM_TRACE=1
 # The incoherent host memory maps, but flushing the mapping fails.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

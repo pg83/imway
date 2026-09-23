@@ -117,9 +117,9 @@ struct ChaosMonkey {
     virtual VkResult setup(VkResult result) = 0;
 
     // renderer: wl_shm imports and the screenshot capture
-    // the device's memory types as a wl_shm pool's host-pointer import
-    // picks its heap from them
-    virtual void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) = 0;
+    // the device's memory types as a wl_shm pool's import (a host pointer
+    // or a udmabuf buffer) picks its heap from them
+    virtual void poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) = 0;
     // the outcome the screenshot capture's copy submit is about to have,
     // under the same rule as the other submits
     virtual VkResult shotSubmit(VkResult pending) = 0;

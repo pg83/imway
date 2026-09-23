@@ -1302,16 +1302,12 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
         return nullptr;
     }
 
-    u32 typeBits = req.memoryTypeBits & fdProps.memoryTypeBits;
-    u32 memoryType = UINT32_MAX;
+    VkPhysicalDeviceMemoryProperties memoryProps{};
 
-    for (u32 i = 0; i < 32; i++) {
-        if (typeBits & (1u << i)) {
-            memoryType = i;
+    vkGetPhysicalDeviceMemoryProperties(phys, &memoryProps);
+    comp->chaos->poolMemoryTypes(memoryProps);
 
-            break;
-        }
-    }
+    u32 memoryType = memoryTypeWith(memoryProps, req.memoryTypeBits & fdProps.memoryTypeBits, 0);
 
     if (memoryType == UINT32_MAX) {
         return nullptr;
@@ -1449,7 +1445,7 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
     VkPhysicalDeviceMemoryProperties memoryProps{};
 
     vkGetPhysicalDeviceMemoryProperties(phys, &memoryProps);
-    comp->chaos->hostMemoryTypes(memoryProps);
+    comp->chaos->poolMemoryTypes(memoryProps);
 
     u32 memoryType = memoryTypeWith(memoryProps, req.memoryTypeBits & hostProps.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 

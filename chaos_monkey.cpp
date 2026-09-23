@@ -85,9 +85,10 @@ using namespace stl;
 //   setup=K           K boot-time setup calls pass, the one after runs out
 //                     of device memory
 // renderer: wl_shm imports and the screenshot capture
-//   host-memory=M     every wl_shm host-pointer import finds the device's
-//                     memory types changed: M=incoherent, none of them is
-//                     host-coherent; M=none, there are none at all
+//   pool-memory=M     every wl_shm pool import (host pointer, udmabuf
+//                     buffer) finds the device's memory types changed:
+//                     M=incoherent, none of them is host-coherent; M=none,
+//                     there are none at all
 //   shot-submit=N     the next N screenshot capture submits are refused
 //   udmabuf-read=N    the next N udmabuf read brackets of wl_shm pools are
 //                     refused with EIO
@@ -167,7 +168,7 @@ namespace {
         Vector<StringView> hiddenExtensions;
         int setupSkip = -1;
         // renderer: wl_shm imports and the screenshot capture
-        StringView hostMemory;
+        StringView poolMemory;
         int shotSubmitFaults = 0;
         int udmabufReadFaults = 0;
         int gpuWaitSkip = -1;
@@ -225,7 +226,7 @@ namespace {
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
         // renderer: wl_shm imports and the screenshot capture
-        void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
+        void poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         bool udmabufRead(bool started) override;
         VkResult gpuWait(VkResult result) override;
@@ -336,9 +337,9 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         cursorSubmitFaults = (int)arg.stou();
     } else if (fault == "setup"_sv) {
         setupSkip = (int)arg.stou();
-    } else if (fault == "host-memory"_sv) {
+    } else if (fault == "pool-memory"_sv) {
         // renderer: wl_shm imports and the screenshot capture
-        hostMemory = arg;
+        poolMemory = arg;
     } else if (fault == "shot-submit"_sv) {
         shotSubmitFaults = (int)arg.stou();
     } else if (fault == "udmabuf-read"_sv) {
@@ -733,10 +734,10 @@ VkResult TestChaosMonkey::setup(VkResult result) {
 }
 
 // renderer: wl_shm imports and the screenshot capture
-void TestChaosMonkey::hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) {
-    if (hostMemory == "none"_sv) {
+void TestChaosMonkey::poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) {
+    if (poolMemory == "none"_sv) {
         props.memoryTypeCount = 0;
-    } else if (hostMemory == "incoherent"_sv) {
+    } else if (poolMemory == "incoherent"_sv) {
         for (u32 i = 0; i < props.memoryTypeCount; i++) {
             props.memoryTypes[i].propertyFlags &= ~(VkMemoryPropertyFlags)VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
         }
@@ -894,7 +895,7 @@ namespace {
         VkResult cursorSubmit(VkResult pending) override;
         VkResult setup(VkResult result) override;
         // renderer: wl_shm imports and the screenshot capture
-        void hostMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
+        void poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
         bool udmabufRead(bool started) override;
         VkResult gpuWait(VkResult result) override;
@@ -1026,7 +1027,7 @@ VkResult IdleChaosMonkey::setup(VkResult result) {
 }
 
 // renderer: wl_shm imports and the screenshot capture
-void IdleChaosMonkey::hostMemoryTypes(VkPhysicalDeviceMemoryProperties&) {
+void IdleChaosMonkey::poolMemoryTypes(VkPhysicalDeviceMemoryProperties&) {
 }
 
 VkResult IdleChaosMonkey::shotSubmit(VkResult pending) {
