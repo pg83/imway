@@ -3,7 +3,8 @@
 # eventN entries that are there are handed to libinput (a file that is no
 # device among them is tried once and refused), other names never are, and
 # a directory that does not exist leaves the session without input devices
-# rather than without a session.
+# rather than without a session. So does a libinput context that cannot be
+# allocated at all.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -22,5 +23,11 @@ boot_rc 0 "missing input directory"
 boot_has "libinput ready, 0 devices" "missing input directory"
 boot_lacks "Invalid path" "missing input directory"
 
+kms_boot IMWAY_CHAOS=libinput=1 --
+boot_rc 0 "no libinput context"
+boot_has "imway: no input, mouse is dead: .*verify failed: li$" "no libinput context"
+boot_lacks "libinput ready" "no libinput context"
+boot_has "clean exit after 3 frames" "no libinput context"
+
 expect_alive "the scenario's own compositor died"
-echo "OK: boot hands libinput exactly the eventN nodes that are there"
+echo "OK: boot hands libinput exactly the eventN nodes that are there, and survives without libinput"

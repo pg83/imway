@@ -20,6 +20,7 @@
     #include <wayland-server-core.h>
 
     #include <dbus/dbus.h>
+    #include <libinput.h>
 #endif
 
 using namespace stl;
@@ -145,6 +146,7 @@ using namespace stl;
 // the resources a subsystem checks for before it goes on:
 //   control-open=N    the next N opens of the control FIFO fail with
 //                     EMFILE, as for a process out of descriptors
+//   libinput=N        the next N libinput contexts fail to allocate
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -237,6 +239,7 @@ namespace {
 
         // the resources a subsystem checks for
         int controlOpenFaults = 0;
+        int libinputFaults = 0;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -314,6 +317,7 @@ namespace {
 
         // the resources a subsystem checks for
         int controlOpen(int fd) override;
+        libinput* libinputContext(libinput* made) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -478,6 +482,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
     } else if (fault == "control-open"_sv) {
         // the resources a subsystem checks for
         controlOpenFaults = (int)arg.stou();
+    } else if (fault == "libinput"_sv) {
+        libinputFaults = (int)arg.stou();
     }
 }
 
@@ -1062,6 +1068,16 @@ int TestChaosMonkey::controlOpen(int fd) {
     return -1;
 }
 
+libinput* TestChaosMonkey::libinputContext(libinput* made) {
+    if (!made || !spend(libinputFaults)) {
+        return made;
+    }
+
+    libinput_unref(made);
+
+    return nullptr;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1142,6 +1158,7 @@ namespace {
 
         // the resources a subsystem checks for
         int controlOpen(int fd) override;
+        libinput* libinputContext(libinput* made) override;
     };
 }
 
@@ -1372,6 +1389,10 @@ VkResult IdleChaosMonkey::shotReadback(VkResult result) {
 // the resources a subsystem checks for
 int IdleChaosMonkey::controlOpen(int fd) {
     return fd;
+}
+
+libinput* IdleChaosMonkey::libinputContext(libinput* made) {
+    return made;
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

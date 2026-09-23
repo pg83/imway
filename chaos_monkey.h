@@ -17,6 +17,7 @@ struct pam_message;
 struct pam_response;
 struct DBusMessage;
 struct DBusConnection;
+struct libinput;
 
 // The fault seam, one per board (Composer::chaos). A call site hands over
 // the object it is about to act on, or the result it has just got, and
@@ -202,6 +203,9 @@ struct ChaosMonkey {
     // control FIFO (test build): its read end fresh from open (or its -1);
     // a replacement failure closes the fd and returns -1 with errno set
     virtual int controlOpen(int fd) = 0;
+    // input: the libinput context fresh from libinput_path_create_context;
+    // a replacement failure unrefs it and returns null
+    virtual libinput* libinputContext(libinput* made) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

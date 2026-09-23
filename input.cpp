@@ -10,6 +10,7 @@
 #include "input_sink.h"
 #include "log_extern.h"
 #include "ev_watch.h"
+#include "chaos_monkey.h"
 
 #include <std/sys/fs.h>
 #include <std/ios/sys.h>
@@ -245,7 +246,7 @@ LibinputSource::LibinputSource(Composer& c)
     , session(c.session)
 {
     dir = inputDir();
-    li = libinput_path_create_context(&liIface, this);
+    li = c.chaos->libinputContext(libinput_path_create_context(&liIface, this));
     STD_VERIFY(li);
     libinput_log_set_handler(li, libinputLog);
 
