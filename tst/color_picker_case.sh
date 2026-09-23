@@ -16,11 +16,13 @@ notes_active() {
     dump_field '^notifications ' active
 }
 
-x=$(dump_field 'title=render-fault-victim' imgx); y=$(dump_field 'title=render-fault-victim' imgy)
-px=$((x + 120)); py=$((y + 80))
-
-screenshot "$XDG_RUNTIME_DIR/before.ppm"
-read -r er eg eb < <(python3 - "$XDG_RUNTIME_DIR/before.ppm" "$px" "$py" <<'PY'
+# the window's colour as the output shows it, once a frame carries it
+sampled() {
+    local x y
+    x=$(dump_field 'title=render-fault-victim' imgx); y=$(dump_field 'title=render-fault-victim' imgy)
+    [[ -n "$x" && -n "$y" ]] || return 1
+    screenshot "$XDG_RUNTIME_DIR/before.ppm" || return 1
+    read -r er eg eb < <(python3 - "$XDG_RUNTIME_DIR/before.ppm" "$((x + 120))" "$((y + 80))" <<'PY'
 import sys
 with open(sys.argv[1], 'rb') as f:
     assert f.readline().strip() == b'P6'
@@ -32,26 +34,40 @@ p = (y * w + x) * 3
 print(d[p], d[p + 1], d[p + 2])
 PY
 )
+    (( er > eg + 30 && er > eb + 30 ))
+}
+er=0; eg=0; eb=0
+await 50 sampled || { echo "the sample point never showed the red window: $er $eg $eb"; exit 1; }
 echo "the window as the output shows it: $er $eg $eb"
-(( er > eg + 30 && er > eb + 30 )) || { echo "the sample point is not on the red window"; exit 1; }
 
+# arm the picker from the launcher; a sanitized or loaded build takes frames
+# for each step, so each waits for its own result instead of a fixed sleep
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
-sleep 0.3
+await_typing '##launcher' || { echo "the launcher did not open"; dump_state; exit 1; }
 ctl "type color picker"
-sleep 0.3
+await_input "color picker" || { echo "the query did not reach the launcher"; dump_state; exit 1; }
 ctl "key 103 press"; ctl "key 103 release" # Up: into the action row
 ctl "key 28 press"; ctl "key 28 release"   # Enter
-sleep 0.3
+await_no_imgui '##launcher' || { echo "the launcher did not run the picker"; dump_state; exit 1; }
 
-click_at "$px" "$py"
-await 50 swatch_up || { echo "the picker swatch did not appear"; dump_state; exit 1; }
+# the click samples the window: re-aim at its current place for every try
+for _ in $(seq 1 10); do
+    x=$(dump_field 'title=render-fault-victim' imgx); y=$(dump_field 'title=render-fault-victim' imgy)
+    click_at "$((x + 120))" "$((y + 80))"
+    await 20 swatch_up && break
+done
+swatch_up || { echo "the picker swatch did not appear"; dump_state; exit 1; }
 posted() { [[ "$(notes_active)" = 1 ]]; }
 await 50 posted || { echo "the picked colour was not posted"; dump_state; exit 1; }
 
-sx=$(dump_field '^imgui name=##pick' x); sy=$(dump_field '^imgui name=##pick' y)
-sw=$(dump_field '^imgui name=##pick' w); sh=$(dump_field '^imgui name=##pick' h)
-screenshot "$XDG_RUNTIME_DIR/swatch.ppm"
-python3 - "$XDG_RUNTIME_DIR/swatch.ppm" "$sx" "$sy" "$sw" "$sh" "$er" "$eg" "$eb" "${swatch_white:-0}" <<'PY'
+# the swatch as it is drawn now: its rect and a fresh frame, every try
+swatch_shows() {
+    local sx sy sw sh
+    sx=$(dump_field '^imgui name=##pick' x); sy=$(dump_field '^imgui name=##pick' y)
+    sw=$(dump_field '^imgui name=##pick' w); sh=$(dump_field '^imgui name=##pick' h)
+    [[ -n "$sx" && -n "$sh" ]] || return 1
+    screenshot "$XDG_RUNTIME_DIR/swatch.ppm" || return 1
+    python3 - "$XDG_RUNTIME_DIR/swatch.ppm" "$sx" "$sy" "$sw" "$sh" "$er" "$eg" "$eb" "${swatch_white:-0}" <<'PY'
 import sys
 with open(sys.argv[1], 'rb') as f:
     assert f.readline().strip() == b'P6'
@@ -82,6 +98,8 @@ for yy in range(y0, y0 + sh):
 print(f"swatch pixels of the sampled colour: {hits}")
 assert hits > 50, "the swatch does not show the window's colour"
 PY
+}
+await 30 swatch_shows || { echo "the swatch does not show the window's colour"; exit 1; }
 
 ctl "key 1 press"; ctl "key 1 release" # Escape closes the swatch
 expect_alive "the picker took the compositor with it"
