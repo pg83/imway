@@ -9411,7 +9411,7 @@ namespace {
         ActivationGrant grant;
         u64 random = 0;
 
-        if (getrandom(&random, sizeof(random), GRND_NONBLOCK) != sizeof(random)) {
+        if (request->srv->composer->chaos->entropy(getrandom(&random, sizeof(random), GRND_NONBLOCK)) != sizeof(random)) {
             random = ((u64)nowMsec() << 32) ^ ++request->srv->tokenCounter;
         }
 
@@ -9422,7 +9422,7 @@ namespace {
         token << "-"_sv;
         hex16(token, random);
         memcpy(grant.token, token.cStr(), token.used() + 1);
-        grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) && (!request->surfaceSet || (request->surface && wl_resource_get_client(resOf(request->surface.get())) == request->client));
+        grant.authorized = request->serialSet && request->srv->seat.validSerial(request->client, request->serial) && (!request->surfaceSet || request->surface);
 
         if (request->srv->activationGrants.length() == 64) {
             for (size_t i = 1; i < request->srv->activationGrants.length(); i++) {

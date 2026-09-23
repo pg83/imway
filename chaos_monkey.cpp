@@ -43,6 +43,8 @@ using namespace stl;
 //   prime-import=E    wayland: the next dma-buf plane the driver is asked
 //                     to import fails with errno E (13 EACCES: a card fd
 //                     that cannot judge; 22 EINVAL: a buffer it refuses)
+//   entropy=N         wayland: the next N getrandom reads for activation
+//                     tokens find no entropy yet (EAGAIN, as early at boot)
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
 //   scanout-modifier=N the next N scanout modifier queries come back
@@ -109,6 +111,7 @@ namespace {
         // wayland shm and linux-dmabuf
         int shmMapSkip = -1;
         int primeImportErrno = 0;
+        int entropyFaults = 0;
         // KMS backend
         int scanoutSkip = -1;
         int modifierFaults = 0;
@@ -147,6 +150,7 @@ namespace {
         // wayland shm and linux-dmabuf
         void* shmMap(void* mapped, size_t size) override;
         int primeImport(int result) override;
+        long entropy(long got) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -269,6 +273,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         shmMapSkip = (int)arg.stou();
     } else if (fault == "prime-import"_sv) {
         primeImportErrno = (int)arg.stou();
+    } else if (fault == "entropy"_sv) {
+        entropyFaults = (int)arg.stou();
     }
 }
 
@@ -294,6 +300,16 @@ int TestChaosMonkey::primeImport(int result) {
 
     errno = primeImportErrno;
     primeImportErrno = 0;
+
+    return -1;
+}
+
+long TestChaosMonkey::entropy(long got) {
+    if (!spend(entropyFaults)) {
+        return got;
+    }
+
+    errno = EAGAIN;
 
     return -1;
 }
@@ -638,6 +654,7 @@ namespace {
         // wayland shm and linux-dmabuf
         void* shmMap(void* mapped, size_t size) override;
         int primeImport(int result) override;
+        long entropy(long got) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -697,6 +714,10 @@ void* IdleChaosMonkey::shmMap(void* mapped, size_t) {
 
 int IdleChaosMonkey::primeImport(int result) {
     return result;
+}
+
+long IdleChaosMonkey::entropy(long got) {
+    return got;
 }
 
 // KMS backend

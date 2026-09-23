@@ -47,6 +47,9 @@ struct ChaosMonkey {
     // drmPrimeFDToHandle's result on a client's dma-buf plane, the driver's
     // verdict on the buffer; a failure also sets errno
     virtual int primeImport(int result) = 0;
+    // getrandom's answer for an xdg-activation token's random part (the
+    // byte count, or -1 with errno set)
+    virtual long entropy(long got) = 0;
     // KMS backend
     // the result of a Vulkan call building or exporting a scanout buffer
     virtual VkResult scanout(VkResult result) = 0;
