@@ -84,6 +84,10 @@ struct ChaosMonkey {
     // a GPU readback's fence as its poll delivers it: the screenshot's, or
     // the frame capture's that screencopy clients wait on
     virtual VkResult readbackFence(VkResult result) = 0;
+    // fence polls: one poll's reading of a GPU readback's fence (the
+    // screenshot's or the frame capture's); VK_NOT_READY keeps the poll
+    // waiting, as for a GPU still busy with the copy
+    virtual VkResult readbackPoll(VkResult status) = 0;
     // the screenshot's file, built on the offload lane: the memfd fresh
     // from memfd_create (a replacement failure closes it and returns -1),
     // then the result of each write into it

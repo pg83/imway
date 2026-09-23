@@ -1863,7 +1863,7 @@ void RendererImpl::setup() {
 
     VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &fence)));
     VK_CHECK(comp->chaos->setup(vkCreateFence(device, &fenci, nullptr, &captureFence)));
-    captureFencePoll = FencePoll::create(*pool, loop, device, captureFence, *pool->make<CallCaptureRetired>(this));
+    captureFencePoll = FencePoll::create(*pool, loop, *comp->chaos, device, captureFence, *pool->make<CallCaptureRetired>(this));
 
     if (hasSyncFd) {
         // DeviceVk enabled VK_KHR_external_semaphore_fd whenever it set

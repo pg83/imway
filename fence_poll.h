@@ -8,6 +8,7 @@ namespace stl {
 
 struct ev_loop;
 struct Listener;
+struct ChaosMonkey;
 
 // A millisecond poll of a Vulkan fence from the event loop: arm() starts
 // the timer and the listener fires once, on the loop, with a VkResult*
@@ -19,5 +20,5 @@ struct FencePoll {
     virtual bool armed() const = 0;
     virtual void cancel() = 0;
 
-    static FencePoll* create(stl::ObjPool& pool, struct ev_loop* loop, VkDevice device, VkFence fence, Listener& done);
+    static FencePoll* create(stl::ObjPool& pool, struct ev_loop* loop, ChaosMonkey& chaos, VkDevice device, VkFence fence, Listener& done);
 };

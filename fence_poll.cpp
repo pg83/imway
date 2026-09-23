@@ -2,6 +2,7 @@
 
 #include "pooled.h"
 #include "listener.h"
+#include "chaos_monkey.h"
 
 #include <std/mem/obj_pool.h>
 
@@ -12,13 +13,14 @@ using namespace stl;
 namespace {
     struct FencePollImpl: FencePoll {
         struct ev_loop* loop = nullptr;
+        ChaosMonkey* chaos = nullptr;
         VkDevice device = VK_NULL_HANDLE;
         VkFence fence = VK_NULL_HANDLE;
         Listener* done = nullptr;
         ev_timer* timer = nullptr;
         bool active = false;
 
-        FencePollImpl(ObjPool& pool, struct ev_loop* l, VkDevice d, VkFence f, Listener& listener);
+        FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, VkDevice d, VkFence f, Listener& listener);
 
         void arm() override;
         bool armed() const override;
@@ -31,8 +33,9 @@ namespace {
     }
 }
 
-FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, VkDevice d, VkFence f, Listener& listener)
+FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, ChaosMonkey& cm, VkDevice d, VkFence f, Listener& listener)
     : loop(l)
+    , chaos(&cm)
     , device(d)
     , fence(f)
     , done(&listener)
@@ -65,7 +68,7 @@ void FencePollImpl::cancel() {
 }
 
 void FencePollImpl::poll() {
-    VkResult status = vkGetFenceStatus(device, fence);
+    VkResult status = chaos->readbackPoll(vkGetFenceStatus(device, fence));
 
     if (status == VK_NOT_READY) {
         return;
@@ -76,6 +79,6 @@ void FencePollImpl::poll() {
     done->onListen(&status);
 }
 
-FencePoll* FencePoll::create(ObjPool& pool, struct ev_loop* loop, VkDevice device, VkFence fence, Listener& done) {
-    return pool.make<FencePollImpl>(pool, loop, device, fence, done);
+FencePoll* FencePoll::create(ObjPool& pool, struct ev_loop* loop, ChaosMonkey& chaos, VkDevice device, VkFence fence, Listener& done) {
+    return pool.make<FencePollImpl>(pool, loop, chaos, device, fence, done);
 }

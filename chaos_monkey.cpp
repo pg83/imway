@@ -67,6 +67,8 @@ using namespace stl;
 //   frame-hang=K      the same, reporting the wait timing out instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
+//   readback-busy=N   fence polls: the next N polls of a readback fence
+//                     find it still busy
 //   shot-file=K       K steps building the screenshot's file (its memfd,
 //                     then each write) pass, the one after fails: the
 //                     memfd with EMFILE, a write with ENOSPC
@@ -162,6 +164,8 @@ namespace {
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
         int readbackFenceSkip = -1;
+        // fence polls
+        int readbackBusyPolls = 0;
         // the screenshot's file
         int shotFileSkip = -1;
         int descriptorPoolSkip = -1;
@@ -215,6 +219,8 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // fence polls
+        VkResult readbackPoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(ssize_t written) override;
@@ -317,6 +323,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
     } else if (fault == "readback-fence"_sv) {
         readbackFenceSkip = (int)arg.stou();
+    } else if (fault == "readback-busy"_sv) {
+        readbackBusyPolls = (int)arg.stou();
     } else if (fault == "shot-file"_sv) {
         shotFileSkip = (int)arg.stou();
     } else if (fault == "descriptor-pool"_sv) {
@@ -665,6 +673,11 @@ VkResult TestChaosMonkey::readbackFence(VkResult result) {
     return VK_ERROR_DEVICE_LOST;
 }
 
+// fence polls
+VkResult TestChaosMonkey::readbackPoll(VkResult status) {
+    return spend(readbackBusyPolls) ? VK_NOT_READY : status;
+}
+
 // the screenshot's file
 int TestChaosMonkey::shotFile(int fd) {
     if (shotFileSkip < 0 || shotFileSkip-- > 0) {
@@ -897,6 +910,8 @@ namespace {
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
+        // fence polls
+        VkResult readbackPoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(ssize_t written) override;
@@ -1013,6 +1028,11 @@ VkResult IdleChaosMonkey::frameFence(VkResult result) {
 
 VkResult IdleChaosMonkey::readbackFence(VkResult result) {
     return result;
+}
+
+// fence polls
+VkResult IdleChaosMonkey::readbackPoll(VkResult status) {
+    return status;
 }
 
 // the screenshot's file
