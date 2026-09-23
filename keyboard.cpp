@@ -67,7 +67,9 @@ KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
     names.options = o.cStr();
     keymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
-    if (!keymap && (!layout.empty() || !options.empty())) {
+    // with no layout and no options the first try already was the
+    // defaults: the retry fails the same way and the verify below reports it
+    if (!keymap) {
         *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
         keymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
@@ -91,22 +93,12 @@ KeyboardImpl::KeyboardImpl(Log& l, StringView layout, StringView options)
     fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
 }
 
+// the constructor verified all four, and configure only swaps in verified ones
 KeyboardImpl::~KeyboardImpl() noexcept {
-    if (fd >= 0) {
-        close(fd);
-    }
-
-    if (state) {
-        xkb_state_unref(state);
-    }
-
-    if (keymap) {
-        xkb_keymap_unref(keymap);
-    }
-
-    if (ctx) {
-        xkb_context_unref(ctx);
-    }
+    close(fd);
+    xkb_state_unref(state);
+    xkb_keymap_unref(keymap);
+    xkb_context_unref(ctx);
 }
 
 void KeyboardImpl::configure(StringView layout, StringView options) {
@@ -118,7 +110,7 @@ void KeyboardImpl::configure(StringView layout, StringView options) {
 
     xkb_keymap* nextKeymap = xkb_keymap_new_from_names(ctx, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
 
-    if (!nextKeymap && (!layout.empty() || !options.empty())) {
+    if (!nextKeymap) {
         *log << "imway: bad xkb layout/options, falling back to defaults"_sv << endL;
         nextKeymap = xkb_keymap_new_from_names(ctx, nullptr, XKB_KEYMAP_COMPILE_NO_FLAGS);
     }
