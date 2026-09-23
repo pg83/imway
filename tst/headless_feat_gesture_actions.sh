@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Touchpad gestures bound to every action through the settings: swipes and
 # pinches reach alt-tab, the launcher, the notification history and the
-# lockscreen, and a cancelled gesture does nothing.
+# lockscreen, one direction bound alone still claims the swipe, and a
+# cancelled gesture does nothing.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -54,6 +55,25 @@ ctl "swipe begin 3"; ctl "swipe update 0 -200"; ctl "swipe end cancel"
 ctl "swipe begin 3"; ctl "swipe update 0 -10"; ctl "swipe end"
 sleep 0.3
 no_window '##launcher' || { echo "a cancelled or short swipe acted"; exit 1; }
+
+# a cancelled pinch does nothing either
+ctl "pinch begin 2"; ctl "pinch update 0 0 1.5 0"; ctl "pinch end cancel"
+screenshot "$XDG_RUNTIME_DIR/_pinch.ppm"
+no_window '##launcher' || { echo "a cancelled pinch acted"; exit 1; }
+
+# one swipe binding alone still claims the gesture: the history on swipe
+# right with every other direction unbound, then on swipe down alone
+ctl "set input.swipe_left 0"
+ctl "set input.swipe_up 0"
+ctl "set input.swipe_down 0"
+ctl "set input.swipe_right 4"
+await 20 in_log "control: set input.swipe_right" || { echo "the rebinding was not taken"; exit 1; }
+ctl "swipe begin 3"; ctl "swipe update 200 0"; ctl "swipe end"
+await 50 window '##history' || { echo "swipe right alone did not open the history"; dump_state; exit 1; }
+ctl "set input.swipe_right 0"
+ctl "set input.swipe_down 4"
+ctl "swipe begin 3"; ctl "swipe update 0 200"; ctl "swipe end"
+await 50 no_window '##history' || { echo "swipe down alone did not toggle the history off"; dump_state; exit 1; }
 
 # pinch in: the lockscreen, then xxx unlocks
 ctl "pinch begin 2"; ctl "pinch update 0 0 0.5 0"; ctl "pinch end"
