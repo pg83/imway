@@ -1086,7 +1086,15 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
 
     vkGetPhysicalDeviceMemoryProperties(phys, &mp);
 
-    return memoryTypeWith(mp, typeBits, props);
+    u32 memoryType = memoryTypeWith(mp, typeBits, props);
+
+    // Vulkan promises a device-local type for every image and a coherent
+    // host-visible one for every plain buffer; a device breaking that must
+    // not have the missing index reach the driver, which indexes its type
+    // table with it unchecked
+    STD_VERIFY(memoryType != UINT32_MAX);
+
+    return memoryType;
 }
 
 VkResult RendererImpl::allocated(GpuUse use, VkResult result) {

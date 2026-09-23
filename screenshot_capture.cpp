@@ -128,13 +128,22 @@ namespace {
 
         vkGetPhysicalDeviceMemoryProperties(phys, &mp);
 
+        u32 memoryType = UINT32_MAX;
+
         for (u32 i = 0; i < mp.memoryTypeCount; i++) {
             if ((typeBits & (1u << i)) && (mp.memoryTypes[i].propertyFlags & props) == props) {
-                return i;
+                memoryType = i;
+
+                break;
             }
         }
 
-        return UINT32_MAX;
+        // Vulkan promises a coherent host-visible type for every plain
+        // buffer; a device breaking that must not have the missing index
+        // reach the driver, which indexes its type table with it unchecked
+        STD_VERIFY(memoryType != UINT32_MAX);
+
+        return memoryType;
     }
 }
 
