@@ -448,7 +448,7 @@ static int mode_suspended(void) {
     int before = sus_configured;
 
     xdg_toplevel_set_minimized(t);
-    for (int i = 0; i < 100 && (sus_configured == before || !suspended_seen); i++) {
+    for (int i = 0; i < 1000 && (sus_configured == before || !suspended_seen); i++) {
         roundtrip("minimize");
         usleep(10000);
     }
@@ -771,7 +771,7 @@ static int mode_text_input(void) {
     struct zwp_text_input_v3* ti = zwp_text_input_manager_v3_get_text_input(text_inputs, wl_seat_g);
 
     zwp_text_input_v3_add_listener(ti, &ti_listener, NULL);
-    for (int i = 0; i < 100 && !ti_entered; i++) {
+    for (int i = 0; i < 1000 && !ti_entered; i++) {
         roundtrip("enter");
         usleep(10000);
     }
@@ -990,7 +990,7 @@ static int mode_release(void) {
     // the next buffer releases the first one
     wl_surface_attach(s, wl_solid(40, 40, 0xFF0000FF), 0, 0);
     wl_surface_commit(s);
-    for (int i = 0; i < 100 && !release_done[1]; i++) {
+    for (int i = 0; i < 1000 && !release_done[1]; i++) {
         roundtrip("release");
         usleep(10000);
     }
@@ -1100,7 +1100,7 @@ static int mode_bad(const char* what) {
         struct wl_toplevel_ctx t;
 
         wl_make_toplevel(&t, "misc-selection-actions", 60, 40, 0xFF0000FF);
-        for (int i = 0; i < 100 && !wlk_enters; i++) {
+        for (int i = 0; i < 1000 && !wlk_enters; i++) {
             roundtrip("focus");
             usleep(10000);
         }
@@ -1266,7 +1266,7 @@ static void framed(struct wl_surface* s, intptr_t index) {
 }
 
 static int wait_frames(int index, int want) {
-    for (int i = 0; i < 200 && frames_done[index] < want; i++) {
+    for (int i = 0; i < 1000 && frames_done[index] < want; i++) {
         roundtrip("frames");
         usleep(10000);
     }
@@ -1413,8 +1413,13 @@ static void st_settle(void) {
     }
 }
 
+// waits (up to 30 s) for the configure that reports the state: a sanitized
+// compositor answers a state request frames later
 static int st_expect(int maximized, int fullscreen, const char* what) {
-    st_settle();
+    for (int i = 0; i < 3000 && (st_maximized != maximized || st_fullscreen != fullscreen); i++) {
+        roundtrip("state");
+        usleep(10000);
+    }
     if (st_maximized != maximized || st_fullscreen != fullscreen) {
         fprintf(stderr, "%s: maximized=%d fullscreen=%d\n", what, st_maximized, st_fullscreen);
         return 1;
