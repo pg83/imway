@@ -153,12 +153,11 @@ bool SndioMixer::muted() {
     return muteAddr >= 0 ? mute != 0 : level == 0 && softSaved > 0.f;
 }
 
+// both callers (the mute key, the settings checkbox) ask for the opposite
+// of muted(): with a mute control that is never its current value, and
+// without one an unmute always has a saved level to go back to
 void SndioMixer::setMuted(bool m) {
     if (muteAddr >= 0) {
-        if ((unsigned)m == mute) {
-            return;
-        }
-
         mute = m;
         muteWrites.sent(m);
         sioctl_setval(hdl, (unsigned)muteAddr, m);
@@ -172,7 +171,7 @@ void SndioMixer::setMuted(bool m) {
     if (m && level > 0) {
         softSaved = volume();
         setVolume(0.f);
-    } else if (!m && softSaved > 0.f) {
+    } else if (!m) {
         float v = softSaved;
 
         softSaved = 0.f;
