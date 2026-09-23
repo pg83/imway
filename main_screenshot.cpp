@@ -176,9 +176,18 @@ namespace {
             StringView value(color), hs, rest;
 
             if (value.split(':', hs, rest)) {
-                StringView whiteString, minString, peakString, fallString;
-                bool volume = rest.split(':', whiteString, rest) && rest.split(':', minString, rest) && rest.split(':', peakString, fallString);
-                double white = parseFloat(volume ? whiteString : rest);
+                // the white level leads; a display volume after it counts
+                // only when all three of its fields are there
+                StringView whiteString = rest;
+                StringView minString, peakString, fallString, head, tail;
+                bool volume = false;
+
+                if (rest.split(':', head, tail)) {
+                    whiteString = head;
+                    volume = tail.split(':', minString, tail) && tail.split(':', peakString, fallString);
+                }
+
+                double white = parseFloat(whiteString);
 
                 img.color = hs == "1"_sv ? OutputColorState::hdr10(white) : OutputColorState::sdr();
 
