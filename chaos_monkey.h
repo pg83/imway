@@ -109,7 +109,8 @@ struct ChaosMonkey {
     // signal semaphore being recreated
     virtual VkResult syncWait(VkResult result) = 0;
     // the result of one Vulkan call building the renderer's output-sized
-    // targets: at boot, and again whenever the output changes size
+    // targets: at boot, again whenever the output changes size, and for
+    // scanout buffers the output replaced at the same size
     virtual VkResult outputTarget(VkResult result) = 0;
     // whether the Vulkan device offers the named extension, as the device
     // answered: a device without it takes the fallback of its own

@@ -3633,8 +3633,12 @@ void RendererImpl::syncScanoutTargets() {
             continue;
         }
 
+        // nulled as they go: a failed rebuild below ends the session, and
+        // the teardown destroys whatever the lists still hold
         vkDestroyFramebuffer(device, scanFbs[i], nullptr);
         vkDestroyImageView(device, scanViews[i], nullptr);
+        scanFbs.mut(i) = VK_NULL_HANDLE;
+        scanViews.mut(i) = VK_NULL_HANDLE;
 
         VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
 
@@ -3642,7 +3646,7 @@ void RendererImpl::syncScanoutTargets() {
         vci.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vci.format = fmt;
         vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vci, nullptr, &scanViews.mut(i)));
+        VK_CHECK(allocated(GpuUse::output, vkCreateImageView(device, &vci, nullptr, &scanViews.mut(i))));
 
         VkFramebufferCreateInfo fci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
 
@@ -3652,7 +3656,7 @@ void RendererImpl::syncScanoutTargets() {
         fci.width = width;
         fci.height = height;
         fci.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &fci, nullptr, &scanFbs.mut(i)));
+        VK_CHECK(allocated(GpuUse::output, vkCreateFramebuffer(device, &fci, nullptr, &scanFbs.mut(i))));
         scanImages.mut(i) = image;
     }
 }
