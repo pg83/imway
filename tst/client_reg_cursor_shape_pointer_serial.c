@@ -106,7 +106,19 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     printf("own shape serial sent\n");
 
+    // the device outlives its wl_pointer: with no pointer left to own a
+    // serial, a set_shape carrying pointer2's serial changes nothing
     wait_key(KEY_3);
+    wl_pointer_release(pointer2);
+    wl_display_roundtrip(wl_dpy);
+    wp_cursor_shape_device_v1_set_shape(device2, pointer2_enter_serial,
+                                        WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT);
+    wl_display_roundtrip(wl_dpy);
+    printf("orphaned shape serial sent\n");
+
+    wait_key(KEY_4);
+    wp_cursor_shape_device_v1_destroy(device2);
+    wl_display_roundtrip(wl_dpy);
     printf("cursor shape pointer serial ok\n");
     return 0;
 }

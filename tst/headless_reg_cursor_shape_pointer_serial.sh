@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# cursor-shape devices inherit the serial scope of their wl_pointer object.
+# cursor-shape devices inherit the serial scope of their wl_pointer object,
+# and a device whose wl_pointer is gone takes no serial at all.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -25,6 +26,14 @@ wait_client "own shape serial sent"
     exit 1
 }
 
-ctl "key 4 press"; ctl "key 4 release" # KEY_3
+own=$(dump_field '^cursor ' shape)
+ctl "key 4 press"; ctl "key 4 release" # KEY_3: pointer2 released, its serial on device2
+wait_client "orphaned shape serial sent"
+[[ "$(dump_field '^cursor ' shape)" == "$own" ]] || {
+    echo "cursor-shape device2 took a serial after its wl_pointer was gone"
+    exit 1
+}
+
+ctl "key 5 press"; ctl "key 5 release" # KEY_4
 expect_client_ok "cursor-shape per-pointer serial validation failed"
 echo "OK: cursor-shape serial is scoped to its wl_pointer"
