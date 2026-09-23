@@ -1930,11 +1930,9 @@ bool KmsOutput::setupHdr() {
     return createHdrMetadataBlob(metadata, hdrMetaBlob);
 }
 
+// value.hdr holds: setupHdr runs only for an HDR output, whose metadata
+// hdrOutputMetadata marks HDR, and setHdrMetadata checks it first
 bool KmsOutput::createHdrMetadataBlob(const HdrOutputMetadata& value, u32& blob) {
-    if (!value.hdr) {
-        return false;
-    }
-
     hdr_output_metadata meta{};
 
     meta.metadata_type = 0;
