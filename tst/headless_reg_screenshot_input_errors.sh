@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# `imway screenshot` given what it cannot use. A file that does not exist and
-# shared-buffer metadata it cannot parse (too few, empty, negative or
+# `imway screenshot` given what it cannot use. A file that does not exist or
+# whose header claims a zero width or height, and shared-buffer metadata it cannot parse (too few, empty, negative or
 # run-together fields, a field past 64 bits, a GPU id that is not 32
 # lowercase hex digits, a zero width, height, stride or size), or whose
 # buffer cannot be opened, each open the 480x180 error panel, which Escape
@@ -17,6 +17,8 @@ python3 - "$rt" <<'PY'
 import struct, sys
 w, h = 64, 48
 open(f"{sys.argv[1]}/good.shot", "wb").write(struct.pack("<III", 0x31574d49, w, h) + bytes([0xff, 0, 0xff, 0xff]) * (w * h))
+open(f"{sys.argv[1]}/no-width.shot", "wb").write(struct.pack("<III", 0x31574d49, 0, h) + bytes(64))
+open(f"{sys.argv[1]}/no-height.shot", "wb").write(struct.pack("<III", 0x31574d49, w, 0) + bytes(64))
 PY
 
 uuid=00112233445566778899aabbccddeeff
@@ -57,6 +59,8 @@ image() { # <what> <path> [env...]
 }
 
 error_panel "a missing file" "$rt/missing.shot"
+error_panel "a file of zero width" "$rt/no-width.shot"
+error_panel "a file of zero height" "$rt/no-height.shot"
 error_panel "too few fields" "$rt/good.shot" IMWAY_SHOT_DMABUF=64:48:44
 error_panel "a field past 64 bits" "$rt/good.shot" IMWAY_SHOT_DMABUF=64:48:44:0:256:0:99999999999999999999999:$uuid
 error_panel "a GPU id that is not hex" "$rt/good.shot" IMWAY_SHOT_DMABUF=64:48:44:0:256:0:12288:zz112233445566778899aabbccddeeff
