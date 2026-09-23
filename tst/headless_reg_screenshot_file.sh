@@ -2,7 +2,7 @@
 # `imway screenshot PATH` on files: a raw capture file loads through the
 # file path and Enter saves it as JPEG XL into IMWAY_SHOT_DIR; a file that is
 # too small, one with a bad header and a truncated one each open the error
-# panel, which Escape dismisses.
+# panel, which Escape dismisses, and so does Enter.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -55,11 +55,21 @@ await 100 viewer_gone || { echo "the viewer stayed open after saving"; exit 1; }
 await 100 exits 1 || { echo "the viewer did not exit"; exit 1; }
 in_log "exited with status 0" || { echo "the file viewer failed"; cat "$IMWAY_LOG"; exit 1; }
 
+# Enter until <check> holds, as escape_until does with Escape
+enter_until() { # <check...>
+    enter_then() { ctl "key 28 press"; ctl "key 28 release"; sleep 0.2; "$@"; }
+    await 50 enter_then "$@"
+}
+
 n=1
 for bad in small bad trunc; do
     launch "exec ./shot ./$bad.shot"
     await 150 viewer_up || { echo "the error panel did not open for $bad.shot"; cat "$IMWAY_LOG"; exit 1; }
-    escape_until viewer_gone || { echo "Escape did not close the error panel for $bad.shot"; exit 1; }
+    if [[ $bad == trunc ]]; then
+        enter_until viewer_gone || { echo "Enter did not close the error panel for $bad.shot"; exit 1; }
+    else
+        escape_until viewer_gone || { echo "Escape did not close the error panel for $bad.shot"; exit 1; }
+    fi
     n=$((n + 1))
     await 100 exits $n || { echo "the error viewer for $bad.shot did not exit"; exit 1; }
 done
