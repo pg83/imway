@@ -241,6 +241,13 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         # wants a device drops one in; the directory is empty otherwise.
         IMWAY_INPUT_DIR=input_dir,
     )
+    if not meta["private_bus"]:
+        # hermetic buses too: without a private one the host's own session
+        # and system buses (its iwd, NetworkManager, notification daemon)
+        # would be inputs of the scenario; point both at an address that
+        # refuses, imway-env can still name a bus of the scenario's own
+        env["DBUS_SESSION_BUS_ADDRESS"] = "unix:path=/nonexistent-imway-test"
+        env["DBUS_SYSTEM_BUS_ADDRESS"] = "unix:path=/nonexistent-imway-test"
     env.update(meta["env"])
 
     started = time.monotonic()
