@@ -29,13 +29,25 @@ done
 # inside the guest; before the host's timeout kills the VM blind, report
 # where the guest's tasks are blocked, then power it off
 watchdog=$(( ${VNG_TIMEOUT:-300} - 60 ))
-setup+="; (sleep $watchdog; echo \"vng_wrap: guest still running after ${watchdog}s\" >&2; ps -eo pid,stat,wchan:32,args >&2; echo w >/proc/sysrq-trigger; dmesg | tail -n 200 >&2; echo o >/proc/sysrq-trigger) & watchdog=\$!"
+setup+="; (sleep $watchdog && { echo \"vng_wrap: guest still running after ${watchdog}s\" >&2; ps -eo pid,stat,wchan:32,args >&2; echo w >/proc/sysrq-trigger; dmesg | tail -n 200 >&2; echo o >/proc/sysrq-trigger; }) & watchdog=\$!"
 
 # blob resources want the guest's memory in a memfd qemu can hand to udmabuf
 memory=${VNG_MEMORY:-2G}
 
 # a VM that never powers off would hold its build node forever: the
-# scenario's own timeout lives inside the guest and cannot reach it
-exec timeout --kill-after=15 "${VNG_TIMEOUT:-300}" vng -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
+# scenario's own timeout lives inside the guest and cannot reach it. The
+# guest's console (boot included) goes to a file shown only when the run
+# fails: a guest that hangs before the command starts has nothing else
+console=$(mktemp)
+trap 'rm -f "$console"' EXIT
+rc=0
+timeout --kill-after=15 "${VNG_TIMEOUT:-300}" vng --verbose -r "/boot/vmlinuz-$(uname -r)" --rw --memory "$memory" --cpus "${VNG_CPUS:-2}" \
     --qemu-opts="-object memory-backend-memfd,id=imway-mem,size=$memory,share=on -machine memory-backend=imway-mem -device ${VNG_GPU:-virtio-gpu-pci,blob=true}" \
-    -- "$setup; cd $dir && $command; rc=\$?; pkill -P \$watchdog; kill \$watchdog; exit \$rc"
+    -- "$setup; cd $dir && $command; rc=\$?; pkill -P \$watchdog; exit \$rc" >"$console" 2>&1 || rc=$?
+
+if [[ $rc -ne 0 ]]; then
+    echo "vng_wrap: exit $rc, the guest's console:" >&2
+    tail -n 300 "$console" >&2
+fi
+
+exit $rc
