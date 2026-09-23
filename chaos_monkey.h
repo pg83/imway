@@ -193,6 +193,9 @@ struct ChaosMonkey {
     // the result of one Vulkan call building an icon's texture (the dock's,
     // the launcher's, a notification's, a tab's)
     virtual VkResult iconTexture(VkResult result) = 0;
+    // the result of one Vulkan call building the screenshot capture's
+    // readback buffer, sized by the output at the capture
+    virtual VkResult shotReadback(VkResult result) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

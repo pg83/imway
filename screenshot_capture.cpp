@@ -79,7 +79,8 @@ namespace {
         bool submit(int scanoutIndex, VkImage image, VkImageLayout layout) override;
         void resize(int w, int h) override;
         void onListen(void* data) override;
-        void ensureReadback();
+        bool ensureReadback();
+        void dropReadback();
         void fenceDone(VkResult status);
         void pollRetire();
         void buildFileWork();
@@ -253,18 +254,23 @@ void ScreenshotCaptureImpl::resize(int w, int h) {
     height = h;
 }
 
-void ScreenshotCaptureImpl::ensureReadback() {
+void ScreenshotCaptureImpl::dropReadback() {
+    // freeing the memory unmaps it
+    vkDestroyBuffer(device, readback, nullptr);
+    vkFreeMemory(device, readbackMemory, nullptr);
+    readback = VK_NULL_HANDLE;
+    readbackMemory = VK_NULL_HANDLE;
+    readbackMap = nullptr;
+}
+
+bool ScreenshotCaptureImpl::ensureReadback() {
     if (readback && (readbackW != width || readbackH != height)) {
         // sized for a mode the output left; only reached between captures
-        vkDestroyBuffer(device, readback, nullptr);
-        vkFreeMemory(device, readbackMemory, nullptr);
-        readback = VK_NULL_HANDLE;
-        readbackMemory = VK_NULL_HANDLE;
-        readbackMap = nullptr;
+        dropReadback();
     }
 
-    if (readback) {
-        return;
+    if (readbackMap) {
+        return true;
     }
 
     readbackW = width;
@@ -274,19 +280,39 @@ void ScreenshotCaptureImpl::ensureReadback() {
 
     bci.size = (VkDeviceSize)width * height * sizeof(u32);
     bci.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    VK_CHECK(vkCreateBuffer(device, &bci, nullptr, &readback));
 
-    VkMemoryRequirements req{};
+    VkResult result = comp->chaos->shotReadback(vkCreateBuffer(device, &bci, nullptr, &readback));
 
-    vkGetBufferMemoryRequirements(device, readback, &req);
+    if (result == VK_SUCCESS) {
+        VkMemoryRequirements req{};
 
-    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        vkGetBufferMemoryRequirements(device, readback, &req);
 
-    mai.allocationSize = req.size;
-    mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VK_CHECK(vkAllocateMemory(device, &mai, nullptr, &readbackMemory));
-    VK_CHECK(vkBindBufferMemory(device, readback, readbackMemory, 0));
-    VK_CHECK(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &readbackMap));
+        VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+
+        mai.allocationSize = req.size;
+        mai.memoryTypeIndex = findMemoryType(phys, req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        result = comp->chaos->shotReadback(vkAllocateMemory(device, &mai, nullptr, &readbackMemory));
+    }
+
+    if (result == VK_SUCCESS) {
+        result = comp->chaos->shotReadback(vkBindBufferMemory(device, readback, readbackMemory, 0));
+    }
+
+    if (result == VK_SUCCESS) {
+        result = comp->chaos->shotReadback(vkMapMemory(device, readbackMemory, 0, VK_WHOLE_SIZE, 0, &readbackMap));
+    }
+
+    if (result != VK_SUCCESS) {
+        // what the failed step left behind goes, and the renderer's next
+        // frame submits the request again, building the buffer anew
+        *(comp->log) << "imway: screenshot readback buffer failed ("_sv << (long)result << ")"_sv << endL;
+        dropReadback();
+
+        return false;
+    }
+
+    return true;
 }
 
 // the renderer submits for a request until a submit takes, and nothing of
@@ -299,8 +325,8 @@ bool ScreenshotCaptureImpl::submit(int scanoutIndex, VkImage image, VkImageLayou
 
     *(comp->log) << (handoff ? "imway: screenshot handoff of the scanout buffer"_sv : "imway: screenshot readback"_sv) << endL;
 
-    if (!handoff) {
-        ensureReadback();
+    if (!handoff && !ensureReadback()) {
+        return false;
     }
 
     capW = width;

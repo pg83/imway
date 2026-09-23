@@ -139,6 +139,8 @@ using namespace stl;
 //                     a compute-only device
 //   icon-texture=K    K icon texture calls pass, the one after runs out of
 //                     device memory
+//   shot-readback=K   K calls building the screenshot's readback buffer
+//                     pass, the one after runs out of device memory
 namespace {
     // buses: one armed fault
     enum class BusFault {
@@ -227,6 +229,7 @@ namespace {
         int vulkanDeviceCap = -1;
         bool noGraphics = false;
         int iconTextureSkip = -1;
+        int shotReadbackSkip = -1;
 #if __has_include(<security/pam_appl.h>)
         pam_message rewritten{};
 #endif
@@ -300,6 +303,7 @@ namespace {
         u32 vulkanDevices(u32 found) override;
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
         VkResult iconTexture(VkResult result) override;
+        VkResult shotReadback(VkResult result) override;
 
         void arm(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
@@ -458,6 +462,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         noGraphics = arg.stou() != 0;
     } else if (fault == "icon-texture"_sv) {
         iconTextureSkip = (int)arg.stou();
+    } else if (fault == "shot-readback"_sv) {
+        shotReadbackSkip = (int)arg.stou();
     }
 }
 
@@ -1021,6 +1027,14 @@ VkResult TestChaosMonkey::iconTexture(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+VkResult TestChaosMonkey::shotReadback(VkResult result) {
+    if (shotReadbackSkip < 0 || shotReadbackSkip-- > 0) {
+        return result;
+    }
+
+    return VK_ERROR_OUT_OF_DEVICE_MEMORY;
+}
+
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {
     const char* script = getenv("IMWAY_CHAOS");
 
@@ -1097,6 +1111,7 @@ namespace {
         u32 vulkanDevices(u32 found) override;
         VkQueueFlags queueFlags(VkQueueFlags flags) override;
         VkResult iconTexture(VkResult result) override;
+        VkResult shotReadback(VkResult result) override;
     };
 }
 
@@ -1317,6 +1332,10 @@ VkQueueFlags IdleChaosMonkey::queueFlags(VkQueueFlags flags) {
 }
 
 VkResult IdleChaosMonkey::iconTexture(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::shotReadback(VkResult result) {
     return result;
 }
 
