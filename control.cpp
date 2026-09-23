@@ -755,7 +755,7 @@ void ControlImpl::dumpState(StringView outPath) {
     if (comp->kmsIntercept) {
         // delivered page-flip events: the fake device's ground truth for
         // frames that actually reached the screen
-        out << "kms flips="_sv << comp->kmsIntercept->flips() << "\n"_sv;
+        out << "kms flips="_sv << comp->kmsIntercept->flips() << " fbs="_sv << comp->kmsIntercept->liveFbs() << " gems="_sv << comp->kmsIntercept->liveGems() << "\n"_sv;
     }
     out << "cursor shape="_sv << (int)scene->cursorShape << " surface="_sv << (int)(scene->cursorSurface != nullptr) << " drawn="_sv << (int)scene->cursorDrawn << "\n"_sv;
     out << "ime popup="_sv << (int)(scene->imePopup.get() != nullptr) << " x="_sv << (int)scene->imePopupX << " y="_sv << (int)scene->imePopupY << "\n"_sv;

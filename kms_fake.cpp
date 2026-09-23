@@ -275,6 +275,8 @@ namespace {
         int openDdc(StringView bus) override;
         void holdFlips(bool hold) override;
         unsigned long long flips() override;
+        int liveFbs() override;
+        int liveGems() override;
 
         PropDef* findProp(u32 id);
         FakeBlob* findBlob(u32 id);
@@ -1041,6 +1043,25 @@ int FakeKms::emuPrimeFdToHandle(drm_prime_handle* p) {
         failPrimeCount--;
 
         return -failPrimeErr;
+    }
+
+    // one buffer object has one handle per drm fd, however many times and
+    // through whichever of its dma-buf fds it is imported: two wl_buffers
+    // on one BO come back with the same handle, as from the kernel
+    struct stat st{};
+
+    syscall(SYS_fstat, p->fd, &st);
+
+    for (const FakeGem& gem : gems) {
+        struct stat held{};
+
+        syscall(SYS_fstat, gem.fd, &held);
+
+        if (held.st_dev == st.st_dev && held.st_ino == st.st_ino) {
+            p->handle = gem.handle;
+
+            return 0;
+        }
     }
 
     int dup = fcntl(p->fd, F_DUPFD_CLOEXEC, 0);
@@ -1918,6 +1939,26 @@ unsigned long long FakeKms::flips() {
     pthread_mutex_lock(&mu);
 
     unsigned long long n = flipsDone;
+
+    pthread_mutex_unlock(&mu);
+
+    return n;
+}
+
+int FakeKms::liveFbs() {
+    pthread_mutex_lock(&mu);
+
+    int n = (int)fbs.length();
+
+    pthread_mutex_unlock(&mu);
+
+    return n;
+}
+
+int FakeKms::liveGems() {
+    pthread_mutex_lock(&mu);
+
+    int n = (int)gems.length();
 
     pthread_mutex_unlock(&mu);
 

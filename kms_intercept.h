@@ -58,4 +58,8 @@ struct KmsIntercept {
     // page-flip events delivered so far: the ground truth for "a frame
     // made it to the screen", independent of the compositor's counters
     virtual unsigned long long flips() = 0;
+    // framebuffers and GEM handles the backend holds on the device right
+    // now: what a scenario checks for leaked or early-closed imports
+    virtual int liveFbs() = 0;
+    virtual int liveGems() = 0;
 };
