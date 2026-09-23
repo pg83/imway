@@ -97,6 +97,10 @@ y=$(dump_field 'app_id=color-alpha' imgy)
 # on its commit, so the first frame after that can still be the old one
 stripes_reached() { # <ppm> <expected-kind>
     local -a actual expected_values
+    # where the window is now: a slow runner can still be placing it when
+    # the client announces its phase
+    x=$(dump_field 'app_id=color-alpha' imgx)
+    y=$(dump_field 'app_id=color-alpha' imgy)
     screenshot "$1" || return 1
     read -r -a actual < <(sample_stripes "$1" "$x" "$y")
     read -r -a expected_values < <(expected "$2")
