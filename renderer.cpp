@@ -2002,7 +2002,9 @@ void RendererImpl::setup() {
     ii.CustomShaderFragCreateInfo.codeSize = sizeof(renderer_scene_spv);
     ii.CustomShaderFragCreateInfo.pCode = renderer_scene_spv;
 
-    STD_VERIFY(ImGui_ImplVulkan_Init(&ii));
+    // the backend's Vulkan failures reach imguiVkCheck; its init itself
+    // has no failing return
+    ImGui_ImplVulkan_Init(&ii);
 
     hwCapW = output->cursorCapW();
     hwCapH = output->cursorCapH();
