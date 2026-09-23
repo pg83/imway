@@ -6,7 +6,8 @@
 // A privileged client sets the primary selection through ext-data-control;
 // the focused client's zwp_primary_selection_device must get a primary
 // selection offer it can receive the payload through, like the one a
-// zwp_primary_selection_source would make.
+// zwp_primary_selection_source would make. Devices made after the selection
+// exists, a primary one and a data-control one, start out holding it.
 
 static struct ext_data_control_manager_v1* mgr;
 static struct zwp_primary_selection_device_manager_v1* primary_mgr;
@@ -77,6 +78,50 @@ static const struct zwp_primary_selection_device_v1_listener primary_device_list
     .selection = primary_selection,
 };
 
+// ---- devices made once the selection exists ----
+static int late_primary_seen;
+
+static void late_primary_selection(void* d, struct zwp_primary_selection_device_v1* dev,
+                                   struct zwp_primary_selection_offer_v1* o) {
+    (void)d; (void)dev;
+    if (o)
+        late_primary_seen = 1;
+}
+static const struct zwp_primary_selection_device_v1_listener late_primary_listener = {
+    .data_offer = primary_data_offer,
+    .selection = late_primary_selection,
+};
+
+static int late_dc_primary_seen;
+
+static void dc_offer_mime(void* d, struct ext_data_control_offer_v1* o, const char* mime) {
+    (void)d; (void)o; (void)mime;
+}
+static const struct ext_data_control_offer_v1_listener dc_offer_listener = {
+    .offer = dc_offer_mime,
+};
+static void dc_data_offer(void* d, struct ext_data_control_device_v1* dev, struct ext_data_control_offer_v1* o) {
+    (void)d; (void)dev;
+    ext_data_control_offer_v1_add_listener(o, &dc_offer_listener, NULL);
+}
+static void dc_selection(void* d, struct ext_data_control_device_v1* dev, struct ext_data_control_offer_v1* o) {
+    (void)d; (void)dev; (void)o;
+}
+static void dc_finished(void* d, struct ext_data_control_device_v1* dev) {
+    (void)d; (void)dev;
+}
+static void dc_primary_selection(void* d, struct ext_data_control_device_v1* dev, struct ext_data_control_offer_v1* o) {
+    (void)d; (void)dev;
+    if (o)
+        late_dc_primary_seen = 1;
+}
+static const struct ext_data_control_device_v1_listener late_dc_listener = {
+    .data_offer = dc_data_offer,
+    .selection = dc_selection,
+    .finished = dc_finished,
+    .primary_selection = dc_primary_selection,
+};
+
 int main(void) {
     alarm(10);
     if (wl_boot()) return 2;
@@ -127,6 +172,18 @@ int main(void) {
     ssize_t n = read(fds[0], buf, sizeof(buf) - 1);
     if (n < 0 || strcmp(buf, kPayload)) {
         fprintf(stderr, "payload mismatch: got \"%s\"\n", buf);
+        return 1;
+    }
+
+    struct zwp_primary_selection_device_v1* late_primary =
+        zwp_primary_selection_device_manager_v1_get_device(primary_mgr, seat2);
+    struct ext_data_control_device_v1* late_dc = ext_data_control_manager_v1_get_data_device(mgr, seat2);
+
+    zwp_primary_selection_device_v1_add_listener(late_primary, &late_primary_listener, NULL);
+    ext_data_control_device_v1_add_listener(late_dc, &late_dc_listener, NULL);
+    if (wl_display_roundtrip(wl_dpy) < 0 || !late_primary_seen || !late_dc_primary_seen) {
+        fprintf(stderr, "devices made after the selection missed it: primary=%d data-control=%d\n",
+                late_primary_seen, late_dc_primary_seen);
         return 1;
     }
 

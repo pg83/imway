@@ -48,6 +48,17 @@ int main(int argc, char** argv) {
         return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_VALUE);
     }
 
+    // all four -1 unset the source; -1 on only some sides is just negative
+    if (!strcmp(argv[1], "half-unset-width")) {
+        wp_viewport_set_source(vp, wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(10), wl_fixed_from_int(10));
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_VALUE);
+    }
+
+    if (!strcmp(argv[1], "half-unset-height")) {
+        wp_viewport_set_source(vp, wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(-1), wl_fixed_from_int(10));
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_VALUE);
+    }
+
     if (!strcmp(argv[1], "bad-dest")) {
         wp_viewport_set_destination(vp, 0, 100);
         return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_VALUE);
