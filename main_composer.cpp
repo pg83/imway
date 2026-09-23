@@ -63,6 +63,11 @@
 #include <std/sys/throw.h>
 #include <std/thr/pool.h>
 
+#if defined(IMWAY_FOR_TESTS) && !defined(IMWAY_SANITIZED)
+// the coverage runtime's writer, present only in an instrumented build
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+#endif
+
 using namespace stl;
 
 namespace {
@@ -156,7 +161,9 @@ namespace {
     // claims (wayland.cpp owns SIGBUS for shm reads). Nothing here may
     // allocate or take a lock: write(2) and hand-rolled digits only, and the
     // frames come out only when the faulting code carries unwind info —
-    // a fault inside the driver's jitted code walks nowhere.
+    // a fault inside the driver's jitted code walks nowhere. The one
+    // exception comes last, once the report is out: an instrumented build
+    // writes its coverage, which the process would otherwise take with it.
     void crashWrite(const char* text, size_t length) {
         (void)!write(2, text, length);
     }
@@ -165,10 +172,11 @@ namespace {
         char digits[32];
         size_t at = sizeof(digits);
 
+        // an unsigned long has 20 decimal digits at most
         do {
             digits[--at] = "0123456789abcdef"[value % (unsigned)base];
             value /= (unsigned)base;
-        } while (value && at);
+        } while (value);
 
         crashWrite(digits + at, sizeof(digits) - at);
     }
@@ -177,7 +185,8 @@ namespace {
         crashWrite("imway: fatal signal ", 20);
         crashNumber((unsigned long)sig, 10);
         crashWrite(" at 0x", 6);
-        crashNumber((unsigned long)(info ? info->si_addr : nullptr), 16);
+        // an SA_SIGINFO handler always gets the kernel's siginfo
+        crashNumber((unsigned long)info->si_addr, 16);
         crashWrite(", stack follows\n", 16);
 #if __has_include(<execinfo.h>)
         void* frames[64];
@@ -189,6 +198,10 @@ namespace {
             crashWrite("imway: no unwind info at the fault\n", 35);
         }
 #endif
+        if (__llvm_profile_write_file) {
+            __llvm_profile_write_file();
+        }
+
         signal(sig, SIG_DFL);
         raise(sig);
     }
