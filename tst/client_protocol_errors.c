@@ -471,6 +471,73 @@ int main(int argc, char** argv) {
                             WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_ALREADY_SET);
     }
 
+    // parametric descriptions refused at create: primaries missing, a
+    // luminance range upside down once the transfer function is known, and
+    // content light levels outside the range or the wrong way round
+    if (!strncmp(argv[1], "colour-create-", 14)) {
+        const char* what = argv[1] + 14;
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+        uint32_t code = WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INVALID_LUMINANCE;
+
+        if (!strcmp(what, "lum-before-tf")) {
+            // valid against the reference when set, but max is below min
+            // once create sees a transfer function that is not PQ
+            wp_image_description_creator_params_v1_set_luminances(params, 100000, 5, 20);
+        }
+
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
+
+        if (!strcmp(what, "no-primaries")) {
+            code = WP_IMAGE_DESCRIPTION_CREATOR_PARAMS_V1_ERROR_INCOMPLETE_SET;
+        } else {
+            wp_image_description_creator_params_v1_set_primaries_named(
+                params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+        }
+
+        if (!strncmp(what, "cll", 3) || !strncmp(what, "fall", 4)) {
+            wp_image_description_creator_params_v1_set_luminances(params, 1, 1000, 203);
+        }
+
+        if (!strcmp(what, "cll-over-max")) {
+            wp_image_description_creator_params_v1_set_max_cll(params, 2000);
+        } else if (!strcmp(what, "fall-over-max")) {
+            wp_image_description_creator_params_v1_set_max_fall(params, 2000);
+        } else if (!strcmp(what, "fall-over-cll")) {
+            wp_image_description_creator_params_v1_set_max_cll(params, 300);
+            wp_image_description_creator_params_v1_set_max_fall(params, 500);
+        } else if (strcmp(what, "no-primaries") && strcmp(what, "lum-before-tf")) {
+            return 2;
+        }
+
+        wp_image_description_creator_params_v1_create(params);
+
+        // create is a destructor: the object the error names is gone here
+        return expect_error(display, NULL, code);
+    }
+
+    // a failed description cannot be set on a surface
+    if (!strcmp(argv[1], "colour-set-failed")) {
+        struct wp_color_management_surface_v1* cms = wp_color_manager_v1_get_surface(colour, surface);
+        struct wp_image_description_creator_params_v1* params =
+            wp_color_manager_v1_create_parametric_creator(colour);
+
+        wp_image_description_creator_params_v1_set_tf_named(
+            params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_GAMMA22);
+        // a primary with zero y: the description fails
+        wp_image_description_creator_params_v1_set_primaries(
+            params, 640000, 0, 300000, 600000, 150000, 60000, 312700, 329000);
+
+        struct wp_image_description_v1* desc = wp_image_description_creator_params_v1_create(params);
+
+        wl_display_roundtrip(display);
+        wp_color_management_surface_v1_set_image_description(cms, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+
+        return expect_error(display, wp_color_management_surface_v1_interface.name,
+                            WP_COLOR_MANAGEMENT_SURFACE_V1_ERROR_IMAGE_DESCRIPTION);
+    }
+
     if (!strcmp(argv[1], "colour-bad-luminance")) {
         struct wp_image_description_creator_params_v1* params =
             wp_color_manager_v1_create_parametric_creator(colour);
