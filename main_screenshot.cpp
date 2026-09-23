@@ -848,6 +848,13 @@ namespace {
     void destroyLinearHdr();
 
     void setupLinearHdr(ObjPool& shot, u32 width, u32 height) {
+        // registered before the first object: a throw part way through
+        // tears down exactly the objects already made (the rest are null)
+        pooledGuard(shot, [] {
+            destroyLinearHdr();
+            gLinearHdr = false;
+        });
+
         VkAttachmentDescription attachment{};
 
         attachment.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -961,10 +968,6 @@ namespace {
 
         createSceneTarget(width, height);
         gLinearHdr = true;
-        pooledGuard(shot, [] {
-            destroyLinearHdr();
-            gLinearHdr = false;
-        });
     }
 
     void destroyLinearHdr() {
