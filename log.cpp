@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 using namespace stl;
 
@@ -210,6 +211,15 @@ size_t NonblockOut::writeImpl(const void* data, size_t len) {
 }
 
 Output* nonblockStderr(ObjPool* pool) {
+    struct stat st;
+
+    // a file never blocks, and a description of our own would write at an
+    // offset of its own: the log and direct stderr writers (a library, the
+    // crash report) would overwrite each other from the start of the file
+    if (fstat(2, &st) == 0 && S_ISREG(st.st_mode)) {
+        return pool->make<NonblockOut>(2);
+    }
+
     // a reopen makes an independent file description on the same pipe, so
     // stray direct stderr writers keep their blocking semantics
     int fd = open("/proc/self/fd/2", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
