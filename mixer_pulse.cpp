@@ -140,22 +140,16 @@ namespace {
         e->destroy = cb;
     }
 
-    // libpulse's marker for a monotonic time (PA_TIMEVAL_RTCLOCK, private
-    // to pulsecore): a bit in tv_usec far above any real microsecond count
-    constexpr long kRtClockFlag = 1L << 30;
-
-    // the seconds until an absolute pulse time. A context on a foreign
-    // loop hands out wall-clock times (it keeps the monotonic ones for its
-    // own mainloop, flagged as above), so both clocks are honoured: read
-    // against the monotonic clock, a wall-clock time lies decades ahead and
-    // the timer, a reply timeout among them, never fires
+    // the seconds until an absolute pulse time. A context on a loop that
+    // is not pulse's own (use_rtclock is false for it) hands out
+    // wall-clock times: read against the monotonic clock, one lies decades
+    // ahead and the timer, a reply timeout among them, never fires
     double delayUntil(const struct timeval& tv) {
-        bool monotonic = (tv.tv_usec & kRtClockFlag) != 0;
         struct timespec now{};
 
-        clock_gettime(monotonic ? CLOCK_MONOTONIC : CLOCK_REALTIME, &now);
+        clock_gettime(CLOCK_REALTIME, &now);
 
-        double target = (double)tv.tv_sec + (double)(tv.tv_usec & ~kRtClockFlag) / 1e6;
+        double target = (double)tv.tv_sec + (double)tv.tv_usec / 1e6;
         double n = (double)now.tv_sec + (double)now.tv_nsec / 1e9;
         double d = target - n;
 
