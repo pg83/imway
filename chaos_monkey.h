@@ -80,6 +80,9 @@ struct ChaosMonkey {
     // the result of one Vulkan call building the renderer's output-sized
     // targets: at boot, and again whenever the output changes size
     virtual VkResult outputTarget(VkResult result) = 0;
+    // whether the Vulkan device offers the named extension, as the device
+    // answered: a device without it takes the fallback of its own
+    virtual bool deviceExtension(const char* name, bool offered) = 0;
 
     // the buses (dbus_menu, status_notifier, wifi): a message a site has
     // just built, before it goes anywhere (a replacement takes over the one

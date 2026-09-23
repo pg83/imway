@@ -22,6 +22,7 @@ inline constexpr u32 kFourccXb4h = 0x48344258;
 inline constexpr u32 kFourccNv12 = 0x3231564e;
 inline constexpr u32 kFourccP010 = 0x30313050;
 
+struct ChaosMonkey;
 struct DmabufFormat;
 struct Log;
 
@@ -60,7 +61,7 @@ struct DeviceVk {
 
     // drmFd < 0 picks any vulkan device (headless); otherwise the one that
     // drives that drm node. pool-owned, borrowed by const pointer elsewhere
-    DeviceVk(Log& log, int drmFd);
+    DeviceVk(Log& log, ChaosMonkey& chaos, int drmFd);
     ~DeviceVk() noexcept;
 
     DeviceVk(const DeviceVk&) = delete;

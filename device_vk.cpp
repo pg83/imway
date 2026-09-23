@@ -8,6 +8,7 @@
 #include "session.h"
 #include "composer.h"
 #include "renderer.h"
+#include "chaos_monkey.h"
 
 #include <std/sys/fd.h>
 #include <std/sys/fs.h>
@@ -117,7 +118,7 @@ void vkWaitOrDie(VkDevice device, VkFence fence, const char* what) {
     }
 }
 
-DeviceVk::DeviceVk(Log& l, int drmFd)
+DeviceVk::DeviceVk(Log& l, ChaosMonkey& chaos, int drmFd)
     : log(&l)
 {
     this->drmFd = drmFd;
@@ -166,7 +167,7 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
     devs.zero(n);
     vkEnumeratePhysicalDevices(this->instance, &n, devs.mutData());
 
-    auto hasExt = [](VkPhysicalDevice d, const char* name) {
+    auto hasExt = [&chaos](VkPhysicalDevice d, const char* name) {
         u32 en = 0;
 
         vkEnumerateDeviceExtensionProperties(d, nullptr, &en, nullptr);
@@ -176,13 +177,17 @@ DeviceVk::DeviceVk(Log& l, int drmFd)
         eprops.zero(en);
         vkEnumerateDeviceExtensionProperties(d, nullptr, &en, eprops.mutData());
 
+        bool offered = false;
+
         for (const auto& e : eprops) {
             if (StringView(e.extensionName) == StringView(name)) {
-                return true;
+                offered = true;
+
+                break;
             }
         }
 
-        return false;
+        return chaos.deviceExtension(name, offered);
     };
 
     this->phys = VK_NULL_HANDLE;

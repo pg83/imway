@@ -63,6 +63,8 @@ using namespace stl;
 //                     one after fails
 //   output-target=K   K output-target calls pass, the one after runs out
 //                     of device memory
+//   no-ext=NAME       the Vulkan device does not offer extension NAME (the
+//                     word may repeat, one extension each)
 // the buses, each word arming one fault on calls to the named D-Bus member;
 // MEMBER@K lets K matching calls through first:
 //   dbus-message=M    the next message built for M fails to allocate
@@ -115,6 +117,7 @@ namespace {
         int syncFileSkip = -1;
         int syncWaitSkip = -1;
         int outputTargetSkip = -1;
+        Vector<StringView> hiddenExtensions;
         // buses
         BusRule busRules[8];
         int busSendBuffer = 0;
@@ -148,6 +151,7 @@ namespace {
         int syncFile(int fd) override;
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
+        bool deviceExtension(const char* name, bool offered) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -236,6 +240,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         syncWaitSkip = (int)arg.stou();
     } else if (fault == "output-target"_sv) {
         outputTargetSkip = (int)arg.stou();
+    } else if (fault == "no-ext"_sv) {
+        hiddenExtensions.pushBack(arg);
     } else if (fault == "dbus-message"_sv) {
         // buses
         armBus(BusFault::message, arg);
@@ -531,6 +537,16 @@ VkResult TestChaosMonkey::outputTarget(VkResult result) {
     return VK_ERROR_OUT_OF_DEVICE_MEMORY;
 }
 
+bool TestChaosMonkey::deviceExtension(const char* name, bool offered) {
+    for (StringView hidden : hiddenExtensions) {
+        if (hidden == StringView(name)) {
+            return false;
+        }
+    }
+
+    return offered;
+}
+
 // buses
 DBusMessage* TestChaosMonkey::dbusMessage(DBusMessage* built) {
     if (!busFires(BusFault::message, built)) {
@@ -594,6 +610,7 @@ namespace {
         int syncFile(int fd) override;
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
+        bool deviceExtension(const char* name, bool offered) override;
         // buses
         DBusMessage* dbusMessage(DBusMessage* built) override;
         DBusMessage* dbusSend(DBusMessage* call) override;
@@ -685,6 +702,10 @@ VkResult IdleChaosMonkey::syncWait(VkResult result) {
 
 VkResult IdleChaosMonkey::outputTarget(VkResult result) {
     return result;
+}
+
+bool IdleChaosMonkey::deviceExtension(const char*, bool offered) {
+    return offered;
 }
 
 // buses

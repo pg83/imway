@@ -403,7 +403,7 @@ HeadlessDevice::HeadlessDevice(Composer& comp)
     , pool(comp.pool)
     , loop(comp.loop)
 {
-    vk = pool->make<DeviceVk>(*c->log, -1);
+    vk = pool->make<DeviceVk>(*c->log, *c->chaos, -1);
 
     if (vk->hasDmabuf) {
         vk->queryDmabufFormats([this](const DmabufFormat& f) {
