@@ -810,9 +810,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
         struct ev_loop* heldLoop = loop;
 
         pooledGuard(*pool, [heldLoop, prepare] {
-            if (ev_is_active(prepare)) {
-                ev_prepare_stop(heldLoop, prepare);
-            }
+            ev_prepare_stop(heldLoop, prepare);
         });
         ev_prepare_init(prepare, prepareCb);
         prepare->data = this;
@@ -822,9 +820,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
         struct ev_loop* heldLoop = loop;
 
         pooledGuard(*pool, [heldLoop, frameTimer] {
-            if (ev_is_active(frameTimer)) {
-                ev_timer_stop(heldLoop, frameTimer);
-            }
+            ev_timer_stop(heldLoop, frameTimer);
         });
         ev_timer_init(frameTimer, frameTimerCb, 0., 1.0 / scene->hz);
         frameTimer->data = this;
@@ -835,9 +831,7 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     struct ev_loop* heldLoop = loop;
 
     pooledGuard(*pool, [heldLoop, clockTimer] {
-        if (ev_is_active(clockTimer)) {
-            ev_timer_stop(heldLoop, clockTimer);
-        }
+        ev_timer_stop(heldLoop, clockTimer);
     });
     ev_timer_init(clockTimer, clockTimerCb, 1., 1.);
     clockTimer->data = this;

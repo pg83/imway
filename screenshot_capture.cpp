@@ -176,18 +176,14 @@ ScreenshotCaptureImpl::ScreenshotCaptureImpl(Composer& c, const DeviceVk& vk, in
     ev_timer* heldTimer = retireTimer;
 
     pooledGuard(*c.pool, [heldLoop, heldTimer] {
-        if (ev_is_active(heldTimer)) {
-            ev_timer_stop(heldLoop, heldTimer);
-        }
+        ev_timer_stop(heldLoop, heldTimer);
     });
     ev_timer_init(retireTimer, retireTimerCb, 0.001, 0.001);
     retireTimer->data = this;
 }
 
 ScreenshotCaptureImpl::~ScreenshotCaptureImpl() noexcept {
-    if (ev_is_active(retireTimer)) {
-        ev_timer_stop(comp->loop, retireTimer);
-    }
+    ev_timer_stop(comp->loop, retireTimer);
 
     if (fencePoll->armed()) {
         fencePoll->cancel();

@@ -29,7 +29,6 @@ namespace {
         ~OffloadJobImpl() noexcept;
 
         void run() override;
-        bool inFlight() const override;
         void join() override;
         void drain() override;
         void retired();
@@ -51,9 +50,7 @@ OffloadJobImpl::OffloadJobImpl(Composer& comp, ObjPool& owner, void (*w)(void*),
     ev_io* heldIo = io;
 
     pooledGuard(owner, [heldLoop, heldIo] {
-        if (ev_is_active(heldIo)) {
-            ev_io_stop(heldLoop, heldIo);
-        }
+        ev_io_stop(heldLoop, heldIo);
     });
     ev_io_init(io, offloadJobCb, fd.fd(), EV_READ);
     io->data = this;
@@ -77,10 +74,6 @@ void OffloadJobImpl::run() {
         stdAtomicAddAndFetch(&completion, 1, MemoryOrder::Release);
         fd.signal();
     });
-}
-
-bool OffloadJobImpl::inFlight() const {
-    return busy;
 }
 
 void OffloadJobImpl::join() {

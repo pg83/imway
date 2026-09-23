@@ -42,9 +42,7 @@ FencePollImpl::FencePollImpl(ObjPool& pool, struct ev_loop* l, VkDevice d, VkFen
     ev_timer* heldTimer = timer;
 
     pooledGuard(pool, [heldLoop, heldTimer] {
-        if (ev_is_active(heldTimer)) {
-            ev_timer_stop(heldLoop, heldTimer);
-        }
+        ev_timer_stop(heldLoop, heldTimer);
     });
     ev_timer_init(timer, fencePollCb, 0.001, 0.001);
     timer->data = this;
@@ -62,10 +60,8 @@ bool FencePollImpl::armed() const {
 }
 
 void FencePollImpl::cancel() {
-    if (active) {
-        active = false;
-        ev_timer_stop(loop, timer);
-    }
+    active = false;
+    ev_timer_stop(loop, timer);
 }
 
 void FencePollImpl::poll() {

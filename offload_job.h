@@ -16,7 +16,6 @@ namespace stl {
 // read back in the listener; the eventfd hop orders both directions.
 struct OffloadJob {
     virtual void run() = 0;
-    virtual bool inFlight() const = 0;
     // block until the pass in flight retires (teardown)
     virtual void join() = 0;
     // Block until the pass in flight retires and run its completion right
