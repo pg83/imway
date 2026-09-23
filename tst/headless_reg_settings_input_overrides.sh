@@ -23,7 +23,7 @@ ww=$(dump_field '^imgui name=settings ' w)
 wh=$(dump_field '^imgui name=settings ' h)
 
 # the nav pane is a column of one-line rows; input is the fifth page
-click_at_composed $((wx + 40)) $((wy + 118))
+click_at $((wx + 40)) $((wy + 118))
 
 # settled once a frame of the pane matches the one before it: each try
 # takes one screenshot and compares it with the previous try's
@@ -52,7 +52,7 @@ found=0
 # it sits around 455 below the title bar with the default font; the walk is
 # there so a different one does not turn this into a hunt for a pixel
 for y in $(seq $((wy + 448)) 5 $((wy + 488))); do
-    click_at_composed $((wx + 172)) "$y"
+    click_at $((wx + 172)) "$y"
     opened "$y" && { found=1; break; }
 done
 
@@ -89,7 +89,7 @@ screenshot "$XDG_RUNTIME_DIR/after-tick.ppm"
 tick() { # <dx> <row> <what>
     local ty=$((y + 27 + $2 * 26))
     mv "$XDG_RUNTIME_DIR/after-tick.ppm" "$XDG_RUNTIME_DIR/before-tick.ppm"
-    click_at_composed $((wx + $1)) "$ty"
+    click_at $((wx + $1)) "$ty"
     ctl "motion $((wx + ww / 2)) $((wy + 40))"
     revealed() {
         screenshot "$XDG_RUNTIME_DIR/after-tick.ppm" &&

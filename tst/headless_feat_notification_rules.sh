@@ -20,7 +20,7 @@ await_no_imgui '##launcher' || { echo "the launcher did not close"; dump_state; 
 await_imgui settings || { echo "settings did not open"; exit 1; }
 wx=$(dump_field '^imgui name=settings ' x); wy=$(dump_field '^imgui name=settings ' y)
 at() { # <dx> <dy>: click inside the settings window
-    click_at_composed $((wx + $1)) $((wy + $2))
+    click_at $((wx + $1)) $((wy + $2))
 }
 at 40 $((38 + 7 * 20)) # the notifications page
 ctl "motion 1000 700"
@@ -52,7 +52,7 @@ combo_pick() { # <dx> <dy> <item>
     combo_open() { [[ -n "$(dump_field '^imgui name=##Combo' x)" ]]; }
     await 50 combo_open || { echo "the combo at $1,$2 did not open"; dump_state; exit 1; }
     px=$(dump_field '^imgui name=##Combo' x); py=$(dump_field '^imgui name=##Combo' y)
-    click_at_composed $((px + 30)) $((py + 17 + $3 * 20))
+    click_at $((px + 30)) $((py + 17 + $3 * 20))
     combo_closed() { [[ -z "$(dump_field '^imgui name=##Combo' x)" ]]; }
     await 50 combo_closed || { echo "the combo stayed open"; exit 1; }
     ctl "motion 1000 700"

@@ -154,21 +154,6 @@ point_at_color() { # <r> <g> <b>
     return 1
 }
 
-# left-click exactly at (x,y): the pick runs on last-frame hover, so move,
-# render a frame, nudge, render again, then press. Prefer this over
-# point_at_color when windows overlap — a color-bbox centroid can land on
-# the occluding window.
-click_at() { # <x> <y>
-    ctl "motion $1 $2"
-    screenshot "$XDG_RUNTIME_DIR/_click.ppm" || return 1
-    ctl "motion $(($1 + 1)) $2"
-    screenshot "$XDG_RUNTIME_DIR/_click.ppm" || return 1
-    ctl "button left press"
-    sleep 0.1
-    ctl "button left release"
-    sleep 0.2
-}
-
 # a frame composed with everything sent before it: the barrier input needs
 # when it must land on what a frame drew (a hover, a combo just opened). A
 # screenshot is one too, at the price of reading the whole output back and
@@ -178,9 +163,11 @@ compose_frame() {
     dump_state >/dev/null
 }
 
-# click_at on composed frames: the hover is judged, the press seen and the
-# release seen each in a frame of its own
-click_at_composed() { # <x> <y>
+# left-click exactly at (x,y): the pick runs on last-frame hover, so move,
+# compose a frame, nudge, compose again, then press and release, each seen
+# in a composed frame of its own. Prefer this over point_at_color when
+# windows overlap — a color-bbox centroid can land on the occluding window.
+click_at() { # <x> <y>
     ctl "motion $1 $2"
     compose_frame || return 1
     ctl "motion $(($1 + 1)) $2"
@@ -332,8 +319,6 @@ await_mean() { # <ppm> <dump-pattern> <cond>
     return 1
 }
 
-# request a screenshot and wait until the file settles: it appears at
-# open() and fills up afterwards, so mere existence is a truncated read
 # wait until a window stops moving: on a slow runner it can still be placed
 # after it maps, and a rect read then aims at where it is no longer
 wait_placed() { # <dump-pattern>
@@ -367,23 +352,16 @@ shot_until() { # <ppm> <check-command...>
     "$@" "$ppm"
 }
 
+# request a screenshot and wait for the whole file: the compositor writes
+# it out while it runs the command, so a dump sent after it arrives once
+# the file is complete (the control FIFO runs commands in order)
 screenshot() {
     rm -f "$1"
 
     ctl "screenshot $1"
+    dump_state >/dev/null || return 1
 
-    local prev=-1 size
-
-    for _ in $(seq 1 100); do
-        size=$(stat -c %s "$1" 2>/dev/null || echo -1)
-        [[ "$size" -gt 0 && "$size" == "$prev" ]] && return 0
-        prev=$size
-        sleep 0.1
-    done
-
-    echo "screenshot $1 did not settle" >&2
-
-    return 1
+    [[ -s "$1" ]] || { echo "screenshot $1 was not written" >&2; return 1; }
 }
 
 # A fixed-length run of a second compositor on the KMS emulator, next to
