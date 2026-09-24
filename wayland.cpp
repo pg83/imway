@@ -10,6 +10,7 @@
 #include "output.h"
 #include "session.h"
 #include "composer.h"
+#include "coverage.h"
 #include "chaos_monkey.h"
 #include "keyboard.h"
 #include "listener.h"
@@ -201,7 +202,10 @@ namespace {
         return alloc->make<ShmMapping>(alloc, data, size);
     }
 
+    // not a client pool's: the fault is the compositor's own, and dies as
+    // one, by the action that was there before
     void reraiseSigbus() {
+        flushCoverage();
         sigaction(SIGBUS, &oldSigbusAction, nullptr);
         raise(SIGBUS);
     }

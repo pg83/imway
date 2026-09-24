@@ -148,18 +148,25 @@ struct TextureLease {
 };
 
 namespace {
+    // the fault seam of the imgui backend's calls: its check hook is a bare
+    // function pointer, with no way to carry the board it serves
+    ChaosMonkey* imguiChaos = nullptr;
+
     // the imgui vulkan backend swallows every VkResult unless this hook is
     // set (it only ever calls it, never acts on the code): an exhausted
     // descriptor pool would otherwise return VK_ERROR_OUT_OF_POOL_MEMORY,
     // leave the descriptor set uninitialized, and segfault in the driver on
     // the next vkUpdateDescriptorSets. Abort at the failing call instead.
     void imguiVkCheck(VkResult err) {
+        err = imguiChaos->imguiVulkan(err);
+
         if (err == VK_ERROR_DEVICE_LOST) {
             // deliberate policy: no in-process recovery, no restart — the
             // session dies with its reason on record
             sysE << "imway: vulkan device lost, exiting"_sv << endL;
             // no unwinding on a dead device: atexit would run the driver's
             // own teardown over it, with our threads still live
+            flushCoverage();
             _exit(1);
         }
 
@@ -1954,6 +1961,7 @@ void RendererImpl::setup() {
     ii.MinImageCount = 2;
     ii.ImageCount = 2;
     ii.CheckVkResultFn = imguiVkCheck;
+    imguiChaos = comp->chaos;
     ii.PipelineInfoMain.RenderPass = renderPass;
     ii.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
     ii.CustomShaderFragCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;

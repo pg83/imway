@@ -37,6 +37,7 @@ def parse_header(path: str) -> dict:
     expect_exit = False
     private_bus = False
     startup_exit = False
+    expect_signal = None
     wrap = None
     with open(path) as f:
         for line in f.read(2048).splitlines():
@@ -67,6 +68,11 @@ def parse_header(path: str) -> dict:
                 wrap = m.group(1).strip()
             if re.match(r"\s*#\s*expect-compositor-exit\s*$", line):
                 expect_exit = True
+            # the compositor is to die by this signal (SIGBUS, SIGABRT): its
+            # default action is the verdict the scenario is after
+            m = re.match(r"\s*#\s*expect-compositor-signal:\s*([A-Z]+)\s*$", line)
+            if m:
+                expect_signal = int(getattr(signal, "SIG" + m.group(1)))
             # the compositor is to refuse to start (a bad argument, a device
             # it cannot use): the scenario runs after it is gone and judges
             # its log and IMWAY_RC
@@ -75,8 +81,8 @@ def parse_header(path: str) -> dict:
             if re.match(r"\s*#\s*private-session-bus\s*$", line):
                 private_bus = True
     return dict(xfail=xfail, args=args, env=extra_env, pre=pre,
-                expect_exit=expect_exit, private_bus=private_bus, wrap=wrap,
-                startup_exit=startup_exit)
+                expect_exit=expect_exit or expect_signal is not None, private_bus=private_bus, wrap=wrap,
+                startup_exit=startup_exit, expect_signal=expect_signal)
 
 
 def is_sock(p: str) -> bool:
@@ -296,8 +302,9 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         return dict(status=FAIL, seconds=time.monotonic() - started, detail=detail, artifacts=arts)
 
     def startup_verdict(comp_rc: int) -> dict:
-        # a refusal is an exit with a code; a signal is a crash on the way
-        if comp_rc < 0:
+        # a refusal is an exit with a code; a signal is a crash on the way,
+        # unless the scenario is after that very signal
+        if comp_rc < 0 and -comp_rc != meta["expect_signal"]:
             stop_bus()
             return fail(f"compositor died by signal {-comp_rc} during startup")
         env["IMWAY_RC"] = str(comp_rc)
@@ -450,6 +457,8 @@ def run(imway: str, scenario: str, client: str, meta: dict,
     # an expected death may carry a deliberate nonzero code (the gpu policy
     # exits 1); the scenario asserts the semantics itself
     allowed_rc = (0, 1, None, 143) if terminated_by_runner or meta["expect_exit"] else (0, None)
+    if meta["expect_signal"] is not None:
+        allowed_rc = (-meta["expect_signal"],)
     if comp_rc not in allowed_rc:
         return finish(FAIL, f"compositor exit rc={comp_rc}")
     return finish(PASS)

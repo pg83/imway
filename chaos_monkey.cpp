@@ -66,6 +66,9 @@ using namespace stl;
 //   frame-fence=K     K finished-frame fence results pass, the one after
 //                     reports a lost device
 //   frame-hang=K      the same, reporting the wait timing out instead
+//   imgui-lost=K      K Vulkan results the imgui backend checks pass, the
+//                     one after reports a lost device
+//   imgui-fail=K      the same, reporting the device out of memory instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
 //   readback-busy=N   fence polls: the next N polls of a readback fence
@@ -210,6 +213,8 @@ namespace {
         int clientTextureSkip = -1;
         int frameFenceSkip = -1;
         VkResult frameFenceFault = VK_SUCCESS;
+        int imguiVulkanSkip = -1;
+        VkResult imguiVulkanFault = VK_SUCCESS;
         int readbackFenceSkip = -1;
         // fence polls
         int readbackBusyPolls = 0;
@@ -294,6 +299,7 @@ namespace {
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
+        VkResult imguiVulkan(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
         // fence polls
         VkResult readbackPoll(VkResult status) override;
@@ -455,6 +461,9 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
     } else if (fault == "frame-fence"_sv || fault == "frame-hang"_sv) {
         frameFenceSkip = (int)arg.stou();
         frameFenceFault = fault == "frame-hang"_sv ? VK_TIMEOUT : VK_ERROR_DEVICE_LOST;
+    } else if (fault == "imgui-lost"_sv || fault == "imgui-fail"_sv) {
+        imguiVulkanSkip = (int)arg.stou();
+        imguiVulkanFault = fault == "imgui-fail"_sv ? VK_ERROR_OUT_OF_DEVICE_MEMORY : VK_ERROR_DEVICE_LOST;
     } else if (fault == "readback-fence"_sv) {
         readbackFenceSkip = (int)arg.stou();
     } else if (fault == "readback-busy"_sv) {
@@ -803,6 +812,14 @@ VkResult TestChaosMonkey::frameFence(VkResult result) {
     }
 
     return frameFenceFault;
+}
+
+VkResult TestChaosMonkey::imguiVulkan(VkResult result) {
+    if (!failsOnce(imguiVulkanSkip)) {
+        return result;
+    }
+
+    return imguiVulkanFault;
 }
 
 VkResult TestChaosMonkey::readbackFence(VkResult result) {
@@ -1266,6 +1283,7 @@ namespace {
         VkResult clientImport(VkResult result) override;
         VkResult clientTexture(VkResult result) override;
         VkResult frameFence(VkResult result) override;
+        VkResult imguiVulkan(VkResult result) override;
         VkResult readbackFence(VkResult result) override;
         // fence polls
         VkResult readbackPoll(VkResult status) override;
@@ -1405,6 +1423,10 @@ VkResult IdleChaosMonkey::clientTexture(VkResult result) {
 }
 
 VkResult IdleChaosMonkey::frameFence(VkResult result) {
+    return result;
+}
+
+VkResult IdleChaosMonkey::imguiVulkan(VkResult result) {
     return result;
 }
 
