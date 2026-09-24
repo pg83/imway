@@ -5,6 +5,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "intr_list.h"
+#include "chaos_monkey.h"
 #include "ev_watch.h"
 
 #include <ev.h>
@@ -111,7 +112,7 @@ SeatSession::SeatSession(Composer& comp)
     }
 
     for (int i = 0; i < 100 && !active; i++) {
-        if (libseat_dispatch(seat, 100) < 0) {
+        if (c->chaos->seatDispatch(libseat_dispatch(seat, 100)) < 0) {
             break;
         }
     }

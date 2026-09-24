@@ -52,6 +52,8 @@ struct ChaosMonkey {
     // allocation failing (the replacement destroys what it was handed)
     virtual wl_resource* resource(wl_resource* created) = 0;
     // wayland shm and linux-dmabuf
+    // one libseat_dispatch while the seat session waits to become active
+    virtual int seatDispatch(int result) = 0;
     // the icon store's inotify instance fresh from inotify_init1 (a
     // replacement failure closes it and returns -1)
     virtual int iconWatch(int fd) = 0;

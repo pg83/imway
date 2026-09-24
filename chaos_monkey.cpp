@@ -82,6 +82,9 @@ using namespace stl;
 //                     interrupted by a signal before they read anything
 //   icon-watch=N      the next N inotify instances of the icon store fail
 //                     with EMFILE: it watches no directory
+//   seat-dispatch=N   the next N libseat dispatches while the seat session
+//                     waits to become active fail, as on a seat manager
+//                     that hung up
 //   descriptor-pool=K K texture descriptor pool creations pass, the one
 //                     after runs out of device memory
 //   descriptor-set=K  K texture descriptor set allocations pass, every
@@ -229,6 +232,7 @@ namespace {
         int shotInterrupts = 0;
         int iccInterrupts = 0;
         int iconWatchFaults = 0;
+        int seatDispatchFaults = 0;
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
@@ -317,6 +321,7 @@ namespace {
         ssize_t shotWrite(int fd, ssize_t written) override;
         ssize_t iccRead(ssize_t result) override;
         int iconWatch(int fd) override;
+        int seatDispatch(int result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -487,6 +492,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         iccInterrupts = (int)arg.stou();
     } else if (fault == "icon-watch"_sv) {
         iconWatchFaults = (int)arg.stou();
+    } else if (fault == "seat-dispatch"_sv) {
+        seatDispatchFaults = (int)arg.stou();
     } else if (fault == "descriptor-pool"_sv) {
         descriptorPoolSkip = (int)arg.stou();
     } else if (fault == "descriptor-set"_sv) {
@@ -882,6 +889,16 @@ ssize_t TestChaosMonkey::shotWrite(int fd, ssize_t written) {
     }
 
     errno = ENOSPC;
+
+    return -1;
+}
+
+int TestChaosMonkey::seatDispatch(int result) {
+    if (!spend(seatDispatchFaults)) {
+        return result;
+    }
+
+    errno = EPIPE;
 
     return -1;
 }
@@ -1340,6 +1357,7 @@ namespace {
         ssize_t shotWrite(int fd, ssize_t written) override;
         ssize_t iccRead(ssize_t result) override;
         int iconWatch(int fd) override;
+        int seatDispatch(int result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -1492,6 +1510,10 @@ VkResult IdleChaosMonkey::readbackPoll(VkResult status) {
 // the screenshot's file
 int IdleChaosMonkey::shotFile(int fd) {
     return fd;
+}
+
+int IdleChaosMonkey::seatDispatch(int result) {
+    return result;
 }
 
 int IdleChaosMonkey::iconWatch(int fd) {

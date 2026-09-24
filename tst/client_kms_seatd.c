@@ -11,6 +11,8 @@
 //                      conversation
 //   serve-devices      as serve, and open the devices asked for (under the
 //                      scenario's input directory) instead of refusing
+//   serve-held         open the seat and hold it: no enable until the
+//                      scenario sends one
 // It is started by imway-pre before the compositor boots, listens on
 // seatd.sock in its working directory, serves one connection and exits
 // with it, and is driven through the FIFO seatd-ctl there:
@@ -67,6 +69,7 @@ struct header {
 
 static int client = -1;
 static int inactive;
+static int held;
 static int serveDevices;
 static int nextDevice = 1;
 
@@ -174,7 +177,7 @@ static int client_msg(void) {
             // is answered after it instead, which libseat cannot follow.
             if (inactive) {
                 send_msg(SERVER_DEVICE_CLOSED, NULL, 0);
-            } else {
+            } else if (!held) {
                 send_msg(SERVER_ENABLE_SEAT, NULL, 0);
             }
             break;
@@ -250,12 +253,13 @@ static void command(const char* line) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2 || (strcmp(argv[1], "serve") && strcmp(argv[1], "serve-inactive") && strcmp(argv[1], "serve-devices"))) {
-        fprintf(stderr, "usage: %s serve|serve-inactive|serve-devices\n", argv[0]);
+    if (argc < 2 || (strcmp(argv[1], "serve") && strcmp(argv[1], "serve-inactive") && strcmp(argv[1], "serve-devices") && strcmp(argv[1], "serve-held"))) {
+        fprintf(stderr, "usage: %s serve|serve-inactive|serve-devices|serve-held\n", argv[0]);
         return 2;
     }
 
     inactive = !strcmp(argv[1], "serve-inactive");
+    held = !strcmp(argv[1], "serve-held");
     serveDevices = !strcmp(argv[1], "serve-devices");
     // a compositor that never connects does not leave it behind forever
     alarm(120);
