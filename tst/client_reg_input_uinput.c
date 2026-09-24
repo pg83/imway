@@ -197,6 +197,22 @@ static int waitFor(const char* name) {
     return -1;
 }
 
+static const char* waitForEither(const char* a, const char* b) {
+    for (int i = 0; i < 1200; i++) {
+        if (access(a, F_OK) == 0) {
+            return a;
+        }
+
+        if (access(b, F_OK) == 0) {
+            return b;
+        }
+
+        usleep(50000);
+    }
+
+    return NULL;
+}
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     gDir = argc > 1 ? argv[1] : "/dev/input";
@@ -309,36 +325,40 @@ int main(int argc, char** argv) {
 
     printf("keys sent\n");
 
-    // the keyboard's node leaves the directory and comes back as the same
-    // device (linking unlinks first): both inotify events can land in one
-    // read
-    if (waitFor("go-relink")) {
-        fprintf(stderr, "the scenario never asked for the relink\n");
+    // a scenario may relink the keyboard before the unplug: its node leaves
+    // the directory and comes back as the same device (linking unlinks
+    // first), and both inotify events can land in one read
+    const char* next = waitForEither("go-relink", "go-unplug");
+
+    if (!next) {
+        fprintf(stderr, "the scenario never asked for the relink or the unplug\n");
 
         return 1;
     }
 
-    if (linkDevice(kbdName)) {
-        fprintf(stderr, "the keyboard could not be linked again\n");
+    if (!strcmp(next, "go-relink")) {
+        if (linkDevice(kbdName)) {
+            fprintf(stderr, "the keyboard could not be linked again\n");
 
-        return 1;
+            return 1;
+        }
+
+        printf("keyboard relinked\n");
+
+        if (waitFor("go-escape")) {
+            fprintf(stderr, "the scenario never asked for the escape\n");
+
+            return 1;
+        }
+
+        if (emit(kbd, EV_KEY, KEY_ESC, 1) || syn(kbd) || emit(kbd, EV_KEY, KEY_ESC, 0) || syn(kbd)) {
+            fprintf(stderr, "key write failed: %s\n", strerror(errno));
+
+            return 1;
+        }
+
+        printf("escape sent\n");
     }
-
-    printf("keyboard relinked\n");
-
-    if (waitFor("go-escape")) {
-        fprintf(stderr, "the scenario never asked for the escape\n");
-
-        return 1;
-    }
-
-    if (emit(kbd, EV_KEY, KEY_ESC, 1) || syn(kbd) || emit(kbd, EV_KEY, KEY_ESC, 0) || syn(kbd)) {
-        fprintf(stderr, "key write failed: %s\n", strerror(errno));
-
-        return 1;
-    }
-
-    printf("escape sent\n");
 
     if (waitFor("go-unplug")) {
         fprintf(stderr, "the scenario never asked for the unplug\n");
