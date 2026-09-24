@@ -1,14 +1,16 @@
 // A stand-in seatd for the libseat session. The runners have no seatd a
 // scenario may drive (the real one owns a VT and switches it for real);
 // this one speaks just enough of the seatd protocol (open/close seat,
-// device opens refused, disable acknowledgement, ping) to play the seat
-// manager's side of a VT switch. libseat 0.9 waits for the manager to
+// device opens, disable acknowledgement, ping) to play the seat manager's
+// side of a VT switch. libseat 0.9 waits for the manager to
 // acknowledge a disable, 0.8 neither waits nor understands the
 // acknowledgement (one would sit unread in front of every later event),
 // so the scenario, which knows the compositor's libseat, sends it:
 //   serve              enable the seat as soon as it is opened
 //   serve-inactive     open the seat, never enable it and garble the
 //                      conversation
+//   serve-devices      as serve, and open the devices asked for (under the
+//                      scenario's input directory) instead of refusing
 // It is started by imway-pre before the compositor boots, listens on
 // seatd.sock in its working directory, serves one connection and exits
 // with it, and is driven through the FIFO seatd-ctl there:
@@ -20,7 +22,8 @@
 //             unread, as a seatd crashing mid-switch does: the
 //             compositor's end reads a reset connection
 // What the compositor sends lands in seatd-events: "open-seat",
-// "disable-request" once it lets the seat go, "close-seat", "open PATH".
+// "disable-request" once it lets the seat go, "close-seat", "open PATH",
+// "close ID".
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -49,6 +52,7 @@
 
 #define SERVER_SEAT_OPENED SERVER_EVENT(1)
 #define SERVER_SEAT_CLOSED SERVER_EVENT(2)
+#define SERVER_DEVICE_OPENED SERVER_EVENT(3)
 #define SERVER_DEVICE_CLOSED SERVER_EVENT(4)
 #define SERVER_DISABLE_SEAT SERVER_EVENT(5)
 #define SERVER_ENABLE_SEAT SERVER_EVENT(6)
@@ -63,6 +67,8 @@ struct header {
 
 static int client = -1;
 static int inactive;
+static int serveDevices;
+static int nextDevice = 1;
 
 static void event(const char* line) {
     FILE* f = fopen("seatd-events", "a");
@@ -113,6 +119,32 @@ static void send_msg(uint16_t opcode, const void* body, uint16_t size) {
     }
 }
 
+// the device-opened reply carries the device's fd alongside its header, as
+// seatd's does
+static void send_device(int id, int fd) {
+    struct header h = {SERVER_DEVICE_OPENED, sizeof(id)};
+    char buf[sizeof(h) + sizeof(id)];
+    char control[CMSG_SPACE(sizeof(int))];
+    struct iovec iov = {buf, sizeof(buf)};
+    struct msghdr msg = {0};
+
+    memcpy(buf, &h, sizeof(h));
+    memcpy(buf + sizeof(h), &id, sizeof(id));
+    memset(control, 0, sizeof(control));
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control;
+    msg.msg_controllen = sizeof(control);
+
+    struct cmsghdr* c = CMSG_FIRSTHDR(&msg);
+
+    c->cmsg_level = SOL_SOCKET;
+    c->cmsg_type = SCM_RIGHTS;
+    c->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(c), &fd, sizeof(int));
+    sendmsg(client, &msg, MSG_NOSIGNAL);
+}
+
 // the seat has one session: once it is over there is nothing to serve
 static void hangup(void) {
     close(client);
@@ -157,12 +189,29 @@ static int client_msg(void) {
             body[h.size < sizeof(body) ? h.size : sizeof(body) - 1] = 0;
             snprintf(line, sizeof(line), "open %s", body + 2);
             event(line);
-            send_msg(SERVER_ERROR, &err, sizeof(err));
+
+            int fd = serveDevices ? open(body + 2, O_RDWR | O_NONBLOCK | O_CLOEXEC) : -1;
+
+            if (fd >= 0) {
+                send_device(nextDevice++, fd);
+                close(fd);
+            } else {
+                send_msg(SERVER_ERROR, &err, sizeof(err));
+            }
             break;
         }
-        case CLIENT_CLOSE_DEVICE:
+        case CLIENT_CLOSE_DEVICE: {
+            int id = 0;
+
+            if (h.size >= sizeof(id)) {
+                memcpy(&id, body, sizeof(id));
+            }
+
+            snprintf(line, sizeof(line), "close %d", id);
+            event(line);
             send_msg(SERVER_DEVICE_CLOSED, NULL, 0);
             break;
+        }
         case CLIENT_DISABLE_SEAT:
             event("disable-request");
             break;
@@ -201,12 +250,13 @@ static void command(const char* line) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2 || (strcmp(argv[1], "serve") && strcmp(argv[1], "serve-inactive"))) {
-        fprintf(stderr, "usage: %s serve|serve-inactive\n", argv[0]);
+    if (argc < 2 || (strcmp(argv[1], "serve") && strcmp(argv[1], "serve-inactive") && strcmp(argv[1], "serve-devices"))) {
+        fprintf(stderr, "usage: %s serve|serve-inactive|serve-devices\n", argv[0]);
         return 2;
     }
 
     inactive = !strcmp(argv[1], "serve-inactive");
+    serveDevices = !strcmp(argv[1], "serve-devices");
     // a compositor that never connects does not leave it behind forever
     alarm(120);
 
