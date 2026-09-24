@@ -1145,7 +1145,15 @@ int FakeKms::emuGemClose(drm_gem_close* c) {
 }
 
 int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
-    if (!c->width || !c->height || c->bpp != 32) {
+    // the DRM core's checks, in its order: a size at all, one whose rows and
+    // whole fit 32 bits, and a whole that does not wrap when paged
+    if (!c->width || !c->height || !c->bpp || c->bpp > UINT32_MAX - 8) {
+        return -EINVAL;
+    }
+
+    u32 cpp = (c->bpp + 7) / 8;
+
+    if (cpp > UINT32_MAX / c->width || c->height > UINT32_MAX / (cpp * c->width) || c->height * cpp * c->width > UINT32_MAX - 4095) {
         return -EINVAL;
     }
 
@@ -1158,8 +1166,9 @@ int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
     FakeGem gem;
 
     // rows padded to 256 bytes, the way display engines want them: a
-    // 1366-wide buffer is no longer width * 4 apart
-    u32 pitch = (c->width * 4 + 255) & ~255u;
+    // 1366-wide buffer is no longer width * 4 apart. The checks above keep
+    // a padded row inside 32 bits.
+    u32 pitch = (c->width * cpp + 255) & ~255u;
 
     gem.dumbSize = (u64)pitch * c->height;
     gem.fd = (int)syscall(SYS_memfd_create, "fake-kms-dumb", (unsigned)MFD_CLOEXEC);
@@ -1878,13 +1887,53 @@ int FakeKms::conformance() {
     shallow.bpp = 32;
     expect("dumb buffer of no height", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &shallow), EINVAL);
 
-    // the emulator models 32-bit dumb buffers only, what the backend makes
+    drm_mode_create_dumb shapeless{};
+
+    shapeless.width = 16;
+    shapeless.height = 16;
+    shapeless.bpp = 0;
+    expect("dumb buffer of no depth", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &shapeless), EINVAL);
+
+    drm_mode_create_dumb deep{};
+
+    deep.width = 16;
+    deep.height = 16;
+    deep.bpp = UINT32_MAX;
+    expect("dumb buffer deeper than 32 bits can count", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &deep), EINVAL);
+
+    drm_mode_create_dumb wide{};
+
+    wide.width = 0x40000001;
+    wide.height = 1;
+    wide.bpp = 32;
+    expect("dumb buffer with a row past 32 bits", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &wide), EINVAL);
+
+    drm_mode_create_dumb tall{};
+
+    tall.width = 65536;
+    tall.height = 16385;
+    tall.bpp = 32;
+    expect("dumb buffer with a size past 32 bits", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &tall), EINVAL);
+
+    drm_mode_create_dumb paged{};
+
+    paged.width = 1;
+    paged.height = 0xfffff001;
+    paged.bpp = 8;
+    expect("dumb buffer whose size wraps when paged", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &paged), EINVAL);
+
+    // any depth the core can count is the driver's to lay out
     drm_mode_create_dumb narrow{};
 
     narrow.width = 16;
     narrow.height = 16;
     narrow.bpp = 16;
-    expect("a dumb buffer depth the emulator does not model", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &narrow), EINVAL);
+    expect("a 16-bit dumb buffer", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &narrow), 0);
+
+    drm_mode_destroy_dumb narrowGone{};
+
+    narrowGone.handle = narrow.handle;
+    expect("destroying the 16-bit dumb buffer", ioctl(clientFd, DRM_IOCTL_MODE_DESTROY_DUMB, &narrowGone), 0);
 
     drm_mode_map_dumb noMap{};
 
