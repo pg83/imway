@@ -16,6 +16,9 @@
     #include "util.h"
 
     #include <time.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+    #include <sys/time.h>
 
     #include <ev.h>
 
@@ -445,6 +448,64 @@ Mixer* MixerPulse::create(Composer& c) {
     return m;
 }
 
+#ifdef IMWAY_FOR_TESTS
+// Held against pulse's own loop: an event freed with a destroy hook set
+// calls it once, with its userdata; a null time disarms a timer; quit
+// leaves a loop pulse does not own running. Counted, not branched on: a
+// broken part shows as a nonzero count.
+int MixerPulse::mainloopConformance(Composer& c) {
+    PulseApi ctx(c);
+
+    fillApi(ctx);
+
+    pa_mainloop_api* api = &ctx.api;
+    int destroyed = 0;
+    int failed = 0;
+    int fds[2] = {-1, -1};
+
+    failed += pipe2(fds, O_CLOEXEC) != 0;
+
+    pa_io_event* io = api->io_new(api, fds[0], PA_IO_EVENT_OUTPUT, [](pa_mainloop_api*, pa_io_event*, int, pa_io_event_flags_t, void*) {}, &destroyed);
+
+    api->io_enable(io, PA_IO_EVENT_INPUT);
+    api->io_set_destroy(io, [](pa_mainloop_api*, pa_io_event*, void* count) {
+        ++*(int*)count;
+    });
+    api->io_free(io);
+    failed += destroyed != 1;
+
+    struct timeval later{};
+
+    gettimeofday(&later, nullptr);
+    later.tv_sec += 60;
+
+    pa_time_event* timer = api->time_new(api, &later, [](pa_mainloop_api*, pa_time_event*, const struct timeval*, void*) {}, &destroyed);
+
+    api->time_restart(timer, nullptr);
+    failed += ev_is_active(&timer->timer) != 0;
+    api->time_set_destroy(timer, [](pa_mainloop_api*, pa_time_event*, void* count) {
+        ++*(int*)count;
+    });
+    api->time_free(timer);
+    failed += destroyed != 2;
+
+    pa_defer_event* defer = api->defer_new(api, [](pa_mainloop_api*, pa_defer_event*, void*) {}, &destroyed);
+
+    api->defer_enable(defer, 0);
+    api->defer_set_destroy(defer, [](pa_mainloop_api*, pa_defer_event*, void* count) {
+        ++*(int*)count;
+    });
+    api->defer_free(defer);
+    failed += destroyed != 3;
+
+    api->quit(api, 0);
+    close(fds[0]);
+    close(fds[1]);
+
+    return failed;
+}
+#endif
+
 #else // no libpulse
 
 struct Composer;
@@ -453,5 +514,11 @@ struct Mixer;
 Mixer* MixerPulse::create(Composer&) {
     return nullptr;
 }
+
+#ifdef IMWAY_FOR_TESTS
+int MixerPulse::mainloopConformance(Composer&) {
+    return -1;
+}
+#endif
 
 #endif

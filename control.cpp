@@ -11,6 +11,7 @@
 #include "listener.h"
 #include "keyboard.h"
 #include "mixer.h"
+#include "mixer_pulse.h"
 #include "notifier.h"
 #include "renderer.h"
 #include "settings.h"
@@ -264,6 +265,8 @@ bool ControlImpl::kmsVerb(StringView verb, StringView args) {
 
             comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou(), testToo.stou() != 0);
         }
+    } else if (verb == "pulse-mainloop-conformance"_sv) {
+        *(comp->log) << "imway: control: pulse mainloop conformance, "_sv << MixerPulse::mainloopConformance(*comp) << " failed"_sv << endL;
     } else if (verb == "kms-conformance"_sv) {
         int failed = comp->kmsIntercept->conformance();
 
