@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --dpms 1
+# imway-args: --dpms 1
 # The idle timeout locks before the display goes off; on a session the
 # user already locked it finds the lock screen up and leaves it alone:
 # after the wake there is one lock screen, and one password unlocks it.

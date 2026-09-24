@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1
 # The TV swap on the dumb-buffer path (no zero-copy scanout): the dumb
 # buffers are reallocated at the new display's mode and the copied frames
 # fill them at the new size.

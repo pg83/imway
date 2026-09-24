@@ -162,6 +162,8 @@ namespace {
         u32 id = 0;
         u32 width = 0, height = 0, format = 0;
         u64 modifier = 0;
+        u32 handle = 0;
+        u32 pitch = 0;
     };
 
     struct FakeGem {
@@ -193,9 +195,18 @@ namespace {
 
         int connected = 1; // 0 unplugged, 1 plugged, 2 connector gone
         int modeSet = 0; // 0 default, 1 tv, 2 small, 3 1366x768 panel, 4 none, 5 forty unpreferred
+        // one more mode the default set offers, "WxH[@Hz]": the display a
+        // scenario asks --mode of
+        u16 extraW = 0;
+        u16 extraH = 0;
+        u32 extraHz = 60;
         bool noPrime = false;
         bool asyncFlipLogged = false;
         bool cursorOnLogged = false;
+        // IMWAY_DEBUG_CURSOR: what the cursor plane scans out, logged as it
+        // changes, for scenarios to hold the rasterized image to
+        bool traceCursor = false;
+        u64 cursorTraced = 0;
         bool flipsHeld = false;
         Vector<PropDef> props;
         Vector<FakeBlob*> blobs;
@@ -223,6 +234,7 @@ namespace {
         int failAddFbCount = 0;
         int failAddFbSkip = 0;
         int rejectCursorErr = 0;
+        bool noCursorPlane = false;
         bool rejectColor = false;
         bool internalPanel = false;
 
@@ -305,6 +317,7 @@ namespace {
         int emuPrimeFdToHandle(drm_prime_handle* p);
         int emuGemClose(drm_gem_close* c);
         int emuCreateDumb(drm_mode_create_dumb* c);
+        void traceCursorImage(u32 fbId);
         int emuMapDumb(drm_mode_map_dumb* m);
         int emuDestroyDumb(drm_mode_destroy_dumb* d);
         int emuAddFb2(drm_mode_fb_cmd2* f);
@@ -743,6 +756,12 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
     fillMode(modes[0], 1280, 800, 60, true);
     fillMode(modes[1], 1920, 1080, 60, false);
 
+    if (extraW) {
+        fillMode(modes[2], extraW, extraH, extraHz, false);
+
+        return 3;
+    }
+
     return 2;
 }
 
@@ -904,7 +923,8 @@ int FakeKms::emuRevokeLease(drm_mode_revoke_lease*) {
 int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
     static const u32 planes[] = {kLeasePlaneId, kPlaneId, kCursorPlaneId};
 
-    fillArray(r->plane_id_ptr, r->count_planes, planes, 3);
+    // a driver without a cursor plane lists the other two
+    fillArray(r->plane_id_ptr, r->count_planes, planes, noCursorPlane ? 2 : 3);
 
     return 0;
 }
@@ -1145,6 +1165,61 @@ int FakeKms::emuCreateDumb(drm_mode_create_dumb* c) {
     return 0;
 }
 
+// the pixels on the cursor plane, read out of its dumb buffer: how many are
+// visible, and every colour and alpha bit any of them has
+void FakeKms::traceCursorImage(u32 fbId) {
+    const FakeFb* fb = nullptr;
+
+    for (const FakeFb& f : fbs) {
+        if (f.id == fbId) {
+            fb = &f;
+        }
+    }
+
+    int memFd = -1;
+
+    for (const FakeGem& gem : gems) {
+        if (fb && gem.handle == fb->handle && gem.dumbSize) {
+            memFd = gem.fd;
+        }
+    }
+
+    if (memFd < 0) {
+        return;
+    }
+
+    u64 visible = 0;
+    u32 rgbOr = 0;
+    u32 alphaOr = 0;
+    u64 hash = 1469598103934665603ull;
+    Vector<u32> storage;
+
+    // capacity only: the row is read straight into it
+    storage.grow(fb->width);
+
+    u32* row = storage.mutData();
+
+    for (u32 y = 0; y < fb->height; y++) {
+        if (pread(memFd, row, fb->width * 4, (off_t)y * fb->pitch) != (ssize_t)(fb->width * 4)) {
+            return;
+        }
+
+        for (u32 x = 0; x < fb->width; x++) {
+            u32 px = row[x];
+
+            visible += (px >> 24) != 0;
+            rgbOr |= px & 0x00ffffffu;
+            alphaOr |= px >> 24;
+            hash = (hash ^ px) * 1099511628211ull;
+        }
+    }
+
+    if (hash != cursorTraced) {
+        cursorTraced = hash;
+        sysE << "fake-kms: cursor image: visible "_sv << visible << ", rgb "_sv << rgbOr << ", alpha "_sv << alphaOr << endL;
+    }
+}
+
 int FakeKms::emuMapDumb(drm_mode_map_dumb* m) {
     for (const FakeGem& gem : gems) {
         if (gem.handle == m->handle && gem.dumbSize) {
@@ -1183,6 +1258,8 @@ int FakeKms::emuAddFb2(drm_mode_fb_cmd2* f) {
             fb.height = f->height;
             fb.format = f->pixel_format;
             fb.modifier = f->modifier[0];
+            fb.handle = f->handles[0];
+            fb.pitch = f->pitches[0];
             fbs.pushBack(fb);
             f->fb_id = fb.id;
 
@@ -1302,6 +1379,10 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
             if (p->id == pCursorFbId && values[k] && !cursorOnLogged) {
                 sysE << "fake-kms: cursor plane on"_sv << endL;
                 cursorOnLogged = true;
+            }
+
+            if (p->id == pCursorFbId && values[k] && traceCursor) {
+                traceCursorImage((u32)values[k]);
             }
 
             if (p->value != values[k] && p->id == pConnHdrMeta && values[k]) {
@@ -1711,7 +1792,9 @@ int FakeKms::openDevice() {
     internalPanel = getenv("IMWAY_FAKE_KMS_INTERNAL") != nullptr;
     rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
     rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
+    noCursorPlane = getenv("IMWAY_FAKE_KMS_NO_CURSOR_PLANE") != nullptr;
     noPrime = getenv("IMWAY_FAKE_KMS_NO_PRIME") != nullptr;
+    traceCursor = getenv("IMWAY_DEBUG_CURSOR") != nullptr;
 
     const char* drop = getenv("IMWAY_FAKE_KMS_DROP_PROPS");
     const char* zero = getenv("IMWAY_FAKE_KMS_ZERO_PROPS");
@@ -1732,6 +1815,20 @@ int FakeKms::openDevice() {
 
     connected = link ? (int)StringView(link).stou() : 1;
     modeSet = modes ? (int)StringView(modes).stou() : 0;
+
+    if (const char* extra = getenv("IMWAY_FAKE_KMS_MODE")) {
+        StringView wh, hz, ws, hs;
+
+        if (!StringView(extra).split('@', wh, hz)) {
+            wh = StringView(extra);
+        }
+
+        if (wh.split('x', ws, hs)) {
+            extraW = (u16)ws.stou();
+            extraH = (u16)hs.stou();
+            extraHz = hz.empty() ? 60 : (u32)hz.stou();
+        }
+    }
     noAsync = getenv("IMWAY_FAKE_KMS_NO_ASYNC") != nullptr;
     parseLookupFaults(lookups ? StringView(lookups) : StringView());
 

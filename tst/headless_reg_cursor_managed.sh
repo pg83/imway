@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_FORCE_CURSOR=1
 # A cursor surface with a color description must be composited: the hardware
 # cursor plane copies raw ARGB bytes and would show PQ-encoded values as if
 # they were sRGB. The fake plane never appears in screenshots, so the cursor

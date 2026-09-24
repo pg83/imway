@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # The positive HDR path: the synthetic EDID advertises PQ + BT.2020 with a
 # luminance range, the connector takes the color configuration and the
 # session runs BT.2020 + PQ end to end.

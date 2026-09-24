@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # What else shows up in the evdev directory: names that are not eventN,
 # event numbers past the 64 slots libinput is driven through, and an
 # eventN that is no device. None of them becomes an input device or takes

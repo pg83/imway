@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_EDID=garbage
 # imway-args: --hdr 203 --hdr-peak 10000
 # Wayland ARGB8888 is electrical-premultiplied. Verify that both sRGB and PQ
 # are unpremultiplied before EOTF and then blended in the linear-nits scene.
@@ -69,9 +70,9 @@ for alpha_byte in (0, 64, 128, 255):
                 for row in range(3)]
     else:
         nits = mixed
-    result.extend(round(pq_oetf(value) * 1023.0) // 4 for value in nits)
+    result.extend((round(pq_oetf(value) * 1023.0) * 255 + 511) // 1023 for value in nits)
 
-# A2R10G10B10 is rounded to ten bits; the PPM readback keeps its high eight.
+# A2R10G10B10 is rounded to ten bits, the PPM readback to the nearest eight.
 print(*result)
 PY
 }

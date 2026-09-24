@@ -533,3 +533,7 @@ HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrCon
 bool directScanoutColorCompatible(const OutputColorState& output, const ColorDescription& surface) {
     return !output.hdr() && !surface.managed();
 }
+
+u32 unorm10To8(u32 value) {
+    return (value * 255 + 511) / 1023;
+}

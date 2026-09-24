@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --mode 1920x1080
+# imway-args: --mode 1920x1080
 # An explicit --mode picks the non-preferred connector mode: the session
 # boots at that size and flips.
 set -euo pipefail

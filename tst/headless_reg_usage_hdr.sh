@@ -15,14 +15,14 @@ usage() { # <args...>
     grep -q "usage:" <<<"$out" || { echo "imway $* printed no usage: $out"; exit 1; }
 }
 
-usage --device headless --hdr 200 --hdr-min -1
-usage --device headless --hdr 200 --hdr-peak -1
-usage --device headless --hdr 200 --hdr-fall -1
-usage --device headless --hdr-fall 100
-usage --device headless --hdr 200 --hdr-min 100 --hdr-peak 50
+usage --device auto --hdr 200 --hdr-min -1
+usage --device auto --hdr 200 --hdr-peak -1
+usage --device auto --hdr 200 --hdr-fall -1
+usage --device auto --hdr-fall 100
+usage --device auto --hdr 200 --hdr-min 100 --hdr-peak 50
 
 rc=0
-out=$(timeout 60 "$imway_bin" --device headless --socket imway-hdr-args --frames 3 --hdr 200 --hdr-min 1 --hdr-fall 100 2>&1) || rc=$?
+out=$(timeout 60 "$imway_bin" --device auto --socket imway-hdr-args --frames 3 --hdr 200 --hdr-min 1 --hdr-fall 100 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "a consistent HDR command line exited $rc: $out"; exit 1; }
 grep -q "clean exit after" <<<"$out" || { echo "the consistent HDR run did not finish: $out"; exit 1; }
 

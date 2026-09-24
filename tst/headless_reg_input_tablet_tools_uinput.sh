@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The tablet tools beyond the pen, the whole way: an airbrush's finger wheel
 # arrives as a slider, a puck's turning body as rotation and its scroll
 # wheel as a tool wheel, from libinput through tablet-v2 to a client.

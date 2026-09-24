@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=atomic-request=2
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=atomic-request=2
 # libdrm has no memory for a flip's request: the boot modeset takes two
 # (the test, then the commit), the first flip after it gets none. The flip
 # fails with ENOMEM in the log, the cursor plane is not bisected away over

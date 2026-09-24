@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_MODE=1280x600
 # imway-args: --mode 1280x600
 # The editor's 90%-of-the-output clamp applies to the height too: on a
 # 600-pixel-tall output at ui scale 3 the chrome alone is taller than 540,

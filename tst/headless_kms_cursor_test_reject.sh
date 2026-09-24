@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The atomic test of a remodeset (a VT comeback) rejects the configuration
 # with the hardware cursor on it: the test is retried without the cursor
 # plane, that passes, and the session comes back on the software cursor.

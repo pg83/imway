@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS="scanout=10 output-target=13"
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS="scanout=10 output-target=13"
 # The display is swapped for one with other modes and the scanout rebuild
 # at its size fails (scanout=10), so the output rebuilds its swapchain at
 # the old size: new buffers the renderer's output targets have to follow

@@ -12,7 +12,7 @@ imway_bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 refused() { # <chaos> <failed check>
     local rc=0 out
 
-    out=$(IMWAY_CHAOS="$1" timeout 60 "$imway_bin" --device headless --socket imway-refused --frames 3 2>&1) || rc=$?
+    out=$(IMWAY_CHAOS="$1" timeout 60 "$imway_bin" --device auto --socket imway-refused --frames 3 2>&1) || rc=$?
     [[ "$rc" -eq 1 ]] || { echo "$1: exit $rc, expected 1"; echo "$out"; exit 1; }
     grep "imway: fatal" <<<"$out" | grep -qF "verify failed: $2" || { echo "$1: the refusal does not name $2"; echo "$out"; exit 1; }
     ! grep -q "imway: socket imway-refused\|clean exit after" <<<"$out" || { echo "$1: the boot went on"; echo "$out"; exit 1; }

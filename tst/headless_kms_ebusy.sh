@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A transient EBUSY on an atomic commit must not lose the frame: the
 # needed frame retries and reaches the screen without further input.
 set -euo pipefail

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1
 # The screenshot capture keeps its readback buffer between captures, sized
 # for the mode it was made at. After the output moves to a bigger mode the
 # next capture must replace it and save the whole new frame, not a

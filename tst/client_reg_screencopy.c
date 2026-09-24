@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
 
     struct wl_toplevel_ctx ctx;
     wl_make_toplevel(&ctx, "screencopy-target", 300, 300, 0xffff00ff);
-    wl_display_roundtrip(wl_dpy);
+    wl_await_presented(ctx.surface);
 
     // a dump is compared with a later capture: let the window's first
     // frames settle on screen before copying

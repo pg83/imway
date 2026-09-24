@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_EDID=garbage
 # imway-args: --hdr 203
 # Current color-management-v1 protocol contract, independent of rendering.
 set -euo pipefail

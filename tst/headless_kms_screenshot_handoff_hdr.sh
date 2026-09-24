@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHILD_LOG=./viewer.log
-# imway-args: --device auto --hdr 300
+# imway-env: IMWAY_CHILD_LOG=./viewer.log
+# imway-args: --hdr 300
 # The screenshot handoff on an HDR (BT.2020 + PQ) KMS session: the handed-off
 # scanout is a 10-bit buffer, which the viewer imports, reads back at full
 # precision and saves, as PNG mapped to SDR and as JPEG XL keeping the PQ

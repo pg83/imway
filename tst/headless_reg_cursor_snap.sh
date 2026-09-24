@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # A client cursor surface in the composited fallback must land on the output
 # pixel grid. The pointer position is fractional (raw deltas accumulate as
 # doubles); drawing the cursor quad at the raw position bilinearly blends its

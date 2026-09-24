@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # The HDR metadata follows the content on a live HDR link: moving SDR white
 # changes the content light level, the new infoframe blob rides the next
 # page flip, and settings that change nothing (a zero or unchanged white)

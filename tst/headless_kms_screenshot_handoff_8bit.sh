@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_10BIT=1 IMWAY_CHILD_LOG=./viewer.log
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_10BIT=1 IMWAY_CHILD_LOG=./viewer.log
 # The screenshot handoff from an 8-bit (XRGB8888) scanout, on a plane
 # without the 10-bit formats: the viewer imports the handed-off buffer,
 # reads it back as 8-bit pixels and saves a PNG equal to the output's own

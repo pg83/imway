@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Connector hotplug on the fake KMS: disconnect is noticed, reconnect
 # re-modesets and the flip loop keeps running.
 set -euo pipefail

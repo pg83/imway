@@ -23,7 +23,7 @@ boot_has "clean exit after"
 
 # the real card path through the seat: libseat reports the open failure
 rc=0
-out=$(env IMWAY_SETTINGS=advanced.seat_backend=1 LIBSEAT_BACKEND=noop timeout 60 "$(dirname "$IMWAY_TESTS_BIN")/imway_test" --device /nonexistent/card9 --socket imway-boot --frames 3 2>&1) || rc=$?
+out=$(env -u IMWAY_FAKE_KMS IMWAY_SETTINGS=advanced.seat_backend=1 LIBSEAT_BACKEND=noop timeout 60 "$(dirname "$IMWAY_TESTS_BIN")/imway_test" --device /nonexistent/card9 --socket imway-boot --frames 3 2>&1) || rc=$?
 [[ "$rc" -eq 1 ]] || { echo "a missing card node through the seat exited $rc: $out"; exit 1; }
 grep -q "libseat session on seat0" <<<"$out" || { echo "the noop seat did not open: $out"; exit 1; }
 grep -q "kms: open /nonexistent/card9" <<<"$out" || { echo "no open failure reported: $out"; exit 1; }

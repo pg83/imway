@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # zwlr-screencopy while a fullscreen client is on the primary plane: that
 # frame was never composed, so there is nothing to read back. The copy
 # forces one composed frame and delivers it, the client's red, and the copy

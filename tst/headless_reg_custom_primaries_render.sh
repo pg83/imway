@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_EDID=garbage
 # imway-args: --hdr 203 --hdr-peak 1000
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

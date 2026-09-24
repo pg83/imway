@@ -9,7 +9,6 @@
 #include "dbus_menu.h"
 #include "device_kms.h"
 #include "chaos_monkey.h"
-#include "device_headless.h"
 
 #ifdef IMWAY_FOR_TESTS
     #include "kms_fake.h"
@@ -247,7 +246,7 @@ namespace {
 
     void usage(Log& log, const char* argv0) {
         log << "usage: "_sv << argv0
-            << " [--device auto|headless|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]"
+            << " [--device auto|/dev/dri/cardN] [--output NAME] [--mode WxH@HZ]"
                " [--socket NAME] [--xkb-layout L] [--xkb-options O] [--font PATH] [--scale K]"
                " [--frames N] [--screenshot PATH] [--control FIFO] [--dpms SEC] [--hdr SDR_WHITE_NITS]"
                " [--hdr-min NITS] [--hdr-peak NITS] [--hdr-fall NITS] [--bpc BITS]"
@@ -378,8 +377,6 @@ int mainComposer(int argc, char** argv) {
         return 2;
     }
 
-    bool kms = cfg.devicePath != "headless"_sv;
-
     if (!getenv("XDG_RUNTIME_DIR")) {
         *log << "XDG_RUNTIME_DIR is not set"_sv << endL;
 
@@ -420,20 +417,18 @@ int mainComposer(int argc, char** argv) {
 
         Session* session = nullptr;
 
-        if (kms) {
-            if (c.settings->seatBackend() == SeatBackend::direct) {
-                session = Session::createDirect(c);
-            } else {
-                try {
-                    session = Session::create(c);
-                } catch (...) {
-                    if (c.settings->seatBackend() == SeatBackend::libseat) {
-                        throw;
-                    }
-
-                    *log << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
-                    session = Session::createDirect(c);
+        if (c.settings->seatBackend() == SeatBackend::direct) {
+            session = Session::createDirect(c);
+        } else {
+            try {
+                session = Session::create(c);
+            } catch (...) {
+                if (c.settings->seatBackend() == SeatBackend::libseat) {
+                    throw;
                 }
+
+                *log << "imway: "_sv << Exception::current() << ", opening devices directly"_sv << endL;
+                session = Session::createDirect(c);
             }
         }
 
@@ -442,34 +437,21 @@ int mainComposer(int argc, char** argv) {
 #ifdef IMWAY_FOR_TESTS
         // scenarios swap the card node for the userspace KMS emulator; the
         // rest of the stack only ever sees Composer::kmsIntercept
-        if (kms && getenv("IMWAY_FAKE_KMS")) {
+        if (getenv("IMWAY_FAKE_KMS")) {
             c.kmsIntercept = installInterceptor();
         }
 #endif
 
-        Device* device = kms ? DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath) : DeviceHeadless::create(c);
+        Device* device = DeviceKms::create(c, cfg.devicePath == "auto"_sv ? StringView{} : cfg.devicePath);
 
         c.device = device;
 
-        OutputConfiguration outputConfig;
-
-        outputConfig.hdrSdrWhiteNits = c.settings->hdrEnabled() ? c.settings->sdrNits() : 0.;
-        outputConfig.displayMinNits = c.settings->displayMinNits();
-        outputConfig.displayPeakNits = c.settings->displayPeakNits();
-        outputConfig.displayMaxFallNits = c.settings->displayMaxFallNits();
-        outputConfig.bpc = c.settings->outputBpc();
-        outputConfig.range = c.settings->outputRange();
+        OutputConfiguration outputConfig = outputConfiguration(*c.settings);
 
         ::Output* output = device->createOutput(c.settings->outputName(), c.settings->outputMode(), outputConfig);
 
         c.output = output;
 
-        scene->drawCursor = kms;
-
-#ifdef IMWAY_FOR_TESTS
-        // headless scenarios assert on the software cursor in screenshots
-        scene->drawCursor = scene->drawCursor || getenv("IMWAY_FORCE_CURSOR");
-#endif
         scene->socketName = cfg.socketName;
 
         STD_VERIFY(output->start());
@@ -548,12 +530,10 @@ int mainComposer(int argc, char** argv) {
         c.desktop = Desktop::create(c);
         runAutostart(c);
 
-        if (kms) {
-            try {
-                c.input = InputSource::createLibinput(c);
-            } catch (...) {
-                *log << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
-            }
+        try {
+            c.input = InputSource::createLibinput(c);
+        } catch (...) {
+            *log << "imway: no input, mouse is dead: "_sv << Exception::current() << endL;
         }
 
         if (!cfg.controlPath.empty()) {
@@ -602,7 +582,7 @@ int mainComposer(int argc, char** argv) {
         wayland->run();
 
         if (!cfg.screenshotPath.empty()) {
-            renderer->screenshot(cfg.screenshotPath);
+            renderer->screenshot(cfg.screenshotPath, false);
             *log << "imway: screenshot: "_sv << cfg.screenshotPath << endL;
         }
 

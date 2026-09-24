@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=readback-busy=1000000
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=readback-busy=1000000
 # The session ends while a screenshot handoff is still on the GPU: Print
 # exported the scanout buffer for the viewer and submitted its barrier, and
 # the fence reads busy for as long as the session lasts (a slow GPU), so

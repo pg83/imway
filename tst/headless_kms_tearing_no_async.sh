@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_ASYNC=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_ASYNC=1
 # wp-tearing-control on a driver without atomic async page flips: the
 # client's request for async presentation cannot be honoured, so its
 # direct-scanout frames flip on vblank like everyone else's instead of

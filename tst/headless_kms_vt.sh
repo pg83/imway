@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A VT switch away and back: flips stop while the session is disabled and
 # a remodeset brings the display back.
 set -euo pipefail

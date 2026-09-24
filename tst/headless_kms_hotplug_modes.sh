@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Hotplug probes of a connector whose mode list says little. With no modes
 # at all there is nothing to follow: the output keeps its mode, a second
 # unplug event while unplugged changes nothing, and replugging commits the

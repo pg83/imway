@@ -7,7 +7,7 @@ set -euo pipefail
 
 imway_bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 rc=0
-out=$(timeout 60 "$imway_bin" --device headless --socket imway-test --frames 3 2>&1) || rc=$?
+out=$(timeout 60 "$imway_bin" --device auto --socket imway-test --frames 3 2>&1) || rc=$?
 
 [[ "$rc" -ne 0 ]] || { echo "a second compositor took a socket that was in use: $out"; exit 1; }
 grep -q "wl socket imway-test failed" <<<"$out" || { echo "the taken socket was not reported (rc=$rc): $out"; exit 1; }

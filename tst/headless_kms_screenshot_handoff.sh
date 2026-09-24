@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHILD_LOG=./viewer.log
-# imway-args: --device auto
+# imway-env: IMWAY_CHILD_LOG=./viewer.log
 # The screenshot chord on a KMS session hands the scanout buffer itself to
 # the viewer instead of reading pixels back: the compositor swaps in a
 # replacement scanout and the old one travels to the viewer as a dma-buf.

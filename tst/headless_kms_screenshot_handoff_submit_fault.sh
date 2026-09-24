@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=shot-submit=1
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=shot-submit=1
 # The queue refuses the copy submit of a screenshot handoff after the
 # scanout was exported for the viewer: the refusal is reported, the
 # exported dma-buf fd is closed rather than left open in the compositor,

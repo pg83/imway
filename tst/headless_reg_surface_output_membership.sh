@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# A visible surface enters the sole headless output and leaves it on unmap.
+# A visible surface enters the sole output and leaves it on unmap.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

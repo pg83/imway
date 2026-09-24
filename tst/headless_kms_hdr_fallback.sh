@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_REJECT_COLOR=1
-# imway-args: --device auto --hdr 300
+# imway-env: IMWAY_FAKE_KMS_REJECT_COLOR=1
+# imway-args: --hdr 300
 # The connector refuses the HDR color configuration: the first modeset
 # falls back to SDR on the same framebuffer and the session lights up.
 set -euo pipefail

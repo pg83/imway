@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Grow and shrink: 1280x800 -> a 1080p-only TV -> an 800p-only panel. The
 # fullscreen client follows both configures and lands on the plane at
 # every stop; the shrink direction gets the same coverage as the grow.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # cursor-shape-v1 fidelity: every shape the protocol names must land in the
 # scene verbatim, not collapsed onto a lookalike, and the compositor must
 # actually draw it. The client walks the whole enum; each observed value is

@@ -9,7 +9,8 @@ sleep 0.5
 screenshot "$XDG_RUNTIME_DIR/a.ppm"
 
 # force fresh frames between the shots: the desktop content is unchanged
-# (no cursor sprite on headless), only the frame counter advances
+# (the cursor is on its plane, out of the shot), only the frame counter
+# advances
 for i in 1 2 3 4 5; do
     ctl "motion $((600 + i)) 400"
     sleep 0.05

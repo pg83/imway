@@ -15,21 +15,21 @@ usage() { # <args...>
     grep -q "usage:" <<<"$out" || { echo "imway $* printed no usage: $out"; exit 1; }
 }
 
-usage --device headless --mode
-usage --device headless --scale 0
-usage --device headless --scale -1
-usage --device headless --rgb-range sideways
-usage --device headless --no-such-flag
-usage --device headless --hdr -1
-usage --device headless --bpc 9
-usage --device headless --hdr-min 100 --hdr-peak 50
-usage --device headless --hdr-peak 100
-usage --device headless --hdr 200 --hdr-peak 100 --hdr-fall 200
-usage --device headless --
+usage --device auto --mode
+usage --device auto --scale 0
+usage --device auto --scale -1
+usage --device auto --rgb-range sideways
+usage --device auto --no-such-flag
+usage --device auto --hdr -1
+usage --device auto --bpc 9
+usage --device auto --hdr-min 100 --hdr-peak 50
+usage --device auto --hdr-peak 100
+usage --device auto --hdr 200 --hdr-peak 100 --hdr-fall 200
+usage --device auto --
 usage screenshot
 
 rc=0
-out=$(env -u XDG_RUNTIME_DIR "$imway_bin" --device headless 2>&1) || rc=$?
+out=$(env -u XDG_RUNTIME_DIR "$imway_bin" --device auto 2>&1) || rc=$?
 [[ "$rc" -eq 1 ]] || { echo "no runtime dir exited $rc, expected 1: $out"; exit 1; }
 grep -q "XDG_RUNTIME_DIR" <<<"$out" || { echo "no runtime dir: unexpected output: $out"; exit 1; }
 
@@ -37,9 +37,9 @@ rc=0
 out=$("$imway_bin" --list 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "--list exited $rc: $out"; exit 1; }
 
-# a fixed-length headless run next to this one, on its own socket
+# a fixed-length run next to this one, on its own socket
 rc=0
-out=$("$imway_bin" --device headless --socket imway-frames --frames 3 --screenshot "$XDG_RUNTIME_DIR/last.ppm" --xkb-layout us --xkb-options "" --dpms 1 2>&1) || rc=$?
+out=$("$imway_bin" --device auto --socket imway-frames --frames 3 --screenshot "$XDG_RUNTIME_DIR/last.ppm" --xkb-layout us --xkb-options "" --dpms 1 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "the fixed-length run exited $rc: $out"; exit 1; }
 # the closing capture composes one frame of its own, so the count is the
 # three the flag asked for plus that one

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # On a 10-bit HDR scanout the eyedropper narrows the sampled pixel from
 # A2R10G10B10 to the 8-bit colour it shows.
 set -euo pipefail

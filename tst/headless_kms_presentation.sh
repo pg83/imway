@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # presentation-time on the KMS output: frames are reported with the page
 # flip's own timestamp and sequence, flagged as vsynced hardware timing.
 set -euo pipefail

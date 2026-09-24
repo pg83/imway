@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Scanout taint end to end: the plane rejects the client's framebuffer with
 # a permanent errno on its first direct flip, the buffer gets tainted, the
 # flip is never retried and composition carries the content on.

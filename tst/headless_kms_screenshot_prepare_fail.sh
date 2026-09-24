@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=scanout=10
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=scanout=10
 # The replacement scanout for a handoff cannot be built: the first call of
 # its creation (after the ten of the boot swapchain) fails on the offload
 # lane and the capture reads the frame back instead.

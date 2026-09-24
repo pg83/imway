@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --dpms 1
+# imway-args: --dpms 1
 # A flip event that the idle blanking drains itself after the event loop
 # has already seen the drm fd readable: the loop's own read of the fd then
 # finds nothing and must not wait for an event that is not coming. Each

@@ -105,7 +105,7 @@ struct Composer {
     // the renderer registers itself here; wayland's copy-capture reads it
     FrameCapture* frameCapture = nullptr;
     Mixer* mixer = nullptr;
-    // nullable: headless runs and dead-input kms runs have no libinput
+    // nullable: a run whose libinput could not start has none
     InputSource* input = nullptr;
     DBusConn* sysbus = nullptr;
     Wifi* wifi = nullptr;

@@ -59,8 +59,8 @@ struct DeviceVk {
     // VK_EXT_debug_utils: loader and validation messages into the log
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
 
-    // drmFd < 0 picks any vulkan device (headless); otherwise the one that
-    // drives that drm node. pool-owned, borrowed by const pointer elsewhere
+    // the vulkan device that drives the drm node, else the first one on
+    // offer. pool-owned, borrowed by const pointer elsewhere
     DeviceVk(Composer& c, int drmFd);
     ~DeviceVk() noexcept;
 

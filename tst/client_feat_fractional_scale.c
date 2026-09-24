@@ -1,6 +1,6 @@
 // Feature: fractional-scale-v1. Requesting a fractional scale object for a
-// surface must yield a preferred_scale event (in 120ths). Headless is scale 1,
-// so the compositor should report 120.
+// surface must yield a preferred_scale event (in 120ths). The output is at
+// scale 1, so the compositor should report 120.
 
 #include "wl_util.h"
 #include <fractional-scale-v1-client-protocol.h>

@@ -3,6 +3,7 @@
 #include <vulkan/vulkan.h>
 
 #include <std/sys/types.h>
+#include <std/str/view.h>
 
 #include <stddef.h>
 #include <sys/types.h>
@@ -107,10 +108,13 @@ struct ChaosMonkey {
     virtual VkResult descriptorPool(VkResult result) = 0;
     virtual VkResult descriptorSet(VkResult result) = 0;
     // a sync file the renderer exported: to wait on before sampling a
-    // client's dma-buf (implicit or explicit sync), or its own frame's
-    // fence to hand back to those dma-bufs; a replacement failure closes
+    // client's implicit-sync dma-buf, or its own frame's fence to hand back
+    // to those dma-bufs and to the display; a replacement failure closes
     // the fd it was handed and returns -1
     virtual int syncFile(int fd) = 0;
+    // an explicit-sync client's acquire point, exported as a sync file to
+    // wait on before sampling its dma-buf; failure as for syncFile
+    virtual int acquireFile(int fd) = 0;
     // the result of making or filling a sync-file semaphore: one the frame
     // waits on (creating it, importing the fd into it), or the frame's own
     // signal semaphore being recreated
@@ -237,6 +241,10 @@ struct ChaosMonkey {
     // when libdrm had no memory for it); a replacement failure frees it
     // and returns null
     virtual _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) = 0;
+
+    // more faults from now on, in IMWAY_CHAOS words: a scenario arms one
+    // once the state it breaks is reached (the control harness)
+    virtual void arm(stl::StringView words) = 0;
 
     static ChaosMonkey* create(stl::ObjPool& pool);
 };

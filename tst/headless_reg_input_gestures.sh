@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Gestures the whole way: fingers on a virtual touchpad, libinput turning
 # their movement into a swipe and a pinch, and the desktop running the
 # action each is bound to. The FIFO can post gestures directly, which is

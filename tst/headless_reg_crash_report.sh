@@ -15,11 +15,12 @@ bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 grep -qa "imway: fatal signal " "$bin" || { echo "SKIP: this build has no crash handler (sanitized)"; exit 127; }
 
 out="$XDG_RUNTIME_DIR/crash.log"
-"$bin" --device headless --socket imway-crash 2>"$out" &
+"$bin" --device auto --socket imway-crash 2>"$out" &
 pid=$!
 
 up() { grep -q "socket imway-crash," "$out"; }
 await 300 up || { echo "the second compositor did not come up"; cat "$out"; kill -9 "$pid" 2>/dev/null || true; exit 1; }
+first=$(head -1 "$out")
 
 kill -SEGV "$pid"
 rc=0
@@ -31,7 +32,7 @@ fail() { echo "$1"; cat "$out"; exit 1; }
 report=$(grep -n "^imway: fatal signal 11 at 0x[0-9a-f]*, stack follows$" "$out" | cut -d: -f1 || true)
 [[ -n "$report" ]] || fail "the crash was not reported"
 # the report goes after the log, it does not overwrite it
-head -1 "$out" | grep -q "^imway: vulkan device: " || fail "the log's first line was overwritten"
+[[ "$(head -1 "$out")" == "$first" ]] || fail "the log's first line was overwritten"
 socket=$(grep -n "socket imway-crash," "$out" | cut -d: -f1)
 (( report > socket )) || fail "the report does not follow the log"
 

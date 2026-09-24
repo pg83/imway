@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_MODE=3840x2160@60
 # imway-args: --mode 3840x2160@60 --scale 2.5
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

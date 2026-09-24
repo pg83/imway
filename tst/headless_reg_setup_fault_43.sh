@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # expect-startup-exit
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_CHAOS=setup=43
+# imway-env: IMWAY_CHAOS=setup=43
 # The boot cannot create the cursor raster's fence.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

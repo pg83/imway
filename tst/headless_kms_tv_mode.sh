@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The TV case: the display is swapped for one that only offers 1920x1080.
 # Reconnect re-probes the mode list, remodesets the new preferred mode and
 # the whole stack — scanout, renderer targets, screenshots — follows.

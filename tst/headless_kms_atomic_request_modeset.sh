@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=atomic-request=0
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=atomic-request=0
 # libdrm has no memory for the boot modeset's test request: the modeset is
 # reported unavailable for now (nothing about the configuration is known,
 # so the hardware cursor stays), the next frame modesets, and the session

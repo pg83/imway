@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # ext-image-copy-capture of the output while a fullscreen client is on the
 # primary plane: that frame was never composed, so the first capture attempt
 # asks for a composed frame and the retry delivers it - the client's red.

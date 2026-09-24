@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_REJECT_CURSOR=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_REJECT_CURSOR=1
 # A display that never accepts the cursor plane: whichever commit first
 # tries to enable it gets bisected away and the session boots with the
 # software cursor.

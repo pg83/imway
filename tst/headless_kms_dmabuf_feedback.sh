@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # linux-dmabuf feedback over the KMS emulator leads with a scanout tranche
 # of the primary plane's formats, in the default and the surface feedback.
 set -euo pipefail

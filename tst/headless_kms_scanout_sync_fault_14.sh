@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS="scanout=10 output-target=14"
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS="scanout=10 output-target=14"
 # As headless_kms_scanout_sync_fault_13, the renderer following the
 # swapchain rebuilt at the old size; here the first new buffer's view is
 # made and its framebuffer fails.

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS="resource=wp_drm_lease_device_v1 resource=wp_drm_lease_request_v1 resource=wp_drm_lease_v1"
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS="resource=wp_drm_lease_device_v1 resource=wp_drm_lease_request_v1 resource=wp_drm_lease_v1"
 # wp-drm-lease objects that fail to allocate over the KMS emulator: the
 # device bind, the lease request and the lease itself each reach their
 # client as no_memory, and the compositor lives on.

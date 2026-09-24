@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-args: --output HEADLESS-2 --font ./no-such-font.ttf --rgb-range auto --rgb-range full
+# imway-args: --output HDMI-A-1 --font ./no-such-font.ttf --rgb-range auto --rgb-range full
 # The documented options the other scenarios never pass: an output name, a
 # font that is not there (the renderer falls back to the system font) and
 # the RGB range given twice, the last one winning. The compositor accepts

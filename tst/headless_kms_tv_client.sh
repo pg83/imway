@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The TV case end to end: a fullscreen client is on the plane at 1280x800,
 # the display is swapped for a 1080p-only one, the client follows the
 # configure with a new buffer and lands back on the plane at 1920x1080

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_FORCE_CURSOR=1 IMWAY_DEBUG_CURSOR=1
+# imway-env: IMWAY_DEBUG_CURSOR=1
 # A client cursor on the (fake, 64x64) hardware cursor plane, in the buffer
 # kinds that take their own path onto it: a single-pixel buffer's one
 # pixel; an XRGB buffer, whose undefined top byte must come out opaque (all

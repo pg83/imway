@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # New HDR metadata the driver cannot take yet: a blob that fails to be
 # created is reported and retried with the next frame; a blob created while
 # no flip lands stays pending, never reaching the connector until a flip

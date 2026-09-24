@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # wp-tearing-control end to end: a fullscreen client that opted into async
 # presentation gets its direct-scanout flips submitted as async page flips.
 set -euo pipefail

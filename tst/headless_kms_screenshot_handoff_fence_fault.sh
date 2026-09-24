@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=readback-fence=0
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=readback-fence=0
 # The fence of a screenshot handoff reports a lost device after the scanout
 # was exported for the viewer: no viewer is spawned, and the exported
 # dma-buf fd is closed rather than left open in the compositor. The session

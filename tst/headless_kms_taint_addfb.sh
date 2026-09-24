@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Scanout taint at the framebuffer stage: the prime import succeeds but
 # AddFB2 refuses the client's buffer, the buffer gets tainted and
 # composition carries the content on.

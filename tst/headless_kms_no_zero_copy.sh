@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1
 # A device without prime import: the zero-copy swapchain cannot be built,
 # the session falls back to dumb-buffer presentation and still flips.
 set -euo pipefail

@@ -2,6 +2,7 @@
 
 #include "log.h"
 #include "util.h"
+#include "color.h"
 #include "scene.h"
 #include "output.h"
 #include "pooled.h"
@@ -515,7 +516,7 @@ int ScreenshotCaptureImpl::buildFile() {
             for (size_t i = 0; i < count; i++) {
                 u32 src = chunk[i];
 
-                chunk[i] = ((src >> 22) & 0xff) | (((src >> 12) & 0xff) << 8) | (((src >> 2) & 0xff) << 16) | 0xff000000u;
+                chunk[i] = unorm10To8((src >> 20) & 1023) | (unorm10To8((src >> 10) & 1023) << 8) | (unorm10To8(src & 1023) << 16) | 0xff000000u;
             }
         } else {
             for (size_t i = 0; i < count; i++) {

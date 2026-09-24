@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Pointer devices libinput reports differently from a mouse, the whole way:
 # an absolute pointer (a VM's tablet device) lands the cursor where it
 # says, its horizontal wheel scrolls the window under it sideways, and on a

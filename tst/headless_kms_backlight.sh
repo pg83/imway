@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_INTERNAL=1 IMWAY_SYSFS_BACKLIGHT=./backlight
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_INTERNAL=1 IMWAY_SYSFS_BACKLIGHT=./backlight
 # imway-pre: mkdir -p backlight/raw0 backlight/imway0
 # imway-pre: printf 'raw\n' > backlight/raw0/type; printf '100\n' > backlight/raw0/max_brightness; printf '50\n' > backlight/raw0/brightness
 # imway-pre: printf 'firmware\n' > backlight/imway0/type; printf '255\n' > backlight/imway0/max_brightness; printf '128\n' > backlight/imway0/brightness

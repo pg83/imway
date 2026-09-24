@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A lease request the kernel side cannot satisfy ends in `finished`, never
 # in a half-built lease: the connector unplugged after the offer, its
 # encoder gone, every crtc it can reach already driving the desktop, the

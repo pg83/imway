@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_CHAOS=shot-submit=1
-# The queue refuses the copy submit of a screenshot readback (no scanout
-# to hand off on the headless output): the refusal is reported, the next
-# frame submits the capture again and the file is saved.
+# imway-env: IMWAY_CHAOS=shot-submit=1 IMWAY_FAKE_KMS_NO_PRIME=1
+# The queue refuses the copy submit of a screenshot readback (a display
+# that cannot import the GPU's buffers scans out dumb ones, with nothing to
+# hand off): the refusal is reported, the next frame submits the capture
+# again and the file is saved.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -15,7 +16,7 @@ await 20 in_log "control: set applications.screenshot_action" || { echo "setting
 
 ctl "key 99 press"; ctl "key 99 release" # Print
 await 100 in_log "imway: screenshot submit failed (-2)" || { echo "the refused submit was not reported"; cat "$IMWAY_LOG"; exit 1; }
-! in_log "screenshot handoff" || { echo "the headless output handed a scanout off"; cat "$IMWAY_LOG"; exit 1; }
+! in_log "screenshot handoff" || { echo "the dumb-buffer output handed a scanout off"; cat "$IMWAY_LOG"; exit 1; }
 retried() {
     [[ $(grep -c "imway: screenshot readback" "$IMWAY_LOG") -ge 2 ]]
 }

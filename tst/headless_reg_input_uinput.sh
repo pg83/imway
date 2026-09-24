@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The libinput source end to end: a virtual keyboard and mouse are plugged
 # into the compositor's own evdev directory while it runs, libinput picks
 # them up through inotify, and their events come out of the seat as the

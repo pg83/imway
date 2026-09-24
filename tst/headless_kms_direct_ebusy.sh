@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A transient EBUSY on a direct-scanout flip: the buffer is not tainted,
 # the frame goes out composed, and the next frame puts the client buffer
 # back on the plane.

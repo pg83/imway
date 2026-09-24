@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The KMS session opens its VT to switch the keyboard off and the console
 # to graphics, but must not take that VT as its controlling terminal: a
 # compositor started without one (a service, an ssh session, this runner's

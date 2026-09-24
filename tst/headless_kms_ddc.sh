@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_DDC=100 IMWAY_SYSFS_DRM=./drm
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_DDC=100 IMWAY_SYSFS_DRM=./drm
 # imway-pre: mkdir -p drm/card0-HDMI-A-1/ddc/i2c-dev/i2c-7 drm/card0-DP-1/ddc/i2c-dev/i2c-3 drm/card0 drm/card-HDMI-A-1 drm/card0xHDMI-A-1 && touch drm/version
 # The brightness of an external monitor over DDC/CI: the connector's own
 # i2c bus is found in sysfs (never a neighbour's, never a prefix match),

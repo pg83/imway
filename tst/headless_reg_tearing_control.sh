@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # wp-tearing-control: the async hint must be recorded on the surface (the
-# async page flip itself is hardware-only and unverifiable headless).
+# async page flip it leads to has scenarios of its own on the KMS side).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

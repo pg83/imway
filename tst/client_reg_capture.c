@@ -115,8 +115,7 @@ int main(void) {
 
     struct wl_toplevel_ctx ctx;
     wl_make_toplevel(&ctx, "capture-target", 300, 300, 0xffff00ff);
-    // a couple of presented frames so the magenta window is composited
-    wl_display_roundtrip(wl_dpy);
+    wl_await_presented(ctx.surface);
 
     struct ext_image_capture_source_v1* source =
         ext_output_image_capture_source_manager_v1_create_source(source_mgr, output);

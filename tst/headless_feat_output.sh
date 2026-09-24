@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # wl_output + xdg-output advertise a consistent mode/scale/name/logical size.
+# imway-env: IMWAY_FAKE_KMS_MODE=1920x1080@75
 # imway-args: --mode 1920x1080@75
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

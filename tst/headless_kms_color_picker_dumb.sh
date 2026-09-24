@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1
 # The dumb-buffer path already reads every frame back for presentation; the
 # eyedropper samples that copy instead of reading the frame back again.
 set -euo pipefail

@@ -38,7 +38,7 @@ struct Device {
     virtual int drmFd() const = 0;
     virtual bool explicitSyncSupported() const = 0;
 
-    // non-desktop connectors available to lease; empty on headless and when
+    // non-desktop connectors available to lease; empty when
     // the drm node has none
     virtual void leaseConnectorsImpl(stl::VisitorFace&& vis) = 0;
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_SETTINGS=display.lock_before_dpms=false
-# imway-args: --device auto --dpms 3
+# imway-env: IMWAY_SETTINGS=display.lock_before_dpms=false
+# imway-args: --dpms 3
 # Power and session requests that change nothing: a "session enabled" with
 # no switch away before it remodesets nothing, the idle timeout while the
 # VT is switched away leaves the display alone (it is not ours to turn off

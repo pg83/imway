@@ -49,9 +49,10 @@ opened() { # <y>
 
 found=0
 
-# it sits around 455 below the title bar with the default font; the walk is
+# it sits around 431 below the title bar with the default font (a row
+# lower when libinput is missing and the page says so first); the walk is
 # there so a different one does not turn this into a hunt for a pixel
-for y in $(seq $((wy + 448)) 5 $((wy + 488))); do
+for y in $(seq $((wy + 421)) 5 $((wy + 488))); do
     click_at $((wx + 172)) "$y"
     opened "$y" && { found=1; break; }
 done

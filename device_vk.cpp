@@ -205,39 +205,34 @@ DeviceVk::DeviceVk(Composer& c, int drmFd)
 
     this->phys = VK_NULL_HANDLE;
 
-    if (drmFd >= 0) {
-        struct stat st{};
+    struct stat st{};
 
-        if (fstat(drmFd, &st) == 0) {
-            for (VkPhysicalDevice d : devs) {
-                if (!hasExt(d, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
-                    continue;
-                }
+    if (fstat(drmFd, &st) == 0) {
+        for (VkPhysicalDevice d : devs) {
+            if (!hasExt(d, VK_EXT_PHYSICAL_DEVICE_DRM_EXTENSION_NAME)) {
+                continue;
+            }
 
-                VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
-                VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
+            VkPhysicalDeviceDrmPropertiesEXT drm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRM_PROPERTIES_EXT};
+            VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};
 
-                p2.pNext = &drm;
-                vkGetPhysicalDeviceProperties2(d, &p2);
+            p2.pNext = &drm;
+            vkGetPhysicalDeviceProperties2(d, &p2);
 
-                bool primaryMatch = drm.hasPrimary && drm.primaryMajor == (i64)major(st.st_rdev) && drm.primaryMinor == (i64)minor(st.st_rdev);
-                bool renderMatch = drm.hasRender && drm.renderMajor == (i64)major(st.st_rdev) && drm.renderMinor == (i64)minor(st.st_rdev);
+            bool primaryMatch = drm.hasPrimary && drm.primaryMajor == (i64)major(st.st_rdev) && drm.primaryMinor == (i64)minor(st.st_rdev);
+            bool renderMatch = drm.hasRender && drm.renderMajor == (i64)major(st.st_rdev) && drm.renderMinor == (i64)minor(st.st_rdev);
 
-                if (primaryMatch || renderMatch) {
-                    this->phys = d;
+            if (primaryMatch || renderMatch) {
+                this->phys = d;
 
-                    break;
-                }
+                break;
             }
         }
     }
 
     if (this->phys == VK_NULL_HANDLE) {
         this->phys = devs[0];
-
-        if (drmFd >= 0) {
-            *comp->log << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
-        }
+        *comp->log << "imway: no vulkan device matches the drm node, render/display are split (readback path)"_sv << endL;
     }
 
     VkPhysicalDeviceIDProperties ids{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES};

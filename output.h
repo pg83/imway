@@ -26,6 +26,11 @@ struct SharedScanout {
     OutputColorState color;
 };
 
+struct Settings;
+
+// the display configuration the settings ask for
+OutputConfiguration outputConfiguration(const Settings& settings);
+
 struct Output {
     virtual int width() const = 0;
     virtual int height() const = 0;
@@ -81,7 +86,6 @@ struct Output {
     virtual bool start() = 0;
 
     virtual bool ready() const = 0;
-    virtual bool vsynced() const = 0;
 
     virtual int scanoutCount() const = 0;
     virtual ScanoutBuffer* scanoutBuffer(int i) = 0;

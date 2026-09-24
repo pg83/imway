@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHILD_LOG=./viewer.log
-# imway-args: --device auto
+# imway-env: IMWAY_CHILD_LOG=./viewer.log
 # A mode change probed while a screenshot is building the scanout buffer
 # it will lend its viewer: switching now would rebuild the swapchain under
 # it, so the switch is refused for now, and a hotplug event after the

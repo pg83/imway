@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=output-target=23
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=output-target=23
 # The rebuild for the new mode fails at the first scanout image's framebuffer.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

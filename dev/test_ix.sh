@@ -5,8 +5,8 @@
 #
 # Run the integration suite in the IX environment: the build set of
 # dev/build_ix.sh plus what the scenarios reach for at runtime — a vulkan
-# driver for the headless compositor, a session bus, sndiod, and the shell
-# tools lib.sh calls. Arguments go to ./build test:
+# driver for the compositor on the KMS emulator, a session bus, sndiod, and
+# the shell tools lib.sh calls. Arguments go to ./build test:
 #
 #   dev/test_ix.sh -Druns=1
 #   dev/test_ix.sh -Druns=1 -Dfilter='headless_reg_positioner_*'

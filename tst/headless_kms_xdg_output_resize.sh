@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # xdg_output objects of every manager version follow a live mode change:
 # the new logical size, closed by xdg_output.done before v3 and by
 # wl_output.done from v3 on.

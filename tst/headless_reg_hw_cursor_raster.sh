@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A manually-built ImDrawList must bind the font atlas texture; otherwise the
 # hardware cursor bitmap is transparent after ImGui's TextureId -> TexRef API.
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_FORCE_CURSOR=1 IMWAY_DEBUG_CURSOR=1
+# imway-env: IMWAY_DEBUG_CURSOR=1
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # A hotplug arrives while the vt is switched away: without drm master every
 # atomic ioctl (test commits included) bounces with EACCES. That says
 # nothing about the display — the HDR configuration must survive untouched

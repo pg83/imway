@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The KMS path on the userspace emulator: modeset against the fake
 # connector, a zero-copy scanout swapchain on the real GPU, page flips
 # paced by the emulator's event pipe, and a client composited end to end.

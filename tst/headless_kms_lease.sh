@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # wp-drm-lease over the KMS emulator: the compositor drives the desktop
 # connector and offers only the non-desktop one, a client leases it and
 # receives a live fd, and the protocol errors are refused.

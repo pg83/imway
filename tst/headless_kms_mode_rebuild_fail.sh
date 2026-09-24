@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=scanout=10
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=scanout=10
 # A display swapped for one with other modes, and the scanout rebuild at
 # its size fails on the GPU: the output stays at the old size on a rebuilt
 # swapchain and says the new display refuses it. Swapped back, the old mode

@@ -522,6 +522,13 @@ namespace {
         void onListen(void*) override;
     };
 
+    struct CallKmsDisplaySetting: Listener {
+        KmsOutput* parent;
+
+        CallKmsDisplaySetting(KmsOutput* p);
+        void onListen(void*) override;
+    };
+
     struct DirectFbOwner {
         KmsOutput* output = nullptr;
         DmabufBuffer* buffer = nullptr;
@@ -686,6 +693,8 @@ namespace {
         int physicalHeightMm() const override;
         void pickPipe(StringView connector, StringView modeStr);
         bool setupHdr();
+        bool hdrCapable();
+        void applyDisplaySettings();
         bool createHdrMetadataBlob(const HdrOutputMetadata& metadata, u32& blob);
         void applyPendingHdrMetadata();
 
@@ -732,7 +741,6 @@ namespace {
         void hotplug() override;
         void hotplugProbe();
         void hotplugProbed();
-        bool vsynced() const override;
         int scanoutCount() const override;
         ScanoutBuffer* scanoutBuffer(int i) override;
         int acquire() override;
@@ -776,6 +784,15 @@ namespace {
 
     void CallKmsSessionDisabled::onListen(void*) {
         parent->sessionDisabled();
+    }
+
+    CallKmsDisplaySetting::CallKmsDisplaySetting(KmsOutput* p)
+        : parent(p)
+    {
+    }
+
+    void CallKmsDisplaySetting::onListen(void*) {
+        parent->applyDisplaySettings();
     }
 
     struct CallHotplugProbed: Listener {
@@ -1393,6 +1410,13 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
 {
     c.sessionEnabledListeners.pushBack(c.pool->make<CallKmsSessionEnabled>(this));
     c.sessionDisabledListeners.pushBack(c.pool->make<CallKmsSessionDisabled>(this));
+    // the SDR white alone needs no modeset: setSdrWhite takes it
+    c.settings->addHdrEnabledListener(c.pool->make<CallKmsDisplaySetting>(this));
+    c.settings->addDisplayMinNitsListener(c.pool->make<CallKmsDisplaySetting>(this));
+    c.settings->addDisplayPeakNitsListener(c.pool->make<CallKmsDisplaySetting>(this));
+    c.settings->addDisplayMaxFallNitsListener(c.pool->make<CallKmsDisplaySetting>(this));
+    c.settings->addOutputBpcListener(c.pool->make<CallKmsDisplaySetting>(this));
+    c.settings->addOutputRangeListener(c.pool->make<CallKmsDisplaySetting>(this));
     screenshotJob = OffloadJob::create(c, [](void* self) {
         ((KmsOutput*)self)->screenshotPrepare();
     }, this, *c.pool->make<CallScreenshotPrepared>(this));
@@ -1963,6 +1987,118 @@ bool KmsOutput::setupHdr() {
     }
 
     return createHdrMetadataBlob(metadata, hdrMetaBlob);
+}
+
+// HDR on the buffers already scanning out: they are 10-bit, the display
+// takes PQ over BT.2020 and the connector carries both the colorspace and
+// the metadata
+bool KmsOutput::hdrCapable() {
+    if (scanCount == 0 || scanFourcc != DRM_FORMAT_XRGB2101010) {
+        *(c->log) << "imway: hdr: the scanout is not 10-bit"_sv << endL;
+
+        return false;
+    }
+
+    if (displayCapabilities.valid && (!displayCapabilities.pq || !displayCapabilities.bt2020Rgb)) {
+        *(c->log) << "imway: display EDID does not advertise PQ + BT.2020 RGB"_sv << endL;
+
+        return false;
+    }
+
+    if (!connHdrMeta || !getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Colorspace", "BT2020_RGB", &connColorspace, &colorspaceBt2020)) {
+        *(c->log) << "imway: hdr: the connector carries no BT2020_RGB colorspace or HDR metadata"_sv << endL;
+
+        return false;
+    }
+
+    return true;
+}
+
+// the display settings changed: the output takes the color, link depth and
+// range they ask for with a modeset on the buffers it has; what the
+// connector cannot do is logged and the output stays as it was
+void KmsOutput::applyDisplaySettings() {
+    OutputConfiguration next = outputConfiguration(*c->settings);
+
+    // the SDR white follows its own setting through setSdrWhite
+    next.hdrSdrWhiteNits = next.hdrSdrWhiteNits > 0 && color.hdr() ? color.sdrWhiteNits : next.hdrSdrWhiteNits;
+
+    OutputColorState nextColor = outputColorState(next, displayCapabilities);
+
+    if (nextColor.hdr() && !color.hdr() && !hdrCapable()) {
+        *(c->log) << "imway: HDR unsupported here, staying SDR"_sv << endL;
+        next.hdrSdrWhiteNits = 0;
+        nextColor = outputColorState(next, displayCapabilities);
+    }
+
+    u32 bpcProp = 0;
+    u64 minBpc = 0, maxBpc = 0;
+    bool bpcRange = getRangeProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "max bpc", &bpcProp, &minBpc, &maxBpc);
+
+    if (next.bpc && (!bpcRange || next.bpc < minBpc || next.bpc > maxBpc)) {
+        *(c->log) << "imway: the connector cannot carry "_sv << next.bpc << " bpc"_sv << endL;
+
+        return;
+    }
+
+    // a 10-bit framebuffer asks for a 10-bit link unless told otherwise, as
+    // at boot
+    if (!nextColor.hdr() && scanFourcc == DRM_FORMAT_XRGB2101010 && bpcRange && !next.bpc) {
+        nextColor.bpc = (u32)(maxBpc < 10 ? maxBpc : 10);
+    }
+
+    u64 nextRange = rangeValue;
+
+    if (next.range == OutputRange::full) {
+        nextRange = rangeFullValue;
+    } else if (next.range == OutputRange::limited) {
+        nextRange = rangeLimitedValue;
+    } else {
+        u32 rangeProp = 0;
+
+        getEnumProp(fd, connectorId, DRM_MODE_OBJECT_CONNECTOR, "Broadcast RGB", "Automatic", &rangeProp, &nextRange);
+    }
+
+    if (next.range != OutputRange::automatic && !connRange) {
+        *(c->log) << "imway: connector cannot select requested RGB range"_sv << endL;
+
+        return;
+    }
+
+    config = next;
+
+    if (nextColor == color && nextRange == rangeValue) {
+        return;
+    }
+
+    color = nextColor;
+    maxBpcValue = color.bpc;
+    rangeValue = nextRange;
+
+    HdrContentMetadata content;
+
+    content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
+    metadata = hdrOutputMetadata(color, content);
+
+    if (color.hdr()) {
+        u32 blob = 0;
+
+        if (!createHdrMetadataBlob(metadata, blob)) {
+            *(c->log) << "imway: cannot create the HDR metadata blob"_sv << endL;
+
+            return;
+        }
+
+        if (hdrMetaBlob) {
+            drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
+        }
+
+        hdrMetaBlob = blob;
+    }
+
+    signalFeedbackLogged = false;
+    remodeset("display settings changed, remodeset"_sv);
+    c->scene->needsFrame = true;
 }
 
 // value.hdr holds: setupHdr runs only for an HDR output, whose metadata
@@ -3032,10 +3168,6 @@ bool KmsOutput::ready() const {
     return started && !flipPending && sessionActive && connectorConnected && powered;
 }
 
-bool KmsOutput::vsynced() const {
-    return true;
-}
-
 int KmsOutput::scanoutCount() const {
     return scanCount;
 }
@@ -3400,7 +3532,7 @@ void KmsOutput::releaseDirectUse(DmabufBuffer*& buf, FrameResourceRef*& frame) {
 }
 
 void KmsOutput::present(const void* pixels) {
-    if (!modesetDone || flipPending || !sessionActive || !pixels) {
+    if (!modesetDone || flipPending || !sessionActive) {
         return;
     }
 

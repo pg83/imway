@@ -1,6 +1,6 @@
 # A Vulkan call building the session's once-only GPU objects at boot fails
-# (the scenario's IMWAY_CHAOS=setup=K names which; the headless boot with
-# the fake cursor plane makes its calls in a fixed order). Nothing can run
+# (the scenario's IMWAY_CHAOS=setup=K names which; the boot on the KMS
+# emulator makes its calls in a fixed order). Nothing can run
 # without them: the compositor refuses to start, with an exit code rather
 # than a signal (the harness judges that), the failed call on record
 # ($fault_call) and nothing half-built faulting on the way out.

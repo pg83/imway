@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Scanout taint at the earliest import stage: the KMS side refuses the
 # prime fd import of the client's framebuffer, the buffer gets tainted at
 # once and composition carries the content on.

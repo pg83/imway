@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A display swapped for one with other modes, and the driver refuses the
 # framebuffers of the scanout rebuild at the new size and then at the old
 # one too (kms-fail-addfb, twice): with no swapchain at either size no

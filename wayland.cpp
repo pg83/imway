@@ -1509,9 +1509,10 @@ namespace {
         int buttonsDown = 0;
         // frame edges left to look for the surface under a resting pointer
         // whose window went away (minimize, unmap). ImGui judges hover off
-        // the previous frame's windows: for one frame the hidden window's
-        // place reads as the ui owning the pointer and the window uncovered
-        // is not hovered yet, so the second edge is the one that finds it
+        // the previous frame's windows: the edge that notices comes before
+        // the frame that stops drawing the window, in which its place reads
+        // as the ui owning the pointer; the frame after hovers the window
+        // uncovered, so the third edge is the one that finds it
         int ptrRepickFrames = 0;
 
         double curX = 0, curY = 0;
@@ -9591,10 +9592,6 @@ namespace {
             }
         }
 
-        if (srv.drmFd < 0) {
-            return true;
-        }
-
         for (int i = 0; i < b.nplanes; i++) {
             u32 handle = 0;
 
@@ -10528,7 +10525,7 @@ void SeatState::pointerRepick() {
 
     if (t && t->minimized) {
         pointerSetFocus(nullptr, 0, 0);
-        ptrRepickFrames = 2;
+        ptrRepickFrames = 3;
     }
 
     if (ptrRepickFrames == 0) {
@@ -12031,7 +12028,7 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
         pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
         // the frame edges find what the pointer rests on now
-        ptrRepickFrames = 2;
+        ptrRepickFrames = 3;
     }
 
     if (kbFocus == t) {
@@ -12404,7 +12401,7 @@ WaylandImpl::WaylandImpl(Composer& comp, const WaylandConfig& cfg)
 
     syncEvFd = *heldSyncFd;
 
-    if (syncEvFd >= 0 && drmFd >= 0) {
+    if (syncEvFd >= 0) {
         // probe like wlroots: ENOENT on an invalid handle proves the ioctl
         // exists, anything else means no eventfd parking on this kernel
         syncEventfdOk = drmSyncobjEventfd(drmFd, 0, 0, syncEvFd, 0) != 0 && errno == ENOENT;
@@ -13464,15 +13461,13 @@ void WaylandImpl::createGlobals() {
 
     u64 syncCap = 0;
 
-    if (explicitSyncSupported && drmFd >= 0 && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
+    if (explicitSyncSupported && drmGetCap(drmFd, DRM_CAP_SYNCOBJ_TIMELINE, &syncCap) == 0 && syncCap) {
         global(*(composer->log), *(composer->chaos), display, &wp_linux_drm_syncobj_manager_v1_interface, 1, this, syncManagerBind);
     }
 
-    // wp-drm-lease: only with a real drm node behind it; the device offers
-    // the non-desktop connectors (none in headless / VM without VR hardware)
-    if (drmFd >= 0 && composer->device) {
-        global(*(composer->log), *(composer->chaos), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
-    }
+    // wp-drm-lease: the device offers the non-desktop connectors (none on a
+    // VM without VR hardware)
+    global(*(composer->log), *(composer->chaos), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
 
     if (!formats.empty()) {
         int dmabufVersion = 3;

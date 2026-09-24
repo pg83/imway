@@ -21,7 +21,9 @@ struct InspectorInfo;
 // The desktop drives it only through this surface; it knows nothing of
 // windows, focus or input.
 struct Renderer {
-    virtual bool screenshot(stl::StringView path) = 0;
+    // the last frame as a PPM; raw keeps the framebuffer's own depth (a
+    // 10-bit one as maxval 1023), else it is rounded to 8 bits
+    virtual bool screenshot(stl::StringView path, bool raw) = 0;
     // compose a frame of the current state now, as a screenshot does before
     // it reads back; false when there is nothing to compose into yet
     virtual bool composeNow() = 0;

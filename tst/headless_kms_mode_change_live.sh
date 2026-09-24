@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A mode-list change without a disconnect (a dock re-reading EDID): the
 # hotplug probe notices the current mode is gone and remodesets in place,
 # never reporting the connector down.

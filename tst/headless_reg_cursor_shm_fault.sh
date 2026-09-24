@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=cpu IMWAY_CHAOS=client-texture=8 IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_SHM_BACKEND=cpu IMWAY_CHAOS=client-texture=8 IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # A client's wl_shm cursor image the device has no memory for (the first
 # client-sized allocation after the window's eight fails): a cursor has no
 # window to fault, so the pointer shows nothing of it and the client stays

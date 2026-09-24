@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FORCE_CURSOR=1 IMWAY_DEBUG_CURSOR=1
+# imway-env: IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1 IMWAY_DEBUG_CURSOR=1
 # IMWAY_DEBUG_CURSOR traces the software cursor every 120th frame: kind,
 # position, whether it is over a client. The first frame is one of them,
 # and its trace names the arrow over the bare desktop.

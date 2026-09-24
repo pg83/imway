@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1
 # The dumb-buffer path on a 1366x768 panel: the driver pads each row of a
 # dumb buffer to 256 bytes, so a frame no longer copies in one block but row
 # by row into the padded pitch, and the output still shows it.

@@ -224,7 +224,6 @@ namespace {
         ImGui_ImplVulkan_SetTextureColor(source, primaries, reference, (float)surface->color.minNits, (float)surface->color.maxNits, matrix, gamma, (int)surface->representation.alphaMode, coefficients, range, chromaLocation, yuvBits);
     }
 
-    void frameTimerCb(struct ev_loop*, ev_timer* w, int);
     void prepareCb(struct ev_loop*, ev_prepare* w, int);
     void clockTimerCb(struct ev_loop*, ev_timer* w, int);
 
@@ -491,7 +490,6 @@ namespace {
 
         ~RendererImpl() noexcept;
 
-        void tick();
 
         u32 findMemoryType(u32 typeBits, VkMemoryPropertyFlags props);
         // what a GPU allocation is for, which says which fault seam its
@@ -566,7 +564,7 @@ namespace {
         void onListen(void* arg) override;
         bool renderFrame(int scanIdx);
         bool readbackLastFrame();
-        bool screenshot(StringView path) override;
+        bool screenshot(StringView path, bool raw) override;
         bool composeNow() override;
         bool captureSubmit(int x, int y, int w, int h, Listener& done) override;
         void captureCancel(Listener& done) override;
@@ -639,10 +637,6 @@ namespace {
         if (r->wantFrame() && r->comp->output->ready()) {
             r->frameNow();
         }
-    }
-
-    void frameTimerCb(struct ev_loop*, ev_timer* w, int) {
-        ((RendererImpl*)w->data)->tick();
     }
 
     // the desktop renders on demand, wake it up so the clock stays fresh
@@ -822,30 +816,17 @@ RendererImpl::RendererImpl(Composer& comp, DeviceVk& vk, int limit)
     // sized by the first mode announcement, like everything else here
     shotCapture = ScreenshotCapture::create(comp, vk, 0, 0, fmt, *comp.pool->make<CallScreenshotReady>(this));
 
-    if (comp.output->vsynced()) {
-        ev_prepare* prepare = comp.pool->make<ev_prepare>();
-        struct ev_loop* heldLoop = comp.loop;
+    ev_prepare* prepare = comp.pool->make<ev_prepare>();
+    struct ev_loop* heldLoop = comp.loop;
 
-        pooledGuard(*comp.pool, [heldLoop, prepare] {
-            ev_prepare_stop(heldLoop, prepare);
-        });
-        evPrepareInit(prepare, prepareCb);
-        prepare->data = this;
-        ev_prepare_start(comp.loop, prepare);
-    } else {
-        ev_timer* frameTimer = comp.pool->make<ev_timer>();
-        struct ev_loop* heldLoop = comp.loop;
-
-        pooledGuard(*comp.pool, [heldLoop, frameTimer] {
-            ev_timer_stop(heldLoop, frameTimer);
-        });
-        evTimerInit(frameTimer, frameTimerCb, 0., 1.0 / comp.scene->hz);
-        frameTimer->data = this;
-        ev_timer_start(comp.loop, frameTimer);
-    }
+    pooledGuard(*comp.pool, [heldLoop, prepare] {
+        ev_prepare_stop(heldLoop, prepare);
+    });
+    evPrepareInit(prepare, prepareCb);
+    prepare->data = this;
+    ev_prepare_start(comp.loop, prepare);
 
     ev_timer* clockTimer = comp.pool->make<ev_timer>();
-    struct ev_loop* heldLoop = comp.loop;
 
     pooledGuard(*comp.pool, [heldLoop, clockTimer] {
         ev_timer_stop(heldLoop, clockTimer);
@@ -2828,16 +2809,8 @@ void RendererImpl::recordOutputTransform(VkCommandBuffer commands, VkFramebuffer
     // temporal dither: shift the noise pattern every frame so quantization
     // structure does not freeze in screen space. splitMix64 of the frame
     // index: a pure function of it, decorrelated between frames (a linear
-    // walk repeats every cycle along one diagonal). Live displays only — a
-    // headless screenshot must not depend on which frame it caught
-    bool temporal = comp->output->vsynced();
-
-#ifdef IMWAY_FOR_TESTS
-    // the dither-motion regression test forces the live behavior on headless
-    temporal = temporal || getenv("IMWAY_TEMPORAL_DITHER");
-#endif
-
-    push.row[6][3] = (float)(splitMix64(temporal ? (u64)comp->scene->framesDone : 0) % 4096);
+    // walk repeats every cycle along one diagonal)
+    push.row[6][3] = (float)(splitMix64((u64)comp->scene->framesDone) % 4096);
     // the roll-off knee reshapes in-range content, so it only runs when
     // something visible can actually exceed the output peak
     push.row[7][0] = sceneMaxNits > mapping.peakNits * 1.0001 ? 1.f : 0.f;
@@ -3608,9 +3581,9 @@ void RendererImpl::rasterizeShape(int kind, u32* out) {
         for (size_t i = 0; i < (size_t)hwCapW * hwCapH; i++) {
             u32 v = out[i];
             u32 a = ((v >> 30) & 3) * 85;
-            u32 r = (v >> 22) & 0xff;
-            u32 g = (v >> 12) & 0xff;
-            u32 b = (v >> 2) & 0xff;
+            u32 r = unorm10To8((v >> 20) & 1023);
+            u32 g = unorm10To8((v >> 10) & 1023);
+            u32 b = unorm10To8(v & 1023);
 
             out[i] = (a << 24) | (r << 16) | (g << 8) | b;
         }
@@ -3725,7 +3698,7 @@ bool RendererImpl::renderFrame(int scanIdx) {
                     bool exported = ready && drmSyncobjCreate(drmFd, 0, &binary) == 0 && drmSyncobjTransfer(drmFd, binary, 0, s->syncAcquireHandle, s->syncAcquirePoint, 0) == 0 && drmSyncobjExportSyncFile(drmFd, binary, &syncFd) == 0;
 
                     if (exported) {
-                        syncFd = comp->chaos->syncFile(syncFd);
+                        syncFd = comp->chaos->acquireFile(syncFd);
                         exported = syncFd >= 0;
                     }
 
@@ -4137,12 +4110,13 @@ bool RendererImpl::renderFrame(int scanIdx) {
             // again without a wait in between. The signal op is still in
             // flight, so recreate after the frame fence retires.
             syncOutStale = true;
+            *(comp->log) << "imway: frame fence export failed, its semaphore is replaced"_sv << endL;
         }
     }
 
     // The dumb-buffer backend consumes the readback on the CPU immediately.
-    // Zero-copy/headless paths keep the submission asynchronous and retire it
-    // at the next fence poll or presentation completion.
+    // The zero-copy path keeps the submission asynchronous and retires it at
+    // the next fence poll or presentation completion.
     if (comp->output->presentNeedsPixels()) {
         finishGpuFrame(true);
     }
@@ -4228,7 +4202,7 @@ bool RendererImpl::composeNow() {
     return true;
 }
 
-bool RendererImpl::screenshot(StringView path) {
+bool RendererImpl::screenshot(StringView path, bool raw) {
     if (!composeNow() || !readbackLastFrame()) {
         return false;
     }
@@ -4239,27 +4213,41 @@ bool RendererImpl::screenshot(StringView path) {
         return false;
     }
 
+    // a 10-bit framebuffer kept at its depth: two bytes a sample, big
+    // endian, as PPM has it past maxval 255
+    bool wide = raw && fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
     FDRegular out(f);
     auto& hdr = sb();
 
-    hdr << "P6\n"_sv << width << " "_sv << height << "\n255\n"_sv;
+    hdr << "P6\n"_sv << width << " "_sv << height << (wide ? "\n1023\n"_sv : "\n255\n"_sv);
     out.write(hdr.data(), hdr.used());
 
     auto* px = (const unsigned char*)readbackMap;
     Vector<u8> row;
 
-    row.zero((size_t)width * 3);
+    row.zero((size_t)width * (wide ? 6 : 3));
 
     for (int y = 0; y < height; y++) {
         const unsigned char* src = px + (size_t)y * width * 4;
 
-        if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+        if (wide) {
             const u32* p = (const u32*)src;
 
             for (int x = 0; x < width; x++) {
-                row.mut(x * 3 + 0) = (u8)((p[x] >> 22) & 0xff);
-                row.mut(x * 3 + 1) = (u8)((p[x] >> 12) & 0xff);
-                row.mut(x * 3 + 2) = (u8)((p[x] >> 2) & 0xff);
+                for (int ch = 0; ch < 3; ch++) {
+                    u32 v = (p[x] >> (20 - ch * 10)) & 1023;
+
+                    row.mut(x * 6 + ch * 2) = (u8)(v >> 8);
+                    row.mut(x * 6 + ch * 2 + 1) = (u8)(v & 0xff);
+                }
+            }
+        } else if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+            const u32* p = (const u32*)src;
+
+            for (int x = 0; x < width; x++) {
+                row.mut(x * 3 + 0) = (u8)unorm10To8((p[x] >> 20) & 1023);
+                row.mut(x * 3 + 1) = (u8)unorm10To8((p[x] >> 10) & 1023);
+                row.mut(x * 3 + 2) = (u8)unorm10To8(p[x] & 1023);
             }
         } else {
             for (int x = 0; x < width; x++) {
@@ -4388,7 +4376,7 @@ void RendererImpl::captureRetired(VkResult status) {
         for (size_t i = 0; i < (size_t)captureW * captureH; i++) {
             u32 p = px[i];
 
-            px[i] = (((p >> 22) & 0xffu) << 16) | (((p >> 12) & 0xffu) << 8) | ((p >> 2) & 0xffu) | 0xff000000u;
+            px[i] = (unorm10To8((p >> 20) & 1023) << 16) | (unorm10To8((p >> 10) & 1023) << 8) | unorm10To8(p & 1023) | 0xff000000u;
         }
     }
 
@@ -4485,9 +4473,9 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
     if (fmt == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
         u32 p = *(const u32*)src;
 
-        r = (u8)((p >> 22) & 0xff);
-        g = (u8)((p >> 12) & 0xff);
-        b = (u8)((p >> 2) & 0xff);
+        r = (u8)unorm10To8((p >> 20) & 1023);
+        g = (u8)unorm10To8((p >> 10) & 1023);
+        b = (u8)unorm10To8(p & 1023);
     } else {
         r = src[2];
         g = src[1];
@@ -4668,7 +4656,7 @@ void RendererImpl::frameNow() {
                 presentFenceFd = -1;
             }
         } else {
-            comp->output->present(comp->output->presentNeedsPixels() ? readbackMap : nullptr);
+            comp->output->present(readbackMap);
         }
 
         if (shotRequested && accepted) {
@@ -4686,25 +4674,6 @@ void RendererImpl::frameNow() {
     clock_gettime(CLOCK_MONOTONIC, &ft1);
     frameMs[frameMsIdx] = (float)((double)(ft1.tv_sec - ft0.tv_sec) * 1e3 + (double)(ft1.tv_nsec - ft0.tv_nsec) / 1e6);
     frameMsIdx = (frameMsIdx + 1) % kFrameHistory;
-
-    comp->scene->framesDone++;
-
-    if (framesLimit > 0 && comp->scene->framesDone >= framesLimit) {
-        ev_break(comp->loop, EVBREAK_ALL);
-    }
-}
-
-void RendererImpl::tick() {
-    // headless present() reports the frame event before the GPU is done, so the
-    // frame retires here instead; without this, dmabuf releases to clients
-    // wait for the next needed frame or the 2s clock tick
-    finishGpuFrame(false);
-
-    if (wantFrame()) {
-        frameNow();
-
-        return;
-    }
 
     comp->scene->framesDone++;
 

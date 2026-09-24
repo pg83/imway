@@ -377,6 +377,16 @@ screenshot() {
     [[ -s "$1" ]] || { echo "screenshot $1 was not written" >&2; return 1; }
 }
 
+# the framebuffer at its own depth: maxval 1023 for a 10-bit one
+screenshot_raw() {
+    rm -f "$1"
+
+    ctl "screenshot-raw $1"
+    dump_state >/dev/null || return 1
+
+    [[ -s "$1" ]] || { echo "screenshot $1 was not written" >&2; return 1; }
+}
+
 # A fixed-length run of a second compositor on the KMS emulator, next to
 # the scenario's own: boots the display/driver shape the emulator's knobs
 # describe, renders three frames and exits. Output lands in BOOT_OUT, the

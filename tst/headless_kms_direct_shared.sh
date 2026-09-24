@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Two wl_buffers on one buffer object, each flipped straight to the plane.
 # The device gives the object one GEM handle however often it is imported,
 # so the backend holds one handle for both framebuffers: dropping the

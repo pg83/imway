@@ -1,7 +1,8 @@
 # The device runs out of memory building the screenshot capture's readback
 # buffer, at the step the scenario's IMWAY_CHAOS=shot-readback=K names (0
-# the buffer, 1 its memory, 2 the bind, 3 the map; the headless output
-# reads every capture back, it has no scanout to hand off). The Print key
+# the buffer, 1 its memory, 2 the bind, 3 the map; a display that cannot
+# import the GPU's buffers scans out dumb buffers, so every capture is read
+# back instead of handed off). The Print key
 # must not cost the session: the failure is reported, the next frame
 # builds the buffer and captures again, and the file is saved.
 shots="$XDG_RUNTIME_DIR/shots"

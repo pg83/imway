@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS='frame-fence=40 no-ext=VK_KHR_external_semaphore_fd'
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS='frame-fence=40 no-ext=VK_KHR_external_semaphore_fd'
 # A KMS frame without a present fence (no SYNC_FD semaphores to make one)
 # waits for its own GPU fence before the flip; when that fence reports a
 # lost device the frame is not flipped and the session ends through the

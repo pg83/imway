@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A pen on a real tablet, the whole way: libinput reads the device, the
 # compositor turns its axes into tablet-v2 events, and a client on the other
 # end reads them back. The control FIFO can post tablet events straight into

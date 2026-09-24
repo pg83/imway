@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # expect-startup-exit
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_CHAOS=setup=28
+# imway-env: IMWAY_CHAOS=setup=28
 # The boot cannot create the output pipeline layout.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

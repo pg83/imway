@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --mode 1920x1080
+# imway-args: --mode 1920x1080
 # A floating window parked at the far corner of a 1080p display must stay
 # reachable when the display shrinks to 800p: enough of it — including
 # the titlebar — has to remain on screen to grab.

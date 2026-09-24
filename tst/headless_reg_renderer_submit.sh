@@ -11,14 +11,14 @@ set -euo pipefail
 imway_bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 
 rc=0
-out=$(env IMWAY_CHAOS=frame-submit=1 timeout 60 "$imway_bin" --device headless --socket imway-submit --frames 3 2>&1) || rc=$?
+out=$(env IMWAY_CHAOS=frame-submit=1 timeout 60 "$imway_bin" --device auto --socket imway-submit --frames 3 2>&1) || rc=$?
 [[ "$rc" -ne 124 ]] || { echo "a refused frame hung the compositor: $out"; exit 1; }
 grep -q "Vulkan queue submit failed" <<<"$out" || { echo "the refused frame was not reported (rc=$rc): $out"; exit 1; }
 ! grep -q "clean exit after 3 frames" <<<"$out" || { echo "the session ran on after a refused frame: $out"; exit 1; }
 
 shot="$XDG_RUNTIME_DIR/refused.ppm"
 rc=0
-out=$(env IMWAY_CHAOS=readback-submit=1 timeout 60 "$imway_bin" --device headless --socket imway-submit --frames 3 --screenshot "$shot" 2>&1) || rc=$?
+out=$(env IMWAY_CHAOS=readback-submit=1 timeout 60 "$imway_bin" --device auto --socket imway-submit --frames 3 --screenshot "$shot" 2>&1) || rc=$?
 [[ "$rc" -eq 0 ]] || { echo "a refused readback exited $rc: $out"; exit 1; }
 grep -q "readback submit failed" <<<"$out" || { echo "the refused readback was not reported: $out"; exit 1; }
 [[ ! -s "$shot" ]] || { echo "a screenshot was written from a refused readback"; exit 1; }

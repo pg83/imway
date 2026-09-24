@@ -7,7 +7,7 @@
 # which Up and Down walk inside the group. Enter runs what the walk landed
 # on: the application, or the settings action (a toggle).
 # imway-args: --mode 800x1280
-# imway-env: XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./vk
+# imway-env: IMWAY_FAKE_KMS_MODE=800x1280 XDG_DATA_HOME=./xdg XDG_DATA_DIRS=./vk
 # imway-pre: mkdir -p vk && ln -s /usr/share/vulkan vk/vulkan
 # imway-pre: mkdir -p xdg/applications
 set -euo pipefail

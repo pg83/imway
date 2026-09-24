@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Client cursor surfaces the hardware cursor plane cannot take as they are.
 # A dma-buf cursor has no CPU copy for the plane: it stays composited into
 # the frame with the plane on. A wl_shm cursor whose file shrank under the

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_CHAOS=sigbus-record=1
+# imway-env: IMWAY_CHAOS=sigbus-record=1 IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # The cursor capture edges once more, on a compositor whose main thread
 # cannot allocate its SIGBUS guard record the first time it needs one: the
 # single-pixel cursor's copy into a whole, healthy destination is refused

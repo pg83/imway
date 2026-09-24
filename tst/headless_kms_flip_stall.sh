@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A page flip that never completes (a wedged driver or link) while a VT
 # comeback needs a remodeset: waiting for the flip gives up after a frame's
 # worth of time instead of hanging the compositor, and once flips complete

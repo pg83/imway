@@ -3,10 +3,10 @@
 # unknown verb, an unknown setting, a line longer than the reader's buffer
 # (cut at 1023 bytes, the rest dropped until the newline), a dump whose
 # final path is a directory (the temporary file cannot be renamed onto it),
-# the fake-KMS verbs without the fake device, input verbs short of their
-# arguments, gesture phases that do not exist, an empty line, malformed
-# rule and notify lines, a rule app name longer than a rule holds (cut to
-# it), "type" text with characters no key produces, which are skipped:
+# input verbs short of their arguments, gesture phases that do not exist,
+# an empty line, malformed rule and notify lines, a rule app name longer
+# than a rule holds (cut to it), "type" text with characters no key
+# produces, which are skipped:
 # the launcher still finds settings from the letters around them, and a
 # character only a shifted key produces, typed with Shift.
 set -euo pipefail
@@ -31,13 +31,6 @@ mkdir -p "$XDG_RUNTIME_DIR/dumpdir/inside"
 ctl "dump $XDG_RUNTIME_DIR/dumpdir"
 await 50 in_log "imway: dump: cannot rename" || { echo "a dump onto a directory was not reported"; cat "$IMWAY_LOG"; exit 1; }
 [[ ! -e "$XDG_RUNTIME_DIR/dumpdir.tmp" ]] || { echo "the failed dump left its temporary file"; exit 1; }
-
-# the fake-KMS verbs on a compositor without the fake device are verbs it
-# does not have
-for v in kms-connector kms-fail-commit kms-fail-new-fb kms-fail-prime kms-fail-addfb kms-reject-cursor kms-modes kms-lease-fault kms-fail-lookup; do
-    ctl "$v 1 1"
-    await 50 in_log "imway: unknown command: $v 1 1" || { echo "$v on a headless compositor was not refused"; exit 1; }
-done
 
 # input verbs short of their arguments, phases a gesture does not have, an
 # empty line and malformed rule and notify lines do nothing; the sentinel

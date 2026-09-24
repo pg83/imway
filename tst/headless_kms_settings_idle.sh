@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The display page's idle sliders, typed into with Ctrl+click like a user
 # would to hit an exact value: "display sleep" at 2 seconds blanks the
 # fake KMS output once input stops, and with "lock before sleep" unticked

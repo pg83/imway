@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # Display power management against idle inhibitors and its own settings: an
 # inhibitor on a shown popup keeps the display on past the timeout, one on a
 # surface without content does not; switching the timeout off wakes a dark

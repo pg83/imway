@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The pointer rests on the dock when a fullscreen dma-buf client maps. The
 # desktop judges whether its ui owns the pointer in composed frames only,
 # so while it says the ui does, the client's buffer stays off the plane:

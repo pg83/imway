@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1 IMWAY_SETTINGS=display.lock_before_dpms=false
-# imway-args: --device auto --dpms 1
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1 IMWAY_SETTINGS=display.lock_before_dpms=false
+# imway-args: --dpms 1
 # Idle power management and a VT comeback on the dumb-buffer path: waking
 # the display and coming back from a VT switch both remodeset on the last
 # dumb buffer shown, not on a scanout image there is none of.

@@ -161,6 +161,10 @@ ColorRgb mapOutputNits(const OutputMapping& mapping, const ColorRgb& color);
 // when nothing on screen can exceed the output peak, the roll-off knee must
 // not touch in-range content.
 double surfaceMaxNits(const ColorDescription& color, double sdrWhiteNits);
+
+// a 10-bit unorm channel at 8 bits, the nearest level: dropping the low
+// bits instead would darken by up to a level
+u32 unorm10To8(u32 value);
 HdrOutputMetadata hdrOutputMetadata(const OutputColorState& output, const HdrContentMetadata& content);
 
 bool directScanoutColorCompatible(const OutputColorState& output, const ColorDescription& surface);

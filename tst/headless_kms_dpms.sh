@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --dpms 1
+# imway-args: --dpms 1
 # Idle power management on the fake KMS: a second of no input turns the
 # display off (ACTIVE=0 commit), input turns it back on and flips resume.
 # A wake the display refuses is logged and does not count as back on; the

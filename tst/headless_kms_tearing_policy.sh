@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The tearing setting overrides the client's wish either way: "always"
 # presents a direct-scanout client that never asked for tearing with async
 # page flips, "deny" keeps a client that asked for it on vsynced flips.

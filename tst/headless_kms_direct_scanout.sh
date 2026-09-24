@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The positive direct-scanout path: a lone fullscreen dmabuf toplevel goes
 # straight to the plane, flips keep coming and no rejection is logged.
 set -euo pipefail

@@ -1,6 +1,6 @@
 // Regression: Wayland ARGB buffers are premultiplied in the electrical
 // domain. Exercise a translucent subsurface first as legacy sRGB and then as
-// PQ/BT.2020; the headless scenario checks the actual composed signal.
+// PQ/BT.2020; the scenario checks the actual composed signal.
 
 #include "wl_util.h"
 #include <color-management-v1-client-protocol.h>

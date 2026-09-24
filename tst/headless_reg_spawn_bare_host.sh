@@ -17,7 +17,7 @@ rt="$XDG_RUNTIME_DIR/bare"
 mkdir -p "$rt"
 
 env -u PATH XDG_RUNTIME_DIR="$rt" \
-    "$IMWAY_CLIENT" "$bin" --device headless --socket imway-test -- sh -c "PATH=/usr/bin:/bin exec '$probe' boot" \
+    "$IMWAY_CLIENT" "$bin" --device auto --socket imway-test -- sh -c "PATH=/usr/bin:/bin exec '$probe' boot" \
     >"$rt/out.log" 2>&1 &
 bare=$!
 

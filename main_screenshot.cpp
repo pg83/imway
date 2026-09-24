@@ -50,7 +50,7 @@ using namespace stl;
 
 // imway screenshot <path>: a standalone plt+Vulkan imgui client. On KMS the
 // path names an owned scanout DMA-BUF and metadata comes through the
-// environment; headless uses a self-describing IMW1 memfd. The HDR viewer
+// environment; a readback comes as a self-describing IMW1 memfd. The HDR viewer
 // decodes the shared PQ image into an FP16 linear-BT.2020/nits target, blends
 // ImGui there, then encodes the result to its PQ swapchain. Save still
 // reads only the selected source region. plt owns window/input.
@@ -1352,7 +1352,7 @@ namespace {
                 u32 g = (pixel >> 10) & 1023;
                 u32 b = pixel & 1023;
 
-                dest[i] = (r >> 2) | ((g >> 2) << 8) | ((b >> 2) << 16) | 0xff000000u;
+                dest[i] = unorm10To8(r) | (unorm10To8(g) << 8) | (unorm10To8(b) << 16) | 0xff000000u;
                 rgb16[i * 3 + 0] = (u16)((r * 65535 + 511) / 1023);
                 rgb16[i * 3 + 1] = (u16)((g * 65535 + 511) / 1023);
                 rgb16[i * 3 + 2] = (u16)((b * 65535 + 511) / 1023);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # expect-startup-exit
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_CHAOS=setup=0
+# imway-env: IMWAY_CHAOS=setup=0
 # The boot cannot create the Vulkan instance.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

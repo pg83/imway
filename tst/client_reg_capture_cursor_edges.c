@@ -238,7 +238,7 @@ int main(int argc, char** argv) {
     struct wl_toplevel_ctx ctx;
 
     wl_make_toplevel(&ctx, "capture-cursor-edges", 300, 300, 0xff20c080u);
-    wl_display_roundtrip(wl_dpy);
+    wl_await_presented(ctx.surface);
 
     // no client cursor anywhere yet
     if (expect_failed("no cursor", 1, 1, capture(cursor_session(), 0)))

@@ -419,7 +419,8 @@ struct Scene {
     int framesDone = 0;
 
     bool needsFrame = true;
-    bool drawCursor = false;
+    // off only while the eyedropper composes a frame without the cursor
+    bool drawCursor = true;
     // current ui scale, written by the desktop when a scale change is
     // applied at a frame edge; the renderer reacts (cursor bitmaps rebake)
     float uiScale = 1.f;

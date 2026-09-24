@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_LINK_BPC=8
-# imway-args: --device auto --hdr 300
+# imway-env: IMWAY_FAKE_KMS_LINK_BPC=8
+# imway-args: --hdr 300
 # The connector accepts the HDR configuration but the link only negotiates
 # 8 bpc: the feedback path notices after the first flip and degrades the
 # session to SDR instead of showing banded PQ.

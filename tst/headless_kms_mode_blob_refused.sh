@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A display swapped for one with other modes, and the driver will not take
 # the new mode's blob: the output stays whole at the old size and says the
 # new display refuses it, instead of ending the session. Replugged once the

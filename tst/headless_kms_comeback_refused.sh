@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A VT comeback whose remodeset the device will not take. A test commit
 # bouncing with EPERM or EBUSY says nothing about the configuration: the
 # remodeset is called unavailable and nothing is degraded. A test that

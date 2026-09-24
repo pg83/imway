@@ -83,6 +83,8 @@ using namespace stl;
 //   sync-file=K       K sync-file exports pass, the one after fails
 //   sync-wait=K       K sync-file semaphore creations and imports pass, the
 //                     one after fails
+//   acquire-file=K    K explicit-sync acquire point exports pass, the one
+//                     after fails
 //   output-target=K   K output-target calls pass, the one after runs out
 //                     of device memory
 //   no-ext=NAME       the Vulkan device does not offer extension NAME (the
@@ -220,6 +222,7 @@ namespace {
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
+        int acquireFileSkip = -1;
         int syncWaitSkip = -1;
         int outputTargetSkip = -1;
         Vector<StringView> hiddenExtensions;
@@ -305,6 +308,7 @@ namespace {
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
+        int acquireFile(int fd) override;
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
         bool deviceExtension(const char* name, bool offered) override;
@@ -356,7 +360,8 @@ namespace {
         ssize_t formatTableWrite(ssize_t written) override;
         _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) override;
 
-        void arm(StringView fault, StringView arg);
+        void arm(StringView words) override;
+        void armFault(StringView fault, StringView arg);
         void armBus(BusFault kind, StringView arg);
         bool busFires(BusFault kind, DBusMessage* msg);
     };
@@ -373,6 +378,10 @@ namespace {
 }
 
 TestChaosMonkey::TestChaosMonkey(StringView script) {
+    arm(script);
+}
+
+void TestChaosMonkey::arm(StringView script) {
     while (!script.empty()) {
         StringView word, rest, fault, arg;
 
@@ -384,12 +393,12 @@ TestChaosMonkey::TestChaosMonkey(StringView script) {
         }
 
         if (word.split('=', fault, arg)) {
-            arm(fault, arg);
+            armFault(fault, arg);
         }
     }
 }
 
-void TestChaosMonkey::arm(StringView fault, StringView arg) {
+void TestChaosMonkey::armFault(StringView fault, StringView arg) {
     if (fault == "account"_sv) {
         accountFaults = (int)arg.stou();
     } else if (fault == "pam-message"_sv) {
@@ -438,6 +447,8 @@ void TestChaosMonkey::arm(StringView fault, StringView arg) {
         descriptorSetSkip = (int)arg.stou();
     } else if (fault == "sync-file"_sv) {
         syncFileSkip = (int)arg.stou();
+    } else if (fault == "acquire-file"_sv) {
+        acquireFileSkip = (int)arg.stou();
     } else if (fault == "sync-wait"_sv) {
         syncWaitSkip = (int)arg.stou();
     } else if (fault == "output-target"_sv) {
@@ -890,6 +901,16 @@ int TestChaosMonkey::syncFile(int fd) {
     return -1;
 }
 
+int TestChaosMonkey::acquireFile(int fd) {
+    if (acquireFileSkip < 0 || acquireFileSkip-- > 0) {
+        return fd;
+    }
+
+    close(fd);
+
+    return -1;
+}
+
 VkResult TestChaosMonkey::syncWait(VkResult result) {
     if (syncWaitSkip < 0 || syncWaitSkip-- > 0) {
         return result;
@@ -1293,6 +1314,7 @@ namespace {
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
+        int acquireFile(int fd) override;
         VkResult syncWait(VkResult result) override;
         VkResult outputTarget(VkResult result) override;
         bool deviceExtension(const char* name, bool offered) override;
@@ -1343,6 +1365,7 @@ namespace {
         int formatTable(int fd) override;
         ssize_t formatTableWrite(ssize_t written) override;
         _drmModeAtomicReq* atomicRequest(_drmModeAtomicReq* made) override;
+        void arm(StringView words) override;
     };
 }
 
@@ -1455,6 +1478,10 @@ VkResult IdleChaosMonkey::descriptorSet(VkResult result) {
 }
 
 int IdleChaosMonkey::syncFile(int fd) {
+    return fd;
+}
+
+int IdleChaosMonkey::acquireFile(int fd) {
     return fd;
 }
 
@@ -1617,6 +1644,10 @@ ssize_t IdleChaosMonkey::formatTableWrite(ssize_t written) {
 
 _drmModeAtomicReq* IdleChaosMonkey::atomicRequest(_drmModeAtomicReq* made) {
     return made;
+}
+
+// only the control harness arms faults, and production does not link it
+void IdleChaosMonkey::arm(StringView) {
 }
 
 ChaosMonkey* ChaosMonkey::create(ObjPool& pool) {

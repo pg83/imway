@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=scanout=15
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=scanout=15
 # The replacement is built, but the presented scanout buffer cannot be
 # exported as a dma-buf for the viewer (the call after the boot's ten and
 # the replacement's five): the spare is dropped and the capture reads the

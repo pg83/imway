@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # expect-compositor-exit
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FAKE_KMS_NO_PRIME=1 IMWAY_CHAOS=output-target=21
-# imway-args: --device auto
+# imway-env: IMWAY_FAKE_KMS_NO_PRIME=1 IMWAY_CHAOS=output-target=21
 # On the dumb-buffer path the renderer draws into an offscreen target of
 # its own; the rebuild for the new mode fails at the offscreen target's view.
 set -euo pipefail

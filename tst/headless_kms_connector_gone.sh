@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A hotplug probe that finds the connector object itself gone for a moment
 # (an MST port re-enumerating): the probe carries no information, so the
 # output neither disconnects nor remodesets, and when the connector is

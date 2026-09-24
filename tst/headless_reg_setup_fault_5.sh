@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # expect-startup-exit
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_CHAOS=setup=5
+# imway-env: IMWAY_CHAOS=setup=5
 # The boot cannot create the frame command buffer.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

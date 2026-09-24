@@ -3,9 +3,10 @@
 #
 # This is a graph node's command (see build.py): the compositor and the test
 # clients are dependencies, so by the time we run they are built. We start a
-# fresh headless compositor in its own scratch dir (TMPDIR == XDG_RUNTIME_DIR
-# == cwd), wait until it is fully up, run the scenario with the environment
-# from tst/lib.sh, and write {status, seconds, detail, ...} to --out.
+# fresh compositor on the KMS emulator in its own scratch dir (TMPDIR ==
+# XDG_RUNTIME_DIR == cwd), wait until it is fully up, run the scenario with
+# the environment from tst/lib.sh, and write {status, seconds, detail, ...}
+# to --out.
 #
 # We ALWAYS exit 0: a scenario failure is recorded in the JSON, not in the
 # process exit code, so the build graph does not abort and every test still
@@ -269,6 +270,12 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         # test opens the machine's real keyboard and mouse. A scenario that
         # wants a device drops one in; the directory is empty otherwise.
         IMWAY_INPUT_DIR=input_dir,
+        # every scenario drives the KMS backend over the userspace emulator
+        IMWAY_FAKE_KMS="1",
+        # hermetic seat: the host's seatd must not hand a scenario its seat;
+        # libseat fails fast and the compositor opens its devices directly,
+        # imway-env can name a seatd of the scenario's own
+        SEATD_SOCK="/nonexistent-imway-test",
     )
     if not meta["private_bus"]:
         # hermetic buses too: without a private one the host's own session
@@ -314,7 +321,7 @@ def run(imway: str, scenario: str, client: str, meta: dict,
 
     logf = open(log, "w")
     proc = subprocess.Popen(
-        [imway, "--device", "headless", "--socket", "imway-test", "--control", ctl] + meta["args"],
+        [imway, "--device", "auto", "--socket", "imway-test", "--control", ctl] + meta["args"],
         cwd=rt, env=env, stdout=logf, stderr=subprocess.STDOUT,
         start_new_session=True,
     )

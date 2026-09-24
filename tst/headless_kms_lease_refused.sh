@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS="lease=1 resource=wp_drm_lease_connector_v1"
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS="lease=1 resource=wp_drm_lease_connector_v1"
 # wp-drm-lease over the KMS emulator when the device says no: a connector
 # offer that could not be allocated is skipped, a refused lease ends in
 # finished and the retry is granted, a released device object is told so,

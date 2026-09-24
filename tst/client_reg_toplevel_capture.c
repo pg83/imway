@@ -164,8 +164,7 @@ int main(void) {
     struct wl_toplevel_ctx decoy, target;
     wl_make_toplevel(&decoy, "tl-cap-decoy", 420, 320, 0xFF00FF00u);
     wl_make_toplevel(&target, "tl-cap-target", 260, 180, 0xFFFF00FFu);
-    wl_display_roundtrip(wl_dpy);
-    wl_display_roundtrip(wl_dpy);
+    wl_await_presented(target.surface);
     if (!target_handle) {
         fprintf(stderr, "target toplevel never appeared in the list\n");
         return 1;

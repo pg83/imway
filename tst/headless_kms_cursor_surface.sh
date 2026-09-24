@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A client's own cursor surface rides the hardware cursor plane: with the
 # plane off it is composited into the frame, with the plane on it leaves the
 # frame, and a null cursor hides the plane without the session missing a

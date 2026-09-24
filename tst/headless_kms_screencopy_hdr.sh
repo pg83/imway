@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto --hdr 300
+# imway-args: --hdr 300
 # zwlr-screencopy of an HDR KMS output: the 10-bit PQ scanout is narrowed to the
 # 8-bit XRGB the client's buffer holds, the same PQ code values the
 # compositor's own capture of that output reads.

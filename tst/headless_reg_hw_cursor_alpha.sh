@@ -2,7 +2,7 @@
 # The rasterized hardware-cursor image must keep per-pixel alpha. The unit
 # bypass in the output transform used to write alpha=1.0, turning the cursor
 # plane into an opaque 64x64 square around the arrow.
-# imway-env: IMWAY_FAKE_CURSOR_PLANE=1 IMWAY_FORCE_CURSOR=1 IMWAY_DEBUG_CURSOR=1
+# imway-env: IMWAY_DEBUG_CURSOR=1
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

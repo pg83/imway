@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=cpu IMWAY_SHM_COPY_DELAY_MS=3000 IMWAY_SHM_TRACE=1 IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_SHM_BACKEND=cpu IMWAY_SHM_COPY_DELAY_MS=3000 IMWAY_SHM_TRACE=1 IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # Reading the screen while a wl_shm commit is still on the CPU copy lane
 # (held there for three seconds): a screenshot taken right after a window
 # turns blue waits the copy out and shows the new colour, never the

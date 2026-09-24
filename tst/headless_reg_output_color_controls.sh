@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The headless output's color controls do only what a display would: on an
+# The output's color controls do only what a display would: on an
 # SDR output an SDR-white change is meaningless and a night-light
 # temperature at or above daylight is neutral, so neither moves a pixel,
 # and a display setting that leaves the color state as it was re-renders
@@ -59,17 +59,17 @@ await 50 cll_is 250 || { echo "SDR white 250 did not reach the metadata ($(cll))
 imway_bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 
 rc=0
-out=$(timeout 60 "$imway_bin" --device headless --socket imway-mode --frames 3 --mode 800x600@75 2>&1) || rc=$?
-[[ "$rc" -eq 0 ]] || { echo "an 800x600@75 headless run exited $rc: $out"; exit 1; }
+out=$(IMWAY_FAKE_KMS_MODE=800x600@75 timeout 60 "$imway_bin" --device auto --socket imway-mode --frames 3 --mode 800x600@75 2>&1) || rc=$?
+[[ "$rc" -eq 0 ]] || { echo "an 800x600@75 run exited $rc: $out"; exit 1; }
 grep -q "output 800x600@75" <<<"$out" || { echo "the mode was not honoured: $out"; exit 1; }
 
 # a mode without a size on either side of the x, or with a zero one, is
 # no mode at all
 for mode in sideways x600 800x 0x600 800x0; do
     rc=0
-    out=$(timeout 60 "$imway_bin" --device headless --socket imway-mode --frames 3 --mode "$mode" 2>&1) || rc=$?
+    out=$(timeout 60 "$imway_bin" --device auto --socket imway-mode --frames 3 --mode "$mode" 2>&1) || rc=$?
     [[ "$rc" -eq 1 ]] || { echo "the unparseable mode $mode exited $rc: $out"; exit 1; }
 done
 
-expect_alive "compositor died on headless color controls"
-echo "OK: headless color controls change only what they should"
+expect_alive "compositor died on the output's color controls"
+echo "OK: the output's color controls change only what they should"

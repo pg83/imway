@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_CHAOS=readback-busy=4000
-# imway-args: --device auto
+# imway-env: IMWAY_CHAOS=readback-busy=4000
 # Output copies while the GPU is slow to finish the readback they share
 # (its fence reads busy for a few thousand polls). A copy destroyed while
 # its readback is on the GPU is dropped from it; one still in flight when

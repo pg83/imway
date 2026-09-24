@@ -11,7 +11,7 @@ ImGui on Vulkan. Windows, a dock, a menu bar, a launcher, notifications,
 a calendar, a wifi picker, a volume mixer, a lock screen and a screenshot
 tool are all part of the compositor; there is no shell to install next to
 it. It drives a display through KMS with atomic modesetting, dma-buf
-scanout and HDR, or renders headless for tests and screenshots.
+scanout and HDR.
 
 Single-threaded by design, with one background lane for blocking work.
 Every object lives in a pool; the C++ standard library is not used, the
@@ -34,7 +34,7 @@ offers.
 
 | Flag | Meaning |
 |---|---|
-| `--device auto\|headless\|/dev/dri/cardN` | KMS device to drive, or no display at all |
+| `--device auto\|/dev/dri/cardN` | KMS device to drive |
 | `--output NAME` | connector to use when the device has several |
 | `--mode WxH@HZ` | mode to set; the connector's preferred mode otherwise |
 | `--scale K` | UI scale for the compositor's own chrome |
@@ -93,8 +93,9 @@ On an [IX](https://github.com/pg83/ix) machine `dev/build_ix.sh` and
 `dev/test_ix.sh` supply the same libraries the `bin/imway` recipe uses and
 pass their arguments through to `./build`.
 
-Tests are shell scenarios under `tst/` driving a headless compositor
-through a control FIFO, each with a small Wayland client written in C. See
+Tests are shell scenarios under `tst/` driving a compositor on a userspace
+KMS emulator through a control FIFO, each with a small Wayland client
+written in C. See
 [tst/README.md](tst/README.md) for runs, filters and sanitizer builds.
 Format sources with `./dev/style.py`.
 

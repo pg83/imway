@@ -1,6 +1,6 @@
-// wp_presentation v2: the compositor must advertise version >= 2. On the
-// headless path there is no hardware vblank timestamp, so the presented
-// feedback must not claim the VSYNC kind.
+// wp_presentation v2: the compositor must advertise version >= 2, and a
+// frame the display flipped is presented with the kernel's timestamp: the
+// feedback claims VSYNC, the hardware clock and hardware completion.
 
 #include "wl_util.h"
 #include <presentation-time-client-protocol.h>
@@ -88,11 +88,13 @@ int main(void) {
         fprintf(stderr, "frame was never presented\n");
         return 1;
     }
-    if (present_flags & WP_PRESENTATION_FEEDBACK_KIND_VSYNC) {
-        fprintf(stderr, "software timestamp wrongly claims VSYNC (flags=%d)\n", present_flags);
+    int hardware = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
+
+    if ((present_flags & hardware) != hardware) {
+        fprintf(stderr, "a flipped frame is not presented as hardware-timed (flags=%d)\n", present_flags);
         return 1;
     }
 
-    printf("client_reg_presentation_version_2: presented, no false vsync\n");
+    printf("client_reg_presentation_version_2: presented, hardware-timed\n");
     return 0;
 }

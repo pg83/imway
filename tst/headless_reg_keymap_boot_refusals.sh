@@ -12,7 +12,7 @@ imway_bin="$(dirname "$IMWAY_TESTS_BIN")/imway_test"
 refused() { # <chaos> <what the log names> <failed check>
     local rc=0 out
 
-    out=$(IMWAY_CHAOS="$1" timeout 60 "$imway_bin" --device headless --socket imway-keymap --frames 3 2>&1) || rc=$?
+    out=$(IMWAY_CHAOS="$1" timeout 60 "$imway_bin" --device auto --socket imway-keymap --frames 3 2>&1) || rc=$?
     [[ "$rc" -eq 1 ]] || { echo "$1: exit $rc, expected 1"; echo "$out"; exit 1; }
     [[ -z "$2" ]] || grep -qF "imway: keymap unusable: $2" <<<"$out" || { echo "$1: the log does not say '$2'"; echo "$out"; exit 1; }
     grep "imway: fatal" <<<"$out" | grep -q "verify failed: $3$" || { echo "$1: the refusal does not name $3"; echo "$out"; exit 1; }

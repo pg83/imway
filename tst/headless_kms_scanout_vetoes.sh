@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # What takes a fullscreen dma-buf off the primary plane, and gives it back:
 # a subsurface over or under it needs composition, and so do an alpha
 # multiplier below one, an image description the plane cannot reproduce

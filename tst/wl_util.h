@@ -446,4 +446,25 @@ static void wl_make_toplevel(struct wl_toplevel_ctx* c, const char* title, int w
     wl_display_roundtrip(wl_dpy);
 }
 
+static void wl_presented_done(void* d, struct wl_callback* cb, uint32_t t) {
+    (void)t;
+    *(int*)d = 1;
+    wl_callback_destroy(cb);
+}
+
+static const struct wl_callback_listener wl_presented_listener = {.done = wl_presented_done};
+
+// returns once a frame showing the surface's current content went out: the
+// frame callback of a commit fires when that commit reaches the screen,
+// paced by the output, not by a roundtrip
+static void wl_await_presented(struct wl_surface* s) {
+    int done = 0;
+    struct wl_callback* cb = wl_surface_frame(s);
+
+    wl_callback_add_listener(cb, &wl_presented_listener, &done);
+    wl_surface_commit(s);
+    while (!done && wl_display_dispatch(wl_dpy) != -1) {
+    }
+}
+
 #endif

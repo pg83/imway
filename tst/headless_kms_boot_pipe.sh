@@ -25,7 +25,7 @@ boot_has "cursor plane 105, 64x64"
 
 # the real card path, no emulator: a node that is not there
 rc=0
-out=$(env IMWAY_SETTINGS=advanced.seat_backend=2 timeout 60 "$(dirname "$IMWAY_TESTS_BIN")/imway_test" --device /nonexistent/card9 --socket imway-boot --frames 3 2>&1) || rc=$?
+out=$(env -u IMWAY_FAKE_KMS IMWAY_SETTINGS=advanced.seat_backend=2 timeout 60 "$(dirname "$IMWAY_TESTS_BIN")/imway_test" --device /nonexistent/card9 --socket imway-boot --frames 3 2>&1) || rc=$?
 [[ "$rc" -eq 1 ]] || { echo "a missing card node exited $rc: $out"; exit 1; }
 grep -q "kms: open /nonexistent/card9" <<<"$out" || { echo "no open failure reported: $out"; exit 1; }
 

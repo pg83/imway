@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # The mode stops accepting the cursor plane mid-session: the commit bisect
 # retries without it, falls back to the software cursor and the session
 # keeps flipping.

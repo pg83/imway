@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FORCE_CURSOR=1
+# imway-env: IMWAY_FAKE_KMS_NO_CURSOR_PLANE=1
 # Surface trees drawn beyond the plain case (client_reg_overlay_trees):
 # a toplevel's subsurface stacked below it shows only through the
 # toplevel's transparent half; a popup is drawn as its window geometry, a

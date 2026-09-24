@@ -474,12 +474,21 @@ void ControlImpl::handleLine(StringView cmd) {
         // the barrier a scenario needs before input that must meet it
         comp->renderer->composeNow();
     } else if (verb == "screenshot"_sv) {
-        comp->renderer->screenshot(args);
+        comp->renderer->screenshot(args, false);
         *(comp->log) << "imway: screenshot by command: "_sv << args << endL;
+    } else if (verb == "screenshot-raw"_sv) {
+        comp->renderer->screenshot(args, true);
+        *(comp->log) << "imway: raw screenshot by command: "_sv << args << endL;
     } else if (verb == "sdr-white"_sv) {
         comp->output->setSdrWhite(parseFloat(args));
     } else if (verb == "night"_sv) {
         comp->output->setColorTemp(parseFloat(args));
+    } else if (verb == "chaos"_sv) {
+        // faults armed once the scenario reached the state they break; a
+        // frame follows, for the faults a frame spends
+        comp->chaos->arm(args);
+        comp->scene->needsFrame = true;
+        *(comp->log) << "imway: control: chaos "_sv << args << endL;
     } else if (verb == "dump"_sv) {
         dumpState(args);
     } else if (verb == "icon-size"_sv) {

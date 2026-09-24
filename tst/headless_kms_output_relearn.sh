@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1
-# imway-args: --device auto
 # A wl_output bound at boot has to be told when the session remodesets: the
 # compositor re-sends the geometry and the mode to everyone holding one.
 set -euo pipefail

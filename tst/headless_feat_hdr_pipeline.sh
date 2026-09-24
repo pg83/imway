@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_FAKE_KMS_EDID=garbage
 # imway-args: --hdr 203
 # The HDR output path must round-trip a PQ/BT.2020 client without collapsing it
 # into SDR. The same raw bytes first arrive as legacy SDR, then as PQ content.

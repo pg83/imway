@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_FAKE_KMS=1 IMWAY_FORCE_CURSOR=1
-# imway-args: --device auto
 # The lock filter owns output-sized images. A live mode change while locked
 # must rebuild them before recording the next filtered frame.
 set -euo pipefail

@@ -232,7 +232,7 @@ namespace {
             }
         }
 
-        // The headless test build has no account database. Keep its credential
+        // The test build has no account database. Keep its credential
         // out of the production binary while exercising the complete async UI
         // and teardown path.
         if (secureEqual(password, StringView("xxx"))) {
