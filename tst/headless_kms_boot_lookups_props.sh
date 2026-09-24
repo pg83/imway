@@ -6,7 +6,8 @@
 # volume to the overrides. Both boot. Failing where an explicit --bpc or
 # --rgb-range looks for its property ends the boot with that request
 # refused, not taken blindly. A single property that cannot be read is
-# skipped by every lookup walking past it, and the rest are still found.
+# skipped by every lookup walking past it, and the rest are still found;
+# so is a plane whose whole property list is unreadable.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -37,6 +38,14 @@ boot_rc 0 "Colorspace unreadable"
 boot_has "fake-kms: max bpc = 8" "Colorspace unreadable"
 boot_has "fake-kms: Broadcast RGB = 1" "Colorspace unreadable"
 boot_has "clean exit after" "Colorspace unreadable"
+
+# a plane whose properties cannot be read is passed over by the walk that
+# picks the pipe's primary and cursor planes: the second pipe's primary,
+# listed first, fails for good and both of ours are still found
+kms_boot IMWAY_FAKE_KMS_FAIL_LOOKUPS=props:304::-1 --
+boot_rc 0 "the first plane unreadable"
+boot_has "kms output: 1280x800@60, connector 101, crtc 103, plane 104" "the first plane unreadable"
+boot_has "cursor plane 105" "the first plane unreadable"
 
 expect_alive "the scenario's own compositor died"
 echo "OK: connector property lookups that fail are survived or refused as they must"
