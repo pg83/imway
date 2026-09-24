@@ -523,7 +523,7 @@ StringView IwdWifi::passphraseFor() {
     return sv(passNet);
 }
 
-// the picker only offers the prompt while one is pending
+// the picker only offers the prompt, and its cancel, while one is pending
 void IwdWifi::providePassphrase(StringView pw) {
     DBusMessage* reply = dbus_message_new_method_return(passMsg);
     Buffer p(pw);
@@ -539,10 +539,6 @@ void IwdWifi::providePassphrase(StringView pw) {
 }
 
 void IwdWifi::cancelPassphrase() {
-    if (!passMsg) {
-        return;
-    }
-
     DBusMessage* err = dbus_message_new_error(passMsg, "net.connman.iwd.Agent.Error.Canceled", "cancelled by user");
 
     dbus_connection_send(conn, err, nullptr);
