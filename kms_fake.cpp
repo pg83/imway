@@ -21,6 +21,7 @@
 #include <xf86drm.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <drm_fourcc.h>
 #include <sys/socket.h>
@@ -1700,15 +1701,13 @@ int FakeKms::conformance() {
     int failed = 0;
     constexpr u32 kNone = 999999;
 
+    // every check says what it got, and a mismatch counts
     auto expect = [&](const char* what, int rc, int want) {
         int got = rc < 0 ? errno : 0;
 
         checks++;
-
-        if (got != want) {
-            failed++;
-            sysE << "fake-kms: conformance: "_sv << StringView(what) << ": errno "_sv << got << ", the kernel's "_sv << want << endL;
-        }
+        failed += got != want;
+        sysE << "fake-kms: conformance: "_sv << StringView(what) << ": errno "_sv << got << ", the kernel's "_sv << want << endL;
     };
 
     // a room of zero entries: the call reports the count and writes nothing
@@ -1723,24 +1722,23 @@ int FakeKms::conformance() {
             return (u64)(uintptr_t)bytes;
         }
 
-        bool clean() const {
+        size_t written() const {
+            size_t n = 0;
+
             for (u8 b : bytes) {
-                if (b != 0xa5) {
-                    return false;
-                }
+                n += b != 0xa5;
             }
 
-            return true;
+            return n;
         }
     };
 
     auto untouched = [&](const char* what, const Room& room) {
-        checks++;
+        size_t written = room.written();
 
-        if (!room.clean()) {
-            failed++;
-            sysE << "fake-kms: conformance: "_sv << StringView(what) << ": wrote into a room of zero entries"_sv << endL;
-        }
+        checks++;
+        failed += written != 0;
+        sysE << "fake-kms: conformance: "_sv << StringView(what) << ": "_sv << (u64)written << " bytes written into a room of zero entries"_sv << endL;
     };
 
     static const u32 connectors[] = {kConnectorId, kLeaseConnectorId};
@@ -1873,6 +1871,21 @@ int FakeKms::conformance() {
     flat.bpp = 32;
     expect("dumb buffer of no width", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &flat), EINVAL);
 
+    drm_mode_create_dumb shallow{};
+
+    shallow.width = 16;
+    shallow.height = 0;
+    shallow.bpp = 32;
+    expect("dumb buffer of no height", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &shallow), EINVAL);
+
+    // the emulator models 32-bit dumb buffers only, what the backend makes
+    drm_mode_create_dumb narrow{};
+
+    narrow.width = 16;
+    narrow.height = 16;
+    narrow.bpp = 16;
+    expect("a dumb buffer depth the emulator does not model", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &narrow), EINVAL);
+
     drm_mode_map_dumb noMap{};
 
     noMap.handle = kNone;
@@ -1909,6 +1922,7 @@ int FakeKms::conformance() {
     expect("atomic with an unknown property", atomicOne(kCrtcId, kNone, 0), ENOENT);
     expect("atomic with another object's property", atomicOne(kCrtcId, pConnCrtcId, 0), ENOENT);
     expect("atomic with an unknown mode blob", atomicOne(kCrtcId, pCrtcModeId, kNone), EINVAL);
+    expect("atomic test of no mode", atomicOne(kCrtcId, pCrtcModeId, 0), 0);
 
     drm_get_cap noCap{};
 
@@ -1919,6 +1933,18 @@ int FakeKms::conformance() {
 
     crtc.crtc_id = kCrtcId;
     expect("an ioctl the emulator does not model", ioctl(clientFd, DRM_IOCTL_MODE_GETCRTC, &crtc), ENOTTY);
+
+    // GETFB2 sits inside the syncobj range the render node answers, and is
+    // not one of them
+    drm_mode_fb_cmd2 fb2{};
+
+    fb2.fb_id = kNone;
+    expect("GETFB2, amid the syncobj range", ioctl(clientFd, DRM_IOCTL_MODE_GETFB2, &fb2), ENOTTY);
+
+    // a terminal's request on the device fd is no DRM ioctl at all
+    struct winsize size{};
+
+    expect("an ioctl of another driver", ioctl(clientFd, TIOCGWINSZ, &size), ENOTTY);
 
     sysE << "fake-kms: conformance: "_sv << checks << " checks, "_sv << failed << " failed"_sv << endL;
 
