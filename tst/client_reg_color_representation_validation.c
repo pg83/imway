@@ -70,6 +70,25 @@ int main(int argc, char** argv) {
         return wl_expect_error(wp_color_representation_surface_v1_interface.name,
                                WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT);
     }
+    if (!strcmp(argv[1], "cached-rgb")) {
+        // on a synchronized subsurface: the YCbCr matrix waits in the cache
+        // with no buffer to object to, and still refuses the RGB buffer a
+        // second cached commit brings
+        struct wl_surface* parent = wl_compositor_create_surface(wl_comp);
+        wl_subcompositor_get_subsurface(wl_subcomp, surface, parent);
+        wp_color_representation_surface_v1_set_coefficients_and_range(
+            repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_BT709,
+            WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED);
+        wl_surface_commit(surface);
+        if (wl_display_roundtrip(wl_dpy) < 0) {
+            fprintf(stderr, "a cached representation without a buffer was refused\n");
+            return 1;
+        }
+        wl_surface_attach(surface, wl_solid(16, 16, 0xffffffff), 0, 0);
+        wl_surface_commit(surface);
+        return wl_expect_error(wp_color_representation_surface_v1_interface.name,
+                               WP_COLOR_REPRESENTATION_SURFACE_V1_ERROR_PIXEL_FORMAT);
+    }
     if (!strcmp(argv[1], "chroma-zero")) {
         // below the first defined location
         wp_color_representation_surface_v1_set_chroma_location(repr, 0);

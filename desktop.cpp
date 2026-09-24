@@ -1776,7 +1776,9 @@ void DesktopImpl::buildUi(Scene& scene) {
             t->maximizedApplied = true;
         } else if (!t->maximized && t->maximizedApplied) {
             t->maximizedApplied = false;
-            t->restoreRequested = t->restoreW > 0 && t->restoreH > 0;
+            // the restore size comes from a mapped window, at least 1x1,
+            // so the width alone tells one was recorded
+            t->restoreRequested = t->restoreW > 0;
             t->restoreFromW = root->geomW();
             t->restoreFromH = root->geomH();
         }

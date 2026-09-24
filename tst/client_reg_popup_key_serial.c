@@ -6,6 +6,8 @@
 // Success = the popup takes the grab (it gets the keyboard, no popup_done)
 // and the client is not disconnected. The grab uses the press serial: the
 // scenario's release follows at once, and a release is no grab trigger.
+// First, a grab off a serial one short of the press is dismissed: the key
+// grab is the press's serial, not any serial of the focused client.
 
 #include "wl_util.h"
 
@@ -19,8 +21,8 @@ static void popup_configure(void* d, struct xdg_popup* p, int32_t x, int32_t y, 
     (void)d; (void)p; (void)x; (void)y; (void)w; (void)h;
 }
 static void popup_done(void* d, struct xdg_popup* p) {
-    (void)d; (void)p;
-    popup_dismissed = 1;
+    (void)p;
+    *(int*)d = 1;
 }
 static void popup_reposition(void* d, struct xdg_popup* p, uint32_t t) { (void)d; (void)p; (void)t; }
 static const struct xdg_popup_listener popup_listener = {popup_configure, popup_done,
@@ -54,6 +56,28 @@ int main(void) {
         }
 
         if (!popup && wlk_press_serial) {
+            // a serial the key grab never had: dismissed, not an error
+            int stale_dismissed = 0;
+            struct xdg_positioner* spos = xdg_wm_base_create_positioner(wl_wm);
+            xdg_positioner_set_size(spos, 120, 90);
+            xdg_positioner_set_anchor_rect(spos, 20, 20, 60, 20);
+            struct wl_surface* ss = wl_compositor_create_surface(wl_comp);
+            struct xdg_surface* sxs = xdg_wm_base_get_xdg_surface(wl_wm, ss);
+            struct xdg_popup* stale = xdg_surface_get_popup(sxs, top.xs, spos);
+            xdg_popup_add_listener(stale, &popup_listener, &stale_dismissed);
+            xdg_popup_grab(stale, wl_seat_g, wlk_press_serial - 1);
+            xdg_positioner_destroy(spos);
+            while (!stale_dismissed && wl_display_dispatch(wl_dpy) != -1) {
+            }
+            if (!stale_dismissed) {
+                fprintf(stderr, "client_reg_popup_key_serial: disconnected on a stale serial\n");
+                return 1;
+            }
+            xdg_popup_destroy(stale);
+            xdg_surface_destroy(sxs);
+            wl_surface_destroy(ss);
+            printf("client_reg_popup_key_serial: stale serial dismissed\n");
+
             struct xdg_positioner* pos = xdg_wm_base_create_positioner(wl_wm);
             xdg_positioner_set_size(pos, 120, 90);
             xdg_positioner_set_anchor_rect(pos, 20, 20, 60, 20);
@@ -61,7 +85,7 @@ int main(void) {
             struct xdg_surface* pxs = xdg_wm_base_get_xdg_surface(wl_wm, popup_surface);
             xdg_surface_add_listener(pxs, &popup_xdg_listener, NULL);
             popup = xdg_surface_get_popup(pxs, top.xs, pos);
-            xdg_popup_add_listener(popup, &popup_listener, NULL);
+            xdg_popup_add_listener(popup, &popup_listener, &popup_dismissed);
             xdg_popup_grab(popup, wl_seat_g, wlk_press_serial); // the key serial
             xdg_positioner_destroy(pos);
             wl_surface_commit(popup_surface);

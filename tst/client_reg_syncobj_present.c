@@ -3,8 +3,10 @@
  * buffer replaces it, the first buffer's release point must signal. A
  * commit without a buffer needs no points. On a synchronized subsurface a
  * buffer committed and then replaced before the parent commits is dropped
- * unshown: its release point signals as well. Last, the syncobj surface
- * object and the timelines are destroyed while the surfaces live. */
+ * unshown: its release point signals as well. One timeline may carry both
+ * points of a commit, the release after the acquire, and the release comes
+ * on it. Last, the syncobj surface object and the timelines are destroyed
+ * while the surfaces live. */
 #include "syncobj_error.inc"
 
 #include <time.h>
@@ -137,6 +139,29 @@ int main(void) {
     }
 
     printf("cached release signaled\n");
+
+    /* acquire 10 and release 11 on one timeline; the buffer is replaced
+     * under points on other timelines, so only the compositor can reach 11 */
+    signal_point(&acq, 10);
+    wp_linux_drm_syncobj_surface_v1_set_acquire_point(sync_surface, acq.proxy, 0, 10);
+    wp_linux_drm_syncobj_surface_v1_set_release_point(sync_surface, acq.proxy, 0, 11);
+    wl_surface_attach(top.surface, second, 0, 0);
+    wl_surface_damage(top.surface, 0, 0, 32, 32);
+    wl_surface_commit(top.surface);
+
+    if (wl_display_roundtrip(wl_dpy) < 0) {
+        fprintf(stderr, "a release after the acquire on one timeline was refused\n");
+        return 1;
+    }
+
+    commit_synced(sync_surface, top.surface, first, &sub_acq, &rel, 5);
+
+    if (!point_signaled(&acq, 11)) {
+        fprintf(stderr, "the release point on the acquire's timeline never signaled\n");
+        return 1;
+    }
+
+    printf("one-timeline release signaled\n");
 
     /* the protocol objects go while the surfaces live */
     wp_linux_drm_syncobj_surface_v1_destroy(sync_surface);

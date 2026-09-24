@@ -1801,10 +1801,12 @@ namespace {
     void anrMark(WaylandImpl* srv, wl_resource* wmBase, bool unresponsive) {
         wl_client* client = wl_resource_get_client(wmBase);
 
+        // a listed toplevel has its resource: the resource's destroy
+        // takes it off the list
         forEach<Toplevel>(srv->composer->scene->toplevels, [&](Toplevel& t) {
             auto& ti = (ToplevelImpl&)t;
 
-            if (ti.res && wl_resource_get_client(ti.res) == client && t.unresponsive != unresponsive) {
+            if (wl_resource_get_client(ti.res) == client && t.unresponsive != unresponsive) {
                 t.unresponsive = unresponsive;
                 srv->composer->scene->needsFrame = true;
             }
@@ -2358,7 +2360,9 @@ namespace {
                 s.pixels.clear();
                 s.dirty = true;
                 s.damageAll = true;
-            } else if (cache.hasContent && !cache.pixels.empty()) {
+            } else if (cache.hasContent) {
+                // content that is neither a dma-buf nor shm is a single
+                // pixel buffer's colour
                 s.pixels.xchg(cache.pixels);
                 s.dirty = true;
                 s.damageAll = true;
@@ -2453,9 +2457,16 @@ namespace {
         // both callers ask about a non-empty queue
         FifoEntry* e = (FifoEntry*)s.fifo->queue.mutFront();
 
+        if (!e->waitAcquire) {
+            return false;
+        }
+
+        // parked on an acquire point, so the commit had one and its cache
+        // took the timeline (a commit refused after parking took its
+        // client down before any frame looks here)
         TimelineBox* acquire = timelinePtr(e->cache.acq);
 
-        return e->waitAcquire && acquire && !acquireMaterialized(s.srv, acquire->handle, e->cache.acquirePoint);
+        return !acquireMaterialized(s.srv, acquire->handle, e->cache.acquirePoint);
     }
 
     void drainFifo(SurfaceImpl& s, bool presented) {
@@ -3655,7 +3666,9 @@ namespace {
 
         if (ti->maximized) {
             ti->maximized = false;
-            ti->restoreRequested = ti->restoreW > 0 && ti->restoreH > 0;
+            // the restore size comes from a mapped window, at least 1x1,
+            // so the width alone tells one was recorded
+            ti->restoreRequested = ti->restoreW > 0;
             ti->srv->composer->scene->needsFrame = true;
         }
     }
@@ -4096,6 +4109,7 @@ namespace {
 
     void popupGrab(wl_client* client, wl_resource* res, wl_resource* seatRes, u32 serial) {
         auto* p = (PopupImpl*)wl_resource_get_user_data(res);
+        // the one wl_seat global binds every seat resource to srv->seat
         auto* seat = (SeatState*)wl_resource_get_user_data(seatRes);
 
         auto* parentSurface = (SurfaceImpl*)p->parent;
@@ -4109,7 +4123,7 @@ namespace {
             return;
         }
 
-        if (p->mapped || !seat || seat != &p->srv->seat || (parentPopup && !parentPopup->grab)) {
+        if (p->mapped || (parentPopup && !parentPopup->grab)) {
             wl_resource_post_error(res, XDG_POPUP_ERROR_INVALID_GRAB, "popup grab serial is not an active implicit grab");
 
             return;
@@ -4311,14 +4325,11 @@ namespace {
         srv->wmBases.pushBack(ping);
     }
 
+    // the toplevel's xdg_surface is alive: the callers are its requests
+    // (destroying the xdg_surface first is a protocol error) and the focus
+    // and frame-edge paths, which want its surface, and the xdg_surface's
+    // destroy takes the toplevel's surface along
     void xdgToplevelConfigureSize(ToplevelImpl& t, int w, int h) {
-        // Resource teardown on disconnect is not ordered by role hierarchy.
-        // Keep a half-torn-down toplevel inert until its own destroy callback
-        // removes it from the scene.
-        if (!t.res || !t.xdg) {
-            return;
-        }
-
         wl_array states;
 
         wl_array_init(&states);
@@ -4454,7 +4465,10 @@ namespace {
             return;
         }
 
-        if (xs->toplevel && !xs->toplevel->mapped && s.hasContent && xs->acked) {
+        // content on an xdg_surface came with a commit its ack allowed: a
+        // buffer before the ack of its configure is refused, and an unmap
+        // takes the content along with the ack
+        if (xs->toplevel && !xs->toplevel->mapped && s.hasContent) {
             xs->toplevel->mapped = true;
             s.srv->composer->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: toplevel "_sv << sv(xs->toplevel->title) << " ("_sv << sv(xs->toplevel->appId) << ") mapped "_sv << s.width << "x"_sv << s.height << endL;
@@ -4484,7 +4498,7 @@ namespace {
             xs->acked = false;
         }
 
-        if (xs->popup && !xs->popup->mapped && !xs->pop()->dismissed && s.hasContent && xs->acked) {
+        if (xs->popup && !xs->popup->mapped && !xs->pop()->dismissed && s.hasContent) {
             xs->popup->mapped = true;
             s.srv->composer->scene->needsFrame = true;
             *(s.srv->composer->log) << "imway: popup mapped "_sv << s.width << "x"_sv << s.height << " at ("_sv << xs->popup->x << ","_sv << xs->popup->y << ")"_sv << (xs->popup->grab ? " grab" : "") << endL;
@@ -13672,14 +13686,16 @@ void WaylandImpl::onListen(void* arg) {
 #endif
 
         if (cfgTrace && (differsView || differsSent)) {
-            *(composer->log) << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH() << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH << " ack="_sv << (int)(ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0) << " docked="_sv << (int)ti->docked << (int)ti->cfgDocked << " max="_sv << (int)ti->maximized << (int)ti->cfgMaximized << endL;
+            *(composer->log) << "imway: cfg? desired="_sv << ti->desiredW << "x"_sv << ti->desiredH << " view="_sv << ti->viewGeomW << "x"_sv << ti->viewGeomH << " geom="_sv << ti->surface->geomW() << "x"_sv << ti->surface->geomH() << " cfg="_sv << ti->cfgW << "x"_sv << ti->cfgH << " ack="_sv << (int)((i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0) << " docked="_sv << (int)ti->docked << (int)ti->cfgDocked << " max="_sv << (int)ti->maximized << (int)ti->cfgMaximized << endL;
         }
 
         // one configure in flight: during an interactive resize the desired
         // size streams in every frame, but the next request waits until the
         // client answered the previous one — the window steps through
         // client-produced sizes only, at the client's own pace
-        bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
+        // (a toplevel with a surface has its xdg_surface: that one's
+        // destroy takes the surface along)
+        bool answered = (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
 
         // dock state changes alone need a configure: TILED comes and goes
         if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked || ti->maximized != ti->cfgMaximized) {

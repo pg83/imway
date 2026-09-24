@@ -90,6 +90,17 @@ int main(int argc, char** argv) {
         return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_BAD_SIZE);
     }
 
+    if (!strcmp(argv[1], "no-content")) {
+        // no buffer, nothing to be out of: the source waits for one, and
+        // the one that comes is too small for it
+        wp_viewport_set_source(vp, 0, 0, wl_fixed_from_int(200), wl_fixed_from_int(200));
+        wl_surface_commit(surface);
+        if (wl_display_roundtrip(wl_dpy) < 0) { fprintf(stderr, "a source over no buffer was refused\n"); return 1; }
+        wl_surface_attach(surface, wl_solid(100, 100, 0xFF00FF00), 0, 0);
+        wl_surface_commit(surface);
+        return expect_error(wp_viewport_interface.name, WP_VIEWPORT_ERROR_OUT_OF_BUFFER);
+    }
+
     // the rest run on a synchronized subsurface: its commits cache, and
     // the checks weigh the cached state over what is already in effect
     struct wl_surface* parent = wl_compositor_create_surface(wl_comp);

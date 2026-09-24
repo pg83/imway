@@ -1,7 +1,8 @@
 // wl_shm_pool requests out of bounds on one count each: a buffer at a
-// negative offset, with no width, with no height, whose rows overflow a
-// 32-bit size, larger than the pool, or running past the pool's end from
-// its offset; and a pool resized to nothing. Each is its wl_shm error.
+// negative offset, with no width, with no height, with a negative stride,
+// whose rows overflow a 32-bit size, larger than the pool, or running past
+// the pool's end from its offset; and a pool resized to nothing. Each is
+// its wl_shm error.
 
 #include "wl_util.h"
 
@@ -34,6 +35,8 @@ int main(int argc, char** argv) {
         wl_shm_pool_create_buffer(pool, 0, 0, 4, 16, fmt);
     } else if (!strcmp(mode, "no-height")) {
         wl_shm_pool_create_buffer(pool, 0, 4, 0, 16, fmt);
+    } else if (!strcmp(mode, "negative-stride")) {
+        wl_shm_pool_create_buffer(pool, 0, 4, 4, -16, fmt);
     } else if (!strcmp(mode, "rows-overflow")) {
         wl_shm_pool_create_buffer(pool, 0, 1, 65536, 65536, fmt);
     } else if (!strcmp(mode, "past-pool")) {

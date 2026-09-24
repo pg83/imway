@@ -6,7 +6,7 @@ set -euo pipefail
 
 for mode in self-subsurface invalid-transform defunct-subsurface duplicate-xdg invalid-configure \
             invalid-resize-edge negative-min-size conflicting-size \
-            incomplete-positioner unmapped-popup-parent destroy-wm-base \
+            incomplete-positioner unmapped-popup-parent roleless-popup-parent destroy-wm-base \
             invalid-dnd-mask duplicate-dnd-actions \
             shm-bad-format shm-bad-stride shm-pool-shrink shm-pool-zero shm-pool-badfd \
             attach-offset subsurface-place-stranger positioner-zero-anchor \

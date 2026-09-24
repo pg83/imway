@@ -1284,6 +1284,25 @@ int main(int argc, char** argv) {
                             XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT);
     }
 
+    if (!strcmp(argv[1], "roleless-popup-parent")) {
+        // the parent's toplevel and xdg_surface go before the popup's first
+        // commit: its wl_surface lives on, but is no xdg_surface to map on
+        struct xdg_toplevel* parent_toplevel = xdg_surface_get_toplevel(xs);
+        struct wl_surface* popup_surface = wl_compositor_create_surface(compositor);
+        struct xdg_surface* popup_xs = xdg_wm_base_get_xdg_surface(wm_base, popup_surface);
+        struct xdg_positioner* positioner = xdg_wm_base_create_positioner(wm_base);
+
+        xdg_positioner_set_size(positioner, 10, 10);
+        xdg_positioner_set_anchor_rect(positioner, 0, 0, 10, 10);
+        xdg_surface_get_popup(popup_xs, xs, positioner);
+        xdg_toplevel_destroy(parent_toplevel);
+        xdg_surface_destroy(xs);
+        wl_surface_commit(popup_surface);
+
+        return expect_error(display, xdg_wm_base_interface.name,
+                            XDG_WM_BASE_ERROR_INVALID_POPUP_PARENT);
+    }
+
     if (!strcmp(argv[1], "incomplete-positioner")) {
         xdg_surface_get_toplevel(xs);
         struct wl_surface* popup_surface = wl_compositor_create_surface(compositor);
