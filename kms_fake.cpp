@@ -1401,6 +1401,11 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
                 cursorOnLogged = true;
             }
 
+            // the plane going dark after it showed something
+            if (p->id == pCursorFbId && !values[k] && p->value) {
+                sysE << "fake-kms: cursor plane off"_sv << endL;
+            }
+
             if (p->id == pCursorFbId && values[k] && traceCursor) {
                 traceCursorImage((u32)values[k]);
             }

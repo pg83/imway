@@ -3335,10 +3335,10 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         bool hwOk = hwCursor && !cs->dmabuf && plainBuffer && plainColor && hwScratchFrom.get() == cs;
 
         if (!hwOk) {
-            if (hwCursor) {
-                hwVisible = false;
-                comp->output->setCursorPos(0, 0, false);
-            }
+            // the plane goes dark whatever took the cursor off it: an
+            // output that lost the plane ignores the call
+            hwVisible = false;
+            comp->output->setCursorPos(0, 0, false);
 
             return false;
         }
@@ -3358,8 +3358,11 @@ bool RendererImpl::cursorPlane(int kind, Surface* cs, double x, double y, int ho
         return true;
     }
 
+    // the hardware cursor turned off: the plane must not go on showing the
+    // last image beside the composited one
     if (!hwCursor) {
         hwVisible = false;
+        comp->output->setCursorPos(0, 0, false);
 
         return false;
     }
