@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# imway-args: --dpms 1
 # The idle timeout locks before the display goes off; on a session the
 # user already locked it finds the lock screen up and leaves it alone:
 # after the wake there is one lock screen, and one password unlocks it.
+# The idle timeout is armed only once the user's lock is up: from boot, a
+# slow build reaches it before the scenario has locked anything, and the
+# idle lock would come first.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -12,12 +14,15 @@ ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 rele
 captured() { [[ "$(dump_field '^captured ' kb)" == "$1" ]]; }
 await 50 captured 1 || { echo "Super+L did not lock"; dump_state; exit 1; }
 
+ctl "set display.dpms_seconds 1"
 await 100 in_log "display off (idle)" || { echo "the display never went idle"; cat "$IMWAY_LOG"; exit 1; }
 ctl "motion 100 100"
 await 100 in_log "display back on" || { echo "input did not wake the display"; cat "$IMWAY_LOG"; exit 1; }
 
-overlays() { dump_state | grep -c '^imgui name=##lock-overlay ' || true; }
-[[ "$(overlays)" == 1 ]] || { echo "the idle lock left $(overlays) lock screens"; dump_state; exit 1; }
+# counted in a frame composed after the wake
+overlays() { compose_frame; dump_state | grep -c '^imgui name=##lock-overlay ' || true; }
+n=$(overlays)
+[[ "$n" == 1 ]] || { echo "the idle lock left $n lock screens"; dump_state; exit 1; }
 
 unlock() {
     await_typing '##lock-overlay' || return 1
