@@ -101,11 +101,8 @@ void* LogImpl::imbueImpl(size_t* avail) {
     return buf + (wpos & (kBuf - 1));
 }
 
+// an empty commit walks no bytes and leaves the ring as it was
 void LogImpl::commitImpl(size_t len) {
-    if (!len) {
-        return;
-    }
-
     const char* chunk = buf + (wpos & (kBuf - 1));
 
     if (tee) {
