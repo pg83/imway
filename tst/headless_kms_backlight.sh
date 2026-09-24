@@ -73,6 +73,13 @@ if [[ "$(id -u)" != 0 ]]; then
     await 50 two_digits || { echo "an unreadable brightness was not stepped from zero ($(stat -c %s "$level") bytes)"; exit 1; }
     chmod 600 "$level"
     [[ "$(raw)" == 13 ]] || { echo "an unreadable brightness stepped to $(raw), expected 13 (5% of 255)"; exit 1; }
+
+    # and one that cannot be written takes no step and says nothing
+    chmod 400 "$level"
+    ctl "key 225 press"; ctl "key 225 release"
+    screenshot "$XDG_RUNTIME_DIR/_unwritable.ppm"
+    chmod 600 "$level"
+    [[ "$(raw)" == 13 ]] || { echo "an unwritable brightness changed to $(raw)"; exit 1; }
 fi
 
 # the display settings page shows a brightness slider for such a panel
