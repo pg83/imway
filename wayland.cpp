@@ -10362,11 +10362,13 @@ bool SeatState::sameClientS(wl_resource* res, Surface* s) {
     return s && wl_resource_get_client(res) == wl_resource_get_client(resOf(s));
 }
 
+// a child in either pile has its surface: the surface's destroy unlinks
+// the node right after the ring nulls it
 Surface* SeatState::pickInTree(Surface& s) {
     Surface* found = nullptr;
 
     forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             if (Surface* f = pickInTree(*c.surface)) {
                 found = f;
             }
@@ -10378,7 +10380,7 @@ Surface* SeatState::pickInTree(Surface& s) {
     }
 
     forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-        if (c.surface && c.surface->hasContent) {
+        if (c.surface->hasContent) {
             if (Surface* f = pickInTree(*c.surface)) {
                 found = f;
             }
@@ -10918,10 +10920,9 @@ DmabufUse::~DmabufUse() noexcept {
     }
 }
 
+// made only with its buffer, right after the params object that owns it
 BufferBox::~BufferBox() noexcept {
-    if (buffer) {
-        srv->composer->alloc->release(buffer);
-    }
+    srv->composer->alloc->release(buffer);
 }
 
 bool WaylandImpl::idleBlocked() {
