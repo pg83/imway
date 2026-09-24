@@ -2,7 +2,8 @@
 # The libinput source end to end: a virtual keyboard and mouse are plugged
 # into the compositor's own evdev directory while it runs, libinput picks
 # them up through inotify, and their events come out of the seat as the
-# launcher opening and the cursor crossing the screen.
+# launcher opening and the cursor crossing the screen. A keyboard relinked
+# under the same node keeps its one settings entry and types again.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -84,6 +85,25 @@ touch go-keys
 wait_client "keys sent"
 await_imgui '##launcher' || {
     echo "a key from the virtual keyboard did not reach the compositor"
+    dump_state
+    exit 1
+}
+
+# the keyboard leaves and comes back under the same node: the settings keep
+# the one entry they have for it, and the device is live again
+plugs() { grep -c "input device $kbd_node plugged" "$IMWAY_LOG" || true; }
+touch go-relink
+wait_client "keyboard relinked"
+replugged() { [[ "$(plugs)" -ge 2 ]]; }
+await 100 replugged || { echo "the relinked keyboard was not plugged again"; cat "$IMWAY_LOG"; exit 1; }
+[[ "$(dump_field '^input ' devices)" -eq $((devices0 + 2)) ]] || {
+    echo "the relinked keyboard took another settings entry: $(dump_field '^input ' devices) of $((devices0 + 2))"
+    exit 1
+}
+touch go-escape
+wait_client "escape sent"
+await_no_imgui '##launcher' || {
+    echo "Escape from the relinked keyboard did not close the launcher"
     dump_state
     exit 1
 }

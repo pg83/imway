@@ -309,6 +309,37 @@ int main(int argc, char** argv) {
 
     printf("keys sent\n");
 
+    // the keyboard's node leaves the directory and comes back as the same
+    // device (linking unlinks first): both inotify events can land in one
+    // read
+    if (waitFor("go-relink")) {
+        fprintf(stderr, "the scenario never asked for the relink\n");
+
+        return 1;
+    }
+
+    if (linkDevice(kbdName)) {
+        fprintf(stderr, "the keyboard could not be linked again\n");
+
+        return 1;
+    }
+
+    printf("keyboard relinked\n");
+
+    if (waitFor("go-escape")) {
+        fprintf(stderr, "the scenario never asked for the escape\n");
+
+        return 1;
+    }
+
+    if (emit(kbd, EV_KEY, KEY_ESC, 1) || syn(kbd) || emit(kbd, EV_KEY, KEY_ESC, 0) || syn(kbd)) {
+        fprintf(stderr, "key write failed: %s\n", strerror(errno));
+
+        return 1;
+    }
+
+    printf("escape sent\n");
+
     if (waitFor("go-unplug")) {
         fprintf(stderr, "the scenario never asked for the unplug\n");
 
