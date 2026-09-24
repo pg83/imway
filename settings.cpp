@@ -18,6 +18,28 @@ using namespace stl;
 #include "settings.impl.gen.inc"
 
 #ifdef IMWAY_FOR_TESTS
+namespace {
+    // "R,G,B" in 0..1, as a scenario names a theme color
+    ThemeColor parseThemeColor(StringView value) {
+        ThemeColor color;
+        float* channels[] = {&color.r, &color.g, &color.b};
+
+        for (float* channel : channels) {
+            StringView head, tail;
+
+            if (!value.split(',', head, tail)) {
+                head = value;
+                tail = {};
+            }
+
+            *channel = (float)parseFloat(head);
+            value = tail;
+        }
+
+        return color;
+    }
+}
+
 #include "settings.control.gen.inc"
 
 namespace {

@@ -34,10 +34,10 @@ namespace {
             case ShortcutAction::altTabNext:
                 return "next window";
             case ShortcutAction::altTabPrev:
-                return "previous window";
+                break;
         }
 
-        return "action";
+        return "previous window";
     }
 
     void shortcutName(const ShortcutBinding& binding, char out[128]) {
