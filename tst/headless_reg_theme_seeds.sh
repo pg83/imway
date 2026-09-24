@@ -25,7 +25,7 @@ mean_now() {
 
 base=$(mean_now)
 
-acks() { grep -c "control: set appearance.neutral" "$IMWAY_LOG" || true; }
+acked_twice() { [[ "$(grep -c "control: set appearance.neutral" "$IMWAY_LOG" || true)" -ge 2 ]]; }
 
 ctl "set appearance.neutral 0.02,0.02,0.02"
 await 100 in_log "control: set appearance.neutral" || { echo "the neutral color is not reachable"; exit 1; }
@@ -35,7 +35,7 @@ dark=$(mean_now)
 
 # the same color again: nothing to re-theme
 ctl "set appearance.neutral 0.02,0.02,0.02"
-await 100 test "$(acks)" -ge 2 || { echo "the second neutral was not taken"; exit 1; }
+await 100 acked_twice || { echo "the second neutral was not taken"; exit 1; }
 [[ "$(mean_now)" -le $((dark + 2)) ]] || { echo "setting the same neutral changed the desktop"; exit 1; }
 
 ctl "set appearance.selection 0.9,0.3,0.1"
