@@ -769,6 +769,8 @@ void ControlImpl::dumpState(StringView outPath) {
     // group that really did not move
     out << "layout "_sv << StringView(comp->scene->layout) << " group="_sv << (int)comp->kb->activeLayout() << " count="_sv << (int)comp->kb->layoutCount() << "\n"_sv;
     out << "captured kb="_sv << (int)comp->scene->kbCaptured << " ptr="_sv << (int)comp->scene->ptrCaptured << "\n"_sv;
+    // the input devices the settings know, one entry each as it is added
+    out << "input devices="_sv << (u64)comp->settings->inputDeviceCount() << "\n"_sv;
     out << "scanout candidate="_sv << comp->scene->scanoutCandidateId << "\n"_sv;
     out << "bell count="_sv << comp->scene->bellCount << "\n"_sv;
     // the millisecond clock as the bell and the OSD read it

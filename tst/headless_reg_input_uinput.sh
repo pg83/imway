@@ -19,6 +19,7 @@ skip_unless_uinput() {
     fi
 }
 
+devices0=$(dump_field '^input ' devices)
 start_client "$XDG_RUNTIME_DIR/input"
 await 200 grep -q "^uinput " "$CLIENT_LOG" || {
     echo "the uinput helper said nothing"
@@ -46,6 +47,14 @@ skip_unless_uinput
 await 200 in_log "input device event" || {
     echo "libinput never noticed the plugged devices"
     cat "$IMWAY_LOG"
+    exit 1
+}
+
+# both devices are registered (and configured) as they are plugged, before
+# either has sent anything: the settings list has an entry for each
+registered() { [[ "$(dump_field '^input ' devices)" -ge $((devices0 + 2)) ]]; }
+await 100 registered || {
+    echo "the plugged devices were not registered before their first events: $(dump_field '^input ' devices) of $((devices0 + 2))"
     exit 1
 }
 
