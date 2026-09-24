@@ -6,8 +6,11 @@
 // scenario then fires a global chord (Super+F2, the launcher) and checks it
 // still works — mapping a new window here would itself recompute the flag and
 // hide the bug, so we deliberately leave the compositor window-less.
+// Before that, while the inhibitor is active, the same chord is the
+// window's: its F2 reaches the client and the launcher stays shut.
 
 #include "wl_util.h"
+#include <linux/input-event-codes.h>
 #include <keyboard-shortcuts-inhibit-unstable-v1-client-protocol.h>
 
 static struct zwp_keyboard_shortcuts_inhibit_manager_v1* inhibit_mgr;
@@ -20,6 +23,11 @@ static void mgr_reg_global(void* d, struct wl_registry* r, uint32_t name, const 
 }
 static void mgr_reg_remove(void* d, struct wl_registry* r, uint32_t n) { (void)d; (void)r; (void)n; }
 static const struct wl_registry_listener mgr_reg_listener = {mgr_reg_global, mgr_reg_remove};
+
+static int inhibitor_active;
+static void inhibitor_on(void* d, struct zwp_keyboard_shortcuts_inhibitor_v1* i) { (void)d; (void)i; inhibitor_active = 1; }
+static void inhibitor_off(void* d, struct zwp_keyboard_shortcuts_inhibitor_v1* i) { (void)d; (void)i; inhibitor_active = 0; }
+static const struct zwp_keyboard_shortcuts_inhibitor_v1_listener inhibitor_listener = {inhibitor_on, inhibitor_off};
 
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -40,9 +48,18 @@ int main(void) {
     // a focused window that inhibits shortcuts → shortcutsInhibited = true
     struct wl_toplevel_ctx w1;
     wl_make_toplevel(&w1, "client_reg_shortcuts_inhibit", 400, 300, 0xFFFF0000);
-    zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts(inhibit_mgr, w1.surface, wl_seat_g);
-    wl_display_roundtrip(wl_dpy);
+    struct zwp_keyboard_shortcuts_inhibitor_v1* inhibitor =
+        zwp_keyboard_shortcuts_inhibit_manager_v1_inhibit_shortcuts(inhibit_mgr, w1.surface, wl_seat_g);
+    zwp_keyboard_shortcuts_inhibitor_v1_add_listener(inhibitor, &inhibitor_listener, NULL);
+    while (!inhibitor_active && wl_display_dispatch(wl_dpy) != -1) {
+    }
     printf("client_reg_shortcuts_inhibit: inhibitor active\n");
+
+    // the scenario's Super+F2: with the chord inhibited, the window gets it
+    wlk_watch_key = KEY_F2;
+    while (!wlk_watch_hits && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    printf("client_reg_shortcuts_inhibit: inhibited chord reached the window\n");
 
     // Close only the window (destroy the wl_surface), leaving the inhibitor
     // resource alive so cleanup goes through kbInhibitSurfaceGone / toplevelGone

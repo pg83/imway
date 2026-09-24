@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# While a focused window inhibits them, compositor chords are the window's.
 # #14: after the last shortcuts-inhibiting window closes, compositor chords
 # must come back to life. With no window focused, Super+F2 must still open the
 # launcher — observed as a change in the center of the frame.
@@ -6,6 +7,18 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 start_client
+wait_client "inhibitor active"
+
+# while the focused window inhibits them, the launcher chord is the window's
+ctl "key 125 press"  # KEY_LEFTMETA
+ctl "key 60 press"   # KEY_F2
+ctl "key 60 release"
+ctl "key 125 release"
+wait_client "inhibited chord reached the window"
+compose_frame
+compose_frame
+[[ -z "$(dump_field 'imgui name=##launcher' x)" ]] || { echo "the launcher opened on an inhibited chord"; dump_state; exit 1; }
+
 wait_client "inhibitor window closed"
 sleep 0.3
 
