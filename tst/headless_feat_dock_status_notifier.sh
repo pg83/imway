@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # private-session-bus
+# imway-env: SNI_PIXMAP=32x4
 # StatusNotifier items appear in the dock, load DBusMenu asynchronously and
-# route a primary click back to the item.
+# route a primary click back to the item. Its pixmap is a wide strip, which
+# the icon's mip chain halves down to a single row.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

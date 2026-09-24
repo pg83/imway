@@ -120,8 +120,8 @@ static cmsHPROFILE edgeProfile(const char* mode, bool& accepted) {
         return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
     }
     if (!strcmp(mode, "curve-bumpy")) {
-        // a gamma of 2.2 with a ripple: the estimate lands in range, the
-        // curve itself does not follow it
+        // a gamma of 2.2 with a ripple: the exponents it implies spread
+        // too far for lcms to call it one gamma
         float table[256];
         for (int i = 0; i < 256; i++) {
             float x = (float)i / 255.f;
@@ -130,10 +130,17 @@ static cmsHPROFILE edgeProfile(const char* mode, bool& accepted) {
         return rgbProfile(cmsBuildTabulatedToneCurveFloat(nullptr, 256, table));
     }
     if (!strcmp(mode, "curve-toe")) {
-        // BT.709's inverse OETF: a power law above a linear toe, monotonic,
-        // so the gamma estimate lands in range and only the curve check
-        // against that power law can tell it apart
+        // BT.709's inverse OETF: a power law above a linear toe up to
+        // 0.081, where lcms's gamma estimate (it skips the lowest 7%)
+        // still sees the toe and gives no gamma
         const double params[5] = {1 / 0.45, 1 / 1.099, 0.099 / 1.099, 1 / 4.5, 0.081};
+        return rgbProfile(cmsBuildParametricToneCurve(nullptr, 4, params));
+    }
+    if (!strcmp(mode, "curve-low-toe")) {
+        // x^2.2 exactly above 0.05 and a linear toe below it: lcms's
+        // estimate skips the lowest 7% and finds a clean 2.2, and only the
+        // compositor's own check over the whole curve sees the toe
+        const double params[5] = {2.2, 1.0, 0.0, pow(0.05, 1.2), 0.05};
         return rgbProfile(cmsBuildParametricToneCurve(nullptr, 4, params));
     }
     if (!strcmp(mode, "no-green-trc")) {

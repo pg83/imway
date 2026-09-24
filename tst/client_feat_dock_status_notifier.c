@@ -16,7 +16,8 @@ static DBusConnection* conn;
 // SNI_ID, SNI_TITLE, SNI_STATUS and SNI_SERVICE override the item's
 // properties and bus name, so one scenario can run several items shaped
 // after the windows it maps; SNI_ICON_NAME and SNI_ATTENTION_ICON_NAME add
-// themed icon names beside the pixmap
+// themed icon names beside the pixmap; SNI_PIXMAP=WxH sizes the pixmap
+// (16x16, at most 64 either way)
 static const char* env_or(const char* name, const char* fallback) {
     const char* value = getenv(name);
     return value ? value : fallback;
@@ -56,9 +57,13 @@ static void dict_pixmap(DBusMessageIter* dict) {
     const char* key = "IconPixmap";
     DBusMessageIter entry, var, images, image, bytes;
     int32_t w = 16, h = 16;
-    unsigned char pixels[16 * 16 * 4];
+    static unsigned char pixels[64 * 64 * 4];
 
-    for (int i = 0; i < 16 * 16; i++) {
+    if (sscanf(env_or("SNI_PIXMAP", "16x16"), "%dx%d", &w, &h) != 2 || w < 1 || h < 1 || w > 64 || h > 64) {
+        w = h = 16;
+    }
+
+    for (int i = 0; i < w * h; i++) {
         pixels[i * 4 + 0] = 255; // A
         pixels[i * 4 + 1] = 255; // R
         pixels[i * 4 + 2] = 0;   // G
@@ -66,7 +71,7 @@ static void dict_pixmap(DBusMessageIter* dict) {
     }
 
     const unsigned char* p = pixels;
-    int count = sizeof(pixels);
+    int count = w * h * 4;
 
     dbus_message_iter_open_container(dict, DBUS_TYPE_DICT_ENTRY, NULL, &entry);
     dbus_message_iter_append_basic(&entry, DBUS_TYPE_STRING, &key);
