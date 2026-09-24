@@ -1,6 +1,7 @@
 // Regression: a cursor-shape device is tied to the wl_pointer passed to
 // get_pointer. It must not accept an enter serial delivered to another
-// wl_pointer object from the same seat/client.
+// wl_pointer object from the same seat/client, nor its own pointer's serial
+// once the pointer has left the client's window.
 
 #include "wl_util.h"
 #include <cursor-shape-v1-client-protocol.h>
@@ -116,7 +117,24 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
     printf("orphaned shape serial sent\n");
 
+    // the pointer has left the window for the desktop: pointer1's enter
+    // serial was the valid one while it was over the window, and is not now
     wait_key(KEY_4);
+    while (wlp_focus && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    struct wp_cursor_shape_device_v1* device1 =
+        wp_cursor_shape_manager_v1_get_pointer(shape_manager, wl_ptr);
+    wl_display_roundtrip(wl_dpy);
+    printf("pointer left\n");
+
+    wait_key(KEY_5);
+    wp_cursor_shape_device_v1_set_shape(device1, pointer1_serial,
+                                        WP_CURSOR_SHAPE_DEVICE_V1_SHAPE_TEXT);
+    wl_display_roundtrip(wl_dpy);
+    printf("left shape serial sent\n");
+
+    wait_key(KEY_6);
+    wp_cursor_shape_device_v1_destroy(device1);
     wp_cursor_shape_device_v1_destroy(device2);
     wl_display_roundtrip(wl_dpy);
     printf("cursor shape pointer serial ok\n");

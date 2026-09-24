@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # cursor-shape devices inherit the serial scope of their wl_pointer object,
-# and a device whose wl_pointer is gone takes no serial at all.
+# and a device whose wl_pointer is gone takes no serial at all; once the
+# pointer has left for the desktop, no serial the client holds sets a shape.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -34,6 +35,21 @@ wait_client "orphaned shape serial sent"
     exit 1
 }
 
-ctl "key 5 press"; ctl "key 5 release" # KEY_4
+# off the window, over the desktop, no client owns the pointer
+ctl "motion 1200 700"
+screenshot "$XDG_RUNTIME_DIR/_off.ppm"
+ctl "key 5 press"; ctl "key 5 release" # KEY_4: the client waits for the leave
+wait_client "pointer left"
+screenshot "$XDG_RUNTIME_DIR/_off.ppm"
+desktop=$(dump_field '^cursor ' shape)
+ctl "key 6 press"; ctl "key 6 release" # KEY_5
+wait_client "left shape serial sent"
+screenshot "$XDG_RUNTIME_DIR/_off.ppm"
+[[ "$(dump_field '^cursor ' shape)" == "$desktop" ]] || {
+    echo "a cursor shape set after the pointer left the window took effect"
+    exit 1
+}
+
+ctl "key 7 press"; ctl "key 7 release" # KEY_6
 expect_client_ok "cursor-shape per-pointer serial validation failed"
 echo "OK: cursor-shape serial is scoped to its wl_pointer"
