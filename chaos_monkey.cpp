@@ -78,6 +78,8 @@ using namespace stl;
 //                     memfd with EMFILE, a write with ENOSPC
 //   shot-eintr=N      the next N writes of the screenshot's file are
 //                     interrupted by a signal before they write anything
+//   icc-eintr=N       the next N reads of a client's ICC profile file are
+//                     interrupted by a signal before they read anything
 //   descriptor-pool=K K texture descriptor pool creations pass, the one
 //                     after runs out of device memory
 //   descriptor-set=K  K texture descriptor set allocations pass, every
@@ -223,6 +225,7 @@ namespace {
         // the screenshot's file
         int shotFileSkip = -1;
         int shotInterrupts = 0;
+        int iccInterrupts = 0;
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
@@ -309,6 +312,7 @@ namespace {
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(int fd, ssize_t written) override;
+        ssize_t iccRead(ssize_t result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -475,6 +479,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         shotFileSkip = (int)arg.stou();
     } else if (fault == "shot-eintr"_sv) {
         shotInterrupts = (int)arg.stou();
+    } else if (fault == "icc-eintr"_sv) {
+        iccInterrupts = (int)arg.stou();
     } else if (fault == "descriptor-pool"_sv) {
         descriptorPoolSkip = (int)arg.stou();
     } else if (fault == "descriptor-set"_sv) {
@@ -872,6 +878,17 @@ ssize_t TestChaosMonkey::shotWrite(int fd, ssize_t written) {
     errno = ENOSPC;
 
     return -1;
+}
+
+ssize_t TestChaosMonkey::iccRead(ssize_t result) {
+    // pread keeps no position: what this read got is simply read again
+    if (result > 0 && spend(iccInterrupts)) {
+        errno = EINTR;
+
+        return -1;
+    }
+
+    return result;
 }
 
 VkResult TestChaosMonkey::descriptorPool(VkResult result) {
@@ -1304,6 +1321,7 @@ namespace {
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(int fd, ssize_t written) override;
+        ssize_t iccRead(ssize_t result) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -1456,6 +1474,10 @@ VkResult IdleChaosMonkey::readbackPoll(VkResult status) {
 // the screenshot's file
 int IdleChaosMonkey::shotFile(int fd) {
     return fd;
+}
+
+ssize_t IdleChaosMonkey::iccRead(ssize_t result) {
+    return result;
 }
 
 ssize_t IdleChaosMonkey::shotWrite(int, ssize_t written) {

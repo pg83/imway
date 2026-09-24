@@ -52,6 +52,8 @@ struct ChaosMonkey {
     // allocation failing (the replacement destroys what it was handed)
     virtual wl_resource* resource(wl_resource* created) = 0;
     // wayland shm and linux-dmabuf
+    // one pread of the file a client hands an ICC image description creator
+    virtual ssize_t iccRead(ssize_t result) = 0;
     // a wl_shm pool's mapping fresh from mmap (MAP_FAILED when it failed); a
     // replacement failure unmaps the size it was handed and returns MAP_FAILED
     virtual void* shmMap(void* mapped, size_t size) = 0;

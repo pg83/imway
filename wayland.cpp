@@ -13070,7 +13070,7 @@ void cmIccSetFile(wl_client*, wl_resource* res, int fd, u32 offset, u32 length) 
     size_t done = 0;
 
     while (done < length) {
-        ssize_t n = pread(fd, icc->data.mutData() + done, length - done, (off_t)offset + done);
+        ssize_t n = icc->srv->composer->chaos->iccRead(pread(fd, icc->data.mutData() + done, length - done, (off_t)offset + done));
 
         if (n > 0) {
             done += (size_t)n;
