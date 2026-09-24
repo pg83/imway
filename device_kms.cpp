@@ -2575,8 +2575,9 @@ bool KmsOutput::commit(u32 fbId, bool doModeset, int inFenceFd, int* commitErr) 
 
     // bisect: some driver/mode combinations reject the cursor plane in the
     // same commit — retry without it and fall back to the software cursor;
-    // a commit that never got a request tells nothing about the plane
-    if (err != 0 && err != ENOMEM && cursorPlaneId && cursorEnabled) {
+    // a commit that never got a request tells nothing about the plane, and
+    // neither does one with the plane dark: it carried no cursor to blame
+    if (err != 0 && err != ENOMEM && cursorPlaneId && cursorVisible) {
         int errNoCursor = tryCommit(fbId, doModeset, false, inFenceFd);
 
         if (errNoCursor == 0) {
