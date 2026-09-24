@@ -1560,6 +1560,17 @@ namespace {
         }
     }
 
+    // the test build says what the editor did with its input, so scenarios
+    // wait for the editor itself instead of for pixels
+    void traceView(StringView what, const Viewer& v) {
+#ifdef IMWAY_FOR_TESTS
+        sysO << "imway screenshot: "_sv << what << " zoom "_sv << v.zoom << endL;
+#else
+        (void)what;
+        (void)v;
+#endif
+    }
+
     // nudge the zoom by delta% (clamped); any change drops the selection
     void applyZoom(Viewer& v, int delta) {
         int z = (int)clampf((float)(v.zoom + delta), (float)kZoomMin, (float)kZoomMax);
@@ -1567,12 +1578,14 @@ namespace {
         if (z != v.zoom) {
             v.zoom = z;
             v.crop.clear();
+            traceView("zoomed"_sv, v);
         }
     }
 
     void resetView(Viewer& v) {
         v.zoom = kInitialZoom;
         v.crop.clear();
+        traceView("reset"_sv, v);
     }
 
     // left control panel: zoom on top, then Save/Reset in one row, then
@@ -1673,6 +1686,7 @@ namespace {
             ImGui::SetScrollX(ImGui::GetScrollX() - d.x);
             ImGui::SetScrollY(ImGui::GetScrollY() - d.y);
             crop.clear();
+            traceView("panned"_sv, v);
         }
 
         // wheel zooms (the child has NoScrollWithMouse, so the wheel is ours)

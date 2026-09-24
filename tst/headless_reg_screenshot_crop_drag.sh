@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_CHILD_LOG=./viewer.log
 # Selections in the screenshot editor. A crop dragged from its bottom-right
 # corner up to its top-left is the same rectangle as one dragged the usual
 # way: at the editor's 50% zoom a 200x150 drag saves a 400x300 PNG. A
@@ -63,6 +64,8 @@ echo "reversed crop: ${w}x${h}"
 open_editor panned
 drag left $((vx + 420)) $((vy + 150)) $((vx + 620)) $((vy + 300))
 drag middle $((vx + 500)) $((vy + 250)) $((vx + 440)) $((vy + 200))
+panned() { grep -q "imway screenshot: panned" "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; }
+await 100 panned || { echo "the editor never took the middle drag as a pan"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 save panned
 read -r w h < <(png_size "$shots/panned.png")
 echo "after the pan: ${w}x${h}"

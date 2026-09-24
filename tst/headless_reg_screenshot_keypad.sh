@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# imway-env: IMWAY_CHILD_LOG=./viewer.log
 # The screenshot editor from the keypad: keypad + zooms in, keypad - out,
 # keypad 0 resets, the wheel turned toward the user zooms out, and keypad
 # Enter saves.
@@ -19,6 +20,10 @@ viewer_gone() {
 }
 tap() { # <keycode>
     ctl "key $1 press"; ctl "key $1 release"
+}
+# the editor's own account of a key, the <n>th time it says <what>
+editor_said() { # <what> <n>
+    [[ "$(grep -c "imway screenshot: $1" "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null || true)" -ge "$2" ]]
 }
 ctl "key 99 press"; ctl "key 99 release" # Print
 await 150 viewer_up || { echo "editor did not open"; cat "$IMWAY_LOG"; exit 1; }
@@ -41,12 +46,16 @@ await 50 settled "$XDG_RUNTIME_DIR/s0.ppm" "$XDG_RUNTIME_DIR/base.ppm" || { echo
 
 tap 69 # NumLock: keypad 0 is Insert without it
 tap 78 # keypad +
+await 100 editor_said "zoomed zoom 60" 1 || { echo "the editor never took keypad +"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 await 50 differs "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/in.ppm" || { echo "keypad + did not zoom in"; exit 1; }
 tap 82 # keypad 0
+await 100 editor_said "reset zoom 50" 1 || { echo "the editor never took keypad 0"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 await 50 differs "$XDG_RUNTIME_DIR/in.ppm" "$XDG_RUNTIME_DIR/reset.ppm" || { echo "keypad 0 did not reset the zoom"; exit 1; }
 tap 74 # keypad -
+await 100 editor_said "zoomed zoom 40" 1 || { echo "the editor never took keypad -"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/out.ppm" || { echo "keypad - did not zoom out"; exit 1; }
 tap 82
+await 100 editor_said "reset zoom 50" 2 || { echo "the editor never took keypad 0 again"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 await 50 differs "$XDG_RUNTIME_DIR/out.ppm" "$XDG_RUNTIME_DIR/reset2.ppm" || { echo "keypad 0 did not reset the zoom again"; exit 1; }
 
 # the wheel zooms the canvas the pointer is over
