@@ -5,7 +5,7 @@
 # slot, but once the window maps the slot shows the item's icon and its menu
 # holds the window's items and then, past a separator, the item's own. An
 # item with neither an id nor a title gets a slot of its own whose tooltip
-# still says something.
+# still says something. Unmerging the tray and hiding it work as they say.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -71,5 +71,17 @@ await 50 grep -q "layout requested" "$XDG_RUNTIME_DIR/a.log"
 click_at $(($(popup x) + $(popup w) / 2)) $(($(popup y) + $(popup h) - 12))
 await 50 grep -q "menu clicked" "$XDG_RUNTIME_DIR/a.log" || { echo "the last row is not the item's action"; cat "$XDG_RUNTIME_DIR/a.log"; exit 1; }
 
+# unmerged, the passive item leaves the window's slot and, being passive,
+# takes none of its own: the nameless item's is the only tray icon left
+ctl "motion 500 500"
+ctl "set desktop.merge_tray false"
+await 50 one || { echo "unmerged, the passive item still shows in the dock: $(slots | xargs)"; exit 1; }
+# the tray hidden, no item shows at all
+ctl "set desktop.show_tray false"
+none() { [[ "$(slot_count)" -eq 0 ]]; }
+await 50 none || { echo "the hidden tray still shows in the dock: $(slots | xargs)"; exit 1; }
+ctl "set desktop.show_tray true"
+await 50 one || { echo "the tray shown again lost its item: $(slots | xargs)"; exit 1; }
+
 expect_alive "compositor died merging tray items into the dock"
-echo "OK: tray items merge into their window's slot, passive ones take none"
+echo "OK: tray items merge into their window's slot, passive ones take none; the settings unmerge and hide them"
