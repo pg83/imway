@@ -107,6 +107,9 @@ struct OutputColorState {
     void setSdrWhite(double nits);
     bool hdr() const;
     bool operator==(const OutputColorState& other) const;
+    // what an image description of the output says is the same: the
+    // encoding and the luminances, not the link depth or the RGB range
+    bool sameDescription(const OutputColorState& other) const;
 };
 
 struct ColorRgb {

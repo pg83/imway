@@ -1550,7 +1550,7 @@ namespace {
         wl_resource* kbTargetRes();
         TextInput* activeTextInput();
         void imUpdateActivation();
-        void imFlushToTextInput();
+        void imFlushToTextInput(InputMethod& im);
         bool imGrabActive() const;
         void imUpdatePopup();
         Surface* kbFocusSurface();
@@ -1919,7 +1919,8 @@ namespace {
             u32 flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
             u64 sec = frame.nsec / 1000000000ull;
             u32 nsec = (u32)(frame.nsec % 1000000000ull);
-            u32 refreshNs = s.srv->composer->scene->hz > 0 ? (u32)(1e9 / s.srv->composer->scene->hz) : 0;
+            // a mode the connector listed has a nonzero pixel clock
+            u32 refreshNs = (u32)(1e9 / s.srv->composer->scene->hz);
             Vector<wl_resource*> fbs;
 
             fbs.xchg(s.presentFeedbacks);
@@ -2568,8 +2569,10 @@ namespace {
         return true;
     }
 
+    // the points come in pairs by now: syncCommitOk refused a commit with
+    // one and not the other, and a destroyed syncobj surface released both
     void syncApplyPoints(SurfaceImpl& s) {
-        if (!s.pendAcqTl || !s.pendRelTl) {
+        if (!s.pendAcqTl) {
             return;
         }
 
@@ -2822,7 +2825,8 @@ namespace {
                     cache->valid = true;
                     cache->pixels.clear();
 
-                    if (s.pendAcqTl && s.pendRelTl) {
+                    // a pair, as in syncApplyPoints
+                    if (s.pendAcqTl) {
                         cache->acq = s.pendAcqTl;
                         cache->rel = s.pendRelTl;
                         cache->acquirePoint = s.pendAcqPt;
@@ -6691,10 +6695,14 @@ namespace {
         im->deleteAfter = after;
     }
 
+    // the seat's input method commits what it staged; an inert second one
+    // commits nothing, and must not flush the active one's staging either
     void imCommit(wl_client*, wl_resource* res, u32) {
         auto* im = (InputMethod*)wl_resource_get_user_data(res);
 
-        im->srv->seat.imFlushToTextInput();
+        if (im->srv->seat.inputMethod.get() == im) {
+            im->srv->seat.imFlushToTextInput(*im);
+        }
     }
 
     void imGetPopupSurface(wl_client* client, wl_resource* res, u32 id, wl_resource* surfaceRes) {
@@ -10903,10 +10911,9 @@ TimelineBox::TimelineBox(SmallObjAllocator* a, WaylandImpl* s, u32 h)
 {
 }
 
+// made only with the handle the import handed out
 TimelineBox::~TimelineBox() noexcept {
-    if (handle) {
-        drmSyncobjDestroy(srv->drmFd, handle);
-    }
+    drmSyncobjDestroy(srv->drmFd, handle);
 }
 
 void TimelineBox::operator delete(TimelineBox* timeline, std::destroying_delete_t) noexcept {
@@ -11859,42 +11866,39 @@ void SeatState::imUpdateActivation() {
 
 // the input method committed: push its staged string/preedit/delete into the
 // active text input and bump its serial
-void SeatState::imFlushToTextInput() {
-    InputMethod* im = inputMethod.get();
+void SeatState::imFlushToTextInput(InputMethod& im) {
     TextInput* ti = activeTextInput();
 
-    if (!im || !ti) {
-        if (im) {
-            im->commitSet = im->preeditSet = false;
-            im->deleteBefore = im->deleteAfter = 0;
-        }
+    if (!ti) {
+        im.commitSet = im.preeditSet = false;
+        im.deleteBefore = im.deleteAfter = 0;
 
         return;
     }
 
-    if (im->deleteBefore || im->deleteAfter) {
-        zwp_text_input_v3_send_delete_surrounding_text(ti->res, im->deleteBefore, im->deleteAfter);
+    if (im.deleteBefore || im.deleteAfter) {
+        zwp_text_input_v3_send_delete_surrounding_text(ti->res, im.deleteBefore, im.deleteAfter);
     }
 
-    if (im->preeditSet) {
-        Buffer b(sv(im->preeditStr));
-        zwp_text_input_v3_send_preedit_string(ti->res, im->preeditStr.empty() ? nullptr : b.cStr(), im->preeditBegin, im->preeditEnd);
+    if (im.preeditSet) {
+        Buffer b(sv(im.preeditStr));
+        zwp_text_input_v3_send_preedit_string(ti->res, im.preeditStr.empty() ? nullptr : b.cStr(), im.preeditBegin, im.preeditEnd);
     } else {
         zwp_text_input_v3_send_preedit_string(ti->res, nullptr, 0, 0);
     }
 
-    if (im->commitSet) {
-        Buffer b(sv(im->commitStr));
-        zwp_text_input_v3_send_commit_string(ti->res, im->commitStr.empty() ? nullptr : b.cStr());
+    if (im.commitSet) {
+        Buffer b(sv(im.commitStr));
+        zwp_text_input_v3_send_commit_string(ti->res, im.commitStr.empty() ? nullptr : b.cStr());
     }
 
     zwp_text_input_v3_send_done(ti->res, ++ti->serial);
 
-    im->commitSet = im->preeditSet = false;
-    im->commitStr.reset();
-    im->preeditStr.reset();
-    im->preeditBegin = im->preeditEnd = 0;
-    im->deleteBefore = im->deleteAfter = 0;
+    im.commitSet = im.preeditSet = false;
+    im.commitStr.reset();
+    im.preeditStr.reset();
+    im.preeditBegin = im.preeditEnd = 0;
+    im.deleteBefore = im.deleteAfter = 0;
 }
 
 // wp input popup: send the text-input rectangle to the popup surface and
@@ -11954,22 +11958,21 @@ void SeatState::focusToplevel(Toplevel* t) {
         kbFocus->xkbGroup = srv->composer->kb->mods().group;
     }
 
+    // activated is the keyboard focus and nothing else: only this sets
+    // and clears it, so the old focus is the one activated window and the
+    // new one (another window) is not
     if (kbFocus && kbFocus->surface) {
         auto* old = (ToplevelImpl*)kbFocus;
 
-        if (old->activated) {
-            old->activated = false;
-            xdgToplevelReconfigure(*old);
-        }
+        old->activated = false;
+        xdgToplevelReconfigure(*old);
     }
 
     if (t && t->surface) {
         auto* ti = (ToplevelImpl*)t;
 
-        if (!ti->activated) {
-            ti->activated = true;
-            xdgToplevelReconfigure(*ti);
-        }
+        ti->activated = true;
+        xdgToplevelReconfigure(*ti);
     }
 
     // under an active popup grab the keyboard belongs to kbOverride: the old
@@ -13458,30 +13461,26 @@ void WaylandImpl::createGlobals() {
     global(*(composer->log), *(composer->chaos), display, &wp_drm_lease_device_v1_interface, 1, this, leaseDeviceBind);
 
     if (!formats.empty()) {
-        int dmabufVersion = 3;
+        // the feedback always has a main device to name (the renderer's
+        // node, else the display's), so the format table goes with it
+        fbTableSize = (u32)(formats.length() * 16);
+        fbTableFd = composer->chaos->formatTable(memfd_create("imway-format-table", MFD_CLOEXEC | MFD_ALLOW_SEALING));
+        STD_VERIFY(fbTableFd >= 0);
 
-        if (mainDevice) {
-            fbTableSize = (u32)(formats.length() * 16);
-            fbTableFd = composer->chaos->formatTable(memfd_create("imway-format-table", MFD_CLOEXEC | MFD_ALLOW_SEALING));
-            STD_VERIFY(fbTableFd >= 0);
+        for (const DmabufFormat& fm : formats) {
+            struct {
+                u32 fourcc;
+                u32 pad;
+                u64 modifier;
+            } entry = {fm.fourcc, 0, fm.modifier};
 
-            for (const DmabufFormat& fm : formats) {
-                struct {
-                    u32 fourcc;
-                    u32 pad;
-                    u64 modifier;
-                } entry = {fm.fourcc, 0, fm.modifier};
-
-                STD_VERIFY(composer->chaos->formatTableWrite(write(fbTableFd, &entry, sizeof(entry))) == sizeof(entry));
-            }
-
-            fcntl(fbTableFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
-            // v5 adds no new interface members over v4 (v6's
-            // set_sampling_device is not in the installed wayland-protocols)
-            dmabufVersion = 5;
+            STD_VERIFY(composer->chaos->formatTableWrite(write(fbTableFd, &entry, sizeof(entry))) == sizeof(entry));
         }
 
-        global(*(composer->log), *(composer->chaos), display, &zwp_linux_dmabuf_v1_interface, dmabufVersion, this, dmabufBind);
+        fcntl(fbTableFd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL);
+        // v5 adds no new interface members over v4 (v6's
+        // set_sampling_device is not in the installed wayland-protocols)
+        global(*(composer->log), *(composer->chaos), display, &zwp_linux_dmabuf_v1_interface, 5, this, dmabufBind);
     } else {
         *(composer->log) << "imway: no dmabuf formats, linux_dmabuf global not created"_sv << endL;
     }
@@ -13500,7 +13499,10 @@ bool WaylandImpl::formatSupported(u32 fourcc, u64 modifier) const {
 void WaylandImpl::syncColorState() {
     OutputColorState color = composer->output->colorState();
 
-    if (color == cmDisplayColor) {
+    // a new link depth or RGB range leaves the description as it was
+    if (color.sameDescription(cmDisplayColor)) {
+        cmDisplayColor = color;
+
         return;
     }
 
@@ -13733,12 +13735,14 @@ void WaylandImpl::onListen(void* arg) {
         // client-produced sizes only, at the client's own pace
         bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
 
-        ti->configureAnswered = answered;
-
         // dock state changes alone need a configure: TILED comes and goes
         if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked || ti->maximized != ti->cfgMaximized) {
             xdgToplevelConfigureSize(*ti, ti->desiredW, ti->desiredH);
+            // the one just sent is not answered yet
+            answered = false;
         }
+
+        ti->configureAnswered = answered;
     });
 }
 

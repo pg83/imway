@@ -279,7 +279,11 @@ bool OutputColorState::hdr() const {
 }
 
 bool OutputColorState::operator==(const OutputColorState& o) const {
-    return encoding == o.encoding && sdrWhiteNits == o.sdrWhiteNits && displayMinNits == o.displayMinNits && displayPeakNits == o.displayPeakNits && displayMaxFallNits == o.displayMaxFallNits && bpc == o.bpc && range == o.range;
+    return sameDescription(o) && bpc == o.bpc && range == o.range;
+}
+
+bool OutputColorState::sameDescription(const OutputColorState& o) const {
+    return encoding == o.encoding && sdrWhiteNits == o.sdrWhiteNits && displayMinNits == o.displayMinNits && displayPeakNits == o.displayPeakNits && displayMaxFallNits == o.displayMaxFallNits;
 }
 
 ColorMatrix ColorMatrix::identity() {
