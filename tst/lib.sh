@@ -377,6 +377,36 @@ screenshot() {
     [[ -s "$1" ]] || { echo "screenshot $1 was not written" >&2; return 1; }
 }
 
+# fd leak checks: the compositor's open fds by what they point at. The
+# baseline follows a composed frame: the first frames open what they then
+# keep (the driver's caches, the fences of the frame in flight), and on a
+# slow runner they can come after the scenario has started. The check
+# gives the compositor time to take down the clients that just exited: a
+# disconnect it has not got to yet still holds the client's socket and
+# every fd the client sent, which is not a leak
+fd_targets() {
+    local f
+
+    for f in /proc/"$IMWAY_PID"/fd/*; do
+        readlink "$f" 2>/dev/null || true
+    done | sort
+}
+fd_baseline() { # <file>
+    screenshot "$XDG_RUNTIME_DIR/_fd_settle.ppm"
+    fd_targets > "$1"
+}
+fds_within() { # <baseline file> <slack>
+    fd_targets > "$XDG_RUNTIME_DIR/_fd_now.txt"
+    [[ $(wc -l < "$XDG_RUNTIME_DIR/_fd_now.txt") -le $(($(wc -l < "$1") + $2)) ]]
+}
+expect_fds_kept() { # <baseline file> <slack> <what>: at most <slack> more open than at the baseline
+    await 50 fds_within "$1" "$2" || {
+        echo "compositor leaked fds $3: before=$(wc -l < "$1") after=$(wc -l < "$XDG_RUNTIME_DIR/_fd_now.txt")"
+        diff "$1" "$XDG_RUNTIME_DIR/_fd_now.txt" | grep '^[<>]' || true
+        exit 1
+    }
+}
+
 # the framebuffer at its own depth: maxval 1023 for a 10-bit one
 screenshot_raw() {
     rm -f "$1"
