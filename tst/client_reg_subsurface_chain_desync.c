@@ -1,6 +1,7 @@
 /* PLAN depth #2: the same subsurface chains in desync mode, depths 64, 256
  * and 1024 (VkTexturePool grows on demand, so the deep tree no longer
- * exhausts the descriptor pool). */
+ * exhausts the descriptor pool). Torn down from the top, each link commits
+ * once more after its parent is gone: an orphaned desync commit. */
 #include "wl_util.h"
 
 static int frame_done;
@@ -47,6 +48,7 @@ static int run_chain(struct wl_toplevel_ctx* top, int depth, int destroy_topdown
 
     if (destroy_topdown) {
         for (int i = 0; i < depth; i++) {
+            if (i) wl_surface_commit(chain_surface[i]);
             wl_subsurface_destroy(chain_sub[i]);
             wl_surface_destroy(chain_surface[i]);
         }

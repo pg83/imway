@@ -84,6 +84,17 @@ int main(void) {
     struct wl_pointer* ptr = wl_seat_get_pointer(wl_seat_g);
     wl_pointer_add_listener(ptr, &pl, NULL);
 
+    // a toplevel drag whose data source went first never had a drag to be
+    // ongoing: destroying it is fine
+    struct wl_data_source* gone = wl_data_device_manager_create_data_source(ddm);
+    struct xdg_toplevel_drag_v1* orphan = xdg_toplevel_drag_manager_v1_get_xdg_toplevel_drag(drag_mgr, gone);
+    wl_data_source_destroy(gone);
+    xdg_toplevel_drag_v1_destroy(orphan);
+    if (wl_display_roundtrip(wl_dpy) < 0) {
+        fprintf(stderr, "destroying a toplevel drag without its source was refused\n");
+        return 1;
+    }
+
     // the origin window (the "tab bar") and the window to be torn off
     struct wl_toplevel_ctx origin, torn;
     wl_make_toplevel(&origin, "drag-origin", 400, 300, 0xFF3060A0u);

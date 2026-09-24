@@ -1,7 +1,9 @@
 // Feature: wl_data_device clipboard round-trip. A focused client sets a
 // selection, the compositor offers it back to that client's data_device, and
 // receive() pipes the payload from the source. Exercises set_selection ->
-// data_offer -> selection -> receive -> source.send end to end.
+// data_offer -> selection -> receive -> source.send end to end. An accept
+// on the selection offer is drag-and-drop feedback with no drag: the
+// source hears no target from it.
 
 #include "wl_util.h"
 
@@ -13,7 +15,11 @@ static int selection_offered;
 static const char* PAYLOAD = "imway-clip";
 
 // --- source ---
-static void src_target(void* d, struct wl_data_source* s, const char* m) { (void)d; (void)s; (void)m; }
+static int src_targets;
+static void src_target(void* d, struct wl_data_source* s, const char* m) {
+    (void)d; (void)s; (void)m;
+    src_targets++;
+}
 static void src_send(void* d, struct wl_data_source* s, const char* m, int32_t fd) {
     (void)d; (void)s; (void)m;
     ssize_t r = write(fd, PAYLOAD, strlen(PAYLOAD));
@@ -83,6 +89,10 @@ int main(void) {
         usleep(20000);
     }
     if (!selection_offered) { fprintf(stderr, "no selection offer\n"); return 1; }
+
+    wl_data_offer_accept(current_offer, wlk_key_serial, "text/plain");
+    wl_display_roundtrip(wl_dpy);
+    if (src_targets) { fprintf(stderr, "a selection accept reached the source as a target\n"); return 1; }
 
     int fds[2];
     if (pipe(fds) < 0) { perror("pipe"); return 1; }

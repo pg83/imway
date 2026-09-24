@@ -18,4 +18,11 @@ await 50 popup_placed || {
     dump_state
     exit 1
 }
+
+touch "$XDG_RUNTIME_DIR/popup-seen"
+wait_client "popup surface gone"
+popup_gone() {
+    dump_state | grep -q 'ime popup=0'
+}
+await 50 popup_gone || { echo "the popup stayed placed without its surface"; dump_state; exit 1; }
 echo "OK: input popup reported its rectangle and was composited"

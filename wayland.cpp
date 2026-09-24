@@ -5252,9 +5252,10 @@ namespace {
             case DecorationPolicy::clientPreference:
                 return t.requestedDecoration ? t.requestedDecoration : ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
             case DecorationPolicy::server:
-            default:
-                return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+                break;
         }
+
+        return ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
     }
 
     void applyDecoration(ToplevelImpl& t) {
@@ -6640,7 +6641,9 @@ namespace {
             return;
         }
 
-        if (im->popupSurface.get() && im->srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+        // a popup surface already gone left no placement: the scene's
+        // pointer to it went with it
+        if (im->srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
             im->srv->composer->scene->imePopup.reset();
         }
 
@@ -6742,7 +6745,7 @@ namespace {
         if (im->popupRes) {
             // the popup destroy handler would otherwise clear the scene
             // placement; do it here since we sever its link to us
-            if (im->popupSurface.get() && srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+            if (srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
                 srv->composer->scene->imePopup.reset();
             }
 
@@ -7502,8 +7505,9 @@ namespace {
                 return;
             }
 
-            w = t->surface->geomW() > 0 ? t->surface->geomW() : 1;
-            h = t->surface->geomH() > 0 ? t->surface->geomH() : 1;
+            // a mapped window is at least 1x1
+            w = t->surface->geomW();
+            h = t->surface->geomH();
         }
 
         cs.sentW = (u32)w;
@@ -7804,8 +7808,9 @@ namespace {
                 return;
             }
 
-            wantW = t->surface->geomW() > 0 ? (u32)t->surface->geomW() : 1;
-            wantH = t->surface->geomH() > 0 ? (u32)t->surface->geomH() : 1;
+            // a mapped window is at least 1x1
+            wantW = (u32)t->surface->geomW();
+            wantH = (u32)t->surface->geomH();
 
             // the window changed size since the client sized its buffer:
             // push fresh constraints and bounce this frame
@@ -11873,7 +11878,7 @@ void SeatState::imUpdatePopup() {
     TextInput* ti = activeTextInput();
 
     if (!ti || !im->active) {
-        if (im->popupSurface.get() && srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
+        if (srv->composer->scene->imePopup.get() == im->popupSurface.get()) {
             srv->composer->scene->imePopup.reset();
         }
 

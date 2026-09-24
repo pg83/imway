@@ -1,5 +1,7 @@
 // Feature: zwp_idle_inhibit on a mapped surface must hold off
-// ext-idle-notify; destroying the inhibitor lets the idle timer fire.
+// ext-idle-notify; destroying the inhibitor lets the idle timer fire. One
+// on a subsurface holds it off as well while its window is mapped, and no
+// longer once the window unmaps with the subsurface's content still there.
 
 #include "wl_util.h"
 #include <ext-idle-notify-v1-client-protocol.h>
@@ -62,5 +64,37 @@ int main(void) {
     }
     if (!idled) { fprintf(stderr, "never idled after the inhibitor died\n"); return 1; }
     printf("inhibit ok\n");
+
+    if (!wl_subcomp) { fprintf(stderr, "no subcompositor\n"); return 1; }
+    struct wl_surface* child = wl_compositor_create_surface(wl_comp);
+    struct wl_subsurface* sub = wl_subcompositor_get_subsurface(wl_subcomp, child, top.surface);
+    wl_subsurface_set_desync(sub);
+    wl_surface_attach(child, wl_solid(50, 50, 0xFF0000FF), 0, 0);
+    wl_surface_damage(child, 0, 0, 50, 50);
+    wl_surface_commit(child);
+    wl_surface_commit(top.surface);
+    zwp_idle_inhibit_manager_v1_create_inhibitor(inhibit_mgr, child);
+    wl_display_roundtrip(wl_dpy);
+
+    idled = 0;
+    struct ext_idle_notification_v1* n2 =
+        ext_idle_notifier_v1_get_idle_notification(notifier, 300, wl_seat_g);
+    ext_idle_notification_v1_add_listener(n2, &notif_listener, NULL);
+    for (int i = 0; i < 60; i++) {
+        if (wl_display_roundtrip(wl_dpy) < 0) break;
+        usleep(20000);
+    }
+    if (idled) { fprintf(stderr, "idled despite an inhibitor on a shown subsurface\n"); return 1; }
+    printf("subsurface held\n");
+
+    // the window goes, the subsurface keeps its buffer: nothing is shown
+    wl_surface_attach(top.surface, NULL, 0, 0);
+    wl_surface_commit(top.surface);
+    for (int i = 0; i < 150 && !idled; i++) {
+        if (wl_display_roundtrip(wl_dpy) < 0) break;
+        usleep(20000);
+    }
+    if (!idled) { fprintf(stderr, "an unmapped window's subsurface still held idle off\n"); return 1; }
+    printf("unmapped subsurface let go\n");
     return 0;
 }

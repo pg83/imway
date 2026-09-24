@@ -6,7 +6,10 @@
 // #F-14: input-method popup surface. The IME creates a popup surface for an
 // active text input; the compositor reports the text-input rectangle (in the
 // popup's coordinates) and composites the popup. Asserted via the rectangle
-// event and the dump_state popup marker.
+// event and the dump_state popup marker. The cursor rectangle then moves
+// down, widens and grows taller, one at a time: each is a new rectangle.
+// Last, the popup's wl_surface is destroyed before the popup object: the
+// object still hears the rectangle, and the popup leaves the scene.
 
 static struct zwp_text_input_manager_v3* ti_mgr;
 static struct zwp_input_method_manager_v2* im_mgr;
@@ -67,12 +70,28 @@ static const struct zwp_input_method_v2_listener im_listener = {
     im_content_type, im_done, im_unavailable,
 };
 
-static int rect_seen, rect_w, rect_h;
+static int rect_seen, rect_x, rect_y, rect_w, rect_h;
 static void popup_rect(void* d, struct zwp_input_popup_surface_v2* p,
                        int32_t x, int32_t y, int32_t w, int32_t h) {
-    (void)d; (void)p; (void)x; (void)y;
-    rect_w = w; rect_h = h;
-    rect_seen = 1;
+    (void)d; (void)p;
+    rect_x = x; rect_y = y; rect_w = w; rect_h = h;
+    rect_seen++;
+}
+
+// one field of the cursor rectangle changes; the popup hears the new one
+static int expect_rect(struct zwp_text_input_v3* ti, int x, int y, int w, int h) {
+    int seen = rect_seen;
+
+    zwp_text_input_v3_set_cursor_rectangle(ti, x, y, w, h);
+    zwp_text_input_v3_commit(ti);
+    while (rect_seen == seen && wl_display_dispatch(wl_dpy) != -1) {
+    }
+    if (rect_x != -x || rect_y != -y || rect_w != w || rect_h != h) {
+        fprintf(stderr, "popup rectangle %d,%d %dx%d, want %d,%d %dx%d\n",
+                rect_x, rect_y, rect_w, rect_h, -x, -y, w, h);
+        return 1;
+    }
+    return 0;
 }
 static const struct zwp_input_popup_surface_v2_listener popup_listener = {popup_rect};
 
@@ -120,8 +139,23 @@ int main(void) {
         return 1;
     }
 
+    if (expect_rect(ti, 40, 70, 8, 16) || expect_rect(ti, 40, 70, 12, 16) || expect_rect(ti, 40, 70, 12, 20)) {
+        return 1;
+    }
+
     printf("input-popup done\n");
     fflush(stdout);
+
+    // the popup's wl_surface goes first: the popup object still hears the
+    // rectangle, and nothing is placed for it any more
+    alarm(0);
+    if (wl_await_file("popup-seen")) return 1;
+    alarm(10);
+    wl_surface_destroy(surf);
+    if (expect_rect(ti, 40, 80, 12, 20)) return 1;
+    printf("popup surface gone\n");
+    fflush(stdout);
+
     while (wl_display_dispatch(wl_dpy) != -1) {
     }
     return 0;

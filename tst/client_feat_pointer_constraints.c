@@ -1,6 +1,7 @@
 // Feature: pointer-constraints (lock) + relative-pointer. Locking the pointer
 // on the focused surface must fire the locked event; while locked, injected
-// motion arrives as relative deltas.
+// motion arrives as relative deltas, and a region committed on the lock
+// leaves it locked.
 
 #include "wl_util.h"
 #include <relative-pointer-unstable-v1-client-protocol.h>
@@ -21,7 +22,8 @@ static void rel_motion(void* d, struct zwp_relative_pointer_v1* rp, uint32_t th,
 static const struct zwp_relative_pointer_v1_listener rel_listener = {rel_motion};
 
 static void lp_locked(void* d, struct zwp_locked_pointer_v1* lp) { (void)d; (void)lp; locked = 1; }
-static void lp_unlocked(void* d, struct zwp_locked_pointer_v1* lp) { (void)d; (void)lp; }
+static int unlocked;
+static void lp_unlocked(void* d, struct zwp_locked_pointer_v1* lp) { (void)d; (void)lp; unlocked = 1; }
 static const struct zwp_locked_pointer_v1_listener lp_listener = {lp_locked, lp_unlocked};
 
 static void reg2_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
@@ -60,6 +62,20 @@ int main(void) {
         if (locked && wlrel_count > 0) {
             printf("client_feat_pointer_constraints: locked, relative dx=%.1f dy=%.1f\n",
                    wlrel_dx, wlrel_dy);
+
+            // a region committed on the active lock only says where the
+            // lock may hold: it stays locked
+            struct wl_region* region = wl_compositor_create_region(wl_comp);
+            wl_region_add(region, 0, 0, 50, 50);
+            zwp_locked_pointer_v1_set_region(lock, region);
+            wl_region_destroy(region);
+            wl_surface_commit(top.surface);
+            wl_display_roundtrip(wl_dpy);
+            if (unlocked) {
+                fprintf(stderr, "client_feat_pointer_constraints: a region update ended the lock\n");
+                return 1;
+            }
+
             printf("client_feat_pointer_constraints: ok\n");
             return 0;
         }
