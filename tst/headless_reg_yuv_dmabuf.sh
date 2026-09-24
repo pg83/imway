@@ -66,6 +66,19 @@ run_color bt709_full nv12 2 1 1 224 112 112 199 234 194
 # P010 contains the same nominal BT.709 limited sample at ten-bit precision.
 run_color p010_bt709 p010 2 2 1 576 256 192 6 205 14
 
+# The chroma plane in a buffer of its own, as a decoder hands its planes:
+# the image binds each plane's memory apart and reads the same colour.
+run_disjoint() { # name format y cb cr r g b
+    start_client "$2" 2 2 1 "$3" "$4" "$5" disjoint
+    wait_yuv
+    sleep 0.3
+    screenshot "$XDG_RUNTIME_DIR/$1.ppm"
+    assert_color "$XDG_RUNTIME_DIR/$1.ppm" "$6" "$7" "$8" "$1"
+    stop_client
+}
+run_disjoint nv12_disjoint nv12 144 64 48 6 205 14
+run_disjoint p010_disjoint p010 576 256 192 6 205 14
+
 # Four quadrants with independent U/V edges expose each H.273 chroma offset.
 for location in 1 2 3 4 5 6; do
     start_client nv12 2 2 "$location" pattern 0 0
@@ -144,7 +157,7 @@ start_client nv12 1 1 1 128 128 128
 rc=0
 wait "$CLIENT_PID" || rc=$?
 if [[ $rc -eq 77 ]]; then
-    echo "SKIP: AMD dma-buf unavailable"
+    echo "SKIP: YUV dma-buf unavailable"
     exit 127
 fi
 [[ $rc -eq 3 ]] || { echo "identity/YUV was accepted (rc=$rc)"; cat "$CLIENT_LOG"; exit 1; }

@@ -4,8 +4,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <unistd.h>
+
+#include <linux/udmabuf.h>
 
 #include <amdgpu.h>
 #include <amdgpu_drm.h>
@@ -31,6 +34,7 @@ static uint32_t color_range = WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_LIMITED;
 static uint32_t chroma_location = WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCATION_TYPE_0;
 static int y_code = 63, cb_code = 102, cr_code = 240;
 static int pattern;
+static int disjoint;
 static int nv12_linear, p010_linear;
 static int drawn;
 
@@ -88,7 +92,76 @@ static void wm_base_ping(void* data, struct xdg_wm_base* object, uint32_t serial
 
 static const struct xdg_wm_base_listener wm_base_listener = {.ping = wm_base_ping};
 
-static int make_yuv(void) {
+// the picture, both planes back to back as they sit in one buffer
+static uint8_t* yuv_bytes(size_t* ysize, size_t* uvsize) {
+    int bytes = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
+
+    *ysize = (size_t)W * H * bytes;
+    *uvsize = *ysize / 2;
+
+    uint8_t* map = malloc(*ysize + *uvsize);
+
+    if (pixel_format == DRM_FORMAT_P010) {
+        uint16_t* y = (uint16_t*)map;
+        uint16_t* uv = y + W * H;
+
+        for (int i = 0; i < W * H; i++) y[i] = (uint16_t)(y_code << 6);
+        for (int row = 0; row < H / 2; row++) {
+            for (int col = 0; col < W / 2; col++) {
+                int i = (row * (W / 2) + col) * 2;
+
+                uv[i] = (uint16_t)((pattern ? (col < W / 4 ? 64 : 960) : cb_code) << 6);
+                uv[i + 1] = (uint16_t)((pattern ? (row < H / 4 ? 64 : 960) : cr_code) << 6);
+            }
+        }
+    } else {
+        memset(map, y_code, (size_t)W * H);
+        uint8_t* uv = map + W * H;
+
+        for (int row = 0; row < H / 2; row++) {
+            for (int col = 0; col < W / 2; col++) {
+                int i = (row * (W / 2) + col) * 2;
+
+                uv[i] = (uint8_t)(pattern ? (col < W / 4 ? 16 : 240) : cb_code);
+                uv[i + 1] = (uint8_t)(pattern ? (row < H / 4 ? 16 : 240) : cr_code);
+            }
+        }
+    }
+
+    return map;
+}
+
+// sealed memfd pages behind /dev/udmabuf; -1 when the host hands out none
+static int udmabuf_fd(const uint8_t* bytes, size_t size) {
+    int dev = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+
+    if (dev < 0) return -1;
+
+    long page = sysconf(_SC_PAGESIZE);
+    size_t span = (size + (size_t)page - 1) / (size_t)page * (size_t)page;
+    int mem = memfd_create("yuv", MFD_ALLOW_SEALING);
+
+    if (mem < 0 || ftruncate(mem, (off_t)span) < 0 || pwrite(mem, bytes, size, 0) != (ssize_t)size ||
+        fcntl(mem, F_ADD_SEALS, F_SEAL_SHRINK) < 0) {
+        close(dev);
+        return -1;
+    }
+
+    struct udmabuf_create create = {0};
+
+    create.memfd = mem;
+    create.flags = UDMABUF_FLAGS_CLOEXEC;
+    create.size = span;
+
+    int fd = ioctl(dev, UDMABUF_CREATE, &create);
+
+    close(mem);
+    close(dev);
+    return fd;
+}
+
+// a CPU-visible VRAM buffer object of an AMD render node; -1 without one
+static int amdgpu_fd(const uint8_t* bytes, size_t size) {
     int drm_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
     if (drm_fd < 0) return -1;
 
@@ -99,9 +172,8 @@ static int make_yuv(void) {
         return -1;
     }
 
-    int bytes = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
     struct amdgpu_bo_alloc_request request = {
-        .alloc_size = W * H * 3 * bytes / 2,
+        .alloc_size = size,
         .phys_alignment = 4096,
         .preferred_heap = AMDGPU_GEM_DOMAIN_VRAM,
         .flags = AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED,
@@ -117,33 +189,7 @@ static int make_yuv(void) {
         return -1;
     }
 
-    if (pixel_format == DRM_FORMAT_P010) {
-        uint16_t* y = map;
-        uint16_t* uv = y + W * H;
-
-        for (int i = 0; i < W * H; i++) y[i] = (uint16_t)(y_code << 6);
-        for (int row = 0; row < H / 2; row++) {
-            for (int col = 0; col < W / 2; col++) {
-                int i = (row * (W / 2) + col) * 2;
-
-                uv[i] = (uint16_t)((pattern ? (col < W / 4 ? 64 : 960) : cb_code) << 6);
-                uv[i + 1] = (uint16_t)((pattern ? (row < H / 4 ? 64 : 960) : cr_code) << 6);
-            }
-        }
-    } else {
-        memset(map, y_code, W * H);
-        uint8_t* uv = (uint8_t*)map + W * H;
-
-        for (int row = 0; row < H / 2; row++) {
-            for (int col = 0; col < W / 2; col++) {
-                int i = (row * (W / 2) + col) * 2;
-
-                uv[i] = (uint8_t)(pattern ? (col < W / 4 ? 16 : 240) : cb_code);
-                uv[i + 1] = (uint8_t)(pattern ? (row < H / 4 ? 16 : 240) : cr_code);
-            }
-        }
-    }
-
+    memcpy(map, bytes, size);
     amdgpu_bo_cpu_unmap(bo);
     int rc = amdgpu_bo_export(bo, amdgpu_bo_handle_type_dma_buf_fd, &exported);
     amdgpu_bo_free(bo);
@@ -152,22 +198,35 @@ static int make_yuv(void) {
     return rc ? -1 : (int)exported;
 }
 
-static void draw(void) {
-    int fd = make_yuv();
-    if (fd < 0) exit(77);
+static int make_fd(const uint8_t* bytes, size_t size) {
+    int fd = udmabuf_fd(bytes, size);
 
-    int bytes = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
-    uint32_t stride = W * bytes;
-    uint32_t uv_offset = W * H * bytes;
+    return fd >= 0 ? fd : amdgpu_fd(bytes, size);
+}
+
+static void draw(void) {
+    size_t ysize = 0, uvsize = 0;
+    uint8_t* bytes = yuv_bytes(&ysize, &uvsize);
+    // disjoint: each plane in a buffer of its own, as a decoder hands them
+    int fd = make_fd(bytes, disjoint ? ysize : ysize + uvsize);
+    int uv_fd = disjoint ? make_fd(bytes + ysize, uvsize) : fd;
+
+    free(bytes);
+    if (fd < 0 || uv_fd < 0) exit(77);
+
+    int bytes_per = pixel_format == DRM_FORMAT_P010 ? 2 : 1;
+    uint32_t stride = W * bytes_per;
+    uint32_t uv_offset = disjoint ? 0 : (uint32_t)ysize;
 
     struct zwp_linux_buffer_params_v1* params =
         zwp_linux_dmabuf_v1_create_params(dmabuf);
     zwp_linux_buffer_params_v1_add(params, fd, 0, 0, stride, 0, 0);
-    zwp_linux_buffer_params_v1_add(params, fd, 1, uv_offset, stride, 0, 0);
+    zwp_linux_buffer_params_v1_add(params, uv_fd, 1, uv_offset, stride, 0, 0);
     struct wl_buffer* buffer = zwp_linux_buffer_params_v1_create_immed(
         params, W, H, pixel_format, 0);
     zwp_linux_buffer_params_v1_destroy(params);
     close(fd);
+    if (disjoint) close(uv_fd);
 
     if (coefficients) {
         struct wp_color_representation_surface_v1* representation =
@@ -222,8 +281,8 @@ int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(10);
 
-    if (argc != 1 && argc != 8) return 2;
-    if (argc == 8) {
+    if (argc != 1 && argc != 8 && argc != 9) return 2;
+    if (argc >= 8) {
         pixel_format = !strcmp(argv[1], "p010") ? DRM_FORMAT_P010 : DRM_FORMAT_NV12;
         coefficients = (uint32_t)strtoul(argv[2], NULL, 0);
         color_range = (uint32_t)strtoul(argv[3], NULL, 0);
@@ -232,6 +291,7 @@ int main(int argc, char** argv) {
         y_code = pattern ? (pixel_format == DRM_FORMAT_P010 ? 512 : 128) : atoi(argv[5]);
         cb_code = atoi(argv[6]);
         cr_code = atoi(argv[7]);
+        disjoint = argc == 9 && !strcmp(argv[8], "disjoint");
     }
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) return 1;
