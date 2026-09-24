@@ -2065,7 +2065,15 @@ void KmsOutput::applyDisplaySettings() {
         return;
     }
 
-    if (nextColor == color && nextRange == rangeValue) {
+    // the link feedback may have set color.bpc below the depth asked for:
+    // the depth is judged against the request on the connector instead
+    OutputColorState seen = color;
+
+    seen.bpc = nextColor.bpc;
+
+    bool depthChanged = connMaxBpc && nextColor.bpc != maxBpcValue;
+
+    if (nextColor == seen && !depthChanged && nextRange == rangeValue) {
         config = next;
 
         return;

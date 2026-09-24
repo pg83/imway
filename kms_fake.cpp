@@ -235,6 +235,7 @@ namespace {
         int failAddFbSkip = 0;
         int rejectCursorErr = 0;
         bool noCursorPlane = false;
+        u64 linkBpcCap = 10; // the deepest link the display negotiates
         bool rejectColor = false;
         bool internalPanel = false;
 
@@ -645,7 +646,8 @@ void FakeKms::buildProps() {
     addProp(kConnectorId, pConnNonDesktop, "non-desktop", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 1, 0);
     addProp(kLeaseConnectorId, pConnNonDesktop, "non-desktop", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 1, 1);
     addProp(kLeaseConnectorId, pConnCrtcId, "CRTC_ID", DRM_MODE_PROP_OBJECT, nullptr, 0, 0, 0, 0);
-    addProp(kConnectorId, pConnLinkBpc, "link bpc", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 16, linkBpc ? (u64)atoi(linkBpc) : 10);
+    linkBpcCap = linkBpc ? (u64)atoi(linkBpc) : 10;
+    addProp(kConnectorId, pConnLinkBpc, "link bpc", DRM_MODE_PROP_RANGE | DRM_MODE_PROP_IMMUTABLE, nullptr, 0, 0, 16, linkBpcCap);
 
     addProp(kCrtcId, pCrtcModeId, "MODE_ID", DRM_MODE_PROP_BLOB, nullptr, 0, 0, 0, 0);
     addProp(kCrtcId, pCrtcActive, "ACTIVE", DRM_MODE_PROP_RANGE, nullptr, 0, 0, 1, 0);
@@ -1396,6 +1398,13 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
             }
 
             p->value = values[k];
+
+            // the link negotiates no deeper than it was allowed
+            if (p->id == pConnMaxBpc) {
+                if (PropDef* link = findProp(pConnLinkBpc)) {
+                    link->value = values[k] < linkBpcCap ? values[k] : linkBpcCap;
+                }
+            }
         }
     }
 

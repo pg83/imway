@@ -43,6 +43,11 @@ osd_up() {
     [[ -n "$(dump_field '^imgui name=##osd' x)" ]]
 }
 
+# the mixer learns the sink and its level from the server's events: a key
+# pressed before it has is a key with no sink to step
+mixer_at() { [[ "$(dump_field '^mixer ' volume)" == "$1" ]]; }
+await 50 mixer_at "$start" || { echo "the mixer never saw the sink at $start%"; dump_state; exit 1; }
+
 # a volume key steps the sink up by the configured 5% and shows an OSD
 ctl "key 115 press"; ctl "key 115 release" # KEY_VOLUMEUP
 louder() { [[ "$(volume)" -gt "$start" ]]; }
@@ -61,6 +66,7 @@ pa set-sink-volume imway_null 20%
 took_external() { [[ "$(volume)" -le 25 ]]; }
 
 await 50 took_external || true
+await 50 mixer_at "$(volume)" || { echo "the mixer never saw the external level"; dump_state; exit 1; }
 ctl "key 115 press"; ctl "key 115 release"
 stepped_from_external() {
     local v

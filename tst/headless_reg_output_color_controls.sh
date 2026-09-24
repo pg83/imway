@@ -13,8 +13,8 @@ set -euo pipefail
 shot() { # <name>
     screenshot "$XDG_RUNTIME_DIR/$1.ppm"
 }
-changed() { # <a> <b>
-    region_diff "$XDG_RUNTIME_DIR/$1.ppm" "$XDG_RUNTIME_DIR/$2.ppm" 0 0 1280 800
+changed() { # <a> <b>; below the menu bar, whose clock may turn a minute
+    region_diff "$XDG_RUNTIME_DIR/$1.ppm" "$XDG_RUNTIME_DIR/$2.ppm" 0 22 1280 800
 }
 
 # a steady blue-grey window gives every comparison below the same bright

@@ -22,12 +22,16 @@ await 50 in_log "fake-kms: Broadcast RGB = 0" || { echo "the automatic range did
 ctl "set display.bpc 8"
 await 50 in_log "fake-kms: max bpc = 8" || { echo "an 8 bpc link was not asked for"; cat "$IMWAY_LOG"; exit 1; }
 
+# a dump is answered after every command before it: the remodeset of the
+# depth change is in the log by then
+dump_state >/dev/null
 n=$(remodesets)
 ctl "set display.peak_nits 700"
-await 20 in_log "control: set display.peak_nits" || { echo "settings are not reachable"; exit 1; }
-ctl "frame"
+dump_state >/dev/null
 [[ "$(remodesets)" == "$n" ]] || { echo "a peak on an SDR output modeset the display"; exit 1; }
 
+# HDR wants the 10 bpc link back
+ctl "set display.bpc 0"
 ctl "kms-fail-lookup createblob::0:1"
 ctl "set display.hdr_enabled true"
 await 50 in_log "cannot create the HDR metadata blob, the output stays as it was" || { echo "the refused blob was not reported"; cat "$IMWAY_LOG"; exit 1; }
