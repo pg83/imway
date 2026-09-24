@@ -66,6 +66,8 @@ namespace {
         void refresh();
         void reply(Pending& p);
         void answer(const Pending& p, DBusMessage* reply);
+        void ownerAnswered(DBusMessage* reply);
+        void aboutToShowAnswered(DBusMessage* reply);
         void readLayout(DBusMessage* reply, u64 sequence);
         void clearModel();
         void propertiesUpdated(DBusMessage* msg);
@@ -620,29 +622,30 @@ void MenuImpl::reply(Pending& pendingCall) {
 }
 
 // a call's successful reply, read by what was asked
+// the bus answers GetNameOwner with the owner's unique name
+void MenuImpl::ownerAnswered(DBusMessage* reply) {
+    const char* unique = "";
+
+    dbus_message_get_args(reply, nullptr, DBUS_TYPE_STRING, &unique, DBUS_TYPE_INVALID);
+    assign(owner, StringView(unique));
+}
+
+void MenuImpl::aboutToShowAnswered(DBusMessage* reply) {
+    DBusMessageIter it;
+
+    if (dbus_message_iter_init(reply, &it) && iterBool(&it)) {
+        refresh();
+    }
+}
+
 void MenuImpl::answer(const Pending& pendingCall, DBusMessage* reply) {
     switch (pendingCall.kind) {
-        case CallKind::owner: {
-            const char* unique = "";
-
-            // the bus answers GetNameOwner with the owner's unique name
-            dbus_message_get_args(reply, nullptr, DBUS_TYPE_STRING, &unique, DBUS_TYPE_INVALID);
-            assign(owner, StringView(unique));
-
-            return;
-        }
+        case CallKind::owner:
+            return ownerAnswered(reply);
         case CallKind::layout:
-            readLayout(reply, pendingCall.sequence);
-            return;
-        case CallKind::aboutToShow: {
-            DBusMessageIter it;
-
-            if (dbus_message_iter_init(reply, &it) && iterBool(&it)) {
-                refresh();
-            }
-
-            return;
-        }
+            return readLayout(reply, pendingCall.sequence);
+        case CallKind::aboutToShow:
+            return aboutToShowAnswered(reply);
     }
 }
 
