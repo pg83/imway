@@ -3,7 +3,8 @@
 # imway-args: --dpms 1
 # Idle power management and a VT comeback on the dumb-buffer path: waking
 # the display and coming back from a VT switch both remodeset on the last
-# dumb buffer shown, not on a scanout image there is none of.
+# dumb buffer shown, not on a scanout image there is none of. A screenshot
+# taken while switched away composes without touching the display.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -16,6 +17,18 @@ await 100 in_log "display back on" || { echo "input did not wake the display"; c
 
 ctl "session 0"
 await 50 in_log "session disabled (vt switch away)" || { echo "session did not disable"; exit 1; }
+# a screenshot while away still composes, and puts nothing on the display
+# (a flip already on its way when the session went can still land first)
+flips_still() {
+    local a
+    a=$(dump_field '^kms' flips)
+    sleep 0.3
+    [[ "$(dump_field '^kms' flips)" == "$a" ]]
+}
+await 30 flips_still || { echo "the display kept flipping while switched away"; exit 1; }
+away_flips=$(dump_field '^kms' flips)
+screenshot "$XDG_RUNTIME_DIR/away.ppm" || { echo "no screenshot while switched away"; exit 1; }
+[[ "$(dump_field '^kms' flips)" == "$away_flips" ]] || { echo "a screenshot while switched away flipped the display"; exit 1; }
 ctl "session 1"
 await 50 in_log "session enabled, remodeset" || { echo "no remodeset on comeback"; cat "$IMWAY_LOG"; exit 1; }
 

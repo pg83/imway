@@ -3443,9 +3443,10 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
 
 // asked from a frame, which runs only on a ready output (started, its
 // session active, no flip pending), for the candidate's own dma-buf; the
-// compositions a screenshot forces run regardless but have no candidate
+// compositions a screenshot forces run regardless but have no candidate,
+// and an HDR output has none either (directScanoutColorCompatible)
 bool KmsOutput::directScanout(DmabufBuffer* buf, const FrameResourceRef& frame) {
-    if (color.hdr() || !modesetDone) {
+    if (!modesetDone) {
         return false;
     }
 
@@ -3534,8 +3535,11 @@ void KmsOutput::releaseDirectUse(DmabufBuffer*& buf, FrameResourceRef*& frame) {
     }
 }
 
+// the dumb path modesets in start(), before any frame: what can stand in
+// the way is a flip still pending, or a session switched away (a
+// screenshot composes regardless)
 void KmsOutput::present(const void* pixels) {
-    if (!modesetDone || flipPending || !sessionActive) {
+    if (flipPending || !sessionActive) {
         return;
     }
 

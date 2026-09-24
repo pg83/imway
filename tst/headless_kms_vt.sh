@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# A VT switch away and back: flips stop while the session is disabled and
-# a remodeset brings the display back.
+# A VT switch away and back: flips stop while the session is disabled (a
+# screenshot taken then composes and presents nothing) and a remodeset
+# brings the display back.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -20,6 +21,10 @@ f0=$(flips)
 ctl "key 2 press"; ctl "key 2 release"
 sleep 0.7
 [[ "$(flips)" == "$f0" ]] || { echo "flips while the session is away"; exit 1; }
+
+# a screenshot while away still composes, and presents nothing
+screenshot "$XDG_RUNTIME_DIR/away.ppm" || { echo "no screenshot while switched away"; exit 1; }
+[[ "$(flips)" == "$f0" ]] || { echo "a screenshot while away reached the plane"; exit 1; }
 
 ctl "session 1"
 await 50 in_log "session enabled, remodeset" || {
