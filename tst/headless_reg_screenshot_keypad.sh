@@ -38,32 +38,41 @@ settled() { # <scratch> <baseline>: two fresh frames that agree
     settle_pair "$1" "$2" &&
         [[ "$(region_diff "$1" "$2" "$vx" "$vy" $((vx + vw)) $((vy + vh)))" -lt 60 ]]
 }
-differs() { # <baseline> <shot>
-    screenshot "$2" &&
-        [[ "$(region_diff "$1" "$2" "$vx" "$vy" $((vx + vw)) $((vy + vh)))" -gt 500 ]]
+# every step is judged against the settled 50% view alone: a change of
+# zoom can take the editor two frames to paint (the first still laid out
+# for the old size), and a baseline caught on that first frame lets the
+# next step pass on a frame that has not changed at all
+base="$XDG_RUNTIME_DIR/base.ppm"
+zoomed() { # <shot>: away from the 50% view
+    screenshot "$1" &&
+        [[ "$(region_diff "$base" "$1" "$vx" "$vy" $((vx + vw)) $((vy + vh)))" -gt 500 ]]
 }
-await 50 settled "$XDG_RUNTIME_DIR/s0.ppm" "$XDG_RUNTIME_DIR/base.ppm" || { echo "the editor never settled"; exit 1; }
+restored() { # <shot>: back on the 50% view
+    screenshot "$1" &&
+        [[ "$(region_diff "$base" "$1" "$vx" "$vy" $((vx + vw)) $((vy + vh)))" -lt 60 ]]
+}
+await 50 settled "$XDG_RUNTIME_DIR/s0.ppm" "$base" || { echo "the editor never settled"; exit 1; }
 
 tap 69 # NumLock: keypad 0 is Insert without it
 tap 78 # keypad +
 await 100 editor_said "zoomed zoom 60" 1 || { echo "the editor never took keypad +"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
-await 50 differs "$XDG_RUNTIME_DIR/base.ppm" "$XDG_RUNTIME_DIR/in.ppm" || { echo "keypad + did not zoom in"; exit 1; }
+await 50 zoomed "$XDG_RUNTIME_DIR/in.ppm" || { echo "keypad + did not zoom in"; exit 1; }
 tap 82 # keypad 0
 await 100 editor_said "reset zoom 50" 1 || { echo "the editor never took keypad 0"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
-await 50 differs "$XDG_RUNTIME_DIR/in.ppm" "$XDG_RUNTIME_DIR/reset.ppm" || { echo "keypad 0 did not reset the zoom"; exit 1; }
+await 50 restored "$XDG_RUNTIME_DIR/reset.ppm" || { echo "keypad 0 did not reset the zoom"; exit 1; }
 tap 74 # keypad -
 await 100 editor_said "zoomed zoom 40" 1 || { echo "the editor never took keypad -"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
-await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/out.ppm" || { echo "keypad - did not zoom out"; exit 1; }
+await 50 zoomed "$XDG_RUNTIME_DIR/out.ppm" || { echo "keypad - did not zoom out"; exit 1; }
 tap 82
 await 100 editor_said "reset zoom 50" 2 || { echo "the editor never took keypad 0 again"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
-await 50 differs "$XDG_RUNTIME_DIR/out.ppm" "$XDG_RUNTIME_DIR/reset2.ppm" || { echo "keypad 0 did not reset the zoom again"; exit 1; }
+await 50 restored "$XDG_RUNTIME_DIR/reset2.ppm" || { echo "keypad 0 did not reset the zoom again"; exit 1; }
 
 # the wheel zooms the canvas the pointer is over
 wheeled_out() {
     ctl "motion $((vx + vw * 3 / 4)) $((vy + vh / 2))"
     ctl "motion $((vx + vw * 3 / 4 + 1)) $((vy + vh / 2))"
     ctl "scroll 1"
-    differs "$XDG_RUNTIME_DIR/reset2.ppm" "$XDG_RUNTIME_DIR/wheel.ppm"
+    zoomed "$XDG_RUNTIME_DIR/wheel.ppm"
 }
 await 30 wheeled_out || { echo "the wheel did not zoom out"; exit 1; }
 

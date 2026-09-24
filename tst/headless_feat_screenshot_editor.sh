@@ -38,6 +38,15 @@ differs() { # <baseline> <shot>
         [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -gt 500 ]]
 }
 
+# true once the screen is the named settled baseline again. A reset is
+# judged this way, not as a change from the zoomed view: a change of zoom
+# can take the editor two frames to paint, and a zoomed shot caught on the
+# first lets the second pass for a reset that never came
+same() { # <baseline> <shot>
+    screenshot "$2" &&
+        [[ "$(region_diff "$1" "$2" 0 30 1280 780)" -lt 60 ]]
+}
+
 ctl "key 99 press"; ctl "key 99 release" # Print
 await 150 viewer_up || { echo "editor did not open"; cat "$IMWAY_LOG"; exit 1; }
 wait_rect 'title=imway screenshot'
@@ -56,8 +65,8 @@ await 50 differs "$XDG_RUNTIME_DIR/before.ppm" "$XDG_RUNTIME_DIR/zoomed.ppm" || 
     echo "zoom in did not change the view"; exit 1; }
 tap 12 # - zooms out
 tap 11 # 0 resets
-await 50 differs "$XDG_RUNTIME_DIR/zoomed.ppm" "$XDG_RUNTIME_DIR/unzoomed.ppm" || {
-    echo "zooming out and resetting did not change the view"; exit 1; }
+await 50 same "$XDG_RUNTIME_DIR/before.ppm" "$XDG_RUNTIME_DIR/unzoomed.ppm" || {
+    echo "zooming out and resetting did not bring the view back"; exit 1; }
 
 # the wheel zooms the canvas the pointer is over, which is the editor's own
 # input path rather than the compositor's: the scroll travels out as a
@@ -77,7 +86,7 @@ await 50 differs "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/wheeled.ppm" || 
     echo "the wheel did not zoom the canvas"; exit 1; }
 
 tap 11 # 0 resets
-await 50 differs "$XDG_RUNTIME_DIR/wheeled.ppm" "$XDG_RUNTIME_DIR/unwheeled.ppm" || {
+await 50 same "$XDG_RUNTIME_DIR/reset.ppm" "$XDG_RUNTIME_DIR/unwheeled.ppm" || {
     echo "the reset did not undo the wheel's zoom"; exit 1; }
 
 # Keys the editor has no use for must leave it alone. They still travel the
