@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_CHAOS=udmabuf-read=1 IMWAY_SHM_TRACE=1
-# The pool's udmabuf is bound to a buffer, but the kernel refuses the
-# CPU-access bracket that lets the GPU read it: both udmabuf paths close.
+# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_CHAOS=udmabuf-sync=0 IMWAY_SHM_TRACE=1
+# The pool's udmabuf is bound to a buffer, but the kernel refuses the start
+# of the CPU-access bracket that lets the GPU read it: both udmabuf paths
+# close.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 fault_log=""

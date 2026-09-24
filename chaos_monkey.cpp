@@ -119,8 +119,9 @@ using namespace stl;
 //                     M=incoherent, none of them is host-coherent; M=none,
 //                     there are none at all
 //   shot-submit=N     the next N screenshot capture submits are refused
-//   udmabuf-read=N    the next N udmabuf read brackets of wl_shm pools are
-//                     refused with EIO
+//   udmabuf-sync=K    K CPU-access syncs of wl_shm pools' udmabufs pass, the
+//                     one after is refused with EIO (a fresh pool's read
+//                     takes two: its access starts, then ends)
 //   gpu-wait=K        K waits the renderer cannot go on without pass, the
 //                     one after reports a lost device
 // the screenshot viewer, a process of its own with its own monkey:
@@ -262,7 +263,7 @@ namespace {
         // renderer: wl_shm imports and the screenshot capture
         StringView poolMemory;
         int shotSubmitFaults = 0;
-        int udmabufReadFaults = 0;
+        int udmabufSyncSkip = -1;
         int gpuWaitSkip = -1;
         // screenshot viewer
         int swapchainSkip = -1;
@@ -362,7 +363,7 @@ namespace {
         // renderer: wl_shm imports and the screenshot capture
         void poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
-        bool udmabufRead(bool started) override;
+        int udmabufSync(int result) override;
         VkResult gpuWait(VkResult result) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
@@ -556,8 +557,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         poolMemory = arg;
     } else if (fault == "shot-submit"_sv) {
         shotSubmitFaults = (int)arg.stou();
-    } else if (fault == "udmabuf-read"_sv) {
-        udmabufReadFaults = (int)arg.stou();
+    } else if (fault == "udmabuf-sync"_sv) {
+        udmabufSyncSkip = (int)arg.stou();
     } else if (fault == "gpu-wait"_sv) {
         gpuWaitSkip = (int)arg.stou();
     } else if (fault == "swapchain"_sv || fault == "swapchain-suboptimal"_sv) {
@@ -1058,14 +1059,14 @@ VkResult TestChaosMonkey::shotSubmit(VkResult pending) {
     return spend(shotSubmitFaults) ? VK_ERROR_OUT_OF_DEVICE_MEMORY : pending;
 }
 
-bool TestChaosMonkey::udmabufRead(bool started) {
-    if (!spend(udmabufReadFaults)) {
-        return started;
+int TestChaosMonkey::udmabufSync(int result) {
+    if (!failsOnce(udmabufSyncSkip)) {
+        return result;
     }
 
     errno = EIO;
 
-    return false;
+    return -1;
 }
 
 VkResult TestChaosMonkey::gpuWait(VkResult result) {
@@ -1461,7 +1462,7 @@ namespace {
         // renderer: wl_shm imports and the screenshot capture
         void poolMemoryTypes(VkPhysicalDeviceMemoryProperties& props) override;
         VkResult shotSubmit(VkResult pending) override;
-        bool udmabufRead(bool started) override;
+        int udmabufSync(int result) override;
         VkResult gpuWait(VkResult result) override;
         // screenshot viewer
         VkResult swapchain(VkResult result) override;
@@ -1666,8 +1667,8 @@ VkResult IdleChaosMonkey::shotSubmit(VkResult pending) {
     return pending;
 }
 
-bool IdleChaosMonkey::udmabufRead(bool started) {
-    return started;
+int IdleChaosMonkey::udmabufSync(int result) {
+    return result;
 }
 
 VkResult IdleChaosMonkey::gpuWait(VkResult result) {

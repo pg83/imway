@@ -162,9 +162,9 @@ struct ChaosMonkey {
     // the outcome the screenshot capture's copy submit is about to have,
     // under the same rule as the other submits
     virtual VkResult shotSubmit(VkResult pending) = 0;
-    // whether a wl_shm pool's udmabuf took the CPU-access bracket that lets
-    // the GPU read it (DMA_BUF_IOCTL_SYNC); a refusal sets errno
-    virtual bool udmabufRead(bool started) = 0;
+    // one DMA_BUF_IOCTL_SYNC on a wl_shm pool's udmabuf, a step of the
+    // CPU-access bracket that lets the GPU read it (0, or -1 with errno set)
+    virtual int udmabufSync(int result) = 0;
     // the result of a bounded wait on a fence the caller cannot go on
     // without (vkWaitOrDie): a readback, a cursor shape, the capture's
     // teardown

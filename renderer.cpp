@@ -1536,7 +1536,7 @@ bool RendererImpl::prepareShm(ShmState& state) {
             vkDevice->tryShmUdmabufImage = false;
             *comp->log << "imway: disabling direct wl_shm UDMABUF sampling after import failure"_sv << endL;
         } else {
-            if (!comp->chaos->udmabufRead(content.beginDmabufRead(&content, dmabuf->fds[0]))) {
+            if (!content.beginDmabufRead(&content, dmabuf->fds[0])) {
                 vkDevice->tryShmUdmabufImage = false;
                 vkDevice->tryShmUdmabufBuffer = false;
                 udmabufSyncFailed = true;
@@ -1560,7 +1560,7 @@ bool RendererImpl::prepareShm(ShmState& state) {
             vkDevice->tryShmUdmabufBuffer = false;
             *comp->log << "imway: disabling wl_shm UDMABUF buffer import after failure"_sv << endL;
         } else if (upload) {
-            if (!comp->chaos->udmabufRead(content.beginDmabufRead(&content, dmabuf->fds[0]))) {
+            if (!content.beginDmabufRead(&content, dmabuf->fds[0])) {
                 vkDevice->tryShmUdmabufImage = false;
                 vkDevice->tryShmUdmabufBuffer = false;
                 udmabufSyncFailed = true;

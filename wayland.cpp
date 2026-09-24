@@ -541,7 +541,7 @@ namespace {
 
             sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
 
-            if (ioctl(udmabufFd, DMA_BUF_IOCTL_SYNC, &sync) == 0) {
+            if (buffer->pool->comp->chaos->udmabufSync(ioctl(udmabufFd, DMA_BUF_IOCTL_SYNC, &sync)) == 0) {
                 buffer->udmabufCpuAccess = true;
             }
         }
@@ -576,12 +576,13 @@ namespace {
         }
 
         if (!buffer->udmabufReaders) {
+            ChaosMonkey& chaos = *buffer->pool->comp->chaos;
             dma_buf_sync sync{};
 
             if (!buffer->udmabufCpuAccess) {
                 sync.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE;
 
-                if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+                if (chaos.udmabufSync(ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync)) < 0) {
                     return false;
                 }
 
@@ -590,7 +591,7 @@ namespace {
 
             sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
 
-            if (ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync) < 0) {
+            if (chaos.udmabufSync(ioctl(fd, DMA_BUF_IOCTL_SYNC, &sync)) < 0) {
                 return false;
             }
 
