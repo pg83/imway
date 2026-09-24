@@ -7036,7 +7036,7 @@ namespace {
             return 0;
         }
 
-        wl_client* client = wl_client_create(ctx->srv->display, conn);
+        wl_client* client = ctx->srv->composer->chaos->securityClient(ctx->srv->display, conn);
 
         if (!client) {
             close(conn);

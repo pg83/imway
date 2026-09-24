@@ -15,6 +15,7 @@ namespace stl {
 struct passwd;
 struct wl_resource;
 struct wl_display;
+struct wl_client;
 struct wl_global;
 struct pam_message;
 struct pam_response;
@@ -71,6 +72,10 @@ struct ChaosMonkey {
     // security-context: a sandboxed client's connection fresh from accept4
     // (or its -1); a replacement failure closes the fd and returns -1
     virtual int securityAccept(int fd) = 0;
+    // security-context: the client made of an accepted connection; a
+    // failure makes none and leaves the fd to the caller, as
+    // wl_client_create does
+    virtual wl_client* securityClient(wl_display* display, int fd) = 0;
     // KMS backend
     // the result of a Vulkan call building or exporting a scanout buffer
     virtual VkResult scanout(VkResult result) = 0;

@@ -7,10 +7,11 @@
 #include <sys/un.h>
 #include <sys/eventfd.h>
 
-// security-context under IMWAY_CHAOS=security-accept=1: the compositor's
-// accept of the first sandboxed connection fails (as with EMFILE or an
-// aborted connection). That client is dropped; the listener keeps working
-// and the next sandboxed client connects and sees the core globals.
+// security-context under IMWAY_CHAOS=security-accept=1 or security-client=1:
+// the compositor's accept of the first sandboxed connection fails (as with
+// EMFILE or an aborted connection), or the accepted connection gets no
+// client. That client is dropped; the listener keeps working and the next
+// sandboxed client connects and sees the core globals.
 
 static struct wp_security_context_manager_v1* sec_mgr;
 
@@ -85,7 +86,7 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     if (sandboxed_roundtrip(path) >= 0) {
-        fprintf(stderr, "the connection whose accept failed was served\n");
+        fprintf(stderr, "the connection the compositor dropped was served\n");
         return 1;
     }
     saw_compositor = 0;

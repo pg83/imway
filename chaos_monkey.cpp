@@ -5,6 +5,8 @@
 #include <std/str/view.h>
 #include <std/mem/obj_pool.h>
 
+#include <wayland-server-core.h>
+
 #ifdef IMWAY_FOR_TESTS
     #if __has_include(<security/pam_appl.h>)
         #include <security/pam_appl.h>
@@ -17,7 +19,6 @@
     #include <sys/socket.h>
     #include <unistd.h>
     #include <std/lib/vector.h>
-    #include <wayland-server-core.h>
 
     #include <dbus/dbus.h>
     #include <libinput.h>
@@ -51,6 +52,8 @@ using namespace stl;
 //                     (EAGAIN, as early at boot)
 //   security-accept=N wayland: the next N sandboxed connections a security
 //                     context accepts are aborted (ECONNABORTED)
+//   security-client=N wayland: the next N accepted sandboxed connections
+//                     get no client (ENOMEM)
 //   scanout=K         K Vulkan calls behind KMS scanout buffers pass, the
 //                     one after fails
 //   scanout-modifier=N the next N scanout modifier queries come back
@@ -213,6 +216,7 @@ namespace {
         int primeImportErrno = 0;
         int entropyFaults = 0;
         int securityAcceptFaults = 0;
+        int securityClientFaults = 0;
         // KMS backend
         int scanoutSkip = -1;
         int modifierFaults = 0;
@@ -305,6 +309,7 @@ namespace {
         int primeImport(int result) override;
         long entropy(long got) override;
         int securityAccept(int fd) override;
+        wl_client* securityClient(wl_display* display, int fd) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -559,6 +564,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         entropyFaults = (int)arg.stou();
     } else if (fault == "security-accept"_sv) {
         securityAcceptFaults = (int)arg.stou();
+    } else if (fault == "security-client"_sv) {
+        securityClientFaults = (int)arg.stou();
     } else if (fault == "descriptor-full"_sv) {
         // renderer: texture descriptor pools
         fullPools = arg.stou();
@@ -649,6 +656,16 @@ int TestChaosMonkey::securityAccept(int fd) {
     errno = ECONNABORTED;
 
     return -1;
+}
+
+wl_client* TestChaosMonkey::securityClient(wl_display* display, int fd) {
+    if (spend(securityClientFaults)) {
+        errno = ENOMEM;
+
+        return nullptr;
+    }
+
+    return wl_client_create(display, fd);
 }
 
 void TestChaosMonkey::armBus(BusFault kind, StringView arg) {
@@ -1348,6 +1365,7 @@ namespace {
         int primeImport(int result) override;
         long entropy(long got) override;
         int securityAccept(int fd) override;
+        wl_client* securityClient(wl_display* display, int fd) override;
         // KMS backend
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
@@ -1469,6 +1487,10 @@ long IdleChaosMonkey::entropy(long got) {
 
 int IdleChaosMonkey::securityAccept(int fd) {
     return fd;
+}
+
+wl_client* IdleChaosMonkey::securityClient(wl_display* display, int fd) {
+    return wl_client_create(display, fd);
 }
 
 // KMS backend
