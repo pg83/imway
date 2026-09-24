@@ -108,6 +108,27 @@ await 100 has_heading || { echo "the bar reports no Help heading"; dump_state; e
 help_x=$(( ($(heading Help x0) + $(heading Help x1)) / 2 ))
 help_y=$(( ($(heading Help y0) + $(heading Help y1)) / 2 ))
 echo "Help heading at $help_x,$help_y"
+
+# the bar's text is light on the dark bar: count it where Help is drawn
+help_ink() {
+    screenshot "$XDG_RUNTIME_DIR/_ink.ppm"
+    python3 - "$XDG_RUNTIME_DIR/_ink.ppm" "$(heading Help x0)" "$(heading Help y0)" "$(heading Help x1)" "$(heading Help y1)" <<'PY'
+import sys
+f = open(sys.argv[1], 'rb'); assert f.readline().strip() == b'P6'
+w, h = map(int, f.readline().split()); f.readline(); d = f.read(w * h * 3)
+x0, y0, x1, y1 = map(int, sys.argv[2:])
+print(sum(1 for y in range(y0, y1) for x in range(x0, x1) if max(d[(y * w + x) * 3:(y * w + x) * 3 + 3]) > 150))
+PY
+}
+ink_on=$(help_ink)
+(( ink_on > 10 )) || { echo "no Help heading drawn where the dump puts it ($ink_on)"; exit 1; }
+# turned off, the bar draws no menu headings; back on, they return
+ctl "set desktop.global_menu false"
+ink_gone() { (( $(help_ink) < ink_on / 4 )); }
+await 50 ink_gone || { echo "the bar kept its global menu turned off"; exit 1; }
+ctl "set desktop.global_menu true"
+ink_back() { (( $(help_ink) > ink_on * 3 / 4 )); }
+await 50 ink_back || { echo "the global menu did not come back to the bar"; exit 1; }
 help=0
 for _ in 1 2 3; do
     click_at "$help_x" "$help_y"
