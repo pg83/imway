@@ -49,6 +49,15 @@ PY
 
 await 30 ext_landed || { echo "external set did not land (level $(level))"; exit 1; }
 
+# the mixer learns the level from sndiod's own report: a key pressed before
+# it has steps from the old one
+mixer_adopted() {
+    local v
+    v=$(dump_field '^mixer ' volume)
+    [[ -n "$v" ]] && (( v >= 25 && v <= 35 ))
+}
+await 30 mixer_adopted || { echo "the mixer never saw the external level"; dump_state; exit 1; }
+
 ctl "key 114 press"; ctl "key 114 release"
 
 stepped_from_external() {
