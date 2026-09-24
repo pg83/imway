@@ -3437,8 +3437,11 @@ u32 KmsOutput::importDirectFb(DmabufBuffer* buf) {
     return fbId;
 }
 
+// asked from a frame, which runs only on a ready output (started, its
+// session active, no flip pending), for the candidate's own dma-buf; the
+// compositions a screenshot forces run regardless but have no candidate
 bool KmsOutput::directScanout(DmabufBuffer* buf, const FrameResourceRef& frame) {
-    if (color.hdr() || !started || flipPending || !sessionActive || !modesetDone || !buf) {
+    if (color.hdr() || !modesetDone) {
         return false;
     }
 
