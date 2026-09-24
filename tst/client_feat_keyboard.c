@@ -1,7 +1,9 @@
 // Feature: wl_keyboard delivery. A focused surface must get a keymap, an
 // enter, repeat_info (v4+), key events, and modifiers events reflecting a held
-// modifier. The scenario presses Shift + a letter; the client asserts the
-// modifier mask went non-zero while held and a key was delivered.
+// modifier. The scenario presses a key past the 256 codes the desktop's own
+// chords use (KEY_OK), which goes straight to the client, then Shift + a
+// letter; the client asserts the modifier mask went non-zero while held and
+// both keys were delivered.
 
 #include "wl_util.h"
 
@@ -24,8 +26,18 @@ int main(void) {
     if (!wlk_enters) { fprintf(stderr, "no keyboard enter\n"); return 1; }
     if (!wlk_got_repeat) { fprintf(stderr, "no repeat_info\n"); return 1; }
 
-    wlk_watch_key = 30; // KEY_A — the scenario types it under Shift
+    wlk_watch_key = 352; // KEY_OK
     printf("client_feat_keyboard: ready\n");
+
+    for (int i = 0; i < 300 && !wlk_watch_hits; i++) {
+        if (wl_display_roundtrip(wl_dpy) < 0) break;
+        usleep(20000);
+    }
+    if (!wlk_watch_hits) { fprintf(stderr, "client_feat_keyboard: KEY_OK never arrived\n"); return 1; }
+
+    wlk_watch_hits = 0;
+    wlk_watch_key = 30; // KEY_A — the scenario types it under Shift
+    printf("client_feat_keyboard: high key seen\n");
 
     for (int i = 0; i < 300; i++) {
         if (wl_display_roundtrip(wl_dpy) < 0) break;

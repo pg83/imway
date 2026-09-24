@@ -1265,8 +1265,9 @@ void DesktopImpl::altTabStep(long dir) {
     Toplevel* base = altTabActive && altTabSel.get() ? altTabSel.get() : comp->scene->focusedToplevel.get();
     // a circular walk over the ring; the base (or the head sentinel when
     // there is no base) both starts and bounds it, and gets re-tested last
-    // so a lone mapped window still selects itself
-    IntrusiveNode* start = base && !base->singular() ? (IntrusiveNode*)base : tls.mutEnd();
+    // so a lone mapped window still selects itself. A base is in the ring:
+    // a toplevel leaves it only as it dies, which clears the references
+    IntrusiveNode* start = base ? (IntrusiveNode*)base : tls.mutEnd();
     IntrusiveNode* n = start;
 
     do {

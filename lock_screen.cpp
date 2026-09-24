@@ -244,9 +244,10 @@ namespace {
             return false;
         }
 
+        // an account found carries its name
         passwd* account = chaos.account(getpwuid(getuid()));
 
-        if (!account || !account->pw_name) {
+        if (!account) {
             return false;
         }
 
@@ -386,8 +387,9 @@ void LockFilter::setup(RenderContext& ctx) {
     format = ctx.format;
     width = ctx.width;
     height = ctx.height;
-    blurW = width > 4 ? (width + 3) / 4 : 1;
-    blurH = height > 4 ? (height + 3) / 4 : 1;
+    // a quarter, rounded up: at least one texel of an output that has any
+    blurW = (width + 3) / 4;
+    blurH = (height + 3) / 4;
 
     createImage(width, height, format, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, baseImage, baseMemory);
 

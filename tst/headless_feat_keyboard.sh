@@ -6,6 +6,11 @@ set -euo pipefail
 start_client
 wait_client "ready"
 
+# a key past the desktop's 256 chord codes goes straight to the client
+ctl "key 352 press"  # KEY_OK
+ctl "key 352 release"
+wait_client "high key seen"
+
 # Shift held while A is pressed → a non-zero modifier mask plus the key
 ctl "key 42 press"   # KEY_LEFTSHIFT
 ctl "key 30 press"   # KEY_A

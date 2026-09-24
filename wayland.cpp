@@ -13553,7 +13553,10 @@ void WaylandImpl::onListen(void* arg) {
     forEach<Popup>(composer->scene->popups, [&](Popup& value) {
         auto* popup = (PopupImpl*)&value;
 
-        if (!popup->mapped || !popup->parent || !popup->xdg || !popup->positioner.reactive) {
+        // a mapped popup has its parent (the parent surface's death
+        // dismisses it) and its xdg_surface (destroying that first is
+        // refused)
+        if (!popup->mapped || !popup->positioner.reactive) {
             return;
         }
 

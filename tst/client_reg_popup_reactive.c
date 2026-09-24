@@ -99,8 +99,10 @@ int main(void) {
 
     /* Anchored below the parent's bottom edge and taller than the room
      * left there, so the slide always has work to do and its result moves
-     * with the bottom of the work area. */
-    xdg_positioner_set_size(pos, 200, 700);
+     * with the bottom of the work area; and wider than the window's room
+     * on either side, so it slides across as well and that moves with the
+     * window's left edge. */
+    xdg_positioner_set_size(pos, 1200, 700);
     xdg_positioner_set_anchor_rect(pos, 0, cur_h - 10, cur_w, 10);
     xdg_positioner_set_anchor(pos, XDG_POSITIONER_ANCHOR_BOTTOM);
     xdg_positioner_set_gravity(pos, XDG_POSITIONER_GRAVITY_BOTTOM);
