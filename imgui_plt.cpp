@@ -166,12 +166,12 @@ namespace {
     // codepoint is the right source; letters, digits and the punctuation
     // row are all ImGui cares about
     ImGuiKey printableKey(u32 codepoint) {
-        if (codepoint >= 'a' && codepoint <= 'z') {
-            return (ImGuiKey)(ImGuiKey_A + (int)(codepoint - 'a'));
-        }
+        // an ASCII letter of either case folds to lower case by its 0x20
+        // bit; no other codepoint lands in a-z that way
+        u32 folded = codepoint | 0x20;
 
-        if (codepoint >= 'A' && codepoint <= 'Z') {
-            return (ImGuiKey)(ImGuiKey_A + (int)(codepoint - 'A'));
+        if (folded >= 'a' && folded <= 'z') {
+            return (ImGuiKey)(ImGuiKey_A + (int)(folded - 'a'));
         }
 
         if (codepoint >= '0' && codepoint <= '9') {
