@@ -31,7 +31,10 @@ using namespace stl;
 #ifdef IMWAY_FOR_TESTS
 // The test binary's monkey. IMWAY_CHAOS lists the faults as FAULT=ARG words,
 // read once at boot, and each fault is spent by the call it fires on, so a
-// scenario states exactly which call goes wrong:
+// scenario states exactly which call goes wrong. A call that failed on its
+// own spends a fault like any other, and what a failed call is made to give
+// back is released (unref and close take the null or -1 of one that made
+// nothing):
 //   account=N         the next N account lookups come back empty
 //   pam-message=S     the next PAM prompt is rewritten to style S, or
 //                     dropped (a null message) for S=drop
@@ -627,7 +630,7 @@ void* TestChaosMonkey::shmMap(void* mapped, size_t size) {
 }
 
 int TestChaosMonkey::primeImport(int result) {
-    if (!primeImportErrno || result != 0) {
+    if (!primeImportErrno) {
         return result;
     }
 
@@ -815,9 +818,7 @@ int TestChaosMonkey::vtOpen(int fd) {
         return fd;
     }
 
-    if (fd >= 0) {
-        close(fd);
-    }
+    close(fd);
 
     errno = EACCES;
 
@@ -829,9 +830,7 @@ int TestChaosMonkey::leaseFd(int fd) {
         return fd;
     }
 
-    if (fd >= 0) {
-        close(fd);
-    }
+    close(fd);
 
     return -EBUSY;
 }
@@ -892,9 +891,7 @@ int TestChaosMonkey::shotFile(int fd) {
         return fd;
     }
 
-    if (fd >= 0) {
-        close(fd);
-    }
+    close(fd);
 
     errno = EMFILE;
 
@@ -1028,7 +1025,7 @@ VkResult TestChaosMonkey::shotSubmit(VkResult pending) {
 }
 
 bool TestChaosMonkey::udmabufRead(bool started) {
-    if (!started || !spend(udmabufReadFaults)) {
+    if (!spend(udmabufReadFaults)) {
         return started;
     }
 
@@ -1220,7 +1217,7 @@ int TestChaosMonkey::controlOpen(int fd) {
 }
 
 libinput* TestChaosMonkey::libinputContext(libinput* made) {
-    if (!made || !spend(libinputFaults)) {
+    if (!spend(libinputFaults)) {
         return made;
     }
 
@@ -1230,7 +1227,7 @@ libinput* TestChaosMonkey::libinputContext(libinput* made) {
 }
 
 xkb_context* TestChaosMonkey::xkbContext(xkb_context* made) {
-    if (!made || !spend(xkbContextFaults)) {
+    if (!spend(xkbContextFaults)) {
         return made;
     }
 
