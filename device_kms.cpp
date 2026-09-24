@@ -25,6 +25,7 @@
 #include <std/str/view.h>
 #include <std/thr/pool.h>
 #include <std/sym/i_map.h>
+#include <std/ptr/scoped.h>
 #include <std/sys/throw.h>
 #include <std/dbg/verify.h>
 #include <std/ios/out_fd.h>
@@ -547,11 +548,6 @@ namespace {
         bool sessionActive = true;
         const DeviceVk* vk = nullptr;
 
-        // the link-configuration arena: guards on the scanout slots (and
-        // the screenshot replacement slot) registered when the swapchain
-        // comes up; slot contents churn during screenshot handoffs, so the
-        // guards destroy whatever the slot holds when the link dies
-        ObjPool* link = nullptr;
         ScanBuf scan[2];
         int scanCount = 0;
         // the boot ladder's choice, zero-copy swapchain or dumb buffers:
@@ -567,6 +563,13 @@ namespace {
         u32 scanModCount = 0;
 
         ScanBuf screenshotReplacement;
+        // the link-configuration arena: guards on the scanout slots (and
+        // the screenshot replacement slot) registered when the swapchain
+        // comes up; slot contents churn during screenshot handoffs, so the
+        // guards destroy whatever the slot holds when the link dies. A
+        // member declared after the slots: a constructor that throws once
+        // the swapchain is up still takes it down, before the slots go
+        ScopedPtr<ObjPool> link{nullptr};
         int screenshotState = 0;
         int screenshotResult = 0;
         int screenshotIndex = -1;
@@ -1631,7 +1634,7 @@ KmsOutput::KmsOutput(Composer& c, int drmFd, const DeviceVk* v, StringView conne
                 pooledGuard(*trial, [this] {
                     destroyScanBuf(*vk, fd, screenshotReplacement);
                 });
-                link = trial;
+                link.ptr = trial;
 
                 if (scanFourcc == DRM_FORMAT_XRGB2101010) {
                     *(c.log) << "imway: 10-bit scanout"_sv << endL;
@@ -1740,7 +1743,8 @@ KmsOutput::~KmsOutput() noexcept {
     restoreVt();
 
     // the link arena unwinds the scanout slots and the screenshot spare
-    delete link;
+    delete link.ptr;
+    link.ptr = nullptr;
 
     for (auto& b : bufs) {
         freeDumb(b);
@@ -2264,8 +2268,8 @@ void KmsOutput::freeDumb(DumbBuffer& b) {
 // old mode and rebuilds again.
 bool KmsOutput::rebuildScanout() {
     if (zeroCopy) {
-        delete link;
-        link = nullptr;
+        delete link.ptr;
+        link.ptr = nullptr;
         scanCount = 0;
 
         for (auto& sb : scan) {
@@ -2302,7 +2306,7 @@ bool KmsOutput::rebuildScanout() {
         pooledGuard(*trial, [this] {
             destroyScanBuf(*vk, fd, screenshotReplacement);
         });
-        link = trial;
+        link.ptr = trial;
         scanModCount = planeModifiers(fd, planeId, scanFourcc, scanMods, 64);
     } else {
         for (auto& b : bufs) {
