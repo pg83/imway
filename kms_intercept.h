@@ -66,4 +66,7 @@ struct KmsIntercept {
     // now: what a scenario checks for leaked or early-closed imports
     virtual int liveFbs() = 0;
     virtual int liveGems() = 0;
+    // malformed requests through the fd the backend drives, each held
+    // against the kernel's answer; the mismatches are logged and counted
+    virtual int conformance() = 0;
 };

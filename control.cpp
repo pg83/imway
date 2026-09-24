@@ -264,6 +264,10 @@ bool ControlImpl::kmsVerb(StringView verb, StringView args) {
 
             comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou(), testToo.stou() != 0);
         }
+    } else if (verb == "kms-conformance"_sv) {
+        int failed = comp->kmsIntercept->conformance();
+
+        *(comp->log) << "imway: control: kms conformance, "_sv << failed << " failed"_sv << endL;
     } else if (verb == "kms-fail-new-fb"_sv) {
         comp->kmsIntercept->failNewFb((int)args.stou());
     } else if (verb == "kms-fail-prime"_sv) {

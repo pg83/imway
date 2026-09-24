@@ -329,6 +329,7 @@ namespace {
         int emuCreateLease(drm_mode_create_lease* l);
         int emuRevokeLease(drm_mode_revoke_lease* l);
         long fakeIoctl(unsigned long req, void* arg);
+        int conformance() override;
         int dumbMemFd(unsigned long long off);
         void flipLoop();
         void ddcLoop();
@@ -803,11 +804,10 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
             }
         }
 
-        fillArray(c->props_ptr, c->count_props, propIds.data(), (u32)propIds.length());
+        u32 valueRoom = c->count_props;
 
-        if (c->prop_values_ptr && propValues.length()) {
-            memcpy((void*)(uintptr_t)c->prop_values_ptr, propValues.data(), sizeof(u64) * propValues.length());
-        }
+        fillArray(c->props_ptr, c->count_props, propIds.data(), (u32)propIds.length());
+        fillArray(c->prop_values_ptr, valueRoom, propValues.data(), (u32)propValues.length());
 
         static const u32 leaseEncs[] = {kLeaseEncoderId};
 
@@ -846,11 +846,11 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
         }
     }
 
-    fillArray(c->props_ptr, c->count_props, propIds.data(), (u32)propIds.length());
+    // ids and values share one count, and the kernel fills both or neither
+    u32 valueRoom = c->count_props;
 
-    if (c->prop_values_ptr && propValues.length()) {
-        memcpy((void*)(uintptr_t)c->prop_values_ptr, propValues.data(), sizeof(u64) * propValues.length());
-    }
+    fillArray(c->props_ptr, c->count_props, propIds.data(), (u32)propIds.length());
+    fillArray(c->prop_values_ptr, valueRoom, propValues.data(), (u32)propValues.length());
 
     static const u32 encs[] = {kEncoderId};
 
@@ -883,8 +883,10 @@ int FakeKms::emuGetEncoder(drm_mode_get_encoder* e) {
         return 0;
     }
 
-    // the only other encoder: the backend asks for the ids the connectors
-    // above name, never another
+    if (e->encoder_id != kEncoderId) {
+        return -ENOENT;
+    }
+
     e->encoder_type = DRM_MODE_ENCODER_TMDS;
     e->crtc_id = unbound ? 0 : kCrtcId;
     e->possible_crtcs = noCrtc ? 0 : 1;
@@ -940,8 +942,11 @@ int FakeKms::emuGetPlaneResources(drm_mode_get_plane_res* r) {
     return 0;
 }
 
-// the backend asks only for planes the plane list above names
 int FakeKms::emuGetPlane(drm_mode_get_plane* p) {
+    if (p->plane_id != kLeasePlaneId && p->plane_id != kPlaneId && (p->plane_id != kCursorPlaneId || noCursorPlane)) {
+        return -ENOENT;
+    }
+
     fillArray(p->format_type_ptr, p->count_format_types, kFormats, (u32)(sizeof(kFormats) / sizeof(kFormats[0])));
     p->possible_crtcs = p->plane_id == kLeasePlaneId ? 2 : 1;
     p->crtc_id = 0;
@@ -966,19 +971,20 @@ int FakeKms::emuObjGetProperties(drm_mode_obj_get_properties* o) {
         return -ENOENT;
     }
 
-    fillArray(o->props_ptr, o->count_props, ids.data(), (u32)ids.length());
+    u32 valueRoom = o->count_props;
 
-    if (o->prop_values_ptr && values.length()) {
-        memcpy((void*)(uintptr_t)o->prop_values_ptr, values.data(), sizeof(u64) * values.length());
-    }
+    fillArray(o->props_ptr, o->count_props, ids.data(), (u32)ids.length());
+    fillArray(o->prop_values_ptr, valueRoom, values.data(), (u32)values.length());
 
     return 0;
 }
 
-// the backend asks only for property ids an object's property list above
-// handed it, so the property always exists
 int FakeKms::emuGetProperty(drm_mode_get_property* q) {
     PropDef* p = findProp(q->prop_id);
+
+    if (!p) {
+        return -ENOENT;
+    }
 
     memset(q->name, 0, sizeof(q->name));
 
@@ -1240,7 +1246,7 @@ int FakeKms::emuMapDumb(drm_mode_map_dumb* m) {
         }
     }
 
-    return -EINVAL;
+    return -ENOENT;
 }
 
 int FakeKms::emuDestroyDumb(drm_mode_destroy_dumb* d) {
@@ -1278,7 +1284,7 @@ int FakeKms::emuAddFb2(drm_mode_fb_cmd2* f) {
         }
     }
 
-    return -EINVAL;
+    return -ENOENT;
 }
 
 int FakeKms::emuRmFb(u32* id) {
@@ -1308,7 +1314,7 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
     const u32* propIds = (const u32*)(uintptr_t)a->props_ptr;
     const u64* values = (const u64*)(uintptr_t)a->prop_values_ptr;
 
-    // validate first: unknown object/property is EINVAL either way
+    // validate first: a property the object does not have is ENOENT
     u32 k = 0;
 
     for (u32 i = 0; i < a->count_objs; i++) {
@@ -1316,7 +1322,7 @@ int FakeKms::emuAtomic(drm_mode_atomic* a) {
             PropDef* p = findProp(propIds[k]);
 
             if (!p || p->obj != objs[i]) {
-                return -EINVAL;
+                return -ENOENT;
             }
 
             // a connector that refuses the HDR color configuration
@@ -1674,6 +1680,241 @@ long FakeKms::fakeIoctl(unsigned long req, void* arg) {
     }
 
     return 0;
+}
+
+// Requests the backend never sends, through the fd it drives, each held
+// against what the kernel's DRM core answers: an object that does not exist
+// is ENOENT, a room too small for a list takes the count and nothing else,
+// and what the emulator does not model says so. The emulator is only worth
+// its scenarios if it refuses what the kernel would.
+int FakeKms::conformance() {
+    int checks = 0;
+    int failed = 0;
+    constexpr u32 kNone = 999999;
+
+    auto expect = [&](const char* what, int rc, int want) {
+        int got = rc < 0 ? errno : 0;
+
+        checks++;
+
+        if (got != want) {
+            failed++;
+            sysE << "fake-kms: conformance: "_sv << StringView(what) << ": errno "_sv << got << ", the kernel's "_sv << want << endL;
+        }
+    };
+
+    // a room of zero entries: the call reports the count and writes nothing
+    struct Room {
+        u8 bytes[512];
+
+        Room() {
+            memset(bytes, 0xa5, sizeof(bytes));
+        }
+
+        u64 ptr() {
+            return (u64)(uintptr_t)bytes;
+        }
+
+        bool clean() const {
+            for (u8 b : bytes) {
+                if (b != 0xa5) {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+    };
+
+    auto untouched = [&](const char* what, const Room& room) {
+        checks++;
+
+        if (!room.clean()) {
+            failed++;
+            sysE << "fake-kms: conformance: "_sv << StringView(what) << ": wrote into a room of zero entries"_sv << endL;
+        }
+    };
+
+    static const u32 connectors[] = {kConnectorId, kLeaseConnectorId};
+
+    for (u32 id : connectors) {
+        drm_mode_get_connector c{};
+        Room modes, ids, values, encoders;
+
+        c.connector_id = id;
+        c.modes_ptr = modes.ptr();
+        c.props_ptr = ids.ptr();
+        c.prop_values_ptr = values.ptr();
+        c.encoders_ptr = encoders.ptr();
+        expect("connector with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETCONNECTOR, &c), 0);
+        untouched("connector modes", modes);
+        untouched("connector property ids", ids);
+        untouched("connector property values", values);
+        untouched("connector encoders", encoders);
+    }
+
+    drm_mode_get_connector noConnector{};
+
+    noConnector.connector_id = kNone;
+    expect("unknown connector", ioctl(clientFd, DRM_IOCTL_MODE_GETCONNECTOR, &noConnector), ENOENT);
+
+    drm_mode_get_encoder noEncoder{};
+
+    noEncoder.encoder_id = kNone;
+    expect("unknown encoder", ioctl(clientFd, DRM_IOCTL_MODE_GETENCODER, &noEncoder), ENOENT);
+
+    drm_mode_get_plane plane{};
+    Room formats;
+
+    plane.plane_id = kPlaneId;
+    plane.format_type_ptr = formats.ptr();
+    expect("plane with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETPLANE, &plane), 0);
+    untouched("plane formats", formats);
+
+    drm_mode_get_plane noPlane{};
+
+    noPlane.plane_id = kNone;
+    expect("unknown plane", ioctl(clientFd, DRM_IOCTL_MODE_GETPLANE, &noPlane), ENOENT);
+
+    drm_mode_obj_get_properties objProps{};
+    Room objIds, objValues;
+
+    objProps.obj_id = kConnectorId;
+    objProps.obj_type = DRM_MODE_OBJECT_CONNECTOR;
+    objProps.props_ptr = objIds.ptr();
+    objProps.prop_values_ptr = objValues.ptr();
+    expect("object properties with no room", ioctl(clientFd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &objProps), 0);
+    untouched("object property ids", objIds);
+    untouched("object property values", objValues);
+
+    drm_mode_obj_get_properties noObject{};
+
+    noObject.obj_id = kNone;
+    noObject.obj_type = DRM_MODE_OBJECT_ANY;
+    expect("unknown object", ioctl(clientFd, DRM_IOCTL_MODE_OBJ_GETPROPERTIES, &noObject), ENOENT);
+
+    drm_mode_get_property enumProp{};
+    Room enums;
+
+    enumProp.prop_id = pConnColorspace;
+    enumProp.enum_blob_ptr = enums.ptr();
+    expect("enum property with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPERTY, &enumProp), 0);
+    untouched("enum property entries", enums);
+
+    drm_mode_get_property rangeProp{};
+    Room range;
+
+    rangeProp.prop_id = pConnMaxBpc;
+    rangeProp.values_ptr = range.ptr();
+    expect("range property with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPERTY, &rangeProp), 0);
+    untouched("range property bounds", range);
+
+    drm_mode_get_property noProp{};
+
+    noProp.prop_id = kNone;
+    expect("unknown property", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPERTY, &noProp), ENOENT);
+
+    u8 payload[16] = {};
+    drm_mode_create_blob made{};
+
+    made.data = (u64)(uintptr_t)payload;
+    made.length = sizeof(payload);
+    expect("blob creation", ioctl(clientFd, DRM_IOCTL_MODE_CREATEPROPBLOB, &made), 0);
+
+    drm_mode_get_blob shortRead{};
+    Room blobBytes;
+
+    shortRead.blob_id = made.blob_id;
+    shortRead.data = blobBytes.ptr();
+    expect("blob with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPBLOB, &shortRead), 0);
+    untouched("blob bytes", blobBytes);
+
+    drm_mode_get_blob formatsRead{};
+    Room formatBytes;
+
+    formatsRead.blob_id = pPlaneInFormats;
+    formatsRead.data = formatBytes.ptr();
+    expect("IN_FORMATS with no room", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPBLOB, &formatsRead), 0);
+    untouched("IN_FORMATS bytes", formatBytes);
+
+    drm_mode_destroy_blob gone{};
+
+    gone.blob_id = made.blob_id;
+    expect("blob destruction", ioctl(clientFd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &gone), 0);
+    expect("blob destroyed twice", ioctl(clientFd, DRM_IOCTL_MODE_DESTROYPROPBLOB, &gone), ENOENT);
+
+    drm_mode_get_blob goneRead{};
+
+    goneRead.blob_id = made.blob_id;
+    expect("destroyed blob", ioctl(clientFd, DRM_IOCTL_MODE_GETPROPBLOB, &goneRead), ENOENT);
+
+    drm_prime_handle badFd{};
+
+    badFd.fd = -1;
+    expect("prime import of no fd", ioctl(clientFd, DRM_IOCTL_PRIME_FD_TO_HANDLE, &badFd), EBADF);
+
+    drm_gem_close noGem{};
+
+    noGem.handle = kNone;
+    expect("closing an unknown handle", ioctl(clientFd, DRM_IOCTL_GEM_CLOSE, &noGem), EINVAL);
+
+    drm_mode_create_dumb flat{};
+
+    flat.width = 0;
+    flat.height = 16;
+    flat.bpp = 32;
+    expect("dumb buffer of no width", ioctl(clientFd, DRM_IOCTL_MODE_CREATE_DUMB, &flat), EINVAL);
+
+    drm_mode_map_dumb noMap{};
+
+    noMap.handle = kNone;
+    expect("mapping an unknown handle", ioctl(clientFd, DRM_IOCTL_MODE_MAP_DUMB, &noMap), ENOENT);
+
+    drm_mode_fb_cmd2 noBacking{};
+
+    noBacking.width = 16;
+    noBacking.height = 16;
+    noBacking.pixel_format = DRM_FORMAT_XRGB8888;
+    noBacking.handles[0] = kNone;
+    noBacking.pitches[0] = 64;
+    expect("framebuffer on an unknown handle", ioctl(clientFd, DRM_IOCTL_MODE_ADDFB2, &noBacking), ENOENT);
+
+    u32 noFb = kNone;
+
+    expect("removing an unknown framebuffer", ioctl(clientFd, DRM_IOCTL_MODE_RMFB, &noFb), ENOENT);
+
+    // TEST_ONLY: validated whatever flip is pending, and nothing applied
+    auto atomicOne = [&](u32 obj, u32 prop, u64 value) {
+        u32 count = 1;
+        drm_mode_atomic a{};
+
+        a.flags = DRM_MODE_ATOMIC_TEST_ONLY;
+        a.count_objs = 1;
+        a.objs_ptr = (u64)(uintptr_t)&obj;
+        a.count_props_ptr = (u64)(uintptr_t)&count;
+        a.props_ptr = (u64)(uintptr_t)&prop;
+        a.prop_values_ptr = (u64)(uintptr_t)&value;
+
+        return ioctl(clientFd, DRM_IOCTL_MODE_ATOMIC, &a);
+    };
+
+    expect("atomic with an unknown property", atomicOne(kCrtcId, kNone, 0), ENOENT);
+    expect("atomic with another object's property", atomicOne(kCrtcId, pConnCrtcId, 0), ENOENT);
+    expect("atomic with an unknown mode blob", atomicOne(kCrtcId, pCrtcModeId, kNone), EINVAL);
+
+    drm_get_cap noCap{};
+
+    noCap.capability = 0xdead;
+    expect("an unknown capability", ioctl(clientFd, DRM_IOCTL_GET_CAP, &noCap), EINVAL);
+
+    drm_mode_crtc crtc{};
+
+    crtc.crtc_id = kCrtcId;
+    expect("an ioctl the emulator does not model", ioctl(clientFd, DRM_IOCTL_MODE_GETCRTC, &crtc), ENOTTY);
+
+    sysE << "fake-kms: conformance: "_sv << checks << " checks, "_sv << failed << " failed"_sv << endL;
+
+    return failed;
 }
 
 int FakeKms::dumbMemFd(unsigned long long off) {
