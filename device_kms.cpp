@@ -2065,30 +2065,26 @@ void KmsOutput::applyDisplaySettings() {
         return;
     }
 
-    config = next;
-
     if (nextColor == color && nextRange == rangeValue) {
+        config = next;
+
         return;
     }
 
-    color = nextColor;
-    maxBpcValue = color.bpc;
-    rangeValue = nextRange;
-
     HdrContentMetadata content;
 
-    content.add(ColorDescription::sRgb(), color.sdrWhiteNits);
-    metadata = hdrOutputMetadata(color, content);
+    content.add(ColorDescription::sRgb(), nextColor.sdrWhiteNits);
 
-    if (color.hdr()) {
-        u32 blob = 0;
+    HdrOutputMetadata nextMetadata = hdrOutputMetadata(nextColor, content);
+    u32 blob = 0;
 
-        if (!createHdrMetadataBlob(metadata, blob)) {
-            *(c->log) << "imway: cannot create the HDR metadata blob"_sv << endL;
+    if (nextColor.hdr() && !createHdrMetadataBlob(nextMetadata, blob)) {
+        *(c->log) << "imway: cannot create the HDR metadata blob, the output stays as it was"_sv << endL;
 
-            return;
-        }
+        return;
+    }
 
+    if (blob) {
         if (hdrMetaBlob) {
             drmModeDestroyPropertyBlob(fd, hdrMetaBlob);
         }
@@ -2096,6 +2092,11 @@ void KmsOutput::applyDisplaySettings() {
         hdrMetaBlob = blob;
     }
 
+    config = next;
+    color = nextColor;
+    metadata = nextMetadata;
+    maxBpcValue = color.bpc;
+    rangeValue = nextRange;
     signalFeedbackLogged = false;
     remodeset("display settings changed, remodeset"_sv);
     c->scene->needsFrame = true;

@@ -40,6 +40,15 @@ drag() { # <x> <y> <dx> <dy> [cursor]
     ctl "button left release"
 }
 
+# the geometry a composed frame leaves as it was: a commit's new size is in
+# the dump at once, the position anchored to it only from the next frame
+steady() {
+    local before
+    before=$(geometry)
+    ctl "frame"
+    [[ "$(geometry)" == "$before" ]]
+}
+
 # the client committed a new size and the frame caught up with it
 settled_since() { # <client_w> <client_h>
     local g
@@ -65,6 +74,7 @@ moved() {
     [[ "$(dump_field 'app_id=resize' x)" -ge $((x + 150)) && "$(dump_field 'app_id=resize' y)" -ge $((y + 100)) ]]
 }
 await 100 moved || { echo "the title bar drag did not move the window: $(geometry)"; exit 1; }
+await 50 steady || { echo "the moved window never held still: $(geometry)"; exit 1; }
 read -r x y w h cw ch <<<"$(geometry)"
 
 # The client's own presses: it names the top-left corner, then the top edge
@@ -95,6 +105,7 @@ client_drag() { # <n> <dx> <dy>
 
 client_drag 1 -40 -40
 await 100 settled_since "$cw" "$ch" || { echo "the client-driven top-left resize did not land: $(geometry)"; exit 1; }
+await 50 steady || { echo "the top-left resize never held still: $(geometry)"; exit 1; }
 read -r nx ny nw nh ncw nch <<<"$(geometry)"
 echo "client top-left: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
 (( nw > w && nh > h )) || { echo "the top-left resize did not grow the window"; exit 1; }
@@ -105,6 +116,7 @@ x=$nx; y=$ny; w=$nw; h=$nh; cw=$ncw; ch=$nch
 # the top edge alone: a sideways hand does not change the width
 client_drag 2 30 -30
 await 100 settled_since "$cw" "$ch" || { echo "the client-driven top resize did not land: $(geometry)"; exit 1; }
+await 50 steady || { echo "the top resize never held still: $(geometry)"; exit 1; }
 read -r nx ny nw nh ncw nch <<<"$(geometry)"
 echo "client top: $nx,$ny ${nw}x${nh} client ${ncw}x${nch}"
 (( nh > h && ncw == cw )) || { echo "the top resize did not grow the height alone"; exit 1; }

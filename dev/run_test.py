@@ -272,9 +272,11 @@ def run(imway: str, scenario: str, client: str, meta: dict,
         IMWAY_INPUT_DIR=input_dir,
         # every scenario drives the KMS backend over the userspace emulator
         IMWAY_FAKE_KMS="1",
-        # hermetic seat: the host's seatd must not hand a scenario its seat;
-        # libseat fails fast and the compositor opens its devices directly,
+        # hermetic seat: the host's seatd must not hand a scenario its seat,
+        # nor libseat start a seatd of its own on the host's VTs; libseat
+        # fails fast and the compositor opens its devices directly,
         # imway-env can name a seatd of the scenario's own
+        LIBSEAT_BACKEND="seatd",
         SEATD_SOCK="/nonexistent-imway-test",
     )
     if not meta["private_bus"]:

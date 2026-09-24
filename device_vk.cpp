@@ -261,6 +261,12 @@ DeviceVk::DeviceVk(Composer& c, int drmFd)
         }
     }
 
+    // a renderer without a drm node of its own (llvmpipe) imports what is
+    // allocated on the display's node: that is where clients are pointed
+    if (!this->renderDev) {
+        this->renderDev = st.st_rdev;
+    }
+
     u32 qn = 0;
 
     vkGetPhysicalDeviceQueueFamilyProperties(this->phys, &qn, nullptr);
