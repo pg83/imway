@@ -921,3 +921,50 @@ void drawLockOverlay(Composer& c, DialogState** state) {
 void closeLockOverlay(DialogState** state) noexcept {
     dialog(*state);
 }
+
+#ifdef IMWAY_FOR_TESTS
+#if __has_include(<security/pam_appl.h>)
+// Held against Linux-PAM's contract for a conversation: a call with no
+// messages, no message array, nowhere to put the answers or no
+// application data is refused; one call carries several messages, each
+// prompt answered and each notice left without an answer; a style the
+// conversation does not know refuses the whole call and hands out
+// nothing, the answers it had made already freed. Counted, not branched
+// on: a broken part shows as a nonzero count.
+int pamConversationConformance(Composer& c) {
+    PamInput input = {"imway-user", "imway-secret", c.chaos};
+    pam_message user{PAM_PROMPT_ECHO_ON, "login:"};
+    pam_message secret{PAM_PROMPT_ECHO_OFF, "Password:"};
+    pam_message notice{PAM_TEXT_INFO, "welcome"};
+    pam_message error{PAM_ERROR_MSG, "try again"};
+    // a style no PAM defines
+    pam_message strange{-1, "?"};
+    const pam_message* all[] = {&user, &secret, &notice, &error};
+    const pam_message* broken[] = {&user, &secret, &strange};
+    pam_response* out = nullptr;
+    int failed = 0;
+
+    failed += pamConversation(0, all, &out, &input) != PAM_CONV_ERR;
+    failed += pamConversation(4, nullptr, &out, &input) != PAM_CONV_ERR;
+    failed += pamConversation(4, all, nullptr, &input) != PAM_CONV_ERR;
+    failed += pamConversation(4, all, &out, nullptr) != PAM_CONV_ERR;
+    failed += out != nullptr;
+
+    failed += pamConversation(4, all, &out, &input) != PAM_SUCCESS;
+    failed += StringView(out[0].resp) != StringView("imway-user");
+    failed += StringView(out[1].resp) != StringView("imway-secret");
+    failed += (out[2].resp != nullptr) + (out[3].resp != nullptr);
+    freePamResponses(out, 4);
+
+    out = nullptr;
+    failed += pamConversation(3, broken, &out, &input) != PAM_CONV_ERR;
+    failed += out != nullptr;
+
+    return failed;
+}
+#else
+int pamConversationConformance(Composer&) {
+    return -1;
+}
+#endif
+#endif

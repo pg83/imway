@@ -10,6 +10,7 @@
 #include "composer.h"
 #include "listener.h"
 #include "keyboard.h"
+#include "lock_screen.h"
 #include "mixer.h"
 #include "mixer_pulse.h"
 #include "notifier.h"
@@ -267,6 +268,8 @@ bool ControlImpl::kmsVerb(StringView verb, StringView args) {
         }
     } else if (verb == "pulse-mainloop-conformance"_sv) {
         *(comp->log) << "imway: control: pulse mainloop conformance, "_sv << MixerPulse::mainloopConformance(*comp) << " failed"_sv << endL;
+    } else if (verb == "pam-conversation-conformance"_sv) {
+        *(comp->log) << "imway: control: pam conversation conformance, "_sv << pamConversationConformance(*comp) << " failed"_sv << endL;
     } else if (verb == "kms-conformance"_sv) {
         int failed = comp->kmsIntercept->conformance();
 
