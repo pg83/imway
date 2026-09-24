@@ -3,8 +3,9 @@
 # described device drives the panel; anything less leaves it without
 # hardware brightness instead of driving a half-described device.
 # This one: the kernel's own class (an empty override), a missing class
-# directory and an empty one, and a good device behind a connector that
-# cannot be read back when the panel looks for its backlight.
+# directory and an empty one, a good device for eDP, LVDS and DSI panels,
+# and one behind a connector that cannot be read back when the panel looks
+# for its backlight.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -36,6 +37,13 @@ printf '50\n' > "$bl/good/dev0/brightness"
 panel "$bl/good"
 boot_rc 0 "good backlight"
 boot_has "imway: backlight $bl/good/dev0, max 100" "good backlight"
+
+# LVDS and DSI panels are internal ones too, on the same backlight
+for kind in lvds dsi; do
+    kms_boot IMWAY_FAKE_KMS_INTERNAL=$kind IMWAY_SYSFS_BACKLIGHT="$bl/good" --
+    boot_rc 0 "$kind panel"
+    boot_has "imway: backlight $bl/good/dev0, max 100" "$kind panel"
+done
 
 # the pipe pick reads the connector first; the backlight's read is next
 kms_boot IMWAY_FAKE_KMS_INTERNAL=1 IMWAY_SYSFS_BACKLIGHT="$bl/good" IMWAY_FAKE_KMS_FAIL_LOOKUPS=connector:101:2:1 --

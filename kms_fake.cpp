@@ -237,7 +237,9 @@ namespace {
         bool noCursorPlane = false;
         u64 linkBpcCap = 10; // the deepest link the display negotiates
         bool rejectColor = false;
-        bool internalPanel = false;
+        // an internal panel's connector type (eDP unless the scenario
+        // names LVDS or DSI), zero for an external HDMI display
+        u32 internalPanel = 0;
 
         // the device's shape at boot, read from IMWAY_FAKE_KMS_* by
         // openDevice: a scenario boots a different display or driver
@@ -856,7 +858,7 @@ int FakeKms::emuGetConnector(drm_mode_get_connector* c) {
     c->encoder_id = unbound ? 0 : kEncoderId;
     // an internal panel takes its brightness from the backlight class, an
     // external one over ddc/ci; scenarios pick which
-    c->connector_type = internalPanel ? DRM_MODE_CONNECTOR_eDP : DRM_MODE_CONNECTOR_HDMIA;
+    c->connector_type = internalPanel ? internalPanel : DRM_MODE_CONNECTOR_HDMIA;
     c->connector_type_id = 1;
     c->connection = connected ? 1 : 2; // connected : disconnected
     c->mm_width = 340;
@@ -1805,7 +1807,11 @@ int FakeKms::openDevice() {
 
     eventFd = pipeFds[1];
     renderFd = render;
-    internalPanel = getenv("IMWAY_FAKE_KMS_INTERNAL") != nullptr;
+    if (const char* internal = getenv("IMWAY_FAKE_KMS_INTERNAL")) {
+        StringView kind(internal);
+
+        internalPanel = kind == "lvds"_sv ? DRM_MODE_CONNECTOR_LVDS : kind == "dsi"_sv ? DRM_MODE_CONNECTOR_DSI : DRM_MODE_CONNECTOR_eDP;
+    }
     rejectColor = getenv("IMWAY_FAKE_KMS_REJECT_COLOR") != nullptr;
     rejectCursorErr = getenv("IMWAY_FAKE_KMS_REJECT_CURSOR") ? EINVAL : 0;
     noCursorPlane = getenv("IMWAY_FAKE_KMS_NO_CURSOR_PLANE") != nullptr;
