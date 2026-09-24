@@ -51,7 +51,7 @@ struct ShmContent: public stl::ARC {
     int fd = -1;
     RectI damage;
     bool stableMapping = false;
-    bool (*beginAccess)(ShmContent*) = nullptr;
+    void (*beginAccess)(ShmContent*) = nullptr;
     bool (*endAccess)(ShmContent*) = nullptr;
     void (*accessFailed)(ShmContent*) = nullptr;
     bool (*beginDmabufRead)(ShmContent*, int) = nullptr;

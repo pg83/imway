@@ -172,15 +172,17 @@ namespace {
     };
 
     pthread_once_t sigbusOnce = PTHREAD_ONCE_INIT;
-    pthread_key_t sigbusKey;
     struct sigaction oldSigbusAction;
-    bool sigbusReady = false;
 
+    // the client mapping this thread is reading, for the SIGBUS handler: a
+    // thread-local of the executable itself, so the handler reads it
+    // without allocating and every thread has one from its start
     struct SigbusAccess {
         ShmMapping* mapping = nullptr;
-        int count = 0;
         bool faulted = false;
     };
+
+    thread_local SigbusAccess sigbusAccess;
 
     void mappingUpdateStable(ShmPool* pool, ShmMapping* mapping) {
         struct stat st{};
@@ -205,8 +207,7 @@ namespace {
     }
 
     void sigbusHandler(int, siginfo_t* info, void*) {
-        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
-        ShmMapping* mapping = access ? access->mapping : nullptr;
+        ShmMapping* mapping = sigbusAccess.mapping;
 
         if (!mapping || (u8*)info->si_addr < mapping->data || (u8*)info->si_addr >= mapping->data + mapping->size) {
             reraiseSigbus();
@@ -214,15 +215,11 @@ namespace {
             return;
         }
 
-        access->faulted = true;
+        sigbusAccess.faulted = true;
 
         if (mmap(mapping->data, mapping->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_FIXED | MAP_ANONYMOUS, -1, 0) == MAP_FAILED) {
             reraiseSigbus();
         }
-    }
-
-    void destroySigbusAccess(void* data) {
-        free(data);
     }
 
     void initSigbus() {
@@ -232,77 +229,42 @@ namespace {
         action.sa_flags = SA_SIGINFO | SA_NODEFER;
         sigemptyset(&action.sa_mask);
 
-        if (pthread_key_create(&sigbusKey, destroySigbusAccess) != 0) {
-            return;
-        }
-
         // SIGBUS is a catchable signal and both structs are ours, so
         // sigaction has no EINVAL or EFAULT to give back
         sigaction(SIGBUS, &action, &oldSigbusAction);
-        sigbusReady = true;
     }
 
-    bool shmMappingBeginAccess(ChaosMonkey* chaos, ShmMapping* mapping) {
-        // pthread_once reports no errors
-        pthread_once(&sigbusOnce, initSigbus);
-
-        if (!sigbusReady) {
-            return false;
-        }
-
-        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
-
-        if (!access) {
-            access = (SigbusAccess*)chaos->sigbusRecord(calloc(1, sizeof(SigbusAccess)));
-
-            if (!access || pthread_setspecific(sigbusKey, access) != 0) {
-                free(access);
-
-                return false;
-            }
-        }
-
-        if (access->mapping && access->mapping != mapping) {
-            abort();
-        }
-
-        access->mapping = mapping;
-        access->count++;
-
-        return true;
+    // reads of a client's shm memory go between a begin and an end on the
+    // same thread, never nested. The handler runs amid those reads, so the
+    // record is written before them and read after them: the fences keep
+    // the compiler, which knows memcpy touches nothing else, from dropping
+    // the write or moving the reads across it
+    void shmMappingBeginAccess(ShmMapping* mapping) {
+        sigbusAccess.mapping = mapping;
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);
     }
 
+    // whether every read since the begin found the client's memory there
     bool shmMappingEndAccess() {
-        auto* access = (SigbusAccess*)pthread_getspecific(sigbusKey);
+        __atomic_signal_fence(__ATOMIC_SEQ_CST);
 
-        if (!access || access->count < 1) {
-            abort();
-        }
+        bool ok = !sigbusAccess.faulted;
 
-        bool ok = !access->faulted;
-
-        access->count--;
-
-        if (!access->count) {
-            access->mapping = nullptr;
-            access->faulted = false;
-        }
+        sigbusAccess = {};
 
         return ok;
     }
 
-    bool shmBufferBeginAccess(ShmBuffer* buffer) {
-        return shmMappingBeginAccess(buffer->pool->comp->chaos, buffer->pool->mapping.mutPtr());
+    void shmBufferBeginAccess(ShmBuffer* buffer) {
+        shmMappingBeginAccess(buffer->pool->mapping.mutPtr());
     }
 
     bool shmBufferEndAccess(ShmBuffer*) {
         return shmMappingEndAccess();
     }
 
-    bool shmContentBeginAccess(ShmContent* content) {
-        auto* use = (ShmUse*)content;
-
-        return shmMappingBeginAccess(use->buffer->pool->comp->chaos, use->mapping.mutPtr());
+    void shmContentBeginAccess(ShmContent* content) {
+        shmMappingBeginAccess(((ShmUse*)content)->mapping.mutPtr());
     }
 
     bool shmContentEndAccess(ShmContent*) {
@@ -472,6 +434,10 @@ namespace {
     }
 
     bool initWaylandShm(wl_display* display, Composer* comp) {
+        // the handler its reads of client memory rely on comes with the
+        // global, once a process (pthread_once reports no errors)
+        pthread_once(&sigbusOnce, initSigbus);
+
         return comp->chaos->global(wl_global_create(display, &wl_shm_interface, 2, comp, bindShm)) != nullptr;
     }
 
@@ -2280,10 +2246,10 @@ namespace {
         return true;
     }
 
+    // every caller found the buffer through its wl_buffer, alive for the
+    // request or event being handled
     void postShmAccessError(ShmBuffer* shm) {
-        if (shm->resource) {
-            wl_resource_post_error(shm->resource, WL_SHM_ERROR_INVALID_FD, "error accessing SHM buffer");
-        }
+        wl_resource_post_error(shm->resource, WL_SHM_ERROR_INVALID_FD, "error accessing SHM buffer");
     }
 
     void applyChildrenCaches(SurfaceImpl& s) {
@@ -7865,12 +7831,7 @@ namespace {
                 return;
             }
 
-            if (!shmBufferBeginAccess(shm)) {
-                postShmAccessError(shm);
-                captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
-
-                return;
-            }
+            shmBufferBeginAccess(shm);
 
             u8* dst = shm->data();
 
@@ -7916,7 +7877,7 @@ namespace {
         f.inFlight = false;
 
         auto* rows = (const CaptureRows*)arg;
-        ShmBuffer* shm = f.buffer ? shmBufferFromResource(f.buffer) : nullptr;
+        ShmBuffer* shm = shmBufferFromResource(f.buffer);
 
         if (!rows || !shm) {
             captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
@@ -7926,12 +7887,7 @@ namespace {
 
         size_t stride = (size_t)shm->stride;
 
-        if (!shmBufferBeginAccess(shm)) {
-            postShmAccessError(shm);
-            captureFail(f, EXT_IMAGE_COPY_CAPTURE_FRAME_V1_FAILURE_REASON_UNKNOWN);
-
-            return;
-        }
+        shmBufferBeginAccess(shm);
 
         u8* dst = shm->data();
 
@@ -8123,7 +8079,7 @@ namespace {
         f.inFlight = false;
 
         auto* rows = (const CaptureRows*)arg;
-        ShmBuffer* shm = f.buffer ? shmBufferFromResource(f.buffer) : nullptr;
+        ShmBuffer* shm = shmBufferFromResource(f.buffer);
 
         if (!rows || !shm) {
             f.armed = false;
@@ -8134,13 +8090,7 @@ namespace {
 
         size_t stride = (size_t)shm->stride;
 
-        if (!shmBufferBeginAccess(shm)) {
-            postShmAccessError(shm);
-            f.armed = false;
-            zwlr_screencopy_frame_v1_send_failed(f.res);
-
-            return;
-        }
+        shmBufferBeginAccess(shm);
 
         u8* dst = shm->data();
 
@@ -9226,11 +9176,7 @@ namespace {
             return;
         }
 
-        if (!shmBufferBeginAccess(shm)) {
-            postShmAccessError(shm);
-
-            return;
-        }
+        shmBufferBeginAccess(shm);
 
         const u8* src = shm->data();
 

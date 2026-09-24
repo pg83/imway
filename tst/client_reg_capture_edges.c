@@ -13,10 +13,7 @@
 // 1x1 frame, report damage for copy_with_damage, and fail a copy whose
 // buffer died. The *-sigbus modes shrink the destination's memfd under the
 // compositor's mapping: the copy into it faults, and the client is told its
-// buffer could not be accessed instead of the compositor dying. The
-// *-unguarded modes leave the memfd whole for a compositor that cannot set
-// up its SIGBUS guard (IMWAY_CHAOS=sigbus-record=N): it must not touch the
-// memory unguarded, and tells the client the same.
+// buffer could not be accessed instead of the compositor dying.
 
 static struct ext_output_image_capture_source_manager_v1* source_mgr;
 static struct ext_image_copy_capture_manager_v1* copy_mgr;
@@ -247,13 +244,13 @@ static int run_output_faults(void) {
 // the destination's memfd is cut to nothing before the capture is asked
 // for: the compositor's mapping outlives the file size, and the copy into
 // it faults
-static int run_output_sigbus(int cut) {
+static int run_output_sigbus(void) {
     struct ext_image_copy_capture_session_v1* session = output_session();
     struct ext_image_copy_capture_frame_v1* frame =
         ext_image_copy_capture_session_v1_create_frame(session);
     struct wl_buffer* buffer = make_buffer((int)cap_w, (int)cap_h, (int)cap_w * 4, WL_SHM_FORMAT_XRGB8888);
 
-    if (cut && ftruncate(last_fd, 0) < 0)
+    if (ftruncate(last_fd, 0) < 0)
         return 2;
 
     frame_result = -1;
@@ -370,12 +367,12 @@ static int run_wlr(void) {
     return 0;
 }
 
-static int run_wlr_sigbus(int cut) {
+static int run_wlr_sigbus(void) {
     struct zwlr_screencopy_frame_v1* frame =
         wlr_frame(zwlr_screencopy_manager_v1_capture_output(wlr_mgr, 0, output));
     struct wl_buffer* buffer = make_buffer((int)wlr_w, (int)wlr_h, (int)wlr_stride, WL_SHM_FORMAT_XRGB8888);
 
-    if (cut && ftruncate(last_fd, 0) < 0)
+    if (ftruncate(last_fd, 0) < 0)
         return 2;
 
     zwlr_screencopy_frame_v1_copy(frame, buffer);
@@ -401,12 +398,10 @@ int main(int argc, char** argv) {
     }
 
     if (!strcmp(argv[1], "output")) return run_output();
-    if (!strcmp(argv[1], "output-sigbus")) return run_output_sigbus(1);
-    if (!strcmp(argv[1], "output-unguarded")) return run_output_sigbus(0);
+    if (!strcmp(argv[1], "output-sigbus")) return run_output_sigbus();
     if (!strcmp(argv[1], "output-faults")) return run_output_faults();
     if (!strcmp(argv[1], "wlr")) return run_wlr();
-    if (!strcmp(argv[1], "wlr-sigbus")) return run_wlr_sigbus(1);
-    if (!strcmp(argv[1], "wlr-unguarded")) return run_wlr_sigbus(0);
+    if (!strcmp(argv[1], "wlr-sigbus")) return run_wlr_sigbus();
 
     return 2;
 }

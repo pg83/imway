@@ -65,13 +65,6 @@ int main(int argc, char** argv) {
 
     struct xdg_toplevel_icon_v1* icon = xdg_toplevel_icon_manager_v1_create_icon(icon_mgr);
 
-    // a compositor without its SIGBUS guard (IMWAY_CHAOS=sigbus-record=N)
-    // cannot read the icon's pixels safely and says so on the buffer
-    if (!strcmp(argv[1], "unguarded")) {
-        xdg_toplevel_icon_v1_add_buffer(icon, shm_buffer(48, 48, 0xFF00FF00), 1);
-        return wl_expect_error(wl_buffer_interface.name, WL_SHM_ERROR_INVALID_FD);
-    }
-
     if (!strcmp(argv[1], "invalid-buffer")) {
         xdg_toplevel_icon_v1_add_buffer(icon, shm_buffer(48, 32, 0xFF00FF00), 1);
         return expect_error(XDG_TOPLEVEL_ICON_V1_ERROR_INVALID_BUFFER);

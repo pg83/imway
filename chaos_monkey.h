@@ -55,10 +55,6 @@ struct ChaosMonkey {
     // a wl_shm pool's mapping fresh from mmap (MAP_FAILED when it failed); a
     // replacement failure unmaps the size it was handed and returns MAP_FAILED
     virtual void* shmMap(void* mapped, size_t size) = 0;
-    // a thread's SIGBUS guard record fresh from calloc, made on the
-    // thread's first access to a client's shm memory; a replacement failure
-    // frees it and returns null
-    virtual void* sigbusRecord(void* allocated) = 0;
     // drmPrimeFDToHandle's result on a client's dma-buf plane, the driver's
     // verdict on the buffer; a failure also sets errno
     virtual int primeImport(int result) = 0;

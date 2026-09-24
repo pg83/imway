@@ -43,9 +43,6 @@ using namespace stl;
 //                     word per interface, each spent on its own
 //   shm-map=K         wayland: K wl_shm pool mappings pass, the one after
 //                     fails as mmap does without address space
-//   sigbus-record=N   wayland: the next N SIGBUS guard records the main
-//                     thread makes for its shm access fail to allocate (the
-//                     renderer's copy lane keeps its own, untouched)
 //   prime-import=E    wayland: the next dma-buf plane the driver is asked
 //                     to import fails with errno E (13 EACCES: a card fd
 //                     that cannot judge; 22 EINVAL: a buffer it refuses)
@@ -199,7 +196,6 @@ namespace {
         Vector<StringView> resourceFaults;
         // wayland shm and linux-dmabuf
         int shmMapSkip = -1;
-        int sigbusRecordFaults = 0;
         int primeImportErrno = 0;
         int entropyFaults = 0;
         int securityAcceptFaults = 0;
@@ -285,7 +281,6 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // wayland shm and linux-dmabuf
         void* shmMap(void* mapped, size_t size) override;
-        void* sigbusRecord(void* allocated) override;
         int primeImport(int result) override;
         long entropy(long got) override;
         int securityAccept(int fd) override;
@@ -519,8 +514,6 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         devNullFaults = (int)arg.stou();
     } else if (fault == "shm-map"_sv) {
         shmMapSkip = (int)arg.stou();
-    } else if (fault == "sigbus-record"_sv) {
-        sigbusRecordFaults = (int)arg.stou();
     } else if (fault == "prime-import"_sv) {
         primeImportErrno = (int)arg.stou();
     } else if (fault == "entropy"_sv) {
@@ -585,16 +578,6 @@ void* TestChaosMonkey::shmMap(void* mapped, size_t size) {
     munmap(mapped, size);
 
     return MAP_FAILED;
-}
-
-void* TestChaosMonkey::sigbusRecord(void* allocated) {
-    if (!allocated || gettid() != getpid() || !spend(sigbusRecordFaults)) {
-        return allocated;
-    }
-
-    free(allocated);
-
-    return nullptr;
 }
 
 int TestChaosMonkey::primeImport(int result) {
@@ -1270,7 +1253,6 @@ namespace {
         wl_resource* resource(wl_resource* created) override;
         // wayland shm and linux-dmabuf
         void* shmMap(void* mapped, size_t size) override;
-        void* sigbusRecord(void* allocated) override;
         int primeImport(int result) override;
         long entropy(long got) override;
         int securityAccept(int fd) override;
@@ -1378,10 +1360,6 @@ wl_resource* IdleChaosMonkey::resource(wl_resource* created) {
 // wayland shm and linux-dmabuf
 void* IdleChaosMonkey::shmMap(void* mapped, size_t) {
     return mapped;
-}
-
-void* IdleChaosMonkey::sigbusRecord(void* allocated) {
-    return allocated;
 }
 
 int IdleChaosMonkey::primeImport(int result) {

@@ -1679,11 +1679,7 @@ void RendererImpl::shmCopyWork() {
         usleep((useconds_t)strtoul(text, nullptr, 10) * 1000);
     }
 #endif
-    if (!content.beginAccess(&content)) {
-        task.ok = false;
-
-        return;
-    }
+    content.beginAccess(&content);
 
     const u8* src = content.data();
     auto* dst = (u8*)state.upload->map;
@@ -3421,9 +3417,7 @@ void RendererImpl::copyCursorPixels(Surface& cs) {
 
     ShmContent& content = *cs.shm->mutPtr();
 
-    if (!content.beginAccess(&content)) {
-        return;
-    }
+    content.beginAccess(&content);
 
     u32 alpha = content.format == WL_SHM_FORMAT_XRGB8888 ? 0xff000000u : 0;
 
