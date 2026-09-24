@@ -3,6 +3,8 @@
 // move the pointer, and the attached window must track the cursor (observed
 // through the compositor's window position in the state dump). Unmapped
 // mid-drag, the window is let go: mapped again, it stays where it is put.
+// The drag reports every surface it enters, which the attached window never
+// is.
 
 #include "wl_util.h"
 #include <xdg-toplevel-drag-v1-client-protocol.h>
@@ -66,6 +68,23 @@ static const struct wl_data_source_listener sl = {
     src_target, src_send, src_cancelled, src_dnd_drop, src_dnd_finished, src_action,
 };
 
+// a drop target the drag enters: the attached window follows the cursor and
+// must never be one ("does not participate")
+static struct wl_surface* torn_surface;
+static void dd_offer(void* d, struct wl_data_device* dev, struct wl_data_offer* o) { (void)d;(void)dev;(void)o; }
+static void dd_enter(void* d, struct wl_data_device* dev, uint32_t serial, struct wl_surface* s,
+                     wl_fixed_t x, wl_fixed_t y, struct wl_data_offer* o) {
+    (void)d;(void)dev;(void)serial;(void)x;(void)y;(void)o;
+    printf("client_reg_toplevel_drag: drag entered %s\n", s == torn_surface ? "torn" : "origin");
+}
+static void dd_leave(void* d, struct wl_data_device* dev) { (void)d;(void)dev; }
+static void dd_motion(void* d, struct wl_data_device* dev, uint32_t t, wl_fixed_t x, wl_fixed_t y) { (void)d;(void)dev;(void)t;(void)x;(void)y; }
+static void dd_drop(void* d, struct wl_data_device* dev) { (void)d;(void)dev; }
+static void dd_selection(void* d, struct wl_data_device* dev, struct wl_data_offer* o) { (void)d;(void)dev;(void)o; }
+static const struct wl_data_device_listener ddl = {
+    dd_offer, dd_enter, dd_leave, dd_motion, dd_drop, dd_selection,
+};
+
 int main(void) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
@@ -113,6 +132,8 @@ int main(void) {
     }
 
     struct wl_data_device* dev = wl_data_device_manager_get_data_device(ddm, wl_seat_g);
+    torn_surface = torn.surface;
+    wl_data_device_add_listener(dev, &ddl, NULL);
     struct wl_data_source* src = wl_data_device_manager_create_data_source(ddm);
     wl_data_source_add_listener(src, &sl, NULL);
     wl_data_source_offer(src, "text/plain");

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # xdg-toplevel-drag: the attached toplevel tracks the cursor during a
-# pointer drag started from another window; unmapped mid-drag, it is let go.
+# pointer drag started from another window, and is never the drag's drop
+# target, not even where it is the only window under the cursor; unmapped
+# mid-drag, it is let go.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -66,6 +68,29 @@ dy=$(( wy - (ty - 10) )); dy=${dy#-}
     exit 1
 }
 
+# off the origin the window under the cursor is the dragged one alone: a
+# frame puts it there, and the next motion must not make it the drop target
+oxr=$((ox + 400)); oyb=$((oy + 300))
+tx=""
+for cand in "100 650" "1100 650" "1100 100" "100 100"; do
+    read -r cx cy <<<"$cand"
+    if (( cx < ox - 30 || cx > oxr + 30 || cy < oy - 20 || cy > oyb + 20 )); then
+        tx=$cx; ty=$cy
+        break
+    fi
+done
+[[ -n "$tx" ]] || { echo "the origin covers every corner of the screen"; dump_state; exit 1; }
+ctl "motion $tx $ty"
+screenshot "$XDG_RUNTIME_DIR/_off.ppm"
+followed() {
+    local dx dy
+    dx=$(( $(dump_field 'app_id=drag-torn' x) - (tx - 20) )); dy=$(( $(dump_field 'app_id=drag-torn' y) - (ty - 10) ))
+    (( ${dx#-} <= 4 && ${dy#-} <= 4 ))
+}
+await 50 followed || { echo "the torn window did not follow the cursor off the origin"; dump_state; exit 1; }
+ctl "motion $((tx + 1)) $ty"
+screenshot "$XDG_RUNTIME_DIR/_off.ppm"
+
 # unmapped mid-drag, the window is let go: mapped again, the cursor moving
 # on no longer carries it
 ctl "key 57 press"
@@ -73,6 +98,9 @@ ctl "key 57 release"
 wait_client "torn remapped"
 remapped() { [[ "$(dump_field 'app_id=drag-torn' mapped)" == 1 ]]; }
 await 50 remapped || { echo "the torn window did not map again"; dump_state; exit 1; }
+# the client read every drag event before the key that remapped it
+grep -q "drag entered origin" "$CLIENT_LOG" || { echo "the drag never entered the origin it started from"; cat "$CLIENT_LOG"; exit 1; }
+! grep -q "drag entered torn" "$CLIENT_LOG" || { echo "the dragged window became its own drop target"; cat "$CLIENT_LOG"; exit 1; }
 tx=1000
 ty=150
 ctl "motion $tx $ty"
