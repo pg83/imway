@@ -98,7 +98,10 @@ int main(int argc, char** argv) {
         printf("green shared\n");
 
         if (moveon) {
-            wl_display_roundtrip(wl_dpy);
+            // the scenario looks at both windows first, and lets them move on
+            if (wl_await_file("go-moveon")) {
+                return 1;
+            }
 
             if (released) {
                 fprintf(stderr, "the buffer came back while both windows showed it\n");

@@ -45,6 +45,7 @@ PY
 }
 await 100 green_at 'title=shm-recommit-two' || { echo "the second window does not show the shared buffer"; exit 1; }
 
+touch "$XDG_RUNTIME_DIR/go-moveon"
 wait_client "shared buffer released"
 expect_alive "compositor died sharing a udmabuf image"
 echo "OK: a wl_shm buffer sampled as one udmabuf image by two windows shows on both and comes back"
