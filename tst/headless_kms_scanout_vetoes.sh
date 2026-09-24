@@ -11,7 +11,8 @@
 # cannot carry (a dma-buf, or one taller than the plane) has to be
 # composited too, and takes the buffer off the plane until it is hidden.
 # Straight alpha on the opaque buffer and the identity matrix at full
-# range change nothing the plane shows, and keep it there.
+# range change nothing the plane shows, and keep it there. A buffer wider
+# than the output behind an output-sized window geometry is composited.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -64,6 +65,19 @@ stays_on_plane() {
     done
 }
 steps "straight:stays_on_plane" "identity:stays_on_plane"
+
+# a buffer wider than the output stays the candidate, but the plane takes
+# only the output's size: it is composited, never imported to scan out
+fbs() { dump_field '^kms' fbs; }
+fbs0=$(fbs)
+never_scanned_out() {
+    local i
+    for i in $(seq 1 10); do
+        on_plane && [[ "$(fbs)" == "$fbs0" ]] || return 1
+        sleep 0.1
+    done
+}
+steps "wide on:never_scanned_out" "wide off:on_plane"
 
 # the cursor steps need the pointer on the surface
 pointer_in() {

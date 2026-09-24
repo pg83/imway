@@ -25,6 +25,11 @@
  * the buffer stays on it:
  *   "straight"       straight alpha on the opaque buffer
  *   "identity"       the identity matrix at full range
+ * and a buffer wider than the output behind a window geometry of the
+ * output's size: still the candidate, but not the plane's size, so it is
+ * composited without a framebuffer of its own:
+ *   "wide on"        the wide buffer attached
+ *   "wide off"       the output-sized buffer back
  *   "cropped on"     a viewport showing the buffer's top left quarter
  *   "cropped off"    that viewport's source unset
  *   "shrunk on"      a viewport showing the buffer at half size
@@ -81,8 +86,8 @@ static const struct wp_image_description_v1_listener desc_listener = {
     .ready2 = desc_ready2_ev,
 };
 
-// a small blue dumb buffer from a card node, as a LINEAR dma-buf
-static struct wl_buffer* small_dumb(void) {
+// a w x h dumb buffer from a card node, as a LINEAR dma-buf
+static struct wl_buffer* dumb_of(int w, int h) {
     for (int i = 0; i < 8; i++) {
         char path[32];
         snprintf(path, sizeof(path), "/dev/dri/card%d", i);
@@ -90,8 +95,8 @@ static struct wl_buffer* small_dumb(void) {
         if (fd < 0) continue;
 
         struct drm_mode_create_dumb create = {0};
-        create.width = 32;
-        create.height = 32;
+        create.width = (uint32_t)w;
+        create.height = (uint32_t)h;
         create.bpp = 32;
         int prime = -1;
         if (drmIoctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0 ||
@@ -104,7 +109,7 @@ static struct wl_buffer* small_dumb(void) {
         struct zwp_linux_buffer_params_v1* params = zwp_linux_dmabuf_v1_create_params(dmabuf);
         zwp_linux_buffer_params_v1_add(params, prime, 0, 0, create.pitch, 0, 0);
         close(prime);
-        struct wl_buffer* b = zwp_linux_buffer_params_v1_create_immed(params, 32, 32, FOURCC_XRGB8888, 0);
+        struct wl_buffer* b = zwp_linux_buffer_params_v1_create_immed(params, w, h, FOURCC_XRGB8888, 0);
         zwp_linux_buffer_params_v1_destroy(params);
         return b;
     }
@@ -161,8 +166,9 @@ int main(void) {
         return 77;
     }
 
-    struct wl_buffer* cursor_dmabuf = small_dumb();
-    if (!cursor_dmabuf) {
+    struct wl_buffer* cursor_dmabuf = dumb_of(32, 32);
+    struct wl_buffer* wide = dumb_of(W + 64, H);
+    if (!cursor_dmabuf || !wide) {
         fprintf(stderr, "SKIP: no card node made the cursor dumb buffer\n");
         return 77;
     }
@@ -209,7 +215,7 @@ int main(void) {
             pointer_in = 1;
             printf("pointer in\n");
         }
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 29) {
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 31) {
             phase++;
             switch (phase) {
                 case 1:
@@ -335,12 +341,23 @@ int main(void) {
                     step("identity");
                     break;
                 case 27:
-                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    wl_surface_attach(surface, wide, 0, 0);
+                    wl_surface_damage(surface, 0, 0, W + 64, H);
+                    xdg_surface_set_window_geometry(xs, 0, 0, W, H);
+                    step("wide on");
                     break;
                 case 28:
-                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    wl_surface_attach(surface, buffer, 0, 0);
+                    wl_surface_damage(surface, 0, 0, W, H);
+                    step("wide off");
                     break;
                 case 29:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 30:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 31:
                     wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
                     wl_display_flush(wl_dpy);
                     printf("no cursor\n");
