@@ -76,8 +76,16 @@ run_disjoint() { # name format y cb cr r g b
     assert_color "$XDG_RUNTIME_DIR/$1.ppm" "$6" "$7" "$8" "$1"
     stop_client
 }
-run_disjoint nv12_disjoint nv12 144 64 48 6 205 14
-run_disjoint p010_disjoint p010 576 256 192 6 205 14
+# lavapipe maps VK_IMAGE_ASPECT_MEMORY_PLANE_1_BIT_EXT, the aspect a
+# DRM-modifier image's second plane is bound by, to plane 0
+# (lvp_image_aspects_to_plane, Mesa 26.2): the chroma plane is left
+# without memory and sampling it faults. Other devices bind it.
+if in_log "vulkan device: llvmpipe"; then
+    echo "disjoint planes: skipped on lavapipe, which binds both to plane 0"
+else
+    run_disjoint nv12_disjoint nv12 144 64 48 6 205 14
+    run_disjoint p010_disjoint p010 576 256 192 6 205 14
+fi
 
 # Four quadrants with independent U/V edges expose each H.273 chroma offset.
 for location in 1 2 3 4 5 6; do
