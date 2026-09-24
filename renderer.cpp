@@ -487,7 +487,6 @@ namespace {
         PFN_vkImportSemaphoreFdKHR importSemFd = nullptr;
         PFN_vkGetSemaphoreFdKHR getSemFd = nullptr;
         Vector<int> frameSyncFds;
-        int presentFenceFd = -1;
 
         bool haveFrame = false;
         VkImage lastImage = VK_NULL_HANDLE;
@@ -571,7 +570,7 @@ namespace {
 
         void frameNow();
         void onListen(void* arg) override;
-        bool renderFrame(int scanIdx);
+        bool renderFrame(int scanIdx, int& presentFenceFd);
         bool readbackLastFrame();
         bool screenshot(StringView path, bool raw) override;
         bool composeNow() override;
@@ -844,11 +843,6 @@ RendererImpl::~RendererImpl() noexcept {
     vkDeviceWaitIdle(device);
     finishGpuFrame(false);
     ev_idle_stop(comp->loop, &fontReloadIdle);
-
-    if (presentFenceFd >= 0) {
-        close(presentFenceFd);
-        presentFenceFd = -1;
-    }
 
     while (!textures.empty()) {
         destroyTexture((SurfaceTexture*)textures.mutBack());
@@ -3603,7 +3597,7 @@ void RendererImpl::syncScanoutTargets() {
     }
 }
 
-bool RendererImpl::renderFrame(int scanIdx) {
+bool RendererImpl::renderFrame(int scanIdx, int& presentFenceFd) {
     if (scanIdx >= 0) {
         syncScanoutTargets();
     }
@@ -4605,8 +4599,9 @@ void RendererImpl::frameNow() {
     if (!direct) {
         int idx = comp->output->scanoutCount() > 0 ? comp->output->acquire() : -1;
         bool accepted = idx < 0;
+        int presentFenceFd = -1;
 
-        if (!renderFrame(idx)) {
+        if (!renderFrame(idx, presentFenceFd)) {
             comp->scene->needsFrame = true;
 
             return;
@@ -4626,7 +4621,6 @@ void RendererImpl::frameNow() {
 
             if (presentFenceFd >= 0) {
                 close(presentFenceFd);
-                presentFenceFd = -1;
             }
         } else {
             comp->output->present(readbackMap);
