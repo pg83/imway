@@ -86,6 +86,9 @@ struct ChaosMonkey {
     virtual int vtState(int result) = 0;
     // the session's VT just opened; a failure takes over the fd
     virtual int vtOpen(int fd) = 0;
+    // the KDGKBMODE read of the session's VT, its keyboard mode before the
+    // session turns it off (0, or -1 with errno set)
+    virtual int vtKbMode(int result) = 0;
 
     // wayland drm-lease: the fd the device's lease creation returned (or its
     // negative errno); a replacement failure closes the fd it was handed

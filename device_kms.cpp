@@ -3118,8 +3118,11 @@ void KmsOutput::setupVt() {
         return;
     }
 
-    if (ioctl(ttyFd, KDGKBMODE, &oldKbMode) != 0) {
-        oldKbMode = -1;
+    // a mode that cannot be read is given back as the console's default,
+    // not left off: a console without a keyboard is lost to its user
+    if (c->chaos->vtKbMode(ioctl(ttyFd, KDGKBMODE, &oldKbMode)) != 0) {
+        *(c->log) << "imway: "_sv << sv(p) << " keyboard mode unreadable, K_UNICODE goes back on exit"_sv << endL;
+        oldKbMode = K_UNICODE;
     }
 
     ioctl(ttyFd, KDSKBMODE, K_OFF);
@@ -3132,11 +3135,7 @@ void KmsOutput::restoreVt() noexcept {
     }
 
     ioctl(ttyFd, KDSETMODE, KD_TEXT);
-
-    if (oldKbMode != -1) {
-        ioctl(ttyFd, KDSKBMODE, oldKbMode);
-    }
-
+    ioctl(ttyFd, KDSKBMODE, oldKbMode);
     close(ttyFd);
     ttyFd = -1;
 }

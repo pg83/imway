@@ -63,6 +63,7 @@ using namespace stl;
 //                     unsupported
 //   vt-state=N        the next N VT_GETSTATE queries fail
 //   vt-open=N         the next N opens of the session's VT fail
+//   vt-kbmode=N       the next N reads of the session's VT keyboard mode fail
 //   lease=N           wayland drm-lease: the next N lease creations fail
 //                     with EBUSY, as when another lessee holds the objects
 //   client-import=K   renderer: K client-buffer import calls pass, every
@@ -230,6 +231,7 @@ namespace {
         int scanoutSkip = -1;
         int modifierFaults = 0;
         int vtStateFaults = 0;
+        int vtKbModeFaults = 0;
         int vtOpenFaults = 0;
         int leaseFaults = 0;
         // renderer
@@ -326,6 +328,7 @@ namespace {
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
         int vtState(int result) override;
+        int vtKbMode(int result) override;
         int vtOpen(int fd) override;
         int leaseFd(int fd) override;
         // renderer
@@ -492,6 +495,9 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
     } else if (fault == "vt-open"_sv) {
         // KMS backend
         vtOpenFaults = (int)arg.stou();
+    } else if (fault == "vt-kbmode"_sv) {
+        // KMS backend
+        vtKbModeFaults = (int)arg.stou();
     } else if (fault == "lease"_sv) {
         leaseFaults = (int)arg.stou();
     } else if (fault == "client-import"_sv) {
@@ -829,6 +835,16 @@ VkResult TestChaosMonkey::scanoutModifier(VkResult result) {
 
 int TestChaosMonkey::vtState(int result) {
     return spend(vtStateFaults) ? -1 : result;
+}
+
+int TestChaosMonkey::vtKbMode(int result) {
+    if (!spend(vtKbModeFaults)) {
+        return result;
+    }
+
+    errno = EIO;
+
+    return -1;
 }
 
 int TestChaosMonkey::vtOpen(int fd) {
@@ -1411,6 +1427,7 @@ namespace {
         VkResult scanout(VkResult result) override;
         VkResult scanoutModifier(VkResult result) override;
         int vtState(int result) override;
+        int vtKbMode(int result) override;
         int vtOpen(int fd) override;
         int leaseFd(int fd) override;
         // renderer
@@ -1547,6 +1564,10 @@ VkResult IdleChaosMonkey::scanoutModifier(VkResult result) {
 }
 
 int IdleChaosMonkey::vtState(int result) {
+    return result;
+}
+
+int IdleChaosMonkey::vtKbMode(int result) {
     return result;
 }
 
