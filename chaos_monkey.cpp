@@ -76,6 +76,8 @@ using namespace stl;
 //   shot-file=K       K steps building the screenshot's file (its memfd,
 //                     then each write) pass, the one after fails: the
 //                     memfd with EMFILE, a write with ENOSPC
+//   shot-eintr=N      the next N writes of the screenshot's file are
+//                     interrupted by a signal before they write anything
 //   descriptor-pool=K K texture descriptor pool creations pass, the one
 //                     after runs out of device memory
 //   descriptor-set=K  K texture descriptor set allocations pass, every
@@ -220,6 +222,7 @@ namespace {
         int readbackBusyPolls = 0;
         // the screenshot's file
         int shotFileSkip = -1;
+        int shotInterrupts = 0;
         int descriptorPoolSkip = -1;
         int descriptorSetSkip = -1;
         int syncFileSkip = -1;
@@ -305,7 +308,7 @@ namespace {
         VkResult readbackPoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
-        ssize_t shotWrite(ssize_t written) override;
+        ssize_t shotWrite(int fd, ssize_t written) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -470,6 +473,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         readbackBusyPolls = (int)arg.stou();
     } else if (fault == "shot-file"_sv) {
         shotFileSkip = (int)arg.stou();
+    } else if (fault == "shot-eintr"_sv) {
+        shotInterrupts = (int)arg.stou();
     } else if (fault == "descriptor-pool"_sv) {
         descriptorPoolSkip = (int)arg.stou();
     } else if (fault == "descriptor-set"_sv) {
@@ -850,7 +855,16 @@ int TestChaosMonkey::shotFile(int fd) {
     return -1;
 }
 
-ssize_t TestChaosMonkey::shotWrite(ssize_t written) {
+ssize_t TestChaosMonkey::shotWrite(int fd, ssize_t written) {
+    if (written > 0 && spend(shotInterrupts)) {
+        // an interrupted write wrote nothing: what this one did write is
+        // taken back, and the retry writes it again
+        lseek(fd, -written, SEEK_CUR);
+        errno = EINTR;
+
+        return -1;
+    }
+
     if (!failsOnce(shotFileSkip)) {
         return written;
     }
@@ -1289,7 +1303,7 @@ namespace {
         VkResult readbackPoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
-        ssize_t shotWrite(ssize_t written) override;
+        ssize_t shotWrite(int fd, ssize_t written) override;
         VkResult descriptorPool(VkResult result) override;
         VkResult descriptorSet(VkResult result) override;
         int syncFile(int fd) override;
@@ -1444,7 +1458,7 @@ int IdleChaosMonkey::shotFile(int fd) {
     return fd;
 }
 
-ssize_t IdleChaosMonkey::shotWrite(ssize_t written) {
+ssize_t IdleChaosMonkey::shotWrite(int, ssize_t written) {
     return written;
 }
 

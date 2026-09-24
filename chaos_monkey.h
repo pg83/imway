@@ -99,9 +99,10 @@ struct ChaosMonkey {
     virtual VkResult readbackPoll(VkResult status) = 0;
     // the screenshot's file, built on the offload lane: the memfd fresh
     // from memfd_create (a replacement failure closes it and returns -1),
-    // then the result of each write into it
+    // then the result of each write into it (a replacement failure owns
+    // what the write put in the file)
     virtual int shotFile(int fd) = 0;
-    virtual ssize_t shotWrite(ssize_t written) = 0;
+    virtual ssize_t shotWrite(int fd, ssize_t written) = 0;
     // the texture descriptor chain: a pool being created for it, and a set
     // being allocated from one of its pools
     virtual VkResult descriptorPool(VkResult result) = 0;

@@ -468,7 +468,7 @@ int ScreenshotCaptureImpl::buildFile() {
         auto* p = (const u8*)data;
 
         while (size) {
-            ssize_t n = chaos->shotWrite(write(mfd, p, size));
+            ssize_t n = chaos->shotWrite(mfd, write(mfd, p, size));
 
             if (n < 0 && errno == EINTR) {
                 continue;
