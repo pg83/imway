@@ -742,6 +742,13 @@ u32 FakeKms::currentModes(drm_mode_modeinfo* modes) {
         return 0;
     }
 
+    // the boot size at another refresh only
+    if (modeSet == 6) {
+        fillMode(modes[0], 1280, 800, 50, true);
+
+        return 1;
+    }
+
     if (modeSet == 5) {
         // longer than a probe keeps: the tail past 32 is never looked at
         fillMode(modes[0], 1920, 1080, 60, false);

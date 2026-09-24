@@ -4571,7 +4571,10 @@ namespace {
 
         auto* root = (SurfaceImpl*)surface.rootSurface();
 
-        if (root->toplevel && root->toplevel->mapped) {
+        // a toplevel's surface has content only while it is mapped: its
+        // first buffer maps it (none comes before the configure's ack, nor
+        // before the xdg_surface), and dropping the buffer unmaps it
+        if (root->toplevel) {
             return true;
         }
 

@@ -10,6 +10,8 @@
 # buffer is a direct-scanout candidate again. A cursor the hardware plane
 # cannot carry (a dma-buf, or one taller than the plane) has to be
 # composited too, and takes the buffer off the plane until it is hidden.
+# Straight alpha on the opaque buffer and the identity matrix at full
+# range change nothing the plane shows, and keep it there.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -52,6 +54,16 @@ steps() { # <step:want>...
 
 steps "subsurface on:off_plane" "subsurface off:on_plane" "alpha on:off_plane" "alpha off:on_plane" "color on:off_plane" "color off:on_plane" "below on:off_plane" "below off:on_plane" "short on:off_plane" "short off:on_plane"
 steps "turned on:off_plane" "turned off:on_plane" "scaled on:off_plane" "scaled off:on_plane" "offset on:off_plane" "offset off:on_plane" "cropped on:off_plane" "cropped off:on_plane" "shrunk on:off_plane" "shrunk off:on_plane" "lowered on:off_plane" "lowered off:on_plane" "second on:off_plane" "second off:on_plane"
+# a colour representation the plane shows unchanged keeps the buffer on
+# it: on the plane already, it has to stay there through the frames after
+stays_on_plane() {
+    local i
+    for i in $(seq 1 10); do
+        on_plane || return 1
+        sleep 0.1
+    done
+}
+steps "straight:stays_on_plane" "identity:stays_on_plane"
 
 # the cursor steps need the pointer on the surface
 pointer_in() {

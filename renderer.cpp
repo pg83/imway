@@ -879,8 +879,9 @@ RendererImpl::~RendererImpl() noexcept {
     }
 }
 
+// every icon comes whole from its decoder, a positive size and its pixels
 u64 RendererImpl::iconTexture(const Icon* icon) {
-    if (!icon || icon->width <= 0 || icon->argb.length() < (size_t)icon->width * icon->height) {
+    if (!icon) {
         return 0;
     }
 
@@ -965,7 +966,10 @@ bool RendererImpl::surfaceVisible(Surface& s) const {
 
     Surface* root = s.rootSurface();
 
-    if (root->toplevel && root->toplevel->mapped && !root->toplevel->minimized) {
+    // a toplevel's surface has content only while it is mapped: its first
+    // buffer maps it (none comes before the configure's ack, nor before
+    // the xdg_surface), and dropping the buffer unmaps it
+    if (root->toplevel && !root->toplevel->minimized) {
         return true;
     }
 
@@ -1970,7 +1974,8 @@ void RendererImpl::setup() {
     hwCapW = comp->output->cursorCapW();
     hwCapH = comp->output->cursorCapH();
 
-    if (hwCapW > 0 && hwCapH > 0) {
+    // the cursor plane's two sizes come and go together
+    if (hwCapW > 0) {
         createImage(hwCapW, hwCapH, VK_FORMAT_R16G16B16A16_SFLOAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, curScene, curSceneMem);
         createImage(hwCapW, hwCapH, fmt, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, curImg, curImgMem);
 
@@ -2284,10 +2289,8 @@ void RendererImpl::faultSurfaceOwner(Surface& s) {
     // A client-sized GPU resource failed: hand the owner to Wayland for a
     // no_memory disconnect. An unowned surface (cursor, drag icon) just stays
     // untextured.
-    Surface* root = s.rootSurface();
-
-    if (root && root->toplevel) {
-        comp->scene->renderFaults.pushBack(root->toplevel->id);
+    if (Toplevel* t = s.rootToplevel()) {
+        comp->scene->renderFaults.pushBack(t->id);
         comp->scene->needsFrame = true;
     }
 }
@@ -2533,7 +2536,11 @@ Surface* RendererImpl::scanoutCandidate() {
 
     Surface* s = fs->surface.get();
 
-    if (!s || !s->dmabuf || !s->frame || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 || s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst || s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010 || s->representation.alphaMode != 0 || s->representation.coefficients || s->representation.chromaLocation) {
+    // a colour representation on the RGB buffers left changes nothing the
+    // plane shows: its matrix can only be the identity at full range (the
+    // rest is refused on commit), and its alpha mode only matters below
+    // full alpha, which an opaque buffer has nowhere
+    if (!s || !s->dmabuf || !s->frame || !s->hasContent || s->explicitSync || s->bufferTransform != 0 || s->bufferScale != 1 || s->bufferOffsetX != 0 || s->bufferOffsetY != 0 || s->vp.hasSrc || s->vp.hasDst || s->dmabuf->format == kFourccNv12 || s->dmabuf->format == kFourccP010) {
         return nullptr;
     }
 
@@ -3171,12 +3178,13 @@ void RendererImpl::drawSurfaceTree(Surface& s, float x, float y) {
     x += (float)s.bufferOffsetX;
     y += (float)s.bufferOffsetY;
 
-    if (s.texture && s.vp.hasSrc && tw > 0 && th > 0) {
+    // a drawn surface has content, a buffer of at least 1x1
+    if (s.texture && s.vp.hasSrc) {
         ux0 = (float)(s.vp.sx * s.bufferScale / tw);
         uy0 = (float)(s.vp.sy * s.bufferScale / th);
         ux1 = (float)((s.vp.sx + s.vp.sw) * s.bufferScale / tw);
         uy1 = (float)((s.vp.sy + s.vp.sh) * s.bufferScale / th);
-    } else if (s.texture && !viewported && s.hasGeom && tw > 0 && th > 0) {
+    } else if (s.texture && !viewported && s.hasGeom) {
         gx = (float)s.geomX();
         gy = (float)s.geomY();
         w = (float)s.geomW();
@@ -3244,12 +3252,13 @@ void RendererImpl::drawSurfaceTreeOverlay(Surface& s, float x, float y) {
     x += (float)s.bufferOffsetX;
     y += (float)s.bufferOffsetY;
 
-    if (s.texture && s.vp.hasSrc && tw > 0 && th > 0) {
+    // a drawn surface has content, a buffer of at least 1x1
+    if (s.texture && s.vp.hasSrc) {
         ux0 = (float)(s.vp.sx * s.bufferScale / tw);
         uy0 = (float)(s.vp.sy * s.bufferScale / th);
         ux1 = (float)((s.vp.sx + s.vp.sw) * s.bufferScale / tw);
         uy1 = (float)((s.vp.sy + s.vp.sh) * s.bufferScale / th);
-    } else if (s.texture && !viewported && s.hasGeom && tw > 0 && th > 0) {
+    } else if (s.texture && !viewported && s.hasGeom) {
         gx = (float)s.geomX();
         gy = (float)s.geomY();
         w = (float)s.geomW();

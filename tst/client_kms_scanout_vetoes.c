@@ -21,6 +21,10 @@
  *   "lowered off"    and back
  *   "second on"      a second, small toplevel mapped next to it
  *   "second off"     that toplevel destroyed
+ * and two colour representations that change nothing the plane shows, so
+ * the buffer stays on it:
+ *   "straight"       straight alpha on the opaque buffer
+ *   "identity"       the identity matrix at full range
  *   "cropped on"     a viewport showing the buffer's top left quarter
  *   "cropped off"    that viewport's source unset
  *   "shrunk on"      a viewport showing the buffer at half size
@@ -36,11 +40,13 @@
 
 #include <alpha-modifier-v1-client-protocol.h>
 #include <color-management-v1-client-protocol.h>
+#include <color-representation-v1-client-protocol.h>
 #include <viewporter-client-protocol.h>
 
 static struct wp_alpha_modifier_v1* alpha_mgr;
 static struct wp_color_manager_v1* color_mgr;
 static struct wp_viewporter* viewporter;
+static struct wp_color_representation_manager_v1* repr_mgr;
 static int desc_ready, desc_failed;
 
 static void veto_global(void* d, struct wl_registry* r, uint32_t name, const char* iface, uint32_t v) {
@@ -52,6 +58,8 @@ static void veto_global(void* d, struct wl_registry* r, uint32_t name, const cha
         color_mgr = wl_registry_bind(r, name, &wp_color_manager_v1_interface, 1);
     else if (!strcmp(iface, wp_viewporter_interface.name))
         viewporter = wl_registry_bind(r, name, &wp_viewporter_interface, 1);
+    else if (!strcmp(iface, wp_color_representation_manager_v1_interface.name))
+        repr_mgr = wl_registry_bind(r, name, &wp_color_representation_manager_v1_interface, 1);
 }
 static const struct wl_registry_listener veto_listener = {veto_global, extra_remove};
 
@@ -137,7 +145,7 @@ int main(void) {
     struct wl_registry* reg2 = wl_display_get_registry(wl_dpy);
     wl_registry_add_listener(reg2, &veto_listener, NULL);
     wl_display_roundtrip(wl_dpy);
-    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr || !viewporter) {
+    if (!dmabuf || !alpha_mgr || !wl_subcomp || !color_mgr || !viewporter || !repr_mgr) {
         fprintf(stderr, "SKIP: a global is missing\n");
         return 77;
     }
@@ -190,6 +198,7 @@ int main(void) {
     struct wl_surface* cursor = wl_compositor_create_surface(wl_comp);
     struct wp_viewport* viewport = wp_viewporter_get_viewport(viewporter, surface);
     struct wl_toplevel_ctx second = {0};
+    struct wp_color_representation_surface_v1* repr = NULL;
     int phase = 0;
     int pointer_in = 0;
 
@@ -200,7 +209,7 @@ int main(void) {
             pointer_in = 1;
             printf("pointer in\n");
         }
-        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 27) {
+        while (wlk_watch_hits >= 2 * (phase + 1) && phase < 29) {
             phase++;
             switch (phase) {
                 case 1:
@@ -315,12 +324,23 @@ int main(void) {
                     printf("second off\n");
                     break;
                 case 25:
-                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    repr = wp_color_representation_manager_v1_get_surface(repr_mgr, surface);
+                    wp_color_representation_surface_v1_set_alpha_mode(repr, WP_COLOR_REPRESENTATION_SURFACE_V1_ALPHA_MODE_STRAIGHT);
+                    step("straight");
                     break;
                 case 26:
-                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    wp_color_representation_surface_v1_set_coefficients_and_range(
+                        repr, WP_COLOR_REPRESENTATION_SURFACE_V1_COEFFICIENTS_IDENTITY,
+                        WP_COLOR_REPRESENTATION_SURFACE_V1_RANGE_FULL);
+                    step("identity");
                     break;
                 case 27:
+                    cursor_step(cursor, cursor_dmabuf, 32, 32, "dmabuf cursor");
+                    break;
+                case 28:
+                    cursor_step(cursor, wl_solid(16, 96, 0xff0000ff), 16, 96, "tall cursor");
+                    break;
+                case 29:
                     wl_pointer_set_cursor(wl_ptr, wlp_enter_serial, NULL, 0, 0);
                     wl_display_flush(wl_dpy);
                     printf("no cursor\n");
