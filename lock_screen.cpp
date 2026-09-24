@@ -8,6 +8,7 @@
 #include "listener.h"
 #include "tex_pool.h"
 #include "device_vk.h"
+#include "check_true.h"
 #include "offload_job.h"
 #include "chaos_monkey.h"
 #include "render_filter.h"
@@ -768,72 +769,71 @@ void Dialog::draw(Composer& c, bool& open) {
 
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoBringToFrontOnFocus;
 
-    if (ImGui::Begin("##lock-overlay", nullptr, flags)) {
-        filter.overlayDrawList = ImGui::GetWindowDrawList();
-        filter.foregroundDrawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
+    checkTrue(ImGui::Begin("##lock-overlay", nullptr, flags));
+    filter.overlayDrawList = ImGui::GetWindowDrawList();
+    filter.foregroundDrawList = ImGui::GetForegroundDrawList(ImGui::GetMainViewport());
 
-        ImDrawList* draw = filter.overlayDrawList;
-        ImVec2 min = ImGui::GetWindowPos();
-        ImVec2 max(min.x + w, min.y + h);
+    ImDrawList* draw = filter.overlayDrawList;
+    ImVec2 min = ImGui::GetWindowPos();
+    ImVec2 max(min.x + w, min.y + h);
 
-        if (c.settings->lockBlur()) {
-            ImTextureID background = filter.background();
+    if (c.settings->lockBlur()) {
+        ImTextureID background = filter.background();
 
-            if (background) {
-                draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
-                draw->AddImage(background, min, max);
-                draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
-            }
+        if (background) {
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, (void*)2);
+            draw->AddImage(background, min, max);
+            draw->AddCallback(ImGui_ImplVulkan_TextureEncodingCallback, nullptr);
         }
+    }
 
-        draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, c.settings->lockTint())));
+    draw->AddRectFilled(min, max, themeColorU32(themeAlpha(c.theme.desktop, c.settings->lockTint())));
 
-        float fieldW = 360.f * scale;
-        float contentH = 78.f * scale;
-        ImVec2 p0((w - fieldW) * 0.5f, (h - contentH) * 0.5f);
+    float fieldW = 360.f * scale;
+    float contentH = 78.f * scale;
+    ImVec2 p0((w - fieldW) * 0.5f, (h - contentH) * 0.5f);
 
-        ImGui::SetCursorScreenPos(p0);
-        ImGui::TextUnformatted("locked");
-        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 28.f * scale));
-        ImGui::SetNextItemWidth(fieldW);
+    ImGui::SetCursorScreenPos(p0);
+    ImGui::TextUnformatted("locked");
+    ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 28.f * scale));
+    ImGui::SetNextItemWidth(fieldW);
 
-        if (focusField && !authenticating) {
-            ImGui::SetKeyboardFocusHere();
-            focusField = false;
+    if (focusField && !authenticating) {
+        ImGui::SetKeyboardFocusHere();
+        focusField = false;
 
-            if (failed) {
-                *(c.log) << StringView("imway: lockscreen refocused") << endL;
-            }
-        }
-
-        bool enter = false;
-
-        if (authenticating) {
-            ImGui::TextUnformatted("checking...");
-        } else {
-            enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
-
-            // The field holds the keyboard for as long as the screen is
-            // locked. Anything that takes the active id away (a client
-            // window appearing behind the overlay, a stray click on the
-            // background) would otherwise leave the session unable to type
-            // its own password, since the initial focus is a one-shot.
-            if (!ImGui::IsItemActive()) {
-                focusField = true;
-                c.scene->needsFrame = true;
-            }
-        }
-
-        // never while authenticating: a new attempt clears it, only the
-        // attempt's end sets it
         if (failed) {
-            ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));
-            ImGui::TextColored(ImVec4(1.f, 0.42f, 0.42f, 1.f), "wrong password");
+            *(c.log) << StringView("imway: lockscreen refocused") << endL;
         }
+    }
 
-        if (enter) {
-            beginAuthentication();
+    bool enter = false;
+
+    if (authenticating) {
+        ImGui::TextUnformatted("checking...");
+    } else {
+        enter = ImGui::InputText("##password", password, sizeof(password), ImGuiInputTextFlags_Password | ImGuiInputTextFlags_EnterReturnsTrue);
+
+        // The field holds the keyboard for as long as the screen is
+        // locked. Anything that takes the active id away (a client
+        // window appearing behind the overlay, a stray click on the
+        // background) would otherwise leave the session unable to type
+        // its own password, since the initial focus is a one-shot.
+        if (!ImGui::IsItemActive()) {
+            focusField = true;
+            c.scene->needsFrame = true;
         }
+    }
+
+    // never while authenticating: a new attempt clears it, only the
+    // attempt's end sets it
+    if (failed) {
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + 60.f * scale));
+        ImGui::TextColored(ImVec4(1.f, 0.42f, 0.42f, 1.f), "wrong password");
+    }
+
+    if (enter) {
+        beginAuthentication();
     }
 
     ImGui::End();

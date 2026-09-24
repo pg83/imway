@@ -3,6 +3,7 @@
 #include "util.h"
 #include "color.h"
 #include "pooled.h"
+#include "check_true.h"
 
 #include <std/sys/fd.h>
 #include <std/ios/sys.h>
@@ -1745,36 +1746,33 @@ namespace {
 
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
 
-        if (ImGui::Begin("##shot", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings)) {
-            const float panelW = 200.f * gUiScale;
+        checkTrue(ImGui::Begin("##shot", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoSavedSettings));
+        const float panelW = 200.f * gUiScale;
 
-            // +/- zoom, handled before the panel so the slider reflects it
-            if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) {
-                applyZoom(v, kZoomStep);
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_Minus) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract)) {
-                applyZoom(v, -kZoomStep);
-            }
-
-            if (ImGui::IsKeyPressed(ImGuiKey_0) || ImGui::IsKeyPressed(ImGuiKey_Keypad0)) {
-                resetView(v);
-                reset = true;
-            }
-
-            if (ImGui::BeginChild("panel", ImVec2(panelW, 0), ImGuiChildFlags_Borders)) {
-                drawPanel(v, result, reset);
-            }
-
-            ImGui::EndChild();
-            ImGui::SameLine();
-
-            if (ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse)) {
-                drawCanvas(img, tex, v, reset);
-            }
-
-            ImGui::EndChild();
+        // +/- zoom, handled before the panel so the slider reflects it
+        if (ImGui::IsKeyPressed(ImGuiKey_Equal) || ImGui::IsKeyPressed(ImGuiKey_KeypadAdd)) {
+            applyZoom(v, kZoomStep);
         }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_Minus) || ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract)) {
+            applyZoom(v, -kZoomStep);
+        }
+
+        if (ImGui::IsKeyPressed(ImGuiKey_0) || ImGui::IsKeyPressed(ImGuiKey_Keypad0)) {
+            resetView(v);
+            reset = true;
+        }
+
+        checkTrue(ImGui::BeginChild("panel", ImVec2(panelW, 0), ImGuiChildFlags_Borders));
+        drawPanel(v, result, reset);
+
+        ImGui::EndChild();
+        ImGui::SameLine();
+
+        checkTrue(ImGui::BeginChild("canvas", ImVec2(0, 0), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar | ImGuiWindowFlags_NoScrollWithMouse));
+        drawCanvas(img, tex, v, reset);
+
+        ImGui::EndChild();
 
         ImGui::End();
         ImGui::PopStyleVar();
@@ -1804,25 +1802,24 @@ namespace {
 
         ImGui::PushStyleColor(ImGuiCol_WindowBg, IM_COL32(28, 28, 32, 255));
 
-        if (ImGui::Begin("##err", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings)) {
-            float pad = 24.f * gUiScale;
+        checkTrue(ImGui::Begin("##err", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings));
+        float pad = 24.f * gUiScale;
 
-            ImGui::SetCursorPos(ImVec2(pad, pad));
-            ImGui::BeginGroup();
-            ImGui::TextDisabled("imway screenshot");
-            ImGui::Spacing();
-            ImGui::PushTextWrapPos(vp->Size.x - pad);
-            ImGui::TextUnformatted((const char*)msg.data(), (const char*)msg.data() + msg.length());
-            ImGui::PopTextWrapPos();
-            ImGui::Spacing();
-            ImGui::Spacing();
+        ImGui::SetCursorPos(ImVec2(pad, pad));
+        ImGui::BeginGroup();
+        ImGui::TextDisabled("imway screenshot");
+        ImGui::Spacing();
+        ImGui::PushTextWrapPos(vp->Size.x - pad);
+        ImGui::TextUnformatted((const char*)msg.data(), (const char*)msg.data() + msg.length());
+        ImGui::PopTextWrapPos();
+        ImGui::Spacing();
+        ImGui::Spacing();
 
-            if (ImGui::Button("Exit", ImVec2(120.f * gUiScale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
-                result = -1;
-            }
-
-            ImGui::EndGroup();
+        if (ImGui::Button("Exit", ImVec2(120.f * gUiScale, 0)) || ImGui::IsKeyPressed(ImGuiKey_Escape) || ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+            result = -1;
         }
+
+        ImGui::EndGroup();
 
         ImGui::End();
         ImGui::PopStyleColor();

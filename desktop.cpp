@@ -27,6 +27,7 @@
 #include "renderer.h"
 #include "settings.h"
 #include "weak_ptr.h"
+#include "check_true.h"
 #include "chaos_monkey.h"
 #include "inspector.h"
 #include "intr_list.h"
@@ -1495,19 +1496,13 @@ static void spawnClient(Composer& comp, StringView cmd, StringView sock, bool te
     comp.spawner->spawn(spawn);
 }
 
-static StringView wifiGlyph(WifiState s) {
-    switch (s) {
-        case WifiState::connecting:
-            return "wifi..."_sv;
-        case WifiState::disconnected:
-            return "wifi off"_sv;
-        case WifiState::unavailable:
-            return "no wifi"_sv;
-        case WifiState::connected:
-            break;
-    }
+// the bar's wifi glyph, in WifiState order
+static constexpr const char* kWifiGlyphs[] = {"no wifi", "wifi off", "wifi...", "wifi"};
 
-    return "wifi"_sv;
+static_assert(sizeof(kWifiGlyphs) / sizeof(kWifiGlyphs[0]) == (size_t)WifiState::connected + 1, "the glyph table tracks WifiState");
+
+static StringView wifiGlyph(WifiState s) {
+    return StringView(kWifiGlyphs[(int)s]);
 }
 
 void DesktopImpl::buildUi(Scene& scene) {
@@ -1657,29 +1652,28 @@ void DesktopImpl::buildUi(Scene& scene) {
 
         ImGui::SetNextWindowPos(ImVec2((float)scene.outW / 2.f, (float)scene.outH / 2.f), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
 
-        if (ImGui::Begin("##pick", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
-            float sz = ImGui::GetFontSize() * 2.4f;
-            ImVec2 p = ImGui::GetCursorScreenPos();
+        checkTrue(ImGui::Begin("##pick", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking));
+        float sz = ImGui::GetFontSize() * 2.4f;
+        ImVec2 p = ImGui::GetCursorScreenPos();
 
-            ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(pickR, pickG, pickB, 255));
-            ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(180, 180, 190, 255));
-            ImGui::Dummy(ImVec2(sz, sz));
-            ImGui::SameLine();
-            ImGui::BeginGroup();
-            ImGui::TextUnformatted(h);
+        ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(pickR, pickG, pickB, 255));
+        ImGui::GetWindowDrawList()->AddRect(p, ImVec2(p.x + sz, p.y + sz), IM_COL32(180, 180, 190, 255));
+        ImGui::Dummy(ImVec2(sz, sz));
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(h);
 
-            if (ImGui::SmallButton("copy")) {
-                ImGui::SetClipboardText(h);
-            }
-
-            ImGui::SameLine();
-
-            if (ImGui::SmallButton("close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-                pickShow = false;
-            }
-
-            ImGui::EndGroup();
+        if (ImGui::SmallButton("copy")) {
+            ImGui::SetClipboardText(h);
         }
+
+        ImGui::SameLine();
+
+        if (ImGui::SmallButton("close") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+            pickShow = false;
+        }
+
+        ImGui::EndGroup();
 
         ImGui::End();
         scene.needsFrame = true;

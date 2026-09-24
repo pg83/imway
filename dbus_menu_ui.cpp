@@ -17,25 +17,14 @@ namespace {
         return item.iconName.empty() ? nullptr : c.findIcon(sv(item.iconName), desired);
     }
 
+    // the text tint of each disposition, in DBusMenuDisposition order; a
+    // normal item keeps the style's own text color
+    constexpr ImVec4 kDispositionTints[] = {ImVec4(), ImVec4(0.45f, 0.72f, 1.f, 1.f), ImVec4(1.f, 0.72f, 0.24f, 1.f), ImVec4(1.f, 0.35f, 0.30f, 1.f)};
+
+    static_assert(sizeof(kDispositionTints) / sizeof(kDispositionTints[0]) == (size_t)DBusMenuDisposition::alert + 1, "the tint table tracks DBusMenuDisposition");
+
     void pushDisposition(DBusMenuDisposition disposition) {
-        ImVec4 color;
-
-        switch (disposition) {
-            case DBusMenuDisposition::informative:
-                color = ImVec4(0.45f, 0.72f, 1.f, 1.f);
-                break;
-            case DBusMenuDisposition::warning:
-                color = ImVec4(1.f, 0.72f, 0.24f, 1.f);
-                break;
-            case DBusMenuDisposition::alert:
-                color = ImVec4(1.f, 0.35f, 0.30f, 1.f);
-                break;
-            case DBusMenuDisposition::normal:
-                color = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-                break;
-        }
-
-        ImGui::PushStyleColor(ImGuiCol_Text, color);
+        ImGui::PushStyleColor(ImGuiCol_Text, disposition == DBusMenuDisposition::normal ? ImGui::GetStyleColorVec4(ImGuiCol_Text) : kDispositionTints[(int)disposition]);
     }
 
     void drawIcon(Composer& c, DBusMenuItem& item) {

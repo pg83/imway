@@ -5,6 +5,7 @@
 #include "control.h"
 #include "desktop.h"
 #include "composer.h"
+#include "coverage.h"
 #include "dbus_conn.h"
 #include "dbus_menu.h"
 #include "device_kms.h"
@@ -67,7 +68,6 @@
 
 #if defined(IMWAY_FOR_TESTS) && !defined(IMWAY_SANITIZED)
 // the coverage runtime's writer, present only in an instrumented build
-extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
 #endif
 
 using namespace stl;
@@ -222,9 +222,7 @@ namespace {
             crashWrite("imway: no unwind info at the fault\n", 35);
         }
 #endif
-        if (__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 
         signal(sig, SIG_DFL);
         raise(sig);

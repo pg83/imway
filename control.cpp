@@ -16,6 +16,7 @@
 #include "settings.h"
 #include "wayland.h"
 #include "imgui_wm.h"
+#include "coverage.h"
 #include "intr_list.h"
 #include "dbus_menu.h"
 #include "input_sink.h"
@@ -42,7 +43,6 @@
 using namespace stl;
 
 // present only in coverage-instrumented builds
-extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
 
 namespace {
     bool asciiToKey(char c, u32& code, bool& shift) {
@@ -579,9 +579,7 @@ void ControlImpl::handleLine(StringView cmd) {
         // instead of its exit code under an instrumented build. The
         // counters are written by hand: what this session ran is measured
         // like any other's
-        if (__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 
         _exit(1);
     } else if (verb == "rule"_sv) {

@@ -2,6 +2,7 @@
 
 #include "util.h"
 #include "imgui_wm.h"
+#include "check_true.h"
 
 using namespace stl;
 
@@ -12,26 +13,25 @@ void drawOsd(int screenW, float uiScale, StringView label, float value, bool mut
     ImGui::SetNextWindowSize(ImVec2(w, 0.f), ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
 
-    if (ImGui::Begin("##osd", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs)) {
-        auto& l = sb();
+    checkTrue(ImGui::Begin("##osd", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs));
+    auto& l = sb();
 
-        l << label;
+    l << label;
 
-        if (muted) {
-            l << " (muted)"_sv;
-        }
+    if (muted) {
+        l << " (muted)"_sv;
+    }
 
-        ImGui::TextUnformatted(l.cStr());
+    ImGui::TextUnformatted(l.cStr());
 
-        if (muted) {
-            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::GetColorU32(ImGuiCol_TextDisabled));
-        }
+    if (muted) {
+        ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImGui::GetColorU32(ImGuiCol_TextDisabled));
+    }
 
-        ImGui::ProgressBar(value, ImVec2(-1.f, 6.f * uiScale), "");
+    ImGui::ProgressBar(value, ImVec2(-1.f, 6.f * uiScale), "");
 
-        if (muted) {
-            ImGui::PopStyleColor();
-        }
+    if (muted) {
+        ImGui::PopStyleColor();
     }
 
     ImGui::End();

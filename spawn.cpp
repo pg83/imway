@@ -1,6 +1,7 @@
 #include "spawn.h"
 
 #include "log.h"
+#include "coverage.h"
 #include "chaos_monkey.h"
 #include "util.h"
 #include "composer.h"
@@ -29,7 +30,6 @@ using namespace stl;
 
 #ifdef IMWAY_FOR_TESTS
 // the coverage runtime's writer, present only in an instrumented build
-extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
 #endif
 
 namespace {
@@ -176,15 +176,11 @@ namespace {
         // exec replaces the image before the coverage runtime's exit hook
         // runs: what the child did up to here is written out first, in a
         // file of its own pid
-        if (__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 #endif
         execve(path, argv, envp);
 #ifdef IMWAY_FOR_TESTS
-        if (__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 #endif
         _exit(127);
     }

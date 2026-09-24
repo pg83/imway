@@ -629,11 +629,11 @@ void MenuImpl::answer(const Pending& pendingCall, DBusMessage* reply) {
             dbus_message_get_args(reply, nullptr, DBUS_TYPE_STRING, &unique, DBUS_TYPE_INVALID);
             assign(owner, StringView(unique));
 
-            break;
+            return;
         }
         case CallKind::layout:
             readLayout(reply, pendingCall.sequence);
-            break;
+            return;
         case CallKind::aboutToShow: {
             DBusMessageIter it;
 
@@ -641,7 +641,7 @@ void MenuImpl::answer(const Pending& pendingCall, DBusMessage* reply) {
                 refresh();
             }
 
-            break;
+            return;
         }
     }
 }

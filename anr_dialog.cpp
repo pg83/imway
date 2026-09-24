@@ -5,6 +5,7 @@
 #include "dialog.h"
 #include "composer.h"
 #include "imgui_wm.h"
+#include "check_true.h"
 
 using namespace stl;
 
@@ -20,11 +21,7 @@ void Dialog::draw(Composer& c, Toplevel& t, bool& open) {
     // a fixed spot: the dialog must not race the window it indicts
     ImGui::SetNextWindowPos(ImVec2((float)scene.outW / 2.f, (float)scene.outH / 3.f), ImGuiCond_Always, ImVec2(0.5f, 0.f));
 
-    if (!ImGui::Begin("not responding", &open, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
-        ImGui::End();
-
-        return;
-    }
+    checkTrue(ImGui::Begin("not responding", &open, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking));
 
     StringView title = sv(t.title);
 

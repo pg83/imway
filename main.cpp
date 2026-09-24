@@ -1,3 +1,4 @@
+#include "coverage.h"
 #include "main_composer.h"
 #include "main_screenshot.h"
 
@@ -9,10 +10,6 @@
 #endif
 
 using namespace stl;
-
-// present only in coverage-instrumented builds; the runtime's own at-exit
-// hook is not reliable under every harness, so flush at the natural end
-extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
 
 #ifdef IMWAY_FOR_TESTS
 extern "C" void __llvm_profile_set_filename(const char* pattern) __attribute__((weak));
@@ -38,9 +35,7 @@ namespace {
 #endif
 
     int withProfileFlush(int rc) {
-        if (&__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 
         return rc;
     }

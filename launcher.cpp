@@ -9,6 +9,7 @@
 #include "imgui_wm.h"
 #include "xdg_utils.h"
 #include "icon_store.h"
+#include "check_true.h"
 
 #include <std/sys/fs.h>
 #include <std/alg/qsort.h>
@@ -416,166 +417,165 @@ bool Dialog::draw(Composer& c, bool& open, Buffer& run, LauncherAction& action, 
     }
     ImGui::SetNextWindowSizeConstraints(ImVec2(lw, 0.f), ImVec2(lw, (float)screenH));
 
-    if (ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking)) {
-        if (fresh) {
-            ImGui::SetWindowFocus();
-            fresh = false;
-        } else if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
-            open = false;
-        }
+    checkTrue(ImGui::Begin("##launcher", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDocking));
+    if (fresh) {
+        ImGui::SetWindowFocus();
+        fresh = false;
+    } else if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows)) {
+        open = false;
+    }
 
-        // spatial grid navigation over the two stacked groups; the input
-        // line sits at the bottom, Up enters the grid from below, Down
-        // walks back toward the input
-        bool navved = false;
+    // spatial grid navigation over the two stacked groups; the input
+    // line sits at the bottom, Up enters the grid from below, Down
+    // walks back toward the input
+    bool navved = false;
 
-        if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && n) {
-            navved = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow) && n) {
+        navved = true;
 
-            if (sel == 0) {
-                long cnt = sysN ? sysN : appsN;
-                long base = sysN ? appsN : 0;
+        if (sel == 0) {
+            long cnt = sysN ? sysN : appsN;
+            long base = sysN ? appsN : 0;
 
-                sel = base + ((cnt - 1) / cols) * cols + 1;
-            } else {
-                long i = sel - 1;
-                bool inSys = i >= appsN;
-                long gi = inSys ? i - appsN : i;
-                long r = gi / cols, col = gi % cols;
-
-                if (r > 0) {
-                    // the row above is a full one, so the cell straight up
-                    // exists: target is gi - cols
-                    long target = (r - 1) * cols + col;
-
-                    sel = (inSys ? appsN : 0) + target + 1;
-                } else if (inSys && appsN) {
-                    long target = ((appsN - 1) / cols) * cols + col;
-
-                    sel = (target < appsN ? target : appsN - 1) + 1;
-                }
-            }
-        }
-
-        if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel > 0) {
-            navved = true;
-
+            sel = base + ((cnt - 1) / cols) * cols + 1;
+        } else {
             long i = sel - 1;
             bool inSys = i >= appsN;
             long gi = inSys ? i - appsN : i;
             long r = gi / cols, col = gi % cols;
-            long cnt = inSys ? sysN : appsN;
 
-            if (r < (cnt - 1) / cols) {
-                long target = (r + 1) * cols + col;
+            if (r > 0) {
+                // the row above is a full one, so the cell straight up
+                // exists: target is gi - cols
+                long target = (r - 1) * cols + col;
 
-                sel = (inSys ? appsN : 0) + (target < cnt ? target : cnt - 1) + 1;
-            } else if (!inSys && sysN) {
-                sel = appsN + (col < sysN ? col : sysN - 1) + 1;
-            } else {
-                sel = 0;
+                sel = (inSys ? appsN : 0) + target + 1;
+            } else if (inSys && appsN) {
+                long target = ((appsN - 1) / cols) * cols + col;
+
+                sel = (target < appsN ? target : appsN - 1) + 1;
             }
         }
+    }
 
-        // one grid cell: the dock's icon button plus a tooltip on hover and
-        // an accent frame on the keyboard selection
-        auto cellItem = [&](long flat) {
-            const Row& r = rows[vis[(size_t)flat]];
-            bool selected = sel == flat + 1;
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow) && sel > 0) {
+        navved = true;
 
-            ImGui::PushID((int)vis[(size_t)flat]);
+        long i = sel - 1;
+        bool inSys = i >= appsN;
+        long gi = inSys ? i - appsN : i;
+        long r = gi / cols, col = gi % cols;
+        long cnt = inSys ? sysN : appsN;
 
-            u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen), (u32)cell));
-            StringView name = view(r.name, r.nameLen);
+        if (r < (cnt - 1) / cols) {
+            long target = (r + 1) * cols + col;
 
-            if (dockIconButton(c.theme, "##cell", tex, cell, false, false, name)) {
-                pick(r);
-            }
-
-            if (selected && navved) {
-                ImGui::SetScrollHereY(0.5f);
-            }
-
-            if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("%.*s", (int)name.length(), (const char*)name.begin());
-            }
-
-            if (selected) {
-                ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), themeColorU32(c.theme.accent), 6.f, 0, 2.f);
-            }
-
-            ImGui::PopID();
-        };
-
-        auto grid = [&](long base, long count) {
-            for (long k = 0; k < count; k++) {
-                if (k % cols) {
-                    ImGui::SameLine();
-                }
-
-                cellItem(base + k);
-            }
-        };
-
-        // bottom-up: the input line, then (group name, group content,
-        // delimiter) per group — so top-down each grid carries its header
-        // underneath, and the topmost group has no leading delimiter. There
-        // are always rows: rescan adds the compositor actions first
-        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
-        ImGui::BeginChild("##groups", ImVec2(0.f, childH));
-
-        if (appsN) {
-            grid(0, appsN);
-            ImGui::TextDisabled("applications");
-        }
-
-        if (appsN && sysN) {
-            ImGui::Separator();
-        }
-
-        if (sysN) {
-            grid(appsN, sysN);
-            ImGui::TextDisabled("system");
-        }
-
-        ImGui::EndChild();
-        ImGui::PopStyleVar();
-
-        ImGui::SetNextItemWidth(-1.f);
-
-        if (focusField) {
-            ImGui::SetKeyboardFocusHere();
-            focusField = false;
-        }
-
-        bool enter = ImGui::InputText("##q", query, sizeof(query), ImGuiInputTextFlags_EnterReturnsTrue);
-
-        if (ImGui::IsItemEdited()) {
+            sel = (inSys ? appsN : 0) + (target < cnt ? target : cnt - 1) + 1;
+        } else if (!inSys && sysN) {
+            sel = appsN + (col < sysN ? col : sysN - 1) + 1;
+        } else {
             sel = 0;
         }
+    }
 
-        if (enter && !picked) {
-            // sel never exceeds n: the arrows keep it within this frame's
-            // rows, and the rows change only with the query, whose edit
-            // resets sel in the same frame
-            if (sel >= 1) {
-                pick(rows[vis[(size_t)(sel - 1)]]);
-            } else {
-                // nothing highlighted: run the typed text as a command
-                StringView cmd(query);
+    // one grid cell: the dock's icon button plus a tooltip on hover and
+    // an accent frame on the keyboard selection
+    auto cellItem = [&](long flat) {
+        const Row& r = rows[vis[(size_t)flat]];
+        bool selected = sel == flat + 1;
 
-                if (c.settings->launcherShellCommands()) {
-                    run.append(cmd.begin(), cmd.length());
-                    picked = !run.empty();
-                }
+        ImGui::PushID((int)vis[(size_t)flat]);
 
-                open = false;
-            }
+        u64 tex = texes.iconTexture(c.findIcon(view(r.icon, r.iconLen), (u32)cell));
+        StringView name = view(r.name, r.nameLen);
+
+        if (dockIconButton(c.theme, "##cell", tex, cell, false, false, name)) {
+            pick(r);
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        if (selected && navved) {
+            ImGui::SetScrollHereY(0.5f);
+        }
+
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("%.*s", (int)name.length(), (const char*)name.begin());
+        }
+
+        if (selected) {
+            ImGui::GetWindowDrawList()->AddRect(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), themeColorU32(c.theme.accent), 6.f, 0, 2.f);
+        }
+
+        ImGui::PopID();
+    };
+
+    auto grid = [&](long base, long count) {
+        for (long k = 0; k < count; k++) {
+            if (k % cols) {
+                ImGui::SameLine();
+            }
+
+            cellItem(base + k);
+        }
+    };
+
+    // bottom-up: the input line, then (group name, group content,
+    // delimiter) per group — so top-down each grid carries its header
+    // underneath, and the topmost group has no leading delimiter. There
+    // are always rows: rescan adds the compositor actions first
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(gap, gap));
+    ImGui::BeginChild("##groups", ImVec2(0.f, childH));
+
+    if (appsN) {
+        grid(0, appsN);
+        ImGui::TextDisabled("applications");
+    }
+
+    if (appsN && sysN) {
+        ImGui::Separator();
+    }
+
+    if (sysN) {
+        grid(appsN, sysN);
+        ImGui::TextDisabled("system");
+    }
+
+    ImGui::EndChild();
+    ImGui::PopStyleVar();
+
+    ImGui::SetNextItemWidth(-1.f);
+
+    if (focusField) {
+        ImGui::SetKeyboardFocusHere();
+        focusField = false;
+    }
+
+    bool enter = ImGui::InputText("##q", query, sizeof(query), ImGuiInputTextFlags_EnterReturnsTrue);
+
+    if (ImGui::IsItemEdited()) {
+        sel = 0;
+    }
+
+    if (enter && !picked) {
+        // sel never exceeds n: the arrows keep it within this frame's
+        // rows, and the rows change only with the query, whose edit
+        // resets sel in the same frame
+        if (sel >= 1) {
+            pick(rows[vis[(size_t)(sel - 1)]]);
+        } else {
+            // nothing highlighted: run the typed text as a command
+            StringView cmd(query);
+
+            if (c.settings->launcherShellCommands()) {
+                run.append(cmd.begin(), cmd.length());
+                picked = !run.empty();
+            }
+
             open = false;
         }
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        open = false;
     }
 
     ImGui::End();

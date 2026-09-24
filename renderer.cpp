@@ -26,6 +26,7 @@
 #include "notifier.h"
 #include "settings.h"
 #include "tex_pool.h"
+#include "coverage.h"
 #include "device_vk.h"
 #include "icon_pool.h"
 #include "inspector.h"
@@ -85,7 +86,6 @@
 using namespace stl;
 
 // present only in coverage-instrumented builds
-extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
 
 struct TextureLease;
 
@@ -1025,9 +1025,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         // same as a lost device: die where we stand, do not unwind. The
         // counters are written by hand, as control's gpu-fatal does: what
         // this session ran is measured like any other's
-        if (__llvm_profile_write_file) {
-            __llvm_profile_write_file();
-        }
+        flushCoverage();
 
         _exit(1);
     }
@@ -1101,19 +1099,14 @@ u32 RendererImpl::findMemoryType(u32 typeBits, VkMemoryPropertyFlags props) {
     return memoryType;
 }
 
-VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
-    switch (use) {
-        case GpuUse::client:
-            return comp->chaos->clientTexture(result);
-        case GpuUse::output:
-            return comp->chaos->outputTarget(result);
-        case GpuUse::icon:
-            return comp->chaos->iconTexture(result);
-        case GpuUse::renderer:
-            break;
-    }
+// the chaos hook of each use, in GpuUse order: the renderer's own
+// allocations have none
+static constexpr VkResult (ChaosMonkey::*kAllocationFaults[])(VkResult) = {nullptr, &ChaosMonkey::clientTexture, &ChaosMonkey::outputTarget, &ChaosMonkey::iconTexture};
 
-    return result;
+VkResult RendererImpl::allocated(GpuUse use, VkResult result) {
+    static_assert(sizeof(kAllocationFaults) / sizeof(kAllocationFaults[0]) == (size_t)GpuUse::icon + 1, "the fault table tracks GpuUse");
+
+    return use == GpuUse::renderer ? result : (comp->chaos->*kAllocationFaults[(int)use])(result);
 }
 
 void RendererImpl::createImage(int w, int h, VkFormat format, VkImageUsageFlags usage, VkImage& img, VkDeviceMemory& mem, u32 mips, GpuUse use) {
@@ -4605,20 +4598,8 @@ void RendererImpl::frameNow() {
 
     comp->scene->scanoutCandidateId = cand && cand->toplevel ? cand->toplevel->id : 0;
 
-    bool tearing = false;
-
-    if (cand) {
-        switch (comp->settings->tearing()) {
-            case TearingPolicy::deny:
-                break;
-            case TearingPolicy::client:
-                tearing = cand->tearingAsync;
-                break;
-            case TearingPolicy::always:
-                tearing = true;
-                break;
-        }
-    }
+    TearingPolicy policy = comp->settings->tearing();
+    bool tearing = cand && (policy == TearingPolicy::always || (policy == TearingPolicy::client && cand->tearingAsync));
 
     comp->output->setTearingHint(tearing);
 

@@ -525,7 +525,7 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             motion.dyRaw = libinput_event_pointer_get_dy_unaccelerated(p);
             comp->entry->pointerMotion(motion);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_POINTER_MOTION_ABSOLUTE: {
             auto* p = libinput_event_get_pointer_event(ev);
@@ -537,37 +537,37 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             motion.y = libinput_event_pointer_get_absolute_y_transformed(p, 1);
             comp->entry->pointerMotion(motion);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_GESTURE_SWIPE_BEGIN:
             comp->entry->swipeBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
-            break;
+            return;
         case LIBINPUT_EVENT_GESTURE_SWIPE_UPDATE: {
             auto* g = libinput_event_get_gesture_event(ev);
 
             comp->entry->swipeUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g));
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_GESTURE_SWIPE_END:
             comp->entry->swipeEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
-            break;
+            return;
         case LIBINPUT_EVENT_GESTURE_PINCH_BEGIN:
             comp->entry->pinchBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
-            break;
+            return;
         case LIBINPUT_EVENT_GESTURE_PINCH_UPDATE: {
             auto* g = libinput_event_get_gesture_event(ev);
 
             comp->entry->pinchUpdate(libinput_event_gesture_get_dx(g), libinput_event_gesture_get_dy(g), libinput_event_gesture_get_scale(g), libinput_event_gesture_get_angle_delta(g));
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_GESTURE_PINCH_END:
             comp->entry->pinchEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
-            break;
+            return;
         case LIBINPUT_EVENT_GESTURE_HOLD_BEGIN:
             comp->entry->holdBegin((u32)libinput_event_gesture_get_finger_count(libinput_event_get_gesture_event(ev)));
-            break;
+            return;
         case LIBINPUT_EVENT_TABLET_TOOL_PROXIMITY: {
             auto* t = libinput_event_get_tablet_tool_event(ev);
             TabletToolEvent tev;
@@ -576,7 +576,7 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
             comp->entry->tabletTool(tev);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_TABLET_TOOL_TIP: {
             auto* t = libinput_event_get_tablet_tool_event(ev);
@@ -586,7 +586,7 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
             comp->entry->tabletTool(tev);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_TABLET_TOOL_AXIS: {
             auto* t = libinput_event_get_tablet_tool_event(ev);
@@ -595,7 +595,7 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             tabletToolAxes(t, tev, comp->scene->outW, comp->scene->outH);
             comp->entry->tabletTool(tev);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_TABLET_TOOL_BUTTON: {
             auto* t = libinput_event_get_tablet_tool_event(ev);
@@ -607,11 +607,11 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             tev.buttonPressed = libinput_event_tablet_tool_get_button_state(t) == LIBINPUT_BUTTON_STATE_PRESSED;
             comp->entry->tabletTool(tev);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_GESTURE_HOLD_END:
             comp->entry->holdEnd(libinput_event_gesture_get_cancelled(libinput_event_get_gesture_event(ev)) != 0);
-            break;
+            return;
         case LIBINPUT_EVENT_DEVICE_ADDED: {
             libinput_device* dev = libinput_event_get_device(ev);
             int idx = sysnameIndex(dev);
@@ -623,7 +623,7 @@ void LibinputSource::handleEvent(libinput_event* ev) {
             registerDevice(dev);
             configureDevice(dev, *comp->settings);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_DEVICE_REMOVED: {
             // free the slot so a re-plugged device can come back; the
@@ -638,14 +638,14 @@ void LibinputSource::handleEvent(libinput_event* ev) {
                 pathBits &= ~(1ull << idx);
             }
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_POINTER_BUTTON: {
             auto* p = libinput_event_get_pointer_event(ev);
 
             comp->entry->button(libinput_event_pointer_get_button(p), libinput_event_pointer_get_button_state(p) == LIBINPUT_BUTTON_STATE_PRESSED);
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_POINTER_SCROLL_WHEEL:
         case LIBINPUT_EVENT_POINTER_SCROLL_FINGER:
@@ -682,17 +682,17 @@ void LibinputSource::handleEvent(libinput_event* ev) {
                 comp->entry->scroll(scroll);
             }
 
-            break;
+            return;
         }
         case LIBINPUT_EVENT_KEYBOARD_KEY: {
             auto* k = libinput_event_get_keyboard_event(ev);
 
             comp->entry->key(libinput_event_keyboard_get_key(k), libinput_event_keyboard_get_key_state(k) == LIBINPUT_KEY_STATE_PRESSED);
 
-            break;
+            return;
         }
         default:
-            break;
+            return;
     }
 }
 

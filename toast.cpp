@@ -5,6 +5,7 @@
 #include "composer.h"
 #include "imgui_wm.h"
 #include "notifier.h"
+#include "check_true.h"
 
 using namespace stl;
 
@@ -29,31 +30,30 @@ void drawToasts(Composer& c, Notifier& notes, IconResolver& texes, int screenW, 
             ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(220, 90, 60, 255));
         }
 
-        if (ImGui::Begin(label.cStr(), nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav)) {
-            float iconSz = ImGui::GetFontSize() * 2.f;
+        checkTrue(ImGui::Begin(label.cStr(), nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav));
+        float iconSz = ImGui::GetFontSize() * 2.f;
 
-            if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon), (u32)iconSz))) {
-                ImGui::Image((ImTextureID)tex, ImVec2(iconSz, iconSz));
-                ImGui::SameLine();
-            }
-
-            ImGui::BeginGroup();
-            ImGui::TextUnformatted(t.summary.cStr());
-
-            if (!t.body.empty()) {
-                ImGui::PushTextWrapPos(w - ImGui::GetStyle().WindowPadding.x * 2);
-                ImGui::TextDisabled("%s", t.body.cStr());
-                ImGui::PopTextWrapPos();
-            }
-
-            ImGui::EndGroup();
-
-            if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                clicked = t.id;
-            }
-
-            y += (bottom ? -1.f : 1.f) * (ImGui::GetWindowHeight() + 6.f);
+        if (u64 tex = texes.iconTexture(c.findIcon(sv(t.icon), (u32)iconSz))) {
+            ImGui::Image((ImTextureID)tex, ImVec2(iconSz, iconSz));
+            ImGui::SameLine();
         }
+
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(t.summary.cStr());
+
+        if (!t.body.empty()) {
+            ImGui::PushTextWrapPos(w - ImGui::GetStyle().WindowPadding.x * 2);
+            ImGui::TextDisabled("%s", t.body.cStr());
+            ImGui::PopTextWrapPos();
+        }
+
+        ImGui::EndGroup();
+
+        if (ImGui::IsWindowHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+            clicked = t.id;
+        }
+
+        y += (bottom ? -1.f : 1.f) * (ImGui::GetWindowHeight() + 6.f);
 
         ImGui::End();
 

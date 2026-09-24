@@ -21,23 +21,13 @@ using namespace stl;
 namespace {
     constexpr u32 anyModifiers = ~0u;
 
-    const char* shortcutActionName(ShortcutAction action) {
-        switch (action) {
-            case ShortcutAction::screenshot:
-                return "save a screenshot";
-            case ShortcutAction::lock:
-                return "lock the screen";
-            case ShortcutAction::launcher:
-                return "application launcher";
-            case ShortcutAction::inspector:
-                return "inspector";
-            case ShortcutAction::altTabNext:
-                return "next window";
-            case ShortcutAction::altTabPrev:
-                break;
-        }
+    // the shortcuts page's row names, in ShortcutAction order
+    constexpr const char* kShortcutActionNames[] = {"save a screenshot", "lock the screen", "application launcher", "inspector", "next window", "previous window"};
 
-        return "previous window";
+    static_assert(sizeof(kShortcutActionNames) / sizeof(kShortcutActionNames[0]) == (size_t)ShortcutAction::altTabPrev + 1, "the name table tracks ShortcutAction");
+
+    const char* shortcutActionName(ShortcutAction action) {
+        return kShortcutActionNames[(int)action];
     }
 
     void shortcutName(const ShortcutBinding& binding, char out[128]) {

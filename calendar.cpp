@@ -5,6 +5,7 @@
 #include "dialog.h"
 #include "composer.h"
 #include "imgui_wm.h"
+#include "check_true.h"
 
 #include <time.h>
 
@@ -41,101 +42,100 @@ void Dialog::draw(Composer& c, bool& open) {
 
     ImGui::SetNextWindowPos(ImVec2((float)screenW - 8.f, ImGui::GetFrameHeight() + 4.f), ImGuiCond_Always, ImVec2(1.f, 0.f));
 
-    if (ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking)) {
-        if (fresh) {
-            ImGui::SetWindowFocus();
-            fresh = false;
-        } else if (!ImGui::IsWindowFocused()) {
-            open = false;
+    checkTrue(ImGui::Begin("##calendar", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking));
+    if (fresh) {
+        ImGui::SetWindowFocus();
+        fresh = false;
+    } else if (!ImGui::IsWindowFocused()) {
+        open = false;
+    }
+
+    float cell = ImGui::GetFontSize() * 2.2f;
+
+    if (ImGui::ArrowButton("##pm", ImGuiDir_Left)) {
+        if (--mon < 0) {
+            mon = 11;
+            year--;
+        }
+    }
+
+    auto& hdr = sb();
+
+    hdr << kMonths[mon] << " "_sv << year;
+
+    float hw = ImGui::CalcTextSize(hdr.cStr()).x;
+
+    ImGui::SameLine((cell * 7.f - hw) / 2.f);
+    ImGui::TextUnformatted(hdr.cStr());
+    ImGui::SameLine(cell * 7.f - ImGui::GetFrameHeight());
+
+    if (ImGui::ArrowButton("##nm", ImGuiDir_Right)) {
+        if (++mon > 11) {
+            mon = 0;
+            year++;
+        }
+    }
+
+    static const char* kWd[7] = {"mo", "tu", "we", "th", "fr", "sa", "su"};
+
+    for (int i = 0; i < 7; i++) {
+        if (i) {
+            ImGui::SameLine((float)i * cell + ImGui::GetStyle().WindowPadding.x);
         }
 
-        float cell = ImGui::GetFontSize() * 2.2f;
+        ImGui::TextDisabled("%s", kWd[i]);
+    }
 
-        if (ImGui::ArrowButton("##pm", ImGuiDir_Left)) {
-            if (--mon < 0) {
-                mon = 11;
-                year--;
-            }
-        }
+    bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    int days = kDays[mon] + (mon == 1 && leap ? 1 : 0);
+    tm f{};
 
-        auto& hdr = sb();
+    f.tm_year = year - 1900;
+    f.tm_mon = mon;
+    f.tm_mday = 1;
+    f.tm_hour = 12;
+    mktime(&f);
 
-        hdr << kMonths[mon] << " "_sv << year;
+    int col = (f.tm_wday + 6) % 7; // monday-based
+    time_t nowT = time(nullptr);
+    tm today{};
 
-        float hw = ImGui::CalcTextSize(hdr.cStr()).x;
+    localtime_r(&nowT, &today);
 
-        ImGui::SameLine((cell * 7.f - hw) / 2.f);
-        ImGui::TextUnformatted(hdr.cStr());
-        ImGui::SameLine(cell * 7.f - ImGui::GetFrameHeight());
+    // a mid-week day 1 must open its own row: its SameLine below would
+    // otherwise glue the first week onto the weekday header line
+    if (col) {
+        ImGui::Dummy(ImVec2(0.f, 0.f));
+    }
 
-        if (ImGui::ArrowButton("##nm", ImGuiDir_Right)) {
-            if (++mon > 11) {
-                mon = 0;
-                year++;
-            }
-        }
-
-        static const char* kWd[7] = {"mo", "tu", "we", "th", "fr", "sa", "su"};
-
-        for (int i = 0; i < 7; i++) {
-            if (i) {
-                ImGui::SameLine((float)i * cell + ImGui::GetStyle().WindowPadding.x);
-            }
-
-            ImGui::TextDisabled("%s", kWd[i]);
-        }
-
-        bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        int days = kDays[mon] + (mon == 1 && leap ? 1 : 0);
-        tm f{};
-
-        f.tm_year = year - 1900;
-        f.tm_mon = mon;
-        f.tm_mday = 1;
-        f.tm_hour = 12;
-        mktime(&f);
-
-        int col = (f.tm_wday + 6) % 7; // monday-based
-        time_t nowT = time(nullptr);
-        tm today{};
-
-        localtime_r(&nowT, &today);
-
-        // a mid-week day 1 must open its own row: its SameLine below would
-        // otherwise glue the first week onto the weekday header line
+    for (int day = 1; day <= days; day++) {
         if (col) {
-            ImGui::Dummy(ImVec2(0.f, 0.f));
+            ImGui::SameLine((float)col * cell + ImGui::GetStyle().WindowPadding.x);
         }
 
-        for (int day = 1; day <= days; day++) {
-            if (col) {
-                ImGui::SameLine((float)col * cell + ImGui::GetStyle().WindowPadding.x);
-            }
+        auto& ds = sb();
 
-            auto& ds = sb();
+        ds << day;
 
-            ds << day;
+        bool isToday = today.tm_year + 1900 == year && today.tm_mon == mon && today.tm_mday == day;
 
-            bool isToday = today.tm_year + 1900 == year && today.tm_mon == mon && today.tm_mday == day;
-
-            if (isToday) {
-                ImGui::PushStyleColor(ImGuiCol_Text, themeColorU32(c.theme.accent));
-            }
-
-            ImGui::TextUnformatted(ds.cStr());
-
-            if (isToday) {
-                ImGui::PopStyleColor();
-            }
-
-            if (++col == 7) {
-                col = 0;
-            }
+        if (isToday) {
+            ImGui::PushStyleColor(ImGuiCol_Text, themeColorU32(c.theme.accent));
         }
 
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-            open = false;
+        ImGui::TextUnformatted(ds.cStr());
+
+        if (isToday) {
+            ImGui::PopStyleColor();
         }
+
+        if (++col == 7) {
+            col = 0;
+        }
+    }
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        open = false;
     }
 
     ImGui::End();
