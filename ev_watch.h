@@ -6,7 +6,7 @@
 // statement macros, `do { ... } while (0)` nested up to three deep, and the
 // coverage counters put every one of those constant loop conditions on the
 // line that expands them: a condition no run can make true, once per call
-// site. Expanded here once, the call sites are plain calls.
+// site. These do what the macros do, as plain functions.
 void evIoInit(ev_io* w, void (*cb)(struct ev_loop*, ev_io*, int), int fd, int events);
 void evIoSet(ev_io* w, int fd, int events);
 void evTimerInit(ev_timer* w, void (*cb)(struct ev_loop*, ev_timer*, int), ev_tstamp after, ev_tstamp repeat);

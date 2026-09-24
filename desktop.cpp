@@ -579,7 +579,6 @@ namespace {
         Buffer batPath;
 
         DialogState* calendarState = nullptr;
-        bool calendarToggle = false;
 
         // osd: armed by mixer/backlight changes, fades at the tail
         // the millisecond clock the OSD came up at and how long it stays,
@@ -590,7 +589,6 @@ namespace {
         int osdKind = 0; // 1 volume, 2 brightness, 3 hdr sdr white
 
         DialogState* wifiState = nullptr;
-        bool wifiToggle = false;
         DialogState* inspectorState = nullptr;
         bool inspectorToggle = false;
         DialogState* historyState = nullptr;
@@ -1596,15 +1594,11 @@ void DesktopImpl::buildUi(Scene& scene) {
         }
     }
 
-    calendarToggle |= chromeResult.calendar;
-    wifiToggle |= chromeResult.wifi;
-
-    drawCalendar(*comp, calendarToggle, &calendarState);
-    calendarToggle = false;
+    // the bar's own clicks, answered in the frame that took them
+    drawCalendar(*comp, chromeResult.calendar, &calendarState);
 
     if (comp->wifi) {
-        drawWifi(*comp, wifiToggle, &wifiState);
-        wifiToggle = false;
+        drawWifi(*comp, chromeResult.wifi, &wifiState);
     }
 
     drawToasts(*comp, *comp->notifier, *comp->iconResolver, scene.outW, scene.outH, uiScale);
@@ -2327,7 +2321,7 @@ void DesktopImpl::build() {
 // is composed. The bell flash counts too: a direct-scanout frame hides it.
 bool DesktopImpl::overlayActive() {
     bool open = launcherState || calendarState || wifiState || inspectorState || historyState || logState || anrState || settingsState || lockState;
-    bool asked = launcherToggle || calendarToggle || wifiToggle || inspectorToggle || historyToggle || logToggle || anrToggle || settingsToggle;
+    bool asked = launcherToggle || inspectorToggle || historyToggle || logToggle || anrToggle || settingsToggle;
 
     return open || asked || altTabActive || imguiPopup || osdShown || pickArmed || pickShow || comp->scene->bellLit || toastsActive();
 }

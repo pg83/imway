@@ -57,6 +57,10 @@ ctl "kms-fail-commit"
 ctl "kms-fail-prime"
 ctl "kms-fail-addfb"
 ctl "kms-fail-prime 5 0"
+# a key past the 256 the chord table covers (KEY_FN): no binding to look
+# up, and nothing indexed past the table
+ctl "key 464 press"
+ctl "key 464 release"
 ctl "set notifications.timeout 7"
 await 50 in_log "control: set notifications.timeout" || { echo "the malformed lines stopped the FIFO"; exit 1; }
 ! in_log "control: rule 99" || { echo "a rule past the last slot was taken"; exit 1; }
