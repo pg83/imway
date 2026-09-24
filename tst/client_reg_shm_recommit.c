@@ -2,7 +2,9 @@
 // compositor released it, repainted blue in place and attached again. With
 // the argument "outside" the second commit's damage lies wholly outside the
 // buffer. With "shared" the green buffer goes to two windows at once and
-// comes back released once both have taken it.
+// comes back released once both have taken it. With "shared-moveon" the
+// compositor samples it in place, so it stays in use while it shows, and
+// comes back once both windows have moved on to buffers of their own.
 
 #include "wl_util.h"
 
@@ -48,7 +50,8 @@ int main(int argc, char** argv) {
     }
 
     int outside = argc > 1 && !strcmp(argv[1], "outside");
-    int shared = argc > 1 && !strcmp(argv[1], "shared");
+    int moveon = argc > 1 && !strcmp(argv[1], "shared-moveon");
+    int shared = moveon || (argc > 1 && !strcmp(argv[1], "shared"));
     int w = 640;
     int h = 480;
     int stride = w * 4;
@@ -94,7 +97,21 @@ int main(int argc, char** argv) {
         wl_await_presented(two.surface);
         printf("green shared\n");
 
-        // both copies taken, the buffer is the client's again
+        if (moveon) {
+            wl_display_roundtrip(wl_dpy);
+
+            if (released) {
+                fprintf(stderr, "the buffer came back while both windows showed it\n");
+                return 1;
+            }
+
+            commit(top.surface, wl_solid(w, h, 0xff0000ffu), w, h, 0);
+            commit(two.surface, wl_solid(w, h, 0xff0000ffu), w, h, 0);
+            printf("both moved on\n");
+        }
+
+        // both copies taken, or both windows moved on: the buffer is the
+        // client's again
         while (!released && wl_display_dispatch(wl_dpy) != -1) {
         }
 

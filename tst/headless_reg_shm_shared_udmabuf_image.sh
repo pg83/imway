@@ -2,7 +2,8 @@
 # imway-env: IMWAY_SHM_BACKEND=udmabuf-image IMWAY_SHM_TRACE=1
 # One sealed wl_shm buffer on two windows at once, both sampling the image
 # made of the udmabuf the pool is wrapped in, which a frame holds once for
-# both: both windows show it, and the buffer comes back released.
+# both: both windows show it, the buffer stays in use while it shows, and
+# comes back released once both windows have moved on.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -12,7 +13,7 @@ if ! in_log "wl_shm gates image=1"; then
 fi
 
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_shm_recommit"
-start_client shared
+start_client shared-moveon
 wait_client "green shared"
 
 if ! in_log "wl_shm backend udmabuf-image"; then
