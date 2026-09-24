@@ -67,25 +67,6 @@ namespace {
         return VK_FALSE;
     }
 
-    bool haveInstanceExt(const char* name) {
-        u32 n = 0;
-
-        vkEnumerateInstanceExtensionProperties(nullptr, &n, nullptr);
-
-        stl::Vector<VkExtensionProperties> props;
-
-        props.zero(n);
-        vkEnumerateInstanceExtensionProperties(nullptr, &n, props.mutData());
-
-        for (const auto& e : props) {
-            if (stl::StringView(e.extensionName) == stl::StringView(name)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
     // the udmabuf module's size cap; the test build takes a staged file
     // instead, since a scenario cannot write the real one
     const char* udmabufLimitPath() {
@@ -146,28 +127,27 @@ DeviceVk::DeviceVk(Composer& c, int drmFd)
 
     instInfo.pApplicationInfo = &app;
 
-    // loader and validation warnings go through the log instead of stderr
+    // Loader and validation warnings go through the log instead of stderr,
+    // from the instance's creation on: chained into its create info, the
+    // messenger also hears what the loader says while it builds the
+    // instance. The loader implements VK_EXT_debug_utils itself, whatever
+    // the drivers are.
     const char* debugExt = VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
-    bool debugUtils = haveInstanceExt(debugExt);
+    VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
 
-    if (debugUtils) {
-        instInfo.enabledExtensionCount = 1;
-        instInfo.ppEnabledExtensionNames = &debugExt;
-    }
+    dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+    dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    dbg.pfnUserCallback = vkDebugLog;
+    dbg.pUserData = this->comp->log;
+    instInfo.pNext = &dbg;
+    instInfo.enabledExtensionCount = 1;
+    instInfo.ppEnabledExtensionNames = &debugExt;
 
     VK_CHECK(chaos.setup(vkCreateInstance(&instInfo, nullptr, &this->instance)));
 
-    // the instance enabled the extension, so it hands out its commands
-    if (debugUtils) {
-        auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkCreateDebugUtilsMessengerEXT");
-        VkDebugUtilsMessengerCreateInfoEXT dbg{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    auto createMessenger = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkCreateDebugUtilsMessengerEXT");
 
-        dbg.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
-        dbg.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
-        dbg.pfnUserCallback = vkDebugLog;
-        dbg.pUserData = this->comp->log;
-        create(this->instance, &dbg, nullptr, &this->debugMessenger);
-    }
+    createMessenger(this->instance, &dbg, nullptr, &this->debugMessenger);
 
     u32 n = 0;
 
@@ -410,14 +390,9 @@ DeviceVk::~DeviceVk() noexcept {
 
     vkDestroyDevice(this->device, nullptr);
 
-    if (this->debugMessenger) {
-        // a messenger exists only on an instance with the extension enabled
-        auto destroy = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkDestroyDebugUtilsMessengerEXT");
+    auto destroyMessenger = (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(this->instance, "vkDestroyDebugUtilsMessengerEXT");
 
-        destroy(this->instance, this->debugMessenger, nullptr);
-
-        this->debugMessenger = VK_NULL_HANDLE;
-    }
+    destroyMessenger(this->instance, this->debugMessenger, nullptr);
 
     vkDestroyInstance(this->instance, nullptr);
 
