@@ -44,7 +44,7 @@ open_editor() { # <name>
     ctl "key 99 press"; ctl "key 99 release" # Print
     await 150 viewer_up || { echo "the editor did not open"; cat "$IMWAY_LOG"; exit 1; }
     wait_rect 'title=imway screenshot'
-    sleep 0.5
+    wait_placed 'title=imway screenshot' || { echo "the editor never settled"; exit 1; }
     vx=$(dump_field 'title=imway screenshot' imgx)
     vy=$(dump_field 'title=imway screenshot' imgy)
 }
@@ -63,8 +63,20 @@ echo "reversed crop: ${w}x${h}"
 
 open_editor panned
 drag left $((vx + 420)) $((vy + 150)) $((vx + 620)) $((vy + 300))
-drag middle $((vx + 500)) $((vy + 250)) $((vx + 440)) $((vy + 200))
+# the middle button stays down, the pointer moving, until the editor says
+# it took the drag: a slow editor (llvmpipe under ASan) can take a whole
+# press, move and release into fewer frames than a drag needs to be seen
 panned() { grep -q "imway screenshot: panned" "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; }
+mx=$((vx + 500)); my=$((vy + 250))
+ctl "motion $mx $my"
+sleep 0.1
+ctl "button middle press"
+for i in $(seq 1 50); do
+    ctl "motion $((mx - (i % 10) * 6)) $((my - (i % 10) * 5))"
+    sleep 0.2
+    panned && break
+done
+ctl "button middle release"
 await 100 panned || { echo "the editor never took the middle drag as a pan"; cat "$XDG_RUNTIME_DIR/viewer.log" 2>/dev/null; exit 1; }
 save panned
 read -r w h < <(png_size "$shots/panned.png")
