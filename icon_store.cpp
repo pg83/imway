@@ -10,6 +10,7 @@
 #include "icon_pool.h"
 #include "xdg_utils.h"
 #include "icon_provider.h"
+#include "chaos_monkey.h"
 #include "ev_watch.h"
 
 #include <std/sys/fs.h>
@@ -163,7 +164,7 @@ IconStoreImpl::IconStoreImpl(Composer& comp)
     buildIndex();
     comp.settings->addIconThemeListener(comp.pool->make<CallIconTheme>(this));
 
-    inoFd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
+    inoFd = comp.chaos->iconWatch(inotify_init1(IN_NONBLOCK | IN_CLOEXEC));
 
     if (inoFd < 0) {
         return;

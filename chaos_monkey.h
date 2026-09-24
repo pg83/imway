@@ -52,6 +52,9 @@ struct ChaosMonkey {
     // allocation failing (the replacement destroys what it was handed)
     virtual wl_resource* resource(wl_resource* created) = 0;
     // wayland shm and linux-dmabuf
+    // the icon store's inotify instance fresh from inotify_init1 (a
+    // replacement failure closes it and returns -1)
+    virtual int iconWatch(int fd) = 0;
     // one pread of the file a client hands an ICC image description creator
     virtual ssize_t iccRead(ssize_t result) = 0;
     // a wl_shm pool's mapping fresh from mmap (MAP_FAILED when it failed); a
