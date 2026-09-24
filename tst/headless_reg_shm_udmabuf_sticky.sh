@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_SHM_FAIL=udmabuf-buffer IMWAY_SHM_TRACE=1
-# A udmabuf that imports as a VkBuffer once and fails closes its gate for
-# the whole device: the fallback is the CPU copy, and the failed import is
-# never retried on the next commit.
+# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_CHAOS=udmabuf-dup=1 IMWAY_SHM_TRACE=1
+# A udmabuf whose VkBuffer import fails once (the process is out of fds for
+# the dup the driver takes) closes its gate for the whole device: the
+# fallback is the CPU copy, and the failed import is never retried on the
+# next commit.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

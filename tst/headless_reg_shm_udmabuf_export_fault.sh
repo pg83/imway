@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_SHM_FAIL=udmabuf IMWAY_SHM_TRACE=1
+# imway-env: IMWAY_SHM_BACKEND=udmabuf-buffer IMWAY_CHAOS=udmabuf-export=1 IMWAY_SHM_TRACE=1
 # The kernel will not export the pool as a udmabuf at all (UDMABUF_CREATE fails).
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"

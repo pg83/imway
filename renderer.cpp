@@ -666,18 +666,6 @@ namespace {
         return path;
     }
 
-    bool failShmForTest(StringView backend) {
-#ifdef IMWAY_FOR_TESTS
-        const char* value = getenv("IMWAY_SHM_FAIL");
-
-        return value && StringView(value) == backend;
-#else
-        (void)backend;
-
-        return false;
-#endif
-    }
-
     void traceShmBackend(Log& log, StringView backend) {
 #ifdef IMWAY_FOR_TESTS
         if (getenv("IMWAY_SHM_TRACE")) {
@@ -1231,19 +1219,13 @@ DmabufBuffer* RendererImpl::makeUdmabuf(ShmContent& content, ShmCache& cache, bo
 
     attempted = true;
 
-    if (failShmForTest("udmabuf"_sv)) {
-        errno = EIO;
-
-        return nullptr;
-    }
-
     udmabuf_create create{};
 
     create.memfd = (u32)content.fd;
     create.flags = UDMABUF_FLAGS_CLOEXEC;
     create.offset = base;
     create.size = size;
-    int fd = ioctl(vkDevice->udmabufFd, UDMABUF_CREATE, &create);
+    int fd = comp->chaos->udmabufExport(ioctl(vkDevice->udmabufFd, UDMABUF_CREATE, &create));
 
     if (fd < 0) {
         return nullptr;
@@ -1280,10 +1262,6 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
     }
 
     attempted = true;
-
-    if (failShmForTest("udmabuf-buffer"_sv)) {
-        return nullptr;
-    }
 
     ShmUpload* upload = content.storagePool->make<ShmUpload>();
 
@@ -1324,7 +1302,7 @@ ShmUpload* RendererImpl::makeUdmabufUpload(ShmContent& content, ShmCache& cache,
         return nullptr;
     }
 
-    int fd = fcntl(dmabuf.fds[0], F_DUPFD_CLOEXEC, 0);
+    int fd = comp->chaos->udmabufDup(fcntl(dmabuf.fds[0], F_DUPFD_CLOEXEC, 0));
 
     if (fd < 0) {
         return nullptr;
@@ -1397,10 +1375,6 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
     }
 
     attempted = true;
-
-    if (failShmForTest("external-host"_sv)) {
-        return nullptr;
-    }
 
     VkExternalMemoryHandleTypeFlagBits handle = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
     VkMemoryHostPointerPropertiesEXT hostProps{VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT};
@@ -1564,7 +1538,7 @@ bool RendererImpl::prepareShm(ShmState& state) {
     }
 
     if (dmabuf && vkDevice->tryShmUdmabufImage) {
-        if (failShmForTest("udmabuf-image"_sv) || !importDmabufTexture(dmabuf)) {
+        if (!importDmabufTexture(dmabuf)) {
             vkDevice->tryShmUdmabufImage = false;
             *comp->log << "imway: disabling direct wl_shm UDMABUF sampling after import failure"_sv << endL;
         } else {

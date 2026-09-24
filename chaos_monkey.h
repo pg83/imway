@@ -197,6 +197,13 @@ struct ChaosMonkey {
     // device: /dev/udmabuf fresh from open (or its -1); a replacement
     // failure closes the fd and returns -1 with errno set
     virtual int udmabufOpen(int fd) = 0;
+    // renderer: the udmabuf UDMABUF_CREATE exports of a wl_shm pool (or its
+    // -1), and the dup of it a Vulkan import takes; a replacement failure
+    // closes the fd and returns -1 with errno set
+    virtual int udmabufExport(int fd) = 0;
+    virtual int udmabufDup(int fd) = 0;
+    // device: the alignment the device wants of an imported host pointer
+    virtual u64 hostPointerAlignment(u64 alignment) = 0;
 
     // screenshot viewer: its encoders
     // the outcome an encoder allocation is about to have (libpng's write

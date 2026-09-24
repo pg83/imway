@@ -148,6 +148,12 @@ using namespace stl;
 // device: /dev/udmabuf
 //   udmabuf-open=N    the next N opens of /dev/udmabuf fail with EACCES, as
 //                     for a session not let at it
+//   udmabuf-export=N  the kernel refuses the next N wl_shm pools a udmabuf
+//                     (UDMABUF_CREATE fails with EINVAL)
+//   udmabuf-dup=N     the next N dups of a pool's udmabuf for its Vulkan
+//                     import fail with EMFILE
+//   host-alignment=N  the device wants imported host pointers aligned to N
+//                     bytes, a wl_shm pool's page-aligned mapping not enough
 // screenshot viewer: its encoders
 //   encoder-alloc=K   K encoder allocations pass, the one after fails as
 //                     without memory
@@ -270,6 +276,9 @@ namespace {
         size_t fragmentedPools = 0;
         // device: /dev/udmabuf
         int udmabufOpenFaults = 0;
+        int udmabufExportFaults = 0;
+        int udmabufDupFaults = 0;
+        u64 hostAlignment = 0;
         // screenshot viewer: its encoders
         int encoderAllocSkip = -1;
         // the millisecond clock: the offset is fixed at the first reading
@@ -365,6 +374,9 @@ namespace {
         VkResult descriptorRoom(VkResult result, size_t pool) override;
         // device: /dev/udmabuf
         int udmabufOpen(int fd) override;
+        int udmabufExport(int fd) override;
+        int udmabufDup(int fd) override;
+        u64 hostPointerAlignment(u64 alignment) override;
         // screenshot viewer: its encoders
         bool encoderAlloc(bool pending) override;
         // the millisecond clock
@@ -577,6 +589,12 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
     } else if (fault == "udmabuf-open"_sv) {
         // device: /dev/udmabuf
         udmabufOpenFaults = (int)arg.stou();
+    } else if (fault == "udmabuf-export"_sv) {
+        udmabufExportFaults = (int)arg.stou();
+    } else if (fault == "udmabuf-dup"_sv) {
+        udmabufDupFaults = (int)arg.stou();
+    } else if (fault == "host-alignment"_sv) {
+        hostAlignment = arg.stou();
     } else if (fault == "encoder-alloc"_sv) {
         // screenshot viewer: its encoders
         encoderAllocSkip = (int)arg.stou();
@@ -1150,6 +1168,32 @@ int TestChaosMonkey::udmabufOpen(int fd) {
     return -1;
 }
 
+int TestChaosMonkey::udmabufExport(int fd) {
+    if (!spend(udmabufExportFaults)) {
+        return fd;
+    }
+
+    close(fd);
+    errno = EINVAL;
+
+    return -1;
+}
+
+int TestChaosMonkey::udmabufDup(int fd) {
+    if (!spend(udmabufDupFaults)) {
+        return fd;
+    }
+
+    close(fd);
+    errno = EMFILE;
+
+    return -1;
+}
+
+u64 TestChaosMonkey::hostPointerAlignment(u64 alignment) {
+    return hostAlignment ? hostAlignment : alignment;
+}
+
 // screenshot viewer: its encoders
 bool TestChaosMonkey::encoderAlloc(bool pending) {
     if (!failsOnce(encoderAllocSkip)) {
@@ -1415,6 +1459,9 @@ namespace {
         VkResult descriptorRoom(VkResult result, size_t pool) override;
         // device: /dev/udmabuf
         int udmabufOpen(int fd) override;
+        int udmabufExport(int fd) override;
+        int udmabufDup(int fd) override;
+        u64 hostPointerAlignment(u64 alignment) override;
         // screenshot viewer: its encoders
         bool encoderAlloc(bool pending) override;
         // the millisecond clock
@@ -1661,6 +1708,18 @@ VkResult IdleChaosMonkey::descriptorRoom(VkResult result, size_t) {
 // device: /dev/udmabuf
 int IdleChaosMonkey::udmabufOpen(int fd) {
     return fd;
+}
+
+int IdleChaosMonkey::udmabufExport(int fd) {
+    return fd;
+}
+
+int IdleChaosMonkey::udmabufDup(int fd) {
+    return fd;
+}
+
+u64 IdleChaosMonkey::hostPointerAlignment(u64 alignment) {
+    return alignment;
 }
 
 // screenshot viewer: its encoders

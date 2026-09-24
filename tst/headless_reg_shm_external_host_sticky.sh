@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_SHM_FAIL=external-host IMWAY_SHM_TRACE=1
+# imway-env: IMWAY_SHM_BACKEND=external-host IMWAY_CHAOS=client-import=0 IMWAY_SHM_TRACE=1
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 

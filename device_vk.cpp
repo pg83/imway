@@ -342,7 +342,7 @@ DeviceVk::DeviceVk(Composer& c, int drmFd)
         bufferInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
         bufferInfo.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
         vkGetPhysicalDeviceExternalBufferProperties(this->phys, &bufferInfo, &bufferProps);
-        this->hostPointerAlignment = host.minImportedHostPointerAlignment;
+        this->hostPointerAlignment = chaos.hostPointerAlignment(host.minImportedHostPointerAlignment);
         this->tryShmExternalHost = bufferProps.externalMemoryProperties.externalMemoryFeatures & VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT;
         devExts.pushBack(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     }
