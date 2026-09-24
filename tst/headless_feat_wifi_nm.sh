@@ -98,5 +98,16 @@ ctl "key 1 press"; ctl "key 1 release"
 await 50 picker_closed || { echo "cancel did not return the picker to its list"; dump_state; exit 1; }
 [[ "$(grep -c add-activate "$NM_LOG")" -eq 1 ]] || { echo "cancel still activated something"; cat "$NM_LOG"; exit 1; }
 
+# the bar lays its items out leftwards from the clock, the layout indicator
+# right before the glyph: turned off, the glyph takes its place
+glyph_x() { dump_field '^wifi glyph' x0; }
+x_with=$(glyph_x)
+ctl "set desktop.layout_indicator false"
+moved_right() { (( $(glyph_x) > x_with + 10 )); }
+await 50 moved_right || { echo "the glyph did not take the layout indicator's place ($x_with -> $(glyph_x))"; exit 1; }
+ctl "set desktop.layout_indicator true"
+moved_back() { local x; x=$(glyph_x); (( x >= x_with - 3 && x <= x_with + 3 )); }
+await 50 moved_back || { echo "the layout indicator did not come back left of the clock ($x_with -> $(glyph_x))"; exit 1; }
+
 expect_alive "compositor died on the fake NetworkManager"
-echo "OK: wifi over NetworkManager — refresh tree, activation, passphrase, scan"
+echo "OK: wifi over NetworkManager — refresh tree, activation, passphrase, scan; the bar makes room without the layout indicator"
