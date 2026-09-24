@@ -1406,20 +1406,18 @@ ShmUpload* RendererImpl::makeExternalHostUpload(ShmState& state, bool& attempted
 
     vkGetBufferMemoryRequirements(device, upload->buffer, &req);
     VkDeviceSize alignment = vkDevice->hostPointerAlignment;
+    // The import covers whole alignment units of the pool. A requirement
+    // past the last unit that fits is refused before it is rounded up: the
+    // same verdict as rounding first, without a sum that could wrap.
+    VkDeviceSize room = content.poolSize / alignment * alignment;
 
-    if (req.size > UINT64_MAX - (alignment - 1)) {
+    if (req.size > room) {
         attempted = false;
 
         return nullptr;
     }
 
     VkDeviceSize allocationSize = (req.size + alignment - 1) / alignment * alignment;
-
-    if (allocationSize > content.poolSize) {
-        attempted = false;
-
-        return nullptr;
-    }
 
     VkPhysicalDeviceMemoryProperties memoryProps{};
 
