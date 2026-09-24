@@ -71,6 +71,8 @@ using namespace stl;
 //   imgui-fail=K      the same, reporting the device out of memory instead
 //   readback-fence=K  K readback fences pass, the one after reports a lost
 //                     device
+//   frame-busy=N      the next N looks at the last frame's fence before a
+//                     frame find it still busy
 //   readback-busy=N   fence polls: the next N polls of a readback fence
 //                     find it still busy
 //   shot-file=K       K steps building the screenshot's file (its memfd,
@@ -227,6 +229,7 @@ namespace {
         int readbackFenceSkip = -1;
         // fence polls
         int readbackBusyPolls = 0;
+        int frameBusyPolls = 0;
         // the screenshot's file
         int shotFileSkip = -1;
         int shotInterrupts = 0;
@@ -316,6 +319,7 @@ namespace {
         VkResult readbackFence(VkResult result) override;
         // fence polls
         VkResult readbackPoll(VkResult status) override;
+        VkResult framePoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(int fd, ssize_t written) override;
@@ -484,6 +488,8 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
         readbackFenceSkip = (int)arg.stou();
     } else if (fault == "readback-busy"_sv) {
         readbackBusyPolls = (int)arg.stou();
+    } else if (fault == "frame-busy"_sv) {
+        frameBusyPolls = (int)arg.stou();
     } else if (fault == "shot-file"_sv) {
         shotFileSkip = (int)arg.stou();
     } else if (fault == "shot-eintr"_sv) {
@@ -857,6 +863,10 @@ VkResult TestChaosMonkey::readbackFence(VkResult result) {
 // fence polls
 VkResult TestChaosMonkey::readbackPoll(VkResult status) {
     return spend(readbackBusyPolls) ? VK_NOT_READY : status;
+}
+
+VkResult TestChaosMonkey::framePoll(VkResult status) {
+    return spend(frameBusyPolls) ? VK_NOT_READY : status;
 }
 
 // the screenshot's file
@@ -1352,6 +1362,7 @@ namespace {
         VkResult readbackFence(VkResult result) override;
         // fence polls
         VkResult readbackPoll(VkResult status) override;
+        VkResult framePoll(VkResult status) override;
         // the screenshot's file
         int shotFile(int fd) override;
         ssize_t shotWrite(int fd, ssize_t written) override;
@@ -1503,6 +1514,10 @@ VkResult IdleChaosMonkey::readbackFence(VkResult result) {
 }
 
 // fence polls
+VkResult IdleChaosMonkey::framePoll(VkResult status) {
+    return status;
+}
+
 VkResult IdleChaosMonkey::readbackPoll(VkResult status) {
     return status;
 }

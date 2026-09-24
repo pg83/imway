@@ -1019,7 +1019,7 @@ bool RendererImpl::finishGpuFrame(bool wait) {
         return true;
     }
 
-    VkResult status = wait ? vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs) : vkGetFenceStatus(device, fence);
+    VkResult status = wait ? vkWaitForFences(device, 1, &fence, VK_TRUE, kGpuWaitNs) : comp->chaos->framePoll(vkGetFenceStatus(device, fence));
 
     if (status == VK_NOT_READY) {
         return false;

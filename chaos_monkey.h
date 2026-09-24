@@ -104,6 +104,8 @@ struct ChaosMonkey {
     // screenshot's or the frame capture's); VK_NOT_READY keeps the poll
     // waiting, as for a GPU still busy with the copy
     virtual VkResult readbackPoll(VkResult status) = 0;
+    // one look at the last frame's fence before the next frame starts
+    virtual VkResult framePoll(VkResult status) = 0;
     // the screenshot's file, built on the offload lane: the memfd fresh
     // from memfd_create (a replacement failure closes it and returns -1),
     // then the result of each write into it (a replacement failure owns
