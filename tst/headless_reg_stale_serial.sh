@@ -21,12 +21,15 @@ ctl "motion $((mx + 1)) $my"
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 ctl "button left press"
 wait_client "bad move requested"
+# a composed frame at every step: the move starts in the frame after the
+# request, and only while the button is still held there
+compose_frame
 for d in 15 30 45 60; do
     ctl "motion $((mx + d)) $my"
-    sleep 0.1
+    compose_frame
 done
 ctl "button left release"
-sleep 0.4
+compose_frame
 
 x1=$(dump_field 'app_id=serial' x)
 echo "after bad-serial drag: x $x0 -> $x1"
@@ -39,12 +42,13 @@ ctl "motion $((mx + 1)) $my"
 screenshot "$XDG_RUNTIME_DIR/_f.ppm"
 ctl "button left press"
 wait_client "good move requested"
+compose_frame
 for d in 15 30 45 60; do
     ctl "motion $((mx + d)) $my"
-    sleep 0.1
+    compose_frame
 done
 ctl "button left release"
-sleep 0.4
+compose_frame
 
 x2=$(dump_field 'app_id=serial' x)
 echo "after good-serial drag: x -> $x2"

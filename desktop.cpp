@@ -1842,9 +1842,9 @@ void DesktopImpl::buildUi(Scene& scene) {
         // csd clients (gtk) bring their own header bar; ours would double it.
         // without a title bar imgui exempts the window from
         // move-from-titlebar-only, so any in-content drag would move the
-        // window instead of reaching the client — NoMove, lifted for the one
-        // frame that serves a client-requested move (the move persists,
-        // imgui does not re-check the flag mid-drag)
+        // window instead of reaching the client — NoMove, lifted while a
+        // client-requested move waits to start (the move persists, imgui
+        // does not re-check the flag mid-drag)
         if (t->csd) {
             flags |= ImGuiWindowFlags_NoTitleBar;
 
@@ -1895,10 +1895,14 @@ void DesktopImpl::buildUi(Scene& scene) {
                 if (!t->fullscreen && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                     ImGuiWindow* window = ImGui::GetCurrentWindow();
 
+                    // imgui starts a move on the click's frame or once the
+                    // pointer drags: a request landing between the two, the
+                    // button held still, waits for the drag
                     ImGui::StartMouseMovingWindowOrNode(window, window->DockNode, true);
+                    t->moveRequested = GImGui->MovingWindow == nullptr;
+                } else {
+                    t->moveRequested = false;
                 }
-
-                t->moveRequested = false;
             }
 
             if (t->resizeEdges) {
