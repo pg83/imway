@@ -2270,7 +2270,7 @@ namespace {
             return false;
         }
 
-        if (srv->maxImageDim && ((u32)shm.width > srv->maxImageDim || (u32)shm.height > srv->maxImageDim)) {
+        if ((u32)shm.width > srv->maxImageDim || (u32)shm.height > srv->maxImageDim) {
             log << "imway: shm buffer "_sv << shm.width << "x"_sv << shm.height << " exceeds the device limit "_sv << srv->maxImageDim << endL;
 
             return false;
@@ -9680,7 +9680,7 @@ namespace {
 
         // reject beyond the render device's image ceiling here, where it is
         // a protocol error — vkCreateImage would take the session down
-        if (p->srv->maxImageDim && ((u32)width > p->srv->maxImageDim || (u32)height > p->srv->maxImageDim)) {
+        if ((u32)width > p->srv->maxImageDim || (u32)height > p->srv->maxImageDim) {
             wl_resource_post_error(res, ZWP_LINUX_BUFFER_PARAMS_V1_ERROR_INVALID_DIMENSIONS, "%dx%d exceeds the renderer limit %u", width, height, p->srv->maxImageDim);
 
             return nullptr;
@@ -13088,12 +13088,15 @@ void cmIccSetFile(wl_client*, wl_resource* res, int fd, u32 offset, u32 length) 
         return;
     }
 
-    int flags = fcntl(fd, F_GETFL);
-    struct stat st;
-    bool readable = flags >= 0 && (flags & O_ACCMODE) != O_WRONLY;
+    // the fd came in over the socket, so it is open: its flags and its
+    // status are there to read, and only what they say can refuse it
+    bool readable = (fcntl(fd, F_GETFL) & O_ACCMODE) != O_WRONLY;
     bool seekable = lseek(fd, 0, SEEK_CUR) >= 0;
+    struct stat st{};
 
-    if (!readable || !seekable || fstat(fd, &st)) {
+    fstat(fd, &st);
+
+    if (!readable || !seekable) {
         close(fd);
         wl_resource_post_error(res, WP_IMAGE_DESCRIPTION_CREATOR_ICC_V1_ERROR_BAD_FD, "the ICC profile fd must be readable and seekable");
 

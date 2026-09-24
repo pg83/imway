@@ -27,7 +27,8 @@ struct WaylandConfig {
     const DmabufFormat* scanoutFormats = nullptr;
     size_t scanoutFormatCount = 0;
     unsigned long long mainDevice = 0;
-    // the render device's 2d image ceiling for client buffers
+    // the render device's 2d image ceiling for client buffers: Vulkan's
+    // maxImageDimension2D, at least 4096 on every device
     u32 maxImageDim = 0;
     int drmFd = -1;
     bool explicitSync = false;

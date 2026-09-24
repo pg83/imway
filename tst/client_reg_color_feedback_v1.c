@@ -5,7 +5,10 @@
 // A colour-management v1 client across an output colour change: its
 // surface feedback hears the deprecated preferred_changed (not the v2
 // preferred_changed2), a feedback whose surface is gone hears nothing, and
-// a v1 wl_output (which has no done event) is left alone.
+// a v1 wl_output (which has no done event) is left alone. With "info" it
+// asks for the output's description instead: on an SDR output a v1 client
+// is told the sRGB transfer function by the name v1 knows, not v2's
+// compound power 2.4.
 
 static struct wp_color_manager_v1* cm;
 static struct wl_output* output;
@@ -50,7 +53,94 @@ static void o_mode(void* d, struct wl_output* o, uint32_t f, int32_t w, int32_t 
 }
 static const struct wl_output_listener output_listener = {o_geometry, o_mode, NULL, NULL, NULL, NULL};
 
-int main(void) {
+static int desc_ready, desc_failed;
+static int tf_named_count;
+static uint32_t tf_named;
+
+static void desc_failed_cb(void* d, struct wp_image_description_v1* desc, uint32_t cause, const char* msg) {
+    (void)d; (void)desc; (void)cause; (void)msg;
+    desc_failed = 1;
+}
+static void desc_ready_cb(void* d, struct wp_image_description_v1* desc, uint32_t identity) {
+    (void)d; (void)desc; (void)identity;
+    desc_ready = 1;
+}
+static const struct wp_image_description_v1_listener desc_listener = {
+    .failed = desc_failed_cb,
+    .ready = desc_ready_cb,
+};
+
+static void info_done(void* d, struct wp_image_description_info_v1* i) { (void)d; (void)i; }
+static void info_icc(void* d, struct wp_image_description_info_v1* i, int32_t fd, uint32_t size) {
+    (void)d; (void)i; (void)size;
+    close(fd);
+}
+static void info_primaries(void* d, struct wp_image_description_info_v1* i, int32_t rx, int32_t ry, int32_t gx, int32_t gy,
+                           int32_t bx, int32_t by, int32_t wx, int32_t wy) {
+    (void)d; (void)i; (void)rx; (void)ry; (void)gx; (void)gy; (void)bx; (void)by; (void)wx; (void)wy;
+}
+static void info_primaries_named(void* d, struct wp_image_description_info_v1* i, uint32_t p) { (void)d; (void)i; (void)p; }
+static void info_tf_power(void* d, struct wp_image_description_info_v1* i, uint32_t e) { (void)d; (void)i; (void)e; }
+static void info_tf_named(void* d, struct wp_image_description_info_v1* i, uint32_t tf) {
+    (void)d; (void)i;
+    tf_named = tf;
+    tf_named_count++;
+}
+static void info_luminances(void* d, struct wp_image_description_info_v1* i, uint32_t a, uint32_t b, uint32_t c) {
+    (void)d; (void)i; (void)a; (void)b; (void)c;
+}
+static void info_target_primaries(void* d, struct wp_image_description_info_v1* i, int32_t rx, int32_t ry, int32_t gx,
+                                  int32_t gy, int32_t bx, int32_t by, int32_t wx, int32_t wy) {
+    (void)d; (void)i; (void)rx; (void)ry; (void)gx; (void)gy; (void)bx; (void)by; (void)wx; (void)wy;
+}
+static void info_target_luminance(void* d, struct wp_image_description_info_v1* i, uint32_t a, uint32_t b) {
+    (void)d; (void)i; (void)a; (void)b;
+}
+static void info_target_max_cll(void* d, struct wp_image_description_info_v1* i, uint32_t v) { (void)d; (void)i; (void)v; }
+static void info_target_max_fall(void* d, struct wp_image_description_info_v1* i, uint32_t v) { (void)d; (void)i; (void)v; }
+static const struct wp_image_description_info_v1_listener info_listener = {
+    .done = info_done,
+    .icc_file = info_icc,
+    .primaries = info_primaries,
+    .primaries_named = info_primaries_named,
+    .tf_power = info_tf_power,
+    .tf_named = info_tf_named,
+    .luminances = info_luminances,
+    .target_primaries = info_target_primaries,
+    .target_luminance = info_target_luminance,
+    .target_max_cll = info_target_max_cll,
+    .target_max_fall = info_target_max_fall,
+};
+
+static int run_info(void) {
+    struct wp_color_management_output_v1* cm_output = wp_color_manager_v1_get_output(cm, output);
+    struct wp_image_description_v1* desc = wp_color_management_output_v1_get_image_description(cm_output);
+
+    wp_image_description_v1_add_listener(desc, &desc_listener, NULL);
+
+    for (int i = 0; i < 50 && !desc_ready && !desc_failed; i++) {
+        wl_display_roundtrip(wl_dpy);
+    }
+
+    if (!desc_ready) {
+        fprintf(stderr, "the output's description never came ready\n");
+        return 1;
+    }
+
+    wp_image_description_info_v1_add_listener(wp_image_description_v1_get_information(desc), &info_listener, NULL);
+    wl_display_roundtrip(wl_dpy);
+
+    if (tf_named_count != 1 || tf_named != WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB) {
+        fprintf(stderr, "a v1 client was told transfer function %u (%d times), not srgb\n", tf_named, tf_named_count);
+        return 1;
+    }
+
+    printf("info v1 done\n");
+
+    return 0;
+}
+
+int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);
     alarm(30);
 
@@ -62,6 +152,10 @@ int main(void) {
     wl_display_roundtrip(wl_dpy);
 
     if (!cm || !output) return 2;
+
+    if (argc > 1 && !strcmp(argv[1], "info")) {
+        return run_info();
+    }
 
     struct counts live = {0, 0}, dead = {0, 0};
     struct wl_surface* doomed = wl_compositor_create_surface(wl_comp);

@@ -3,7 +3,8 @@
 # buffers already scanning out: the RGB range as each of its values, the
 # link depth; a setting that leaves the color state as it was (a peak on an
 # SDR output) modesets nothing. A metadata blob the driver cannot make
-# keeps the output as it was, and the next try goes through.
+# keeps the output as it was, and the next try goes through; a new peak
+# once HDR is up replaces the metadata and keeps HDR.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -41,6 +42,14 @@ hdr_is 0 || { echo "the output went HDR without its metadata"; dump_state; exit 
 # the setting is still on: the next display setting takes it through
 ctl "set display.peak_nits 800"
 await 100 hdr_is 1 || { echo "HDR did not come up once the blob could be made"; cat "$IMWAY_LOG"; exit 1; }
+
+# a new peak on the HDR output keeps HDR and its SDR white, and the
+# metadata blob is replaced with one for the new peak
+peak_is() { [[ "$(dump_field '^hdr ' max)" == "$1"* ]]; }
+await 50 peak_is 800 || { echo "the HDR metadata does not carry the 800 nit peak"; dump_state; exit 1; }
+ctl "set display.peak_nits 900"
+await 50 peak_is 900 || { echo "a new peak on the HDR output did not reach its metadata"; dump_state; exit 1; }
+hdr_is 1 || { echo "a new peak took the output out of HDR"; exit 1; }
 
 expect_alive "compositor died applying display settings"
 echo "OK: display settings modeset the connector live, a refused blob changes nothing"

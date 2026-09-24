@@ -1658,10 +1658,9 @@ void RendererImpl::startShmCopy() {
     // a loop descheduled right after handing the copy over (a loaded
     // host): the copy finishes, and whatever else arrives meanwhile, before
     // the loop next polls
+    // the scenario names the stall in milliseconds
     if (const char* text = getenv("IMWAY_SHM_COPY_STALL_MS")) {
-        unsigned long stall = strtoul(text, nullptr, 10);
-
-        usleep((stall > 1000 ? 1000 : stall) * 1000);
+        usleep((useconds_t)strtoul(text, nullptr, 10) * 1000);
     }
 #endif
 }
@@ -1675,14 +1674,9 @@ void RendererImpl::shmCopyWork() {
     clipRect(rect, content.width, content.height);
 
 #ifdef IMWAY_FOR_TESTS
+    // the scenario names the delay in milliseconds
     if (const char* text = getenv("IMWAY_SHM_COPY_DELAY_MS")) {
-        unsigned long delay = strtoul(text, nullptr, 10);
-
-        if (delay > 5000) {
-            delay = 5000;
-        }
-
-        usleep(delay * 1000);
+        usleep((useconds_t)strtoul(text, nullptr, 10) * 1000);
     }
 #endif
     if (!content.beginAccess(&content)) {
