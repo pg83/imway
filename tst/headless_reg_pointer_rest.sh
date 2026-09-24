@@ -4,7 +4,8 @@
 # can only see what the last composed frame had under the pointer, so each
 # jump is settled at a frame edge after it: the window hears its enter and
 # then its leave with no further motion to prompt either. So is a release
-# that ends an implicit grab off the window.
+# that ends an implicit grab off the window, and a window that maps over
+# the resting pointer takes it.
 set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
@@ -56,5 +57,21 @@ compose_frame
 left_again() { [[ "$(left)" == 2 ]]; }
 await 50 left_again || { echo "the pointer released off the window never left it"; cat "$CLIENT_LOG"; exit 1; }
 
+# resting on the first window where a cascaded second one will cover it,
+# the pointer goes to the second as it maps over the spot
+px=$((x + w - 20)); py=$((y + h - 20))
+ctl "motion $px $py"
+compose_frame
+compose_frame
+entered_third() { [[ "$(entered)" == 3 ]]; }
+await 50 entered_third || { echo "the pointer back on the first window did not enter it"; cat "$CLIENT_LOG"; exit 1; }
+touch go-second
+wait_client "second mapped"
+wait_mapped 'app_id=pointer-rest-second'
+sx=$(dump_field 'app_id=pointer-rest-second' imgx); sy=$(dump_field 'app_id=pointer-rest-second' imgy)
+(( px >= sx && py >= sy )) || { echo "the second window was placed off the resting pointer (${sx},${sy} vs ${px},${py})"; exit 1; }
+second_entered() { grep -q "pointer entered second" "$CLIENT_LOG"; }
+await 50 second_entered || { echo "the window that mapped under the resting pointer never got it"; cat "$CLIENT_LOG"; exit 1; }
+
 expect_alive "compositor died settling a resting pointer"
-echo "OK: a pointer resting after a single jump or a release enters and leaves at the next frame edge"
+echo "OK: a pointer resting after a jump or a release, or under a window mapping over it, enters and leaves at the next frame edge"

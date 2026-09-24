@@ -1477,13 +1477,6 @@ namespace {
         IntrusiveList grabStack; // GrabNode links
         Surface* ptrFocus = nullptr;
         int buttonsDown = 0;
-        // frame edges left to look for the surface under a resting pointer
-        // whose window went away (minimize, unmap). ImGui judges hover off
-        // the previous frame's windows: the edge that notices comes before
-        // the frame that stops drawing the window, in which its place reads
-        // as the ui owning the pointer; the frame after hovers the window
-        // uncovered, so the third edge is the one that finds it
-        int ptrRepickFrames = 0;
 
         double curX = 0, curY = 0;
         Vector<u32> pressedKeys;
@@ -10475,40 +10468,25 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     constraintActivate();
 }
 
-// Motion and buttons pick the pointer focus, from what the last composed
-// frame had under the pointer; a window going away under a resting pointer
-// produces neither. At frame edges the pointer leaves a window that
-// minimized under it, and after that, an unmap or a motion settles on the
-// surface now beneath it, or on none.
-// A held button keeps its implicit grab on the hidden surface, as it would
-// on motion.
+// At every frame edge the pointer takes the surface that frame put under
+// it: a window that maps, unmaps, minimizes, moves or restacks under a
+// resting pointer, the lock screen coming or going over it, a pointer that
+// stopped right after a jump or a release, all move the focus as a motion
+// would. The pick reads the hover the frame composed, which the renderer
+// lets settle by composing one more frame whenever ImGui's hovered window
+// changed. A held button keeps its implicit grab on the surface it
+// pressed, a drag targets on its own, and a locked pointer stays with the
+// surface that locked it.
 void SeatState::pointerRepick() {
-    if (buttonsDown > 0 || dragClient) {
+    if (buttonsDown > 0 || dragClient || (activeConstraint && activeConstraint->isLock)) {
         return;
     }
-
-    Toplevel* t = ptrFocus ? ptrFocus->rootToplevel() : nullptr;
-
-    if (t && t->minimized) {
-        pointerSetFocus(nullptr, 0, 0);
-        ptrRepickFrames = 3;
-    }
-
-    if (ptrRepickFrames == 0) {
-        return;
-    }
-
-    ptrRepickFrames--;
 
     // while the ui under the pointer owns it there is nothing to pick
     Surface* target = srv->composer->scene->ptrCaptured ? nullptr : pickPointerTarget();
 
     if (target != ptrFocus) {
         pointerRetarget(target);
-    }
-
-    if (ptrRepickFrames > 0) {
-        srv->composer->scene->needsFrame = true;
     }
 }
 
@@ -10981,14 +10959,6 @@ void SeatState::handleMotion(double x, double y) {
         return;
     }
 
-    // the pick below sees what the last composed frame had under the
-    // pointer, not what is there now: a pointer that stops right after a
-    // jump is settled at the frame edges that follow, the first of which
-    // may still be the frame in flight
-    if (buttonsDown == 0 && ptrRepickFrames < 2) {
-        ptrRepickFrames = 2;
-    }
-
     // pointer is over the compositor's own ui: the client sees a leave —
     // unless a button we delivered is still held. imgui keeps WantCaptureMouse
     // for the whole press-drag it saw start, so a drag leaving the window
@@ -11127,12 +11097,6 @@ void SeatState::handleButton(u32 button, bool pressed) {
         pointerGrabSerial = 0;
         pointerGrabClient = nullptr;
         pointerGrabOrigin.reset();
-
-        // the implicit grab is over: the pointer may rest off the window
-        // that held it, which a frame edge settles without another motion
-        if (ptrRepickFrames < 2) {
-            ptrRepickFrames = 2;
-        }
     }
 }
 
@@ -12005,8 +11969,6 @@ void SeatState::toplevelUnmapped(Toplevel* t) {
     if (ptrFocus && ptrFocus->rootToplevel() == t) {
         pointerSetFocus(nullptr, 0, 0);
         buttonsDown = 0;
-        // the frame edges find what the pointer rests on now
-        ptrRepickFrames = 3;
     }
 
     if (kbFocus == t) {

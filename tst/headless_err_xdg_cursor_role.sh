@@ -9,7 +9,15 @@ gone() {
     [[ -z "$(dump_field 'title=cursor-role' id)" ]]
 }
 
+# the window maps where no pointer rests: the client takes the pointer,
+# sets its cursor and exits the moment it enters, so it enters on the aim
+park() {
+    ctl "motion 1270 790"
+    compose_frame
+}
+
 for mode in toplevel popup; do
+    park
     start_client "$mode"
     wait_client "cursor-role ready"
     point_at_color 255 0 0 || { echo "the $mode run's window was not found"; exit 1; }

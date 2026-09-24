@@ -436,6 +436,8 @@ namespace {
 
         bool forceComposition = false;
         bool lastFrameDirect = false;
+        // the ImGui window the pointer was over last frame, compared only
+        ImGuiWindow* lastHoveredWindow = nullptr;
         // brightest possible scene value this frame (from visible surface
         // descriptions); the display tone map engages only above output peak
         double sceneMaxNits = 0;
@@ -3778,6 +3780,14 @@ bool RendererImpl::renderFrame(int scanIdx) {
     // Keep the on-demand renderer running until that queue is empty; otherwise
     // an input burst can strand half of a password until some later event.
     if (GImGui->InputEventsQueue.Size) {
+        comp->scene->needsFrame = true;
+    }
+
+    // ImGui judges hover off the previous frame's windows: when the window
+    // under the pointer changed, the surfaces' hover settles in the frame
+    // after, and the seat picks its target from that frame's
+    if (GImGui->HoveredWindow != lastHoveredWindow) {
+        lastHoveredWindow = GImGui->HoveredWindow;
         comp->scene->needsFrame = true;
     }
 

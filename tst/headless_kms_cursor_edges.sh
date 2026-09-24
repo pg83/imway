@@ -40,6 +40,15 @@ set_cursor() { # the client sets its cursor on the first pointer enter
     echo "the client never set its cursor"; cat "$CLIENT_LOG"; exit 1
 }
 
+# each client maps where no pointer rests: it sets its cursor on its first
+# enter, which is to come from the aim, not from the window mapping under
+# the pointer the previous client left
+park() {
+    ctl "motion 1270 790"
+    compose_frame
+}
+
+park
 start_client dmabuf
 for _ in $(seq 1 100); do
     grep -q "mapped" "$CLIENT_LOG" && break
@@ -60,6 +69,7 @@ kill "$CLIENT_PID" 2>/dev/null || true
 wait "$CLIENT_PID" 2>/dev/null || true
 
 for mode in scaled turned shrunk straight; do
+    park
     start_client "$mode"
     wait_client "mapped"
     set_cursor
@@ -68,6 +78,7 @@ for mode in scaled turned shrunk straight; do
     wait "$CLIENT_PID" 2>/dev/null || true
 done
 
+park
 start_client sigbus
 wait_client "mapped"
 set_cursor
