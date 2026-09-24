@@ -394,6 +394,10 @@ void LibinputSource::inotifyEvents() {
                 pathDrop(idx);
             } else if (pathAdd(idx)) {
                 *(comp->log) << "imway: input device event"_sv << idx << " plugged"_sv << endL;
+                // libinput queues the device's DEVICE_ADDED inside itself
+                // and nothing wakes its fd: take it now, so the device is
+                // registered and configured before its first events
+                dispatch();
             }
         }
     }
