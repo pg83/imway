@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Picking the pipe: a named connector and mode are honoured or refused at
-# boot, a cold-booted connector with no encoder or crtc bound gets one and a
+# boot, a connector of a type libdrm cannot name is picked as Unknown, a cold-booted connector with no encoder or crtc bound gets one and a
 # driver reporting no cursor size still gets the 64x64 plane, and a card
 # node that does not open is fatal.
 set -euo pipefail
@@ -13,6 +13,12 @@ boot_has "kms output: 1920x1080@60, connector 101"
 kms_boot -- --output DP-9
 boot_rc 1 "unknown connector"
 boot_has "connector DP-9 not found or not connected"
+
+# a connector type libdrm has no name for is named Unknown, by which it is
+# picked too
+kms_boot IMWAY_FAKE_KMS_CONNECTOR_TYPE=99 -- --output Unknown-1
+boot_rc 0 "connector of an unnamed type"
+boot_has "kms output: 1280x800@60, connector 101"
 
 kms_boot -- --mode 640x480
 boot_rc 1 "mode not offered"
