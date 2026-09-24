@@ -13,7 +13,10 @@ set -euo pipefail
 start_client
 wait_mapped
 
-point_at_color 255 0 0 || { echo "red window not found"; exit 1; }
+# one motion onto the window: the client starts the walk at its enter, and
+# from then on every motion is an ack
+red_found() { screenshot "$XDG_RUNTIME_DIR/_pt.ppm" && centroid "$XDG_RUNTIME_DIR/_pt.ppm" 255 0 0 >/dev/null 2>&1; }
+await 30 red_found || { echo "red window not found"; exit 1; }
 read -r x y < <(centroid "$XDG_RUNTIME_DIR/_pt.ppm" 255 0 0)
 ctl "motion $((x+15)) $((y+12))"
 

@@ -1493,6 +1493,7 @@ namespace {
         Surface* pickPointerTarget();
         void pointerSetFocus(Surface* s, double sx, double sy);
         void pointerRepick();
+        void pointerRetarget(Surface* target);
 
         void handleMotion(double x, double y);
         void handleButton(u32 button, bool pressed);
@@ -10473,10 +10474,11 @@ void SeatState::pointerSetFocus(Surface* s, double sx, double sy) {
     constraintActivate();
 }
 
-// Motion and buttons pick the pointer focus; a window going away under a
-// resting pointer produces neither. At frame edges the pointer leaves a
-// window that minimized under it, and after that or an unmap looks for the
-// surface now beneath it.
+// Motion and buttons pick the pointer focus, from what the last composed
+// frame had under the pointer; a window going away under a resting pointer
+// produces neither. At frame edges the pointer leaves a window that
+// minimized under it, and after that, an unmap or a motion settles on the
+// surface now beneath it, or on none.
 // A held button keeps its implicit grab on the hidden surface, as it would
 // on motion.
 void SeatState::pointerRepick() {
@@ -10500,11 +10502,29 @@ void SeatState::pointerRepick() {
     // while the ui under the pointer owns it there is nothing to pick
     Surface* target = srv->composer->scene->ptrCaptured ? nullptr : pickPointerTarget();
 
-    if (target) {
-        pointerSetFocus(target, curX - target->imgX, curY - target->imgY);
-        ptrRepickFrames = 0;
-    } else if (ptrRepickFrames > 0) {
+    if (target != ptrFocus) {
+        pointerRetarget(target);
+    }
+
+    if (ptrRepickFrames > 0) {
         srv->composer->scene->needsFrame = true;
+    }
+}
+
+// the pointer has come to rest over another surface, or over none
+void SeatState::pointerRetarget(Surface* target) {
+    pointerSetFocus(target, target ? curX - target->imgX : 0, target ? curY - target->imgY : 0);
+
+    if (target && srv->composer->settings->focusPolicy() == FocusPolicy::followsPointer) {
+        if (Toplevel* t = target->rootToplevel()) {
+            srv->composer->scene->focusedToplevel.bind(t->weak);
+
+            if (srv->composer->settings->raiseOnFocus()) {
+                t->raiseRequested = true;
+            }
+
+            focusToplevel(t);
+        }
     }
 }
 
@@ -10960,6 +10980,14 @@ void SeatState::handleMotion(double x, double y) {
         return;
     }
 
+    // the pick below sees what the last composed frame had under the
+    // pointer, not what is there now: a pointer that stops right after a
+    // jump is settled at the frame edges that follow, the first of which
+    // may still be the frame in flight
+    if (buttonsDown == 0 && ptrRepickFrames < 2) {
+        ptrRepickFrames = 2;
+    }
+
     // pointer is over the compositor's own ui: the client sees a leave —
     // unless a button we delivered is still held. imgui keeps WantCaptureMouse
     // for the whole press-drag it saw start, so a drag leaving the window
@@ -10974,21 +11002,7 @@ void SeatState::handleMotion(double x, double y) {
     Surface* target = buttonsDown > 0 ? ptrFocus : pickPointerTarget();
 
     if (target != ptrFocus) {
-        double sx = target ? x - target->imgX : 0, sy = target ? y - target->imgY : 0;
-
-        pointerSetFocus(target, sx, sy);
-
-        if (target && srv->composer->settings->focusPolicy() == FocusPolicy::followsPointer) {
-            if (Toplevel* t = target->rootToplevel()) {
-                srv->composer->scene->focusedToplevel.bind(t->weak);
-
-                if (srv->composer->settings->raiseOnFocus()) {
-                    t->raiseRequested = true;
-                }
-
-                focusToplevel(t);
-            }
-        }
+        pointerRetarget(target);
 
         return;
     }
@@ -11112,6 +11126,12 @@ void SeatState::handleButton(u32 button, bool pressed) {
         pointerGrabSerial = 0;
         pointerGrabClient = nullptr;
         pointerGrabOrigin.reset();
+
+        // the implicit grab is over: the pointer may rest off the window
+        // that held it, which a frame edge settles without another motion
+        if (ptrRepickFrames < 2) {
+            ptrRepickFrames = 2;
+        }
     }
 }
 
