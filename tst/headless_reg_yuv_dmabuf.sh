@@ -87,6 +87,27 @@ else
     run_disjoint p010_disjoint p010 576 256 192 6 205 14
 fi
 
+# The disjoint import on every device, lavapipe too: the buffer goes to a
+# minimized window, which the compositor imports at its next frame but
+# never draws, so no plane is sampled. An import that fails faults the
+# client, which the compositor then disconnects.
+minimized() { [[ "$(dump_field '^toplevel' minimized)" == 1 ]]; }
+run_disjoint_hidden() { # format y cb cr
+    rm -f "$XDG_RUNTIME_DIR/go-disjoint"
+    start_client "$1" 2 2 1 "$2" "$3" "$4" disjoint-hidden
+    wait_yuv
+    wait_client "minimize asked"
+    await 50 minimized || { echo "the $1 window was not minimized"; dump_state; exit 1; }
+    touch "$XDG_RUNTIME_DIR/go-disjoint"
+    wait_client "disjoint committed"
+    compose_frame
+    compose_frame
+    kill -0 "$CLIENT_PID" 2>/dev/null || { echo "the disjoint $1 import faulted its client"; cat "$CLIENT_LOG"; exit 1; }
+    stop_client
+}
+run_disjoint_hidden nv12 144 64 48
+run_disjoint_hidden p010 576 256 192
+
 # Four quadrants with independent U/V edges expose each H.273 chroma offset.
 for location in 1 2 3 4 5 6; do
     start_client nv12 2 2 "$location" pattern 0 0

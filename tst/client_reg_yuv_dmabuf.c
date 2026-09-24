@@ -35,6 +35,8 @@ static uint32_t chroma_location = WP_COLOR_REPRESENTATION_SURFACE_V1_CHROMA_LOCA
 static int y_code = 63, cb_code = 102, cr_code = 240;
 static int pattern;
 static int disjoint;
+// map with one buffer, then commit the disjoint one to the minimized window
+static int hidden;
 static int nv12_linear, p010_linear;
 static int drawn;
 
@@ -207,9 +209,27 @@ static int make_fd(const uint8_t* bytes, size_t size) {
 static void draw(void) {
     size_t ysize = 0, uvsize = 0;
     uint8_t* bytes = yuv_bytes(&ysize, &uvsize);
-    // disjoint: each plane in a buffer of its own, as a decoder hands them
-    int fd = make_fd(bytes, disjoint ? ysize : ysize + uvsize);
-    int uv_fd = disjoint ? make_fd(bytes + ysize, uvsize) : fd;
+    // disjoint: each plane in a buffer of its own, as a decoder hands them,
+    // and each buffer roomier than its plane, as decoders pad theirs: a
+    // device may want more memory for a plane than its bytes. lavapipe
+    // (Mesa 26.2) does: it answers a plane's memory requirements with the
+    // whole image's size and refuses to import a smaller buffer.
+    int fd = -1, uv_fd = -1;
+
+    if (disjoint) {
+        size_t room = 2 * (ysize + uvsize);
+        uint8_t* plane = calloc(1, room);
+
+        memcpy(plane, bytes, ysize);
+        fd = make_fd(plane, room);
+        memset(plane, 0, room);
+        memcpy(plane, bytes + ysize, uvsize);
+        uv_fd = make_fd(plane, room);
+        free(plane);
+    } else {
+        fd = make_fd(bytes, ysize + uvsize);
+        uv_fd = fd;
+    }
 
     free(bytes);
     if (fd < 0 || uv_fd < 0) exit(77);
@@ -228,7 +248,8 @@ static void draw(void) {
     close(fd);
     if (disjoint) close(uv_fd);
 
-    if (coefficients) {
+    // the surface keeps its representation for every later buffer
+    if (coefficients && !drawn) {
         struct wp_color_representation_surface_v1* representation =
             wp_color_representation_manager_v1_get_surface(representation_manager, surface);
         wp_color_representation_surface_v1_set_coefficients_and_range(
@@ -242,14 +263,16 @@ static void draw(void) {
     wl_surface_commit(surface);
     wl_buffer_destroy(buffer);
     drawn = 1;
-    puts("client_reg_yuv_dmabuf: mapped YUV");
 }
 
 static void xdg_surface_configure(void* data, struct xdg_surface* object,
                                   uint32_t serial) {
     (void)data;
     xdg_surface_ack_configure(object, serial);
-    if (!drawn) draw();
+    if (!drawn) {
+        draw();
+        puts("client_reg_yuv_dmabuf: mapped YUV");
+    }
 }
 
 static const struct xdg_surface_listener xdg_surface_listener = {
@@ -292,6 +315,7 @@ int main(int argc, char** argv) {
         cb_code = atoi(argv[6]);
         cr_code = atoi(argv[7]);
         disjoint = argc == 9 && !strcmp(argv[8], "disjoint");
+        hidden = argc == 9 && !strcmp(argv[8], "disjoint-hidden");
     }
     struct wl_display* display = wl_display_connect(NULL);
     if (!display) return 1;
@@ -319,6 +343,26 @@ int main(int argc, char** argv) {
     xdg_toplevel_add_listener(toplevel, &toplevel_listener, NULL);
     xdg_toplevel_set_title(toplevel, "client_reg_yuv_dmabuf");
     wl_surface_commit(surface);
+
+    if (hidden) {
+        // The compositor imports every committed buffer at its next frame,
+        // a minimized window's too, and draws nothing of that window: the
+        // disjoint buffer is imported and never sampled.
+        while (!drawn && wl_display_dispatch(display) != -1) {}
+        xdg_toplevel_set_minimized(toplevel);
+        wl_display_roundtrip(display);
+        puts("client_reg_yuv_dmabuf: minimize asked");
+
+        while (access("go-disjoint", F_OK) != 0) {
+            if (wl_display_roundtrip(display) == -1) return 3;
+            usleep(20000);
+        }
+
+        disjoint = 1;
+        draw();
+        wl_display_roundtrip(display);
+        puts("client_reg_yuv_dmabuf: disjoint committed");
+    }
 
     while (wl_display_dispatch(display) != -1) {}
     return wl_display_get_error(display) ? 3 : 0;
