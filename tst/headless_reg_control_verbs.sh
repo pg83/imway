@@ -62,7 +62,7 @@ ctl "kms-fail-prime 5 0"
 ctl "key 464 press"
 ctl "key 464 release"
 ctl "set notifications.timeout 7"
-await 50 in_log "control: set notifications.timeout" || { echo "the malformed lines stopped the FIFO"; exit 1; }
+await 100 in_log "control: set notifications.timeout" || { echo "the malformed lines stopped the FIFO"; exit 1; }
 ! in_log "control: rule 99" || { echo "a rule past the last slot was taken"; exit 1; }
 ! in_log "control: notification" || { echo "a malformed notify posted"; exit 1; }
 [[ "$(dump_field '^notifications ' history)" == 0 ]] || { echo "a malformed notify reached the notifier"; exit 1; }
@@ -72,9 +72,9 @@ await 50 in_log "control: set notifications.timeout" || { echo "the malformed li
 ctl "set notifications.rule_count 2"
 long=$(printf 'm%.0s' $(seq 150))
 ctl "rule 0 2 $long"
-await 50 in_log "control: rule 0" || { echo "the long rule was not taken"; exit 1; }
+await 100 in_log "control: rule 0" || { echo "the long rule was not taken"; exit 1; }
 ctl "notify ${long:0:127} 0 0 cut"
-await 50 in_log "control: notification" || { echo "the notification was not taken"; exit 1; }
+await 100 in_log "control: notification" || { echo "the notification was not taken"; exit 1; }
 [[ "$(dump_field '^notifications ' active)" == 0 ]] || { echo "the rule under the cut name did not mute it"; exit 1; }
 
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2

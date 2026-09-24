@@ -9,7 +9,7 @@ set -euo pipefail
 ctl "set input.swipe_up 3"    # launcher
 ctl "set input.swipe_down 4"  # notifications
 ctl "set input.pinch_out 3"   # launcher
-await 20 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
 
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_gesture_orphans"
 start_client

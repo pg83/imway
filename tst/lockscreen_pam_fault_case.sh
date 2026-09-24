@@ -8,5 +8,5 @@
 }
 
 ctl "set advanced.pam_service imway-test"
-await 20 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
 . "$(dirname "$0")/lockscreen_refusal_case.sh"

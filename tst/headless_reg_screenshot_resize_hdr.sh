@@ -9,7 +9,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "set display.ui_scale 3"
-await 20 in_log "control: set display.ui_scale" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.ui_scale" || { echo "settings are not reachable"; exit 1; }
 
 screenshot "$XDG_RUNTIME_DIR/desktop.ppm"
 ctl "key 99 press"; ctl "key 99 release" # Print

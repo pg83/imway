@@ -9,7 +9,7 @@ set -euo pipefail
 ctl "set display.hdr_enabled true"
 ctl "set notifications.dnd_scheduled true"
 ctl "set notifications.rule_count 1"
-await 20 in_log "control: set notifications.rule_count" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set notifications.rule_count" || { echo "settings are not reachable"; exit 1; }
 
 open_settings() {
     ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2

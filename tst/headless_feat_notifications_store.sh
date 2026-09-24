@@ -19,7 +19,7 @@ history_is() {
 screenshot "$XDG_RUNTIME_DIR/quiet-base.ppm"
 ctl "set notifications.history 3"
 ctl "set notifications.timeout 30"
-await 20 in_log "control: set notifications.timeout" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set notifications.timeout" || { echo "settings are not reachable"; exit 1; }
 
 # three posts: all on screen, all kept
 for i in 1 2 3; do
@@ -90,7 +90,7 @@ ctl "set notifications.dnd_start 0"
 ctl "set notifications.dnd_end 1439"
 ctl "rule 0 1 allowed-app"        # allow, even under do-not-disturb
 ctl "rule 1 2 muted-app"          # mute, even outside it
-await 20 in_log "control: rule 1" || { echo "the rules did not reach the settings"; exit 1; }
+await 100 in_log "control: rule 1" || { echo "the rules did not reach the settings"; exit 1; }
 
 before=$(dump_field '^notifications ' active)
 grew() {

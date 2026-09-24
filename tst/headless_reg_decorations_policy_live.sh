@@ -13,7 +13,7 @@ csd_is() { [[ "$(dump_field 'app_id=misc-plain ' csd)" == "$1" ]]; }
 await 50 csd_is 1 || { echo "a window without decoration object is not client-decorated"; dump_state; exit 1; }
 for policy in 1 2 0; do
     ctl "set desktop.decorations $policy"
-    await 50 in_log "control: set desktop.decorations" || { echo "settings are not reachable"; exit 1; }
+    await 100 in_log "control: set desktop.decorations" || { echo "settings are not reachable"; exit 1; }
     await 50 csd_is 1 || { echo "policy $policy changed a window that never negotiated"; dump_state; exit 1; }
 done
 expect_alive

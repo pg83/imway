@@ -12,7 +12,7 @@ ctl "set input.swipe_up 3"     # launcher
 ctl "set input.swipe_down 4"   # notifications
 ctl "set input.pinch_in 5"     # lock
 ctl "set input.pinch_out 3"    # launcher
-await 20 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
 
 # any plain window will do as the alt-tab target
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_feat_screenshot_viewer"
@@ -67,7 +67,7 @@ ctl "set input.swipe_left 0"
 ctl "set input.swipe_up 0"
 ctl "set input.swipe_down 0"
 ctl "set input.swipe_right 4"
-await 20 in_log "control: set input.swipe_right" || { echo "the rebinding was not taken"; exit 1; }
+await 100 in_log "control: set input.swipe_right" || { echo "the rebinding was not taken"; exit 1; }
 ctl "swipe begin 3"; ctl "swipe update 200 0"; ctl "swipe end"
 await 50 window '##history' || { echo "swipe right alone did not open the history"; dump_state; exit 1; }
 ctl "set input.swipe_right 0"

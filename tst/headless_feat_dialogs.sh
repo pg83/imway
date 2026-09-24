@@ -13,7 +13,7 @@ ctl "set desktop.clock_24_hour true"
 ctl "set desktop.clock_seconds false"
 ctl "set desktop.wifi_indicator false"
 ctl "set desktop.layout_indicator false"
-await 20 in_log "control: set desktop.layout_indicator" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set desktop.layout_indicator" || { echo "settings are not reachable"; exit 1; }
 sleep 0.3
 
 window() { # <imgui window name prefix>

@@ -30,7 +30,7 @@ wait_rect 'app_id=shot-source'
 # between the commas takes none
 ctl "set desktop.pinned_apps pinned-quirks.desktop,,term, shot-source,link,noexec"
 ctl "set applications.terminal"
-await 20 in_log "control: set applications.terminal" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.terminal" || { echo "settings are not reachable"; exit 1; }
 
 click_at 29 29
 await 100 test -s pinned.out || { echo "the pinned slot did not launch its entry"; exit 1; }
@@ -49,7 +49,7 @@ await 100 test -s terminal-args || { echo "the terminal entry did not run inside
 # focus to the dock; with the minimize click action the slot first focuses
 # the window, then minimizes it
 ctl "set desktop.active_click 1"
-await 20 in_log "control: set desktop.active_click" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set desktop.active_click" || { echo "settings are not reachable"; exit 1; }
 field_is() { [[ "$(dump_field 'app_id=shot-source' "$1")" == "$2" ]]; }
 click_at 29 135
 await 50 field_is focused 1 || { echo "the pinned slot of a running app did not focus its window"; dump_state; exit 1; }

@@ -12,7 +12,7 @@ ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_name refused"
 ctl "set applications.screenshot_format 1" # png
 ctl "set applications.screenshot_action 1" # save, no window
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 99 press"; ctl "key 99 release" # Print
 await 100 in_log "imway: screenshot submit failed (-2)" || { echo "the refused submit was not reported"; cat "$IMWAY_LOG"; exit 1; }

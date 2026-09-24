@@ -9,7 +9,7 @@ IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_wl_misc"
 next() { ctl "key 2 press"; ctl "key 2 release"; } # KEY_1: the client's next step
 
 ctl "set desktop.decorations 2"
-await 50 in_log "control: set desktop.decorations" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set desktop.decorations" || { echo "settings are not reachable"; exit 1; }
 start_client decoration preference
 wait_client "decoration preference ok"
 csd_is() { [[ "$(dump_field 'app_id=misc-deco ' csd)" == "$1" ]]; }

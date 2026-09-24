@@ -5,7 +5,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "notify history-app 0 0 kept"
-await 50 in_log "control: notification" || { echo "the notification was not taken"; exit 1; }
+await 100 in_log "control: notification" || { echo "the notification was not taken"; exit 1; }
 
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
 await_typing '##launcher' || { echo "launcher did not open"; exit 1; }

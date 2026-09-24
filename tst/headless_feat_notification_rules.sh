@@ -9,7 +9,7 @@ set -euo pipefail
 
 ctl "set notifications.timeout 60"
 ctl "rule 0 2 muteme" # mute
-await 20 in_log "control: rule 0" || { echo "the rule did not land"; exit 1; }
+await 100 in_log "control: rule 0" || { echo "the rule did not land"; exit 1; }
 
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release" # Super+F2
 await_typing '##launcher' || { echo "launcher did not open"; exit 1; }

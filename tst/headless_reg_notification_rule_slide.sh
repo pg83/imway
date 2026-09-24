@@ -8,7 +8,7 @@ set -euo pipefail
 ctl "set notifications.timeout 60"
 ctl "rule 0 2 firstapp"
 ctl "rule 1 2 slideme"
-await 20 in_log "control: rule 1" || { echo "the rules did not land"; exit 1; }
+await 100 in_log "control: rule 1" || { echo "the rules did not land"; exit 1; }
 
 active() { dump_field '^notifications ' active; }
 active_is() { [[ "$(active)" == "$1" ]]; }

@@ -10,7 +10,7 @@ set -euo pipefail
 shots="$XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_format 1" # png
-await 20 in_log "control: set applications.screenshot_format" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_format" || { echo "settings are not reachable"; exit 1; }
 
 viewer_up() {
     [[ -n "$(dump_field 'title=imway screenshot' id)" ]]

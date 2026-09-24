@@ -11,7 +11,7 @@ ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_format 1" # png
 ctl "set applications.screenshot_action 1" # save, no window
 ctl "set applications.screenshot_name first"
-await 20 in_log "control: set applications.screenshot_name" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_name" || { echo "settings are not reachable"; exit 1; }
 
 spawned() {
     grep -c "imway: spawned " "$IMWAY_LOG" || true

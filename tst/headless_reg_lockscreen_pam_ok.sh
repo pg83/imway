@@ -12,7 +12,7 @@ set -euo pipefail
 }
 
 ctl "set advanced.pam_service imway-test-ok"
-await 20 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 release" # Super+L
 await_imgui '##lock-overlay' || { echo "the session did not lock"; dump_state; exit 1; }

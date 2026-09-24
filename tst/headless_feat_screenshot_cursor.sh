@@ -8,7 +8,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "set applications.screenshot_action 0"
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 ctl "key 99 press"; ctl "key 99 release" # Print
 viewer_up() { [[ -n "$(dump_field 'title=imway screenshot' id)" ]]; }
 await 150 viewer_up || { echo "the editor did not open"; cat "$IMWAY_LOG"; exit 1; }

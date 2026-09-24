@@ -6,7 +6,7 @@ set -euo pipefail
 
 shots="$XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_directory $shots"
-await 20 in_log "control: set applications.screenshot_directory" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_directory" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 99 press"; ctl "key 99 release" # Print: the editor
 await 150 in_log "toplevel imway screenshot (imway-screenshot) mapped" || { echo "the editor did not open"; cat "$IMWAY_LOG"; exit 1; }

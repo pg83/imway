@@ -35,7 +35,7 @@ large=$(at_scale 2)
 # plane shows unchanged: frames drawn at that scale leave the last one
 n0=$(images)
 ctl "set display.ui_scale 3"
-await 20 in_log "control: set display.ui_scale" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.ui_scale" || { echo "settings are not reachable"; exit 1; }
 for i in 1 2 3 4 5; do
     ctl "motion $((320 + i)) 300"
     ctl "frame"

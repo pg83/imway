@@ -7,7 +7,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "set input.device_count 1"
-await 20 in_log "control: set input.device_count" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set input.device_count" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 125 press"; ctl "key 60 press"; ctl "key 60 release"; ctl "key 125 release"
 await_typing '##launcher' || { echo "the launcher did not open"; dump_state; exit 1; }

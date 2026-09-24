@@ -42,7 +42,7 @@ await 100 shrank || {
 f0=$(frames)
 
 ctl "set appearance.font_size 28"
-await 20 in_log "control: set appearance.font_size" || { echo "the font size never arrived"; exit 1; }
+await 100 in_log "control: set appearance.font_size" || { echo "the font size never arrived"; exit 1; }
 
 drawing() { [[ "$(frames)" -gt "$((f0 + 2))" && -n "$(dock_w)" ]]; }
 

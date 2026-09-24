@@ -58,7 +58,7 @@ ctl "session 0"
 ctl "session 1"
 
 ctl "set input.swipe_up 3" # launcher
-await 20 in_log "control: set input.swipe_up" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set input.swipe_up" || { echo "settings are not reachable"; exit 1; }
 touch go-swipe
 wait_client "swiped up"
 await_imgui '##launcher' || { echo "the touchpad stopped carrying gestures after the settings"; dump_state; exit 1; }

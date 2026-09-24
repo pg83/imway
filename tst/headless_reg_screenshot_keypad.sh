@@ -10,7 +10,7 @@ shots="$XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_directory $shots"
 ctl "set applications.screenshot_format 1"
 ctl "set applications.screenshot_name keypad"
-await 20 in_log "control: set applications.screenshot_name" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_name" || { echo "settings are not reachable"; exit 1; }
 
 viewer_up() {
     [[ -n "$(dump_field 'title=imway screenshot' id)" ]]

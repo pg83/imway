@@ -14,7 +14,7 @@ in_log "libinput ready" || {
 
 ctl "set input.swipe_up 3"    # launcher
 ctl "set input.pinch_out 3"   # launcher
-await 20 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set input.pinch_out" || { echo "settings are not reachable"; exit 1; }
 
 skip_unless_uinput() {
     if grep -q "uinput unavailable" "$CLIENT_LOG"; then

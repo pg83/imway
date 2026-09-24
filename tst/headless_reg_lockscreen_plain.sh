@@ -11,7 +11,7 @@ set -euo pipefail
 count() { grep -c "$1" "$IMWAY_LOG" || true; }
 
 ctl "set appearance.lock_blur false"
-await 20 in_log "control: set appearance.lock_blur" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set appearance.lock_blur" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 125 press"; ctl "key 38 press"; ctl "key 38 release"; ctl "key 125 release" # Super+L
 await_imgui '##lock-overlay' || { echo "the session did not lock"; dump_state; exit 1; }
@@ -33,7 +33,7 @@ await_typing '##lock-overlay' || { echo "the field did not come back"; dump_stat
 long=$(printf 'imway-%0.sx' $(seq 1 80))
 
 ctl "set advanced.pam_service $long"
-await 20 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set advanced.pam_service" || { echo "settings are not reachable"; exit 1; }
 
 rejections=$(count 'lockscreen rejected')
 

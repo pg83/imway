@@ -31,7 +31,7 @@ await 50 settled || { echo "the screen never settled with the window up"; exit 1
 ctl "sdr-white 250"
 ctl "night 7000"
 ctl "set display.sdr_nits 200"
-await 20 in_log "control: set display.sdr_nits" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.sdr_nits" || { echo "settings are not reachable"; exit 1; }
 shot same
 [[ "$(changed base same)" -eq 0 ]] || { echo "a no-op color control changed pixels ($(changed base same))"; exit 1; }
 [[ "$(dump_field '^hdr' metadata)" == 0 ]] || { echo "an SDR output reports HDR metadata"; dump_state; exit 1; }

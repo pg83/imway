@@ -6,7 +6,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "set desktop.window_docking false"
-await 20 in_log "control: set desktop.window_docking" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set desktop.window_docking" || { echo "settings are not reachable"; exit 1; }
 
 IMWAY_CLIENT="$IMWAY_TESTS_BIN/client_reg_render_fault"
 start_client

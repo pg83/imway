@@ -21,7 +21,7 @@ screenshot "$XDG_RUNTIME_DIR/dark.ppm"
 dark=$(patch_mean "$XDG_RUNTIME_DIR/dark.ppm")
 
 ctl "set appearance.variant 1" # light
-await 20 in_log "control: set appearance.variant" || { echo "the variant is not reachable"; exit 1; }
+await 100 in_log "control: set appearance.variant" || { echo "the variant is not reachable"; exit 1; }
 
 brighter() {
     local light

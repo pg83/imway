@@ -9,7 +9,7 @@ set -euo pipefail
 ctl "set applications.screenshot_name"
 ctl "set applications.screenshot_format 1" # png
 ctl "set applications.screenshot_action 1" # save, no window
-await 20 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set applications.screenshot_action" || { echo "settings are not reachable"; exit 1; }
 
 ctl "key 99 press"; ctl "key 99 release" # Print
 

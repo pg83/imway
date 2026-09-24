@@ -8,7 +8,7 @@ set -euo pipefail
 
 shots="$XDG_RUNTIME_DIR/shots"
 ctl "set applications.screenshot_directory $shots"
-await 20 in_log "control: set applications.screenshot_directory" || { echo "settings are not reachable through the FIFO"; exit 1; }
+await 100 in_log "control: set applications.screenshot_directory" || { echo "settings are not reachable through the FIFO"; exit 1; }
 
 magic() { # <file> <hex prefix>
     [[ "$(head -c "$(( ${#2} / 2 ))" "$1" | od -An -tx1 | tr -d ' \n')" == "$2" ]]

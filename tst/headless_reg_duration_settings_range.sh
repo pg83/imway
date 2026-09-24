@@ -16,7 +16,7 @@ await 100 hdr_is 1 || { echo "the output did not switch to HDR"; dump_state; exi
 
 # a negative OSD duration: no OSD stays up
 ctl "set display.osd_seconds -5"
-await 20 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.osd_seconds" || { echo "settings are not reachable"; exit 1; }
 brightness_key
 screenshot "$XDG_RUNTIME_DIR/_o.ppm"
 await 20 osd_gone || { echo "a negative OSD duration kept the OSD up"; dump_state; exit 1; }

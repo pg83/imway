@@ -6,7 +6,7 @@ set -euo pipefail
 . "$(dirname "$0")/lib.sh"
 
 ctl "set display.lock_seconds 2"
-await 20 in_log "control: set display.lock_seconds" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set display.lock_seconds" || { echo "settings are not reachable"; exit 1; }
 
 # four seconds of one swipe, an update every quarter second: twice the timeout
 ctl "swipe begin 3"

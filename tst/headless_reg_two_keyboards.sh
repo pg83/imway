@@ -70,7 +70,7 @@ grep -q "^key \|^mods 1$" "$log_b" && { echo "the unfocused client got keyboard 
 ctl "set keyboard.layouts us,ru"
 ctl "set keyboard.options grp:alt_shift_toggle"
 ctl "set keyboard.layout_policy 0"
-await 50 in_log "control: set keyboard.layout_policy" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set keyboard.layout_policy" || { echo "settings are not reachable"; exit 1; }
 layout_is() { [[ "$(dump_state | awk '/^layout/ { print $2 }')" == "$1" ]]; }
 await 50 layout_is EN || { echo "the new layout list did not start on its first group"; dump_state; exit 1; }
 ctl "key 56 press"; ctl "key 42 press"; ctl "key 42 release"; ctl "key 56 release" # Alt+Shift

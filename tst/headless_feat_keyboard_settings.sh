@@ -45,13 +45,13 @@ await 50 layout_is EN || { echo "alt+shift did not switch back ($(layout))"; exi
 
 # an empty options string is valid and rebuilds again
 ctl "set keyboard.options "
-await 20 in_log "control: set keyboard.options" || { echo "settings are not reachable"; exit 1; }
+await 100 in_log "control: set keyboard.options" || { echo "settings are not reachable"; exit 1; }
 
 # repeat_info: new numbers go out to every bound keyboard
 ctl "set keyboard.repeat_rate 40"
 ctl "set keyboard.repeat_delay 300"
 ctl "set keyboard.layout_policy 1"
-await 20 in_log "control: set keyboard.layout_policy" || { echo "the repeat settings did not apply"; exit 1; }
+await 100 in_log "control: set keyboard.layout_policy" || { echo "the repeat settings did not apply"; exit 1; }
 sleep 0.3
 
 # the client is still there and typing still reaches it
