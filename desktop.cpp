@@ -2190,8 +2190,9 @@ void DesktopImpl::buildUi(Scene& scene) {
                 return;
             }
 
+            // a mapped window is at least 1x1
             float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
-            float tw = sh > 0.f ? th * sw / sh : th;
+            float tw = th * sw / sh;
 
             total += (tw > th * 2.f ? th * 2.f : tw) + pad;
             count++;
@@ -2214,7 +2215,7 @@ void DesktopImpl::buildUi(Scene& scene) {
                 }
 
                 float sw = (float)t->surface->geomW(), sh = (float)t->surface->geomH();
-                float tw = sh > 0.f ? th * sw / sh : th;
+                float tw = th * sw / sh;
 
                 if (tw > th * 2.f) {
                     tw = th * 2.f;

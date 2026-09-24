@@ -65,6 +65,7 @@ namespace {
         void resolveOwner();
         void refresh();
         void reply(Pending& p);
+        void answer(const Pending& p, DBusMessage* reply);
         void readLayout(DBusMessage* reply, u64 sequence);
         void clearModel();
         void propertiesUpdated(DBusMessage* msg);
@@ -613,6 +614,13 @@ void MenuImpl::reply(Pending& pendingCall) {
         return;
     }
 
+    answer(pendingCall, reply);
+    dbus_message_unref(reply);
+    parent->composer->alloc->release(&pendingCall);
+}
+
+// a call's successful reply, read by what was asked
+void MenuImpl::answer(const Pending& pendingCall, DBusMessage* reply) {
     switch (pendingCall.kind) {
         case CallKind::owner: {
             const char* unique = "";
@@ -636,9 +644,6 @@ void MenuImpl::reply(Pending& pendingCall) {
             break;
         }
     }
-
-    dbus_message_unref(reply);
-    parent->composer->alloc->release(&pendingCall);
 }
 
 void MenuImpl::readLayout(DBusMessage* reply, u64 sequence) {

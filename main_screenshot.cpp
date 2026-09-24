@@ -1884,18 +1884,16 @@ namespace {
 
         ImGui::Render();
 
+        // the draw data is the window's size, checked positive above
         ImDrawData* dd = ImGui::GetDrawData();
-        bool minimized = dd->DisplaySize.x <= 0 || dd->DisplaySize.y <= 0;
 
         gWin.ClearValue.color.float32[0] = 0.1f;
         gWin.ClearValue.color.float32[1] = 0.1f;
         gWin.ClearValue.color.float32[2] = 0.1f;
         gWin.ClearValue.color.float32[3] = 1.0f;
 
-        if (!minimized) {
-            frameRender(dd);
-            framePresent();
-        }
+        frameRender(dd);
+        framePresent();
 
         if (result != 0) {
             action = result;
@@ -1908,7 +1906,7 @@ namespace {
 
         // a swapchain-rebuild frame presented nothing: returning false makes
         // plt retry instead of waiting on a frame callback that never comes
-        return !minimized && !gRebuild;
+        return !gRebuild;
     }
 
     void FrameDriver::close() {
