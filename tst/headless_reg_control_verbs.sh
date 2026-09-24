@@ -32,9 +32,9 @@ ctl "dump $XDG_RUNTIME_DIR/dumpdir"
 await 50 in_log "imway: dump: cannot rename" || { echo "a dump onto a directory was not reported"; cat "$IMWAY_LOG"; exit 1; }
 [[ ! -e "$XDG_RUNTIME_DIR/dumpdir.tmp" ]] || { echo "the failed dump left its temporary file"; exit 1; }
 
-# input verbs short of their arguments, phases a gesture does not have, an
-# empty line and malformed rule and notify lines do nothing; the sentinel
-# after them shows each was read and survived
+# input and emulator verbs short of their arguments, phases a gesture does
+# not have, an empty line and malformed rule and notify lines do nothing;
+# the sentinel after them shows each was read and survived
 ctl "motion"
 ctl "button left"
 ctl "key 30"
@@ -51,6 +51,12 @@ ctl "notify lonely 0 1"
 ctl "tablet motion 5"
 ctl "rule 99 1 far-past-the-rule-slots"
 ctl "notify lonely"
+# the KMS emulator's verbs short of their arguments, and a prime fault that
+# names no calls to let through first (none to fail either: count 0)
+ctl "kms-fail-commit"
+ctl "kms-fail-prime"
+ctl "kms-fail-addfb"
+ctl "kms-fail-prime 5 0"
 ctl "set notifications.timeout 7"
 await 50 in_log "control: set notifications.timeout" || { echo "the malformed lines stopped the FIFO"; exit 1; }
 ! in_log "control: rule 99" || { echo "a rule past the last slot was taken"; exit 1; }

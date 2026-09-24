@@ -29,7 +29,9 @@ if grep -q "uinput unavailable" "$CLIENT_LOG"; then
     exit 127
 fi
 
-opened() { [[ "$(events | grep -c "^open $XDG_RUNTIME_DIR/input/")" -ge 2 ]]; }
+# libinput hands the manager the node its link in the input directory
+# resolves to
+opened() { [[ "$(events | grep -cE "^open /dev/input/($kbd_node|$mouse_node)$")" -ge 2 ]]; }
 await 200 opened || { echo "the devices were not opened through the seat manager"; events; cat "$IMWAY_LOG"; exit 1; }
 await 200 in_log "input device event" || { echo "libinput did not take the devices the manager opened"; cat "$IMWAY_LOG"; exit 1; }
 

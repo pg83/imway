@@ -375,6 +375,31 @@ namespace {
 
         return true;
     }
+
+    // an ordinal fault, -1 while unarmed: K calls pass, the next one fails,
+    // and the fault is spent
+    static bool failsOnce(int& skip) {
+        if (skip < 0) {
+            return false;
+        }
+
+        return skip-- == 0;
+    }
+
+    // the same, but every call after the K that pass fails too
+    static bool failsFromNow(int& skip) {
+        if (skip < 0) {
+            return false;
+        }
+
+        if (skip > 0) {
+            skip--;
+
+            return false;
+        }
+
+        return true;
+    }
 }
 
 TestChaosMonkey::TestChaosMonkey(StringView script) {
@@ -553,11 +578,7 @@ void TestChaosMonkey::armFault(StringView fault, StringView arg) {
 
 // wayland shm and linux-dmabuf
 void* TestChaosMonkey::shmMap(void* mapped, size_t size) {
-    if (shmMapSkip < 0 || mapped == MAP_FAILED) {
-        return mapped;
-    }
-
-    if (shmMapSkip-- > 0) {
+    if (mapped == MAP_FAILED || !failsOnce(shmMapSkip)) {
         return mapped;
     }
 
@@ -707,11 +728,7 @@ void TestChaosMonkey::memoryTypes(VkPhysicalDeviceMemoryProperties& props) {
 }
 
 VkResult TestChaosMonkey::vulkan(VkResult result) {
-    if (vulkanSkip < 0) {
-        return result;
-    }
-
-    if (vulkanSkip-- > 0) {
+    if (!failsOnce(vulkanSkip)) {
         return result;
     }
 
@@ -739,11 +756,7 @@ wl_resource* TestChaosMonkey::resource(wl_resource* created) {
 
 // KMS backend
 VkResult TestChaosMonkey::scanout(VkResult result) {
-    if (scanoutSkip < 0) {
-        return result;
-    }
-
-    if (scanoutSkip-- > 0) {
+    if (!failsOnce(scanoutSkip)) {
         return result;
     }
 
@@ -786,13 +799,7 @@ int TestChaosMonkey::leaseFd(int fd) {
 
 // renderer
 VkResult TestChaosMonkey::clientImport(VkResult result) {
-    if (clientImportSkip < 0) {
-        return result;
-    }
-
-    if (clientImportSkip > 0) {
-        clientImportSkip--;
-
+    if (!failsFromNow(clientImportSkip)) {
         return result;
     }
 
@@ -800,11 +807,7 @@ VkResult TestChaosMonkey::clientImport(VkResult result) {
 }
 
 VkResult TestChaosMonkey::clientTexture(VkResult result) {
-    if (clientTextureSkip < 0) {
-        return result;
-    }
-
-    if (clientTextureSkip-- > 0) {
+    if (!failsOnce(clientTextureSkip)) {
         return result;
     }
 
@@ -812,11 +815,7 @@ VkResult TestChaosMonkey::clientTexture(VkResult result) {
 }
 
 VkResult TestChaosMonkey::frameFence(VkResult result) {
-    if (frameFenceSkip < 0) {
-        return result;
-    }
-
-    if (frameFenceSkip-- > 0) {
+    if (!failsOnce(frameFenceSkip)) {
         return result;
     }
 
@@ -824,11 +823,7 @@ VkResult TestChaosMonkey::frameFence(VkResult result) {
 }
 
 VkResult TestChaosMonkey::readbackFence(VkResult result) {
-    if (readbackFenceSkip < 0) {
-        return result;
-    }
-
-    if (readbackFenceSkip-- > 0) {
+    if (!failsOnce(readbackFenceSkip)) {
         return result;
     }
 
@@ -842,7 +837,7 @@ VkResult TestChaosMonkey::readbackPoll(VkResult status) {
 
 // the screenshot's file
 int TestChaosMonkey::shotFile(int fd) {
-    if (shotFileSkip < 0 || shotFileSkip-- > 0) {
+    if (!failsOnce(shotFileSkip)) {
         return fd;
     }
 
@@ -856,7 +851,7 @@ int TestChaosMonkey::shotFile(int fd) {
 }
 
 ssize_t TestChaosMonkey::shotWrite(ssize_t written) {
-    if (shotFileSkip < 0 || shotFileSkip-- > 0) {
+    if (!failsOnce(shotFileSkip)) {
         return written;
     }
 
@@ -866,11 +861,7 @@ ssize_t TestChaosMonkey::shotWrite(ssize_t written) {
 }
 
 VkResult TestChaosMonkey::descriptorPool(VkResult result) {
-    if (descriptorPoolSkip < 0) {
-        return result;
-    }
-
-    if (descriptorPoolSkip-- > 0) {
+    if (!failsOnce(descriptorPoolSkip)) {
         return result;
     }
 
@@ -878,13 +869,7 @@ VkResult TestChaosMonkey::descriptorPool(VkResult result) {
 }
 
 VkResult TestChaosMonkey::descriptorSet(VkResult result) {
-    if (descriptorSetSkip < 0) {
-        return result;
-    }
-
-    if (descriptorSetSkip > 0) {
-        descriptorSetSkip--;
-
+    if (!failsFromNow(descriptorSetSkip)) {
         return result;
     }
 
@@ -892,7 +877,7 @@ VkResult TestChaosMonkey::descriptorSet(VkResult result) {
 }
 
 int TestChaosMonkey::syncFile(int fd) {
-    if (syncFileSkip < 0 || syncFileSkip-- > 0) {
+    if (!failsOnce(syncFileSkip)) {
         return fd;
     }
 
@@ -902,7 +887,7 @@ int TestChaosMonkey::syncFile(int fd) {
 }
 
 int TestChaosMonkey::acquireFile(int fd) {
-    if (acquireFileSkip < 0 || acquireFileSkip-- > 0) {
+    if (!failsOnce(acquireFileSkip)) {
         return fd;
     }
 
@@ -912,7 +897,7 @@ int TestChaosMonkey::acquireFile(int fd) {
 }
 
 VkResult TestChaosMonkey::syncWait(VkResult result) {
-    if (syncWaitSkip < 0 || syncWaitSkip-- > 0) {
+    if (!failsOnce(syncWaitSkip)) {
         return result;
     }
 
@@ -920,7 +905,7 @@ VkResult TestChaosMonkey::syncWait(VkResult result) {
 }
 
 VkResult TestChaosMonkey::outputTarget(VkResult result) {
-    if (outputTargetSkip < 0 || outputTargetSkip-- > 0) {
+    if (!failsOnce(outputTargetSkip)) {
         return result;
     }
 
@@ -928,7 +913,7 @@ VkResult TestChaosMonkey::outputTarget(VkResult result) {
 }
 
 VkResult TestChaosMonkey::setup(VkResult result) {
-    if (setupSkip < 0 || setupSkip-- > 0) {
+    if (!failsOnce(setupSkip)) {
         return result;
     }
 
@@ -961,7 +946,7 @@ bool TestChaosMonkey::udmabufRead(bool started) {
 }
 
 VkResult TestChaosMonkey::gpuWait(VkResult result) {
-    if (gpuWaitSkip < 0 || gpuWaitSkip-- > 0) {
+    if (!failsOnce(gpuWaitSkip)) {
         return result;
     }
 
@@ -970,7 +955,7 @@ VkResult TestChaosMonkey::gpuWait(VkResult result) {
 
 // screenshot viewer
 VkResult TestChaosMonkey::swapchain(VkResult result) {
-    if (swapchainSkip < 0 || swapchainSkip-- > 0) {
+    if (!failsOnce(swapchainSkip)) {
         return result;
     }
 
@@ -1078,7 +1063,7 @@ int TestChaosMonkey::udmabufOpen(int fd) {
 
 // screenshot viewer: its encoders
 bool TestChaosMonkey::encoderAlloc(bool pending) {
-    if (encoderAllocSkip < 0 || encoderAllocSkip-- > 0) {
+    if (!failsOnce(encoderAllocSkip)) {
         return pending;
     }
 
@@ -1114,7 +1099,7 @@ VkQueueFlags TestChaosMonkey::queueFlags(VkQueueFlags flags) {
 }
 
 VkResult TestChaosMonkey::iconTexture(VkResult result) {
-    if (iconTextureSkip < 0 || iconTextureSkip-- > 0) {
+    if (!failsOnce(iconTextureSkip)) {
         return result;
     }
 
@@ -1122,7 +1107,7 @@ VkResult TestChaosMonkey::iconTexture(VkResult result) {
 }
 
 VkResult TestChaosMonkey::shotReadback(VkResult result) {
-    if (shotReadbackSkip < 0 || shotReadbackSkip-- > 0) {
+    if (!failsOnce(shotReadbackSkip)) {
         return result;
     }
 
@@ -1163,13 +1148,7 @@ xkb_context* TestChaosMonkey::xkbContext(xkb_context* made) {
 }
 
 xkb_keymap* TestChaosMonkey::xkbKeymap(xkb_keymap* compiled) {
-    if (xkbKeymapSkip < 0) {
-        return compiled;
-    }
-
-    if (xkbKeymapSkip > 0) {
-        xkbKeymapSkip--;
-
+    if (!failsFromNow(xkbKeymapSkip)) {
         return compiled;
     }
 
@@ -1180,7 +1159,7 @@ xkb_keymap* TestChaosMonkey::xkbKeymap(xkb_keymap* compiled) {
 }
 
 xkb_state* TestChaosMonkey::xkbState(xkb_state* made) {
-    if (xkbStateSkip < 0 || xkbStateSkip-- > 0) {
+    if (!failsOnce(xkbStateSkip)) {
         return made;
     }
 
@@ -1190,7 +1169,7 @@ xkb_state* TestChaosMonkey::xkbState(xkb_state* made) {
 }
 
 int TestChaosMonkey::keymapFile(int fd) {
-    if (keymapFileSkip < 0 || keymapFileSkip-- > 0) {
+    if (!failsOnce(keymapFileSkip)) {
         return fd;
     }
 
@@ -1202,7 +1181,7 @@ int TestChaosMonkey::keymapFile(int fd) {
 }
 
 ssize_t TestChaosMonkey::keymapWrite(ssize_t written) {
-    if (keymapFileSkip < 0 || keymapFileSkip-- > 0) {
+    if (!failsOnce(keymapFileSkip)) {
         return written;
     }
 
@@ -1241,7 +1220,7 @@ wl_global* TestChaosMonkey::global(wl_global* created) {
 }
 
 int TestChaosMonkey::formatTable(int fd) {
-    if (formatTableSkip < 0 || formatTableSkip-- > 0) {
+    if (!failsOnce(formatTableSkip)) {
         return fd;
     }
 
@@ -1253,7 +1232,7 @@ int TestChaosMonkey::formatTable(int fd) {
 }
 
 ssize_t TestChaosMonkey::formatTableWrite(ssize_t written) {
-    if (formatTableSkip < 0 || formatTableSkip-- > 0) {
+    if (!failsOnce(formatTableSkip)) {
         return written;
     }
 
@@ -1263,7 +1242,7 @@ ssize_t TestChaosMonkey::formatTableWrite(ssize_t written) {
 }
 
 _drmModeAtomicReq* TestChaosMonkey::atomicRequest(_drmModeAtomicReq* made) {
-    if (atomicRequestSkip < 0 || atomicRequestSkip-- > 0) {
+    if (!failsOnce(atomicRequestSkip)) {
         return made;
     }
 

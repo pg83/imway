@@ -160,6 +160,7 @@ namespace {
         ControlImpl(Composer& c, StringView fifoPath);
 
         void handleLine(StringView cmd);
+        bool kmsVerb(StringView verb, StringView args);
         void handleInput();
         void reopen();
         void dumpState(StringView outPath);
@@ -243,6 +244,61 @@ ControlImpl::ControlImpl(Composer& c, StringView fifoPath)
     io->data = this;
     ev_io_start(comp->loop, io);
     *(comp->log) << "imway: control FIFO: "_sv << sv(path) << endL;
+}
+
+// the fake KMS device's verbs; false for any other
+bool ControlImpl::kmsVerb(StringView verb, StringView args) {
+    if (verb == "kms-connector"_sv) {
+        // flip the fake connector and re-probe, like a udev hotplug would
+        comp->kmsIntercept->setConnected((int)args.stou());
+        comp->output->hotplug();
+        comp->scene->needsFrame = true;
+    } else if (verb == "kms-fail-commit"_sv) {
+        StringView err, rest, count, testToo;
+
+        if (args.split(' ', err, rest)) {
+            if (!rest.split(' ', count, testToo)) {
+                count = rest;
+                testToo = "0"_sv;
+            }
+
+            comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou(), testToo.stou() != 0);
+        }
+    } else if (verb == "kms-fail-new-fb"_sv) {
+        comp->kmsIntercept->failNewFb((int)args.stou());
+    } else if (verb == "kms-fail-prime"_sv) {
+        StringView err, rest, count, skip;
+
+        if (args.split(' ', err, rest)) {
+            if (!rest.split(' ', count, skip)) {
+                count = rest;
+                skip = "0"_sv;
+            }
+
+            comp->kmsIntercept->failPrime((int)err.stou(), (int)count.stou(), (int)skip.stou());
+        }
+    } else if (verb == "kms-fail-addfb"_sv) {
+        StringView err, count;
+
+        if (args.split(' ', err, count)) {
+            comp->kmsIntercept->failAddFb((int)err.stou(), (int)count.stou());
+        }
+    } else if (verb == "kms-reject-cursor"_sv) {
+        comp->kmsIntercept->rejectCursor((int)args.stou());
+        comp->scene->needsFrame = true;
+    } else if (verb == "kms-modes"_sv) {
+        comp->kmsIntercept->setModes((int)args.stou());
+    } else if (verb == "kms-hold-flips"_sv) {
+        comp->kmsIntercept->holdFlips(args.stou() != 0);
+    } else if (verb == "kms-lease-fault"_sv) {
+        comp->kmsIntercept->leaseFault((int)args.stou());
+    } else if (verb == "kms-fail-lookup"_sv) {
+        comp->kmsIntercept->failLookups(args);
+    } else {
+        return false;
+    }
+
+    return true;
 }
 
 void ControlImpl::handleLine(StringView cmd) {
@@ -493,52 +549,8 @@ void ControlImpl::handleLine(StringView cmd) {
         dumpState(args);
     } else if (verb == "icon-size"_sv) {
         dumpIconSize = (u32)args.stou();
-    } else if (verb == "kms-connector"_sv && comp->kmsIntercept) {
-        // flip the fake connector and re-probe, like a udev hotplug would
-        comp->kmsIntercept->setConnected((int)args.stou());
-        comp->output->hotplug();
-        comp->scene->needsFrame = true;
-    } else if (verb == "kms-fail-commit"_sv && comp->kmsIntercept) {
-        StringView err, rest, count, testToo;
-
-        if (args.split(' ', err, rest)) {
-            if (!rest.split(' ', count, testToo)) {
-                count = rest;
-                testToo = "0"_sv;
-            }
-
-            comp->kmsIntercept->failCommits((int)err.stou(), (int)count.stou(), testToo.stou() != 0);
-        }
-    } else if (verb == "kms-fail-new-fb"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->failNewFb((int)args.stou());
-    } else if (verb == "kms-fail-prime"_sv && comp->kmsIntercept) {
-        StringView err, rest, count, skip;
-
-        if (args.split(' ', err, rest)) {
-            if (!rest.split(' ', count, skip)) {
-                count = rest;
-                skip = "0"_sv;
-            }
-
-            comp->kmsIntercept->failPrime((int)err.stou(), (int)count.stou(), (int)skip.stou());
-        }
-    } else if (verb == "kms-fail-addfb"_sv && comp->kmsIntercept) {
-        StringView err, count;
-
-        if (args.split(' ', err, count)) {
-            comp->kmsIntercept->failAddFb((int)err.stou(), (int)count.stou());
-        }
-    } else if (verb == "kms-reject-cursor"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->rejectCursor((int)args.stou());
-        comp->scene->needsFrame = true;
-    } else if (verb == "kms-modes"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->setModes((int)args.stou());
-    } else if (verb == "kms-hold-flips"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->holdFlips(args.stou() != 0);
-    } else if (verb == "kms-lease-fault"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->leaseFault((int)args.stou());
-    } else if (verb == "kms-fail-lookup"_sv && comp->kmsIntercept) {
-        comp->kmsIntercept->failLookups(args);
+    } else if (comp->kmsIntercept && kmsVerb(verb, args)) {
+        // the fake KMS device's verbs: a compositor without one has none
     } else if (verb == "session"_sv) {
         // fires the same listener lists a libseat VT switch would
         if (args.stou() != 0) {
