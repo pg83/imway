@@ -1972,9 +1972,10 @@ void DesktopImpl::buildUi(Scene& scene) {
                 t->desiredW = root->geomW();
                 t->desiredH = root->geomH();
 
-                // no active drag and the size has stopped changing: the resize
-                // transaction is done, stop compensating so a move can proceed
-                if ((t->resizeAnchor & kResizeActive) && stepW == 0.f && stepH == 0.f) {
+                // no active drag, the client has answered the last configure
+                // and the size has stopped changing: the resize transaction
+                // is done, stop compensating so a move can proceed
+                if ((t->resizeAnchor & kResizeActive) && t->configureAnswered && stepW == 0.f && stepH == 0.f) {
                     t->resizeAnchor = 0;
                 }
             }

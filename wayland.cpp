@@ -1897,7 +1897,7 @@ namespace {
         }
     }
 
-    void fireFrameCallbacks(SurfaceImpl& s, u32 t) {
+    void fireFrameCallbacks(SurfaceImpl& s, const FrameEvent& frame) {
         // a surface with no content was not presented, and neither was
         // anything below it: the callbacks wait for the first real frame
         if (!s.hasContent) {
@@ -1909,31 +1909,16 @@ namespace {
         cbs.xchg(s.frameCbs);
 
         for (wl_resource* cb : cbs) {
-            wl_callback_send_done(cb, t);
+            wl_callback_send_done(cb, frame.msec());
             wl_resource_destroy(cb);
         }
 
         if (!s.presentFeedbacks.empty()) {
-            // prefer the kernel's pageflip timestamp + vblank sequence over
-            // "now": mpv & co feed these into their vsync phase estimators
-            u64 flipNs = 0;
-            u32 seq = 0;
-            u32 flags;
-
-            if (s.srv->composer->output->lastFlip(flipNs, seq)) {
-                flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
-            } else {
-                timespec ts{};
-
-                clock_gettime(CLOCK_MONOTONIC, &ts);
-                flipNs = (u64)ts.tv_sec * 1000000000ull + (u64)ts.tv_nsec;
-                // a software "now" timestamp is not vblank-locked; the spec
-                // says VSYNC must not be claimed without hardware timing
-                flags = 0;
-            }
-
-            u64 sec = flipNs / 1000000000ull;
-            u32 nsec = (u32)(flipNs % 1000000000ull);
+            // the kernel's pageflip timestamp and vblank sequence: mpv & co
+            // feed these into their vsync phase estimators
+            u32 flags = WP_PRESENTATION_FEEDBACK_KIND_VSYNC | WP_PRESENTATION_FEEDBACK_KIND_HW_CLOCK | WP_PRESENTATION_FEEDBACK_KIND_HW_COMPLETION;
+            u64 sec = frame.nsec / 1000000000ull;
+            u32 nsec = (u32)(frame.nsec % 1000000000ull);
             u32 refreshNs = s.srv->composer->scene->hz > 0 ? (u32)(1e9 / s.srv->composer->scene->hz) : 0;
             Vector<wl_resource*> fbs;
 
@@ -1941,7 +1926,7 @@ namespace {
 
             for (wl_resource* fb : fbs) {
                 wl_resource_set_user_data(fb, nullptr);
-                wp_presentation_feedback_send_presented(fb, (u32)(sec >> 32), (u32)sec, nsec, refreshNs, 0, seq, flags);
+                wp_presentation_feedback_send_presented(fb, (u32)(sec >> 32), (u32)sec, nsec, refreshNs, 0, frame.seq, flags);
                 wl_resource_destroy(fb);
             }
         }
@@ -1949,11 +1934,11 @@ namespace {
         // a child in either pile has its surface: the surface's destroy
         // unlinks the node right after the ring nulls it
         forEach<Subsurface>(s.stackBelow, [&](Subsurface& c) {
-            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
+            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), frame);
         });
 
         forEach<Subsurface>(s.stackAbove, [&](Subsurface& c) {
-            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), t);
+            fireFrameCallbacks(*(SurfaceImpl*)c.surface.get(), frame);
         });
     }
 
@@ -13544,7 +13529,7 @@ void WaylandImpl::syncColorState() {
 }
 
 void WaylandImpl::onListen(void* arg) {
-    u32 msec = ((FrameEvent*)arg)->msec;
+    const FrameEvent& frame = *(const FrameEvent*)arg;
 
     syncColorState();
     syncKeyboardCapture();
@@ -13614,22 +13599,22 @@ void WaylandImpl::onListen(void* arg) {
 
     forEach<Toplevel>(composer->scene->toplevels, [&](Toplevel& tl) {
         if (tl.mapped && !tl.minimized && !tl.tabHidden && tl.surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)tl.surface.get(), msec);
+            fireFrameCallbacks(*(SurfaceImpl*)tl.surface.get(), frame);
         }
     });
 
     forEach<Popup>(composer->scene->popups, [&](Popup& p) {
         if (p.mapped && p.surface) {
-            fireFrameCallbacks(*(SurfaceImpl*)p.surface.get(), msec);
+            fireFrameCallbacks(*(SurfaceImpl*)p.surface.get(), frame);
         }
     });
 
     if (composer->scene->dragIcon) {
-        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->dragIcon.get(), msec);
+        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->dragIcon.get(), frame);
     }
 
     if (composer->scene->cursorSurface) {
-        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->cursorSurface, msec);
+        fireFrameCallbacks(*(SurfaceImpl*)composer->scene->cursorSurface, frame);
     }
 
     // wp-fifo: a presented surface clears its barrier and admits queued
@@ -13744,6 +13729,8 @@ void WaylandImpl::onListen(void* arg) {
         // client answered the previous one — the window steps through
         // client-produced sizes only, at the client's own pace
         bool answered = ti->xdg && (i32)(ti->xdg->committedAckSerial - ti->cfgSerial) >= 0;
+
+        ti->configureAnswered = answered;
 
         // dock state changes alone need a configure: TILED comes and goes
         if ((differsView && differsSent && answered) || ti->docked != ti->cfgDocked || ti->maximized != ti->cfgMaximized) {

@@ -2,7 +2,9 @@
 // every configure with a buffer of exactly the configured size. The scenario
 // drags an ImGui window border and asserts the whole geometry transaction
 // from the outside (control dump); this client only has to keep up. Runs
-// until the scenario kills it.
+// until the scenario kills it. While a file "hold" exists in its working
+// directory it answers no configure: the latest one waits, and is answered
+// once the scenario takes the file away, the way a busy client answers late.
 
 #include "wl_util.h"
 #include <xdg-decoration-unstable-v1-client-protocol.h>
@@ -14,6 +16,8 @@ static struct xdg_toplevel* tl;
 static int cur_w = 300, cur_h = 200;
 static int pend_w, pend_h;
 static int mapped_printed;
+static int held;
+static uint32_t held_serial;
 
 static void tl_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t h,
                          struct wl_array* states) {
@@ -24,9 +28,8 @@ static void tl_configure(void* d, struct xdg_toplevel* t, int32_t w, int32_t h,
 static void tl_close(void* d, struct xdg_toplevel* t) { (void)d; (void)t; exit(0); }
 static const struct xdg_toplevel_listener tl_listener = {tl_configure, tl_close};
 
-static void xs_configure(void* d, struct xdg_surface* s, uint32_t serial) {
-    (void)d;
-    xdg_surface_ack_configure(s, serial);
+static void answer(uint32_t serial) {
+    xdg_surface_ack_configure(xs, serial);
     if (pend_w > 0) cur_w = pend_w;
     if (pend_h > 0) cur_h = pend_h;
     wl_surface_attach(surface, wl_solid(cur_w, cur_h, 0xFFFF0000), 0, 0);
@@ -37,6 +40,20 @@ static void xs_configure(void* d, struct xdg_surface* s, uint32_t serial) {
         printf("resize client mapped\n");
         mapped_printed = 1;
     }
+}
+
+static void xs_configure(void* d, struct xdg_surface* s, uint32_t serial) {
+    (void)d; (void)s;
+
+    if (mapped_printed && access("hold", F_OK) == 0) {
+        held = 1;
+        held_serial = serial;
+        printf("configure held\n");
+
+        return;
+    }
+
+    answer(serial);
 }
 static const struct xdg_surface_listener xs_listener = {xs_configure};
 
@@ -83,7 +100,12 @@ int main(int argc, char** argv) {
     int asked = 0;
     int seen = 0;
 
-    while (wl_display_dispatch(wl_dpy) != -1) {
+    while (wl_display_roundtrip(wl_dpy) != -1) {
+        if (held && access("hold", F_OK) != 0) {
+            held = 0;
+            answer(held_serial);
+        }
+
         if (ask && wlp_button_count != seen && wlp_button_state == WL_POINTER_BUTTON_STATE_PRESSED && (topLeft || !asked)) {
             uint32_t edge = !topLeft ? XDG_TOPLEVEL_RESIZE_EDGE_BOTTOM_RIGHT : asked % 2 ? XDG_TOPLEVEL_RESIZE_EDGE_TOP : XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT;
 
@@ -93,6 +115,7 @@ int main(int argc, char** argv) {
         }
 
         seen = wlp_button_count;
+        usleep(5000);
     }
     return 0;
 }

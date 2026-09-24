@@ -704,7 +704,6 @@ namespace {
         void setHdrMetadata(const HdrOutputMetadata& metadata) override;
         void setColorTemp(double kelvin) override;
         double colorTemp() const override;
-        bool lastFlip(u64& nsec, u32& seq) const override;
         void createDumb(DumbBuffer& b, u32 w, u32 h, u32 format);
         void freeDumb(DumbBuffer& b);
         bool rebuildScanout();
@@ -827,9 +826,7 @@ namespace {
         out->retireScreenshot();
         out->updateSignalFeedback();
 
-        u32 msec = (u32)(out->flipNs / 1000000ull);
-
-        FrameEvent event{msec};
+        FrameEvent event{out->flipNs, out->flipSeq};
 
         forEach<Listener>(out->c->frameListeners, [&event](Listener& listener) {
             listener.onListen(&event);
@@ -2215,16 +2212,6 @@ double KmsOutput::colorTemp() const {
     return tempK;
 }
 
-bool KmsOutput::lastFlip(u64& nsec, u32& seq) const {
-    if (!flipNs) {
-        return false;
-    }
-
-    nsec = flipNs;
-    seq = flipSeq;
-
-    return true;
-}
 
 void KmsOutput::createDumb(DumbBuffer& b, u32 w, u32 h, u32 format) {
     drm_mode_create_dumb create{};

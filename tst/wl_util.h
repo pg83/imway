@@ -467,4 +467,21 @@ static void wl_await_presented(struct wl_surface* s) {
     }
 }
 
+// waits for the scenario to touch <name> in the working directory, the
+// connection serviced meanwhile (pings, frame callbacks); nonzero when it
+// never comes
+static int wl_await_file(const char* name) {
+    for (int i = 0; access(name, F_OK) != 0; i++) {
+        if (i == 3000) {
+            fprintf(stderr, "the scenario never touched %s\n", name);
+            return 1;
+        }
+
+        wl_display_roundtrip(wl_dpy);
+        usleep(20000);
+    }
+
+    return 0;
+}
+
 #endif

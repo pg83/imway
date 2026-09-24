@@ -33,10 +33,15 @@ done
     exit 1
 }
 
-screenshot "$XDG_RUNTIME_DIR/file-menu.ppm"
-diff_pixels=$(region_diff "$XDG_RUNTIME_DIR/before-menu.ppm" \
-    "$XDG_RUNTIME_DIR/file-menu.ppm" 58 0 700 180)
-[[ "$diff_pixels" -gt 200 ]] || {
+# the heading answers the click at once, the popup comes up once the menu's
+# layout is in: take frames until it is drawn
+popup_drawn() {
+    screenshot "$XDG_RUNTIME_DIR/file-menu.ppm" || return 1
+    diff_pixels=$(region_diff "$XDG_RUNTIME_DIR/before-menu.ppm" \
+        "$XDG_RUNTIME_DIR/file-menu.ppm" 58 0 700 180)
+    [[ "$diff_pixels" -gt 200 ]]
+}
+await 50 popup_drawn || {
     echo "global menu popup was not rendered ($diff_pixels changed pixels)"
     exit 1
 }

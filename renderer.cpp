@@ -2516,12 +2516,12 @@ Surface* RendererImpl::scanoutCandidate() {
         return nullptr;
     }
 
-    if (comp->scene->drawCursor) {
-        Surface* cursor = comp->scene->cursorSurface;
+    // a cursor off the plane is composited: nothing to scan out past it
+    // (the eyedropper's cursorless frame is a forced composition, above)
+    Surface* cursor = comp->scene->cursorSurface;
 
-        if (!hwCursorReady || comp->output->cursorCapW() <= 0 || (cursor && (cursor->dmabuf || cursor->width > comp->output->cursorCapW() || cursor->height > comp->output->cursorCapH()))) {
-            return nullptr;
-        }
+    if (!hwCursorReady || comp->output->cursorCapW() <= 0 || (cursor && (cursor->dmabuf || cursor->width > comp->output->cursorCapW() || cursor->height > comp->output->cursorCapH()))) {
+        return nullptr;
     }
 
     Toplevel* fs = nullptr;
@@ -4443,7 +4443,7 @@ bool RendererImpl::readPixel(int x, int y, u8& r, u8& g, u8& b) {
 
     // a cursor off the plane is composited with its hotspot on exactly the
     // pixel asked for: sample a frame composed without it
-    if (comp->scene->drawCursor && !hwVisible) {
+    if (!hwVisible) {
         // frameNow composes nothing while the last frame is still on the GPU
         // or a wl_shm copy is still running; a slow device leaves both, and
         // the pick would read the frame with the cursor in it after all

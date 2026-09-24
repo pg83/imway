@@ -316,6 +316,10 @@ struct Toplevel: stl::IntrusiveNode {
     // client-committed buffer, a left/top drag grows toward the hand instead of
     // anchoring the top-left corner
     u8 resizeAnchor = 0;
+    // the client has answered the last configure it was sent (wayland keeps
+    // it at every frame edge): a resize is over only once it has, its last
+    // step may still be on the way after the drag ends
+    bool configureAnswered = true;
     float curX = 0, curY = 0;
     float lastApplyW = 0, lastApplyH = 0;
 
